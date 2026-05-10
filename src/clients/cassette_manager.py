@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import re
@@ -27,10 +28,19 @@ class CassetteManager:
     def __init__(self, cassette_dir: Path):
         self.cassette_dir = Path(cassette_dir)
         self.cassette_dir.mkdir(parents=True, exist_ok=True)
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def _path(self, operation: str, cache_key: str, input_hash: str) -> Path:
         filename = f"{_slug(operation)}_{_slug(cache_key)}_{input_hash[:8]}.json"
         return self.cassette_dir / filename
+
+    def _get_lock(self, path: Path) -> asyncio.Lock:
+        key = str(path)
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[key] = lock
+        return lock
 
     def exists(self, operation: str, cache_key: str, input_hash: str) -> bool:
         return self._path(operation, cache_key, input_hash).exists()
@@ -42,7 +52,7 @@ class CassetteManager:
         data = json.loads(path.read_text(encoding="utf-8"))
         return CompletionResponse(**data["response"])
 
-    def save(
+    async def save(
         self,
         operation: str,
         cache_key: str,
@@ -59,8 +69,9 @@ class CassetteManager:
             "response": response.model_dump(),
             "recorded_at": datetime.now(UTC).isoformat(),
         }
-        path.write_text(
-            json.dumps(cassette, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        async with self._get_lock(path):
+            path.write_text(
+                json.dumps(cassette, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         return path

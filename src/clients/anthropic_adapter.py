@@ -69,7 +69,9 @@ class AnthropicAdapter:
         else:
             response = await self._call_with_retry(request)
             if effective_mode == "record":
-                self.cassette_manager.save(operation, cache_key, input_hash, request, response)
+                await self.cassette_manager.save(
+                    operation, cache_key, input_hash, request, response
+                )
 
         cost = CostCalculator.calculate(
             model=response.model,
