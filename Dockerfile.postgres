@@ -1,0 +1,14 @@
+FROM pgvector/pgvector:pg16
+
+# pgroonga 설치 (Groonga 공식 APT 저장소)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        lsb-release \
+        wget \
+    && wget https://packages.groonga.org/debian/groonga-apt-source-latest-$(lsb_release --codename --short).deb \
+    && dpkg -i groonga-apt-source-latest-$(lsb_release --codename --short).deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        postgresql-16-pgdg-pgroonga \
+    && rm -rf /var/lib/apt/lists/* groonga-apt-source-latest-*.deb
