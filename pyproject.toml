@@ -54,8 +54,21 @@ line-length = 100
 target-version = "py312"
 extend-exclude = ["src/db/migrations/versions"]
 
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src", "tests"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+"src/db/migrations/*" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
