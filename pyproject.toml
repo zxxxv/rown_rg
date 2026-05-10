@@ -1,0 +1,74 @@
+[project]
+name = "rown-report-system"
+version = "0.1.0"
+description = "AI 보고서 자동생성 시스템"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    # 웹 프레임워크
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.20",
+    # DB
+    "sqlalchemy>=2.0",
+    "alembic>=1.14",
+    "asyncpg>=0.30",
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.3",
+    # LLM·LangGraph
+    "anthropic>=0.40",
+    "langgraph>=0.2",
+    "langchain>=0.3",
+    "langchain-anthropic>=0.3",
+    # 데이터 검증
+    "pydantic>=2.10",
+    "pydantic-settings>=2.6",
+    "email-validator>=2.2",
+    # 인증
+    "python-jose[cryptography]>=3.3",
+    "passlib[bcrypt]>=1.7",
+    "pyotp>=2.9",
+    # 로깅
+    "structlog>=24.4",
+    # 임베딩
+    "sentence-transformers>=3.3",
+    "onnxruntime>=1.20",
+    # 기타
+    "httpx>=0.28",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "pre-commit>=4.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["src/db/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
