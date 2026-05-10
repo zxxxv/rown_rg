@@ -1,0 +1,43 @@
+# 기본: 모든 텍스트 파일 LF 통일
+* text=auto eol=lf
+
+# Python
+*.py text eol=lf
+*.pyi text eol=lf
+
+# 셸 스크립트
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Windows 배치
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 설정 파일
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.cfg text eol=lf
+*.ini text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.sql text eol=lf
+
+# Docker
+Dockerfile text eol=lf
+docker-compose*.yml text eol=lf
+*.dockerignore text eol=lf
+
+# 바이너리
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.hwpx binary
+*.hwp binary
+*.zip binary
+*.tar.gz binary
+*.whl binary
