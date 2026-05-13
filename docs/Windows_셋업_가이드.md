@@ -1,7 +1,7 @@
 # Windows 개발 환경 셋업 가이드
 
 본 가이드는 **Native Windows + Docker Desktop** 조합으로 프로젝트를 셋업·실행하는 절차를 정리합니다.
-README의 명령어는 bash 기준이라 PowerShell에서 일부 다릅니다 — 이 문서가 그 차이를 메꿔줍니다.
+README의 명령어는 bash 기준이라 PowerShell에서 일부 다릅니다.
 
 ---
 
