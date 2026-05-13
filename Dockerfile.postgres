@@ -12,3 +12,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         postgresql-16-pgdg-pgroonga \
     && rm -rf /var/lib/apt/lists/* groonga-apt-source-latest-*.deb
+
+# 초기 DB 부팅 시 확장 자동 활성화 (CI services 환경에서도 동작하도록 이미지에 포함)
+# docker-compose 환경에선 ./init-scripts 마운트가 동일 경로를 덮어쓰지만 내용이 같아 무해
+COPY init-scripts/ /docker-entrypoint-initdb.d/
