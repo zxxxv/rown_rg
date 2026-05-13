@@ -46,7 +46,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 ```powershell
 # 1. 소스 받기
 git clone <repo-url>
-cd 02_rg_v2
+cd rown_rg
 
 # 2. Python 의존성 설치 (.venv 자동 생성)
 uv sync
@@ -216,17 +216,17 @@ bash 명령이 익숙하거나 Linux 환경을 선호한다면 WSL2 사용 가�
 
 ### 셋업
 
-​```powershell
+```powershell
 # PowerShell 관리자 권한으로 (한 번만)
 wsl --install -d Ubuntu-22.04
 # 재시작 후 Ubuntu 첫 실행 시 username/password 설정
-​```
+```
 
 ### 사용
 
 이후 모든 명령은 WSL Ubuntu 안에서 실행하며, README의 bash 명령을 그대로 사용하면 됩니다.
 
-​```bash
+```bash
 # WSL Ubuntu 내부에서
 sudo apt update && sudo apt install -y curl git build-essential
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -247,7 +247,7 @@ docker compose up -d
 uv run alembic upgrade head
 uv run python scripts/create_initial_admin.py
 uv run uvicorn src.main:app --reload
-​```
+```
 
 Docker Desktop은 Native Windows와 같은 인스턴스를 공유하므로 추가 설치 불필요.
 
@@ -258,4 +258,3 @@ Docker Desktop은 Native Windows와 같은 인스턴스를 공유하므로 추�
 | PowerShell이 익숙하고 빠른 셋업 원함 | Native Windows |
 | bash·Linux 환경이 편함 | WSL2 |
 | 운영 환경(Linux)과 동일하게 작업하고 싶음 | WSL2 |
-| Claude Code 적극 활용 | WSL2 (더 안정적) |
