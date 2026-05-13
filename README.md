@@ -1,5 +1,4 @@
-[![CI](https://github.com/zxxxv/rown_rg/actions/workflows/ci.yml/badge.svg)](https://github.c
-  om/zxxxv/rown_rg/actions/workflows/ci.yml)
+[![CI](https://github.com/zxxxv/rown_rg/actions/workflows/ci.yml/badge.svg)](https://github.com/zxxxv/rown_rg/actions/workflows/ci.yml)
 
 # rown_rg
 
