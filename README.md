@@ -27,7 +27,11 @@ uv run alembic upgrade head
 uv run uvicorn src.main:app --reload
 ```
 
-`http://localhost:8000/health` 가 200을 반환하면 정상입니다.
+`http://localhost:8000/health` 가 200을 반환하면 정상
+
+> **Windows 사용자**: 위 명령은 bash 기준입니다. PowerShell에서는 `cp` → `Copy-Item`,
+> 환경변수 inline 실행 등 일부 명령이 다릅니다. 상세 셋업 절차와 명령어 대조표는
+> [docs/Windows_셋업_가이드.md](docs/Windows_셋업_가이드.md)를 참조하세요.
 
 ## pre-commit 안내
 

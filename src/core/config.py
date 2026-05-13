@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     log_level: str = "DEBUG"
 
     # DB
-    database_url: str = "postgresql+asyncpg://dev:dev@localhost:5432/loune"
-    postgres_db: str = "loune"
+    database_url: str = "postgresql+asyncpg://dev:dev@localhost:5432/rown"
+    postgres_db: str = "rown"
     postgres_user: str = "dev"
     postgres_password: str = "dev"
 
@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION
+
+    @property
+    def cors_origins(self) -> list[str]:
+        if self.environment == Environment.LOCAL:
+            return ["*"]
+        return ["https://app.loune-insight.co.kr"]
 
 
 settings = Settings()
