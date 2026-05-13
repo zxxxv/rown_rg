@@ -1,3 +1,6 @@
+[![CI](https://github.com/zxxxv/rown_rg/actions/workflows/ci.yml/badge.svg)](https://github.c
+  om/zxxxv/rown_rg/actions/workflows/ci.yml)
+
 # rown_rg
 
 주식회사 로운인사이트 — AI 보고서 자동생성 시스템
