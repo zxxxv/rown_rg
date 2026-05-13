@@ -45,7 +45,7 @@ uv run uvicorn src.main:app --reload
 
 ## 환경변수
 
-`.env.example`을 `.env`로 복사해서 채워 넣으면 됩니다.
+`.env.example`을 `.env`로 복사해서 채워 넣기
 
 | 변수 | 필수 | 기본값 | 설명 |
 |------|:---:|--------|------|
@@ -185,13 +185,13 @@ init-scripts/           # PostgreSQL 컨테이너 초기화 SQL (확장 활성�
 
 ## CI (GitHub Actions)
 
-push와 PR마다 자동으로 아래 검사가 돌아갑니다 (`.github/workflows/ci.yml`):
+push와 PR마다 자동으로 아래 검사가 동작 (`.github/workflows/ci.yml`):
 
 - `uv sync --frozen` — `uv.lock`이 최신인지
 - `ruff check` / `ruff format --check` — 린트 + 포맷
 - `pytest --cov=src --cov-fail-under=60` — 통합 테스트 + 커버리지 60% 게이트
 
-PostgreSQL은 `Dockerfile.postgres`로 만든 이미지(pgvector + pgroonga 포함)를 GHCR에서 받아 씁니다.
+PostgreSQL은 `Dockerfile.postgres`로 만든 이미지(pgvector + pgroonga 포함)를 GHCR에서 받아 사용
 
 ### CI가 빨간색일 때
 
