@@ -39,5 +39,11 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION
 
+    @property
+    def cors_origins(self) -> list[str]:
+        if self.environment == Environment.LOCAL:
+            return ["*"]
+        return ["https://app.loune-insight.co.kr"]
+
 
 settings = Settings()

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 UserRole = Literal["super_admin", "admin", "worker", "viewer"]
 
@@ -17,20 +16,7 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=12, description="비밀번호 (최소 12자)")
-
-    @field_validator("password")
-    @classmethod
-    def validate_password(cls, v: str) -> str:
-        if not re.search(r"[A-Z]", v):
-            raise ValueError("비밀번호에 대문자 포함 필수")
-        if not re.search(r"[a-z]", v):
-            raise ValueError("비밀번호에 소문자 포함 필수")
-        if not re.search(r"[0-9]", v):
-            raise ValueError("비밀번호에 숫자 포함 필수")
-        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", v):
-            raise ValueError("비밀번호에 특수문자 포함 필수")
-        return v
+    password: str = Field(..., description="비밀번호")
 
 
 class UserUpdate(BaseModel):
