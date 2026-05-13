@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     log_level: str = "DEBUG"
 
     # DB
-    database_url: str = "postgresql+asyncpg://dev:dev@localhost:5432/loune"
-    postgres_db: str = "loune"
+    database_url: str = "postgresql+asyncpg://dev:dev@localhost:5432/rown"
+    postgres_db: str = "rown"
     postgres_user: str = "dev"
     postgres_password: str = "dev"
 

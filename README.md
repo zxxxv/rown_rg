@@ -31,8 +31,8 @@ uv run uvicorn src.main:app --reload
 
 ## pre-commit 안내
 
-`.pre-commit-config.yaml`은 git에 올라가지만 **hook 활성화는 각 개발자가 직접 해야** 합니다.
-`uv run pre-commit install`을 안 돌리면 커밋 전 자동 검사(ruff, trailing-whitespace 등)가 작동하지 않습니다.
+`.pre-commit-config.yaml`은 git에 올라가지만 hook 활성화는 각 개발자가 직접 하기
+`uv run pre-commit install`을 안 돌리면 커밋 전 자동 검사(ruff, trailing-whitespace 등)가 작동하지 X
 
 수동으로 전체 검사를 돌리려면:
 
