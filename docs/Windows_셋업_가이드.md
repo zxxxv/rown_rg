@@ -5,6 +5,17 @@ README의 명령어는 bash 기준이라 PowerShell에서 일부 다릅니다.
 
 ---
 
+### 0. Git 줄바꿈 설정 (★ 한 번만, 필수)
+
+본 프로젝트는 `.gitattributes`로 LF 줄바꿈을 강제합니다. Windows 기본은 CRLF라 충돌이 발생하므로 먼저 설정:
+
+​```powershell
+git config --global core.autocrlf false
+git config --global core.eol lf
+​```
+
+이 설정 없이는 매번 pre-commit이 줄바꿈 수정 커밋을 요구합니다.
+
 ## 1. 사전 요구사항 (한 번만 설치)
 
 | 도구 | 용도 | 설치 방법 |
@@ -45,7 +56,13 @@ uv run pre-commit install
 
 # 4. 환경변수 파일 준비
 Copy-Item .env.example .env
-# 메모장 등으로 .env를 열고 ANTHROPIC_API_KEY, JWT_SECRET_KEY 채워 넣기
+
+# JWT_SECRET_KEY 생성 (32바이트 랜덤)
+uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
+# 출력값을 .env의 JWT_SECRET_KEY=에 붙여넣기
+
+# .env 편집은 VSCode 권장 (메모장은 BOM 추가 위험)
+code .env
 
 # 5. PostgreSQL 컨테이너 시작 (Docker Desktop이 켜져 있어야 함)
 docker compose up -d
@@ -53,7 +70,12 @@ docker compose up -d
 # 6. DB 마이그레이션
 uv run alembic upgrade head
 
-# 7. 백엔드 실행
+# 7. 초기 super_admin 생성 (한 번만)
+$env:INITIAL_ADMIN_EMAIL="me@example.com"
+$env:INITIAL_ADMIN_PASSWORD="MyPass123!@#"
+uv run python scripts/create_initial_admin.py
+
+# 8. 백엔드 실행
 uv run uvicorn src.main:app --reload
 ```
 
@@ -117,7 +139,7 @@ uv run alembic revision --autogenerate -m "메시지"
 uv run alembic upgrade head
 
 # DB 접속 (Docker 컨테이너 안의 psql)
-docker exec -it 02_rg_v2-postgres-1 psql -U dev -d rown
+docker compose exec postgres psql -U dev -d rown
 
 # 초기 super_admin 생성
 $env:INITIAL_ADMIN_EMAIL="me@test.com"
