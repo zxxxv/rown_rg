@@ -1,7 +1,7 @@
 import asyncio
-import logging
 from typing import Any
 
+import structlog
 from anthropic import (
     APIConnectionError,
     APIError,
@@ -24,7 +24,7 @@ from src.clients.exceptions import (
     LLMRateLimitError,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class AnthropicAdapter:
@@ -56,9 +56,10 @@ class AnthropicAdapter:
         if effective_mode == "replay" and self.allow_replay_fallback:
             if not self.cassette_manager.exists(operation, cache_key, input_hash):
                 logger.info(
-                    "Cassette miss for %s/%s, falling back to record",
-                    operation,
-                    cache_key,
+                    "llm.cassette.miss",
+                    operation=operation,
+                    cache_key=cache_key,
+                    fallback="record",
                 )
                 effective_mode = "record"
                 if self._client is None:
@@ -107,32 +108,47 @@ class AnthropicAdapter:
             except RateLimitError as e:
                 last_err = e
                 logger.warning(
-                    "Rate limited (attempt %d/%d), sleeping %.1fs",
-                    attempt,
-                    self.max_retries,
-                    delay,
+                    "llm.retry.rate_limited",
+                    attempt=attempt,
+                    max_retries=self.max_retries,
+                    delay_sec=delay,
+                    provider="anthropic",
+                    model=request.model,
                 )
             except APIConnectionError as e:
                 last_err = e
                 logger.warning(
-                    "Connection error (attempt %d/%d): %s",
-                    attempt,
-                    self.max_retries,
-                    e,
+                    "llm.retry.connection_error",
+                    attempt=attempt,
+                    max_retries=self.max_retries,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    provider="anthropic",
+                    model=request.model,
                 )
             except APIStatusError as e:
                 if e.status_code < 500:
                     raise LLMAPIError(f"Anthropic API error {e.status_code}: {e}") from e
                 last_err = e
                 logger.warning(
-                    "Server error %d (attempt %d/%d)",
-                    e.status_code,
-                    attempt,
-                    self.max_retries,
+                    "llm.retry.server_error",
+                    status_code=e.status_code,
+                    attempt=attempt,
+                    max_retries=self.max_retries,
+                    provider="anthropic",
+                    model=request.model,
                 )
             except APIError as e:
                 last_err = e
-                logger.warning("API error (attempt %d/%d): %s", attempt, self.max_retries, e)
+                logger.warning(
+                    "llm.retry.api_error",
+                    attempt=attempt,
+                    max_retries=self.max_retries,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    provider="anthropic",
+                    model=request.model,
+                )
 
             if attempt < self.max_retries:
                 await asyncio.sleep(delay)

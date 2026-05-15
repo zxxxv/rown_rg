@@ -1,15 +1,16 @@
-import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from decimal import Decimal
 
+import structlog
+
 from src.clients.base import LLMMode
 from src.db.models.token_usage import TokenUsage
 from src.db.session import async_session_maker
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 _user_id: ContextVar[uuid.UUID | None] = ContextVar("llm_user_id", default=None)
 _project_id: ContextVar[uuid.UUID | None] = ContextVar("llm_project_id", default=None)
@@ -89,4 +90,12 @@ async def record_usage_safe(
             mode=mode,
         )
     except Exception:
-        logger.exception("Failed to record token usage")
+        user_id, project_id, _ = get_context()
+        logger.exception(
+            "token_usage.record_failed",
+            user_id=str(user_id) if user_id else None,
+            project_id=str(project_id) if project_id else None,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )

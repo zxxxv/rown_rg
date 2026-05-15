@@ -9,13 +9,13 @@ from src.api.middleware.ip_whitelist import IPWhitelistMiddleware
 from src.api.middleware.logging import LoggingMiddleware
 from src.api.routers import api_v1_router
 from src.core.config import settings
-from src.core.logging import setup_logging
+from src.core.logging import configure_logging
 from src.db.session import async_engine
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    setup_logging()
+    configure_logging()
     yield
     await async_engine.dispose()
 
