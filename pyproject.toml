@@ -37,6 +37,19 @@ dependencies = [
     # 기타
     "httpx>=0.28",
     "python-dotenv>=1.0",
+    "python-hwpx>=2.9",
+    "optimum[exporters,onnxruntime]>=2.0",
+    "onnx>=1.17",
+    "docling>=1.0",
+    "pymupdf>=1.24",
+    "pymupdf4llm>=0.0.17",
+]
+
+[project.optional-dependencies]
+# onnxruntime-gpu는 base onnxruntime(CPU)을 덮어쓰며 같은 namespace를 점유한다.
+# 기본 sync는 CPU 표준을 유지하고, GPU 머신에서만 `uv sync --extra cuda` 로 전환한다.
+cuda = [
+    "onnxruntime-gpu>=1.20",
 ]
 
 [dependency-groups]

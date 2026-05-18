@@ -14,6 +14,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # 환경
@@ -34,6 +35,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     refresh_token_expire_days: int = 7
+
+    # 임베딩 (환경별 변동 가능 — 모델 특성 상수는 클라이언트 ClassVar로 관리)
+    embedding_model_path: str = "./models/bge-m3-onnx-int8"
+    embedding_cache_dir: str = "./cache/embeddings"
 
     @property
     def is_production(self) -> bool:

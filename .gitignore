@@ -45,6 +45,13 @@ htmlcov/
 # LLM 캐셋
 cassettes/
 
+# 파서/임베딩 등 디스크 캐시
+cache/
+
+# 모델 가중치 + 자동 생성 리포트
+models/
+reports/
+
 # Claude
 CLAUDE.md
 
@@ -59,3 +66,4 @@ test_data/pdf/*
 !test_data/hwp/README.md
 !test_data/hwpx/README.md
 !test_data/pdf/README.md
+test_data/parsed/
