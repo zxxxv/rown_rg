@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.clients.parser_client import (
+from src.clients.parser import (
     HwpxParser,
     ParseCache,
     ParseResult,
@@ -360,7 +360,7 @@ def _make_pdf(
 
 class TestPdfParserSupports:
     def test_supports_pdf_extension(self):
-        from src.clients.parser_client import PdfParser
+        from src.clients.parser import PdfParser
 
         parser = PdfParser()
         assert parser.supports(Path("a.pdf"))
@@ -369,7 +369,7 @@ class TestPdfParserSupports:
         assert not parser.supports(Path("a.docx"))
 
     def test_nonexistent_file_raises(self, tmp_path: Path):
-        from src.clients.parser_client import PdfParser
+        from src.clients.parser import PdfParser
 
         async def _run():
             await PdfParser(cache=ParseCache(root=tmp_path / "cache")).parse(
@@ -386,7 +386,7 @@ class TestPdfParserFallback:
     """docling 타임아웃을 강제로 0초로 만들어 폴백 경로만 단독 검증."""
 
     def _make_force_fallback_parser(self, tmp_path: Path):
-        from src.clients.parser_client import PdfParser
+        from src.clients.parser import PdfParser
 
         return PdfParser(
             cache=ParseCache(root=tmp_path / "cache"),
@@ -445,7 +445,7 @@ class TestPdfParserSizeBuckets:
     """크기 분기 정책 — 5MB+는 docling 시도 안 함, 1MB·5MB 임계의 의미 검증."""
 
     async def test_large_bucket_skips_docling(self, tmp_path: Path):
-        from src.clients.parser_client import PdfParser
+        from src.clients.parser import PdfParser
 
         pdf = tmp_path / "tiny_but_large_bucket.pdf"
         _make_pdf(pdf, pages=2)
@@ -475,8 +475,8 @@ class TestPdfParserDoesNotHangAfterTimeout:
     ):
         import time as _time
 
-        import src.clients.parser_client as pc
-        from src.clients.parser_client import PdfParser
+        import src.clients.parser.pdf as pdf_module
+        from src.clients.parser import PdfParser
 
         # docling을 "5초 동안 자고 결과 반환"으로 monkeypatch.
         # main이 worker join을 기다리면 5초+, daemon 패턴이면 timeout 직후 진행.
@@ -484,7 +484,7 @@ class TestPdfParserDoesNotHangAfterTimeout:
             _time.sleep(5.0)
             return ("never seen", None, 0)
 
-        monkeypatch.setattr(pc, "_docling_convert", slow_docling)
+        monkeypatch.setattr(pdf_module, "_docling_convert", slow_docling)
 
         pdf = tmp_path / "x.pdf"
         _make_pdf(pdf, pages=1)
@@ -511,7 +511,7 @@ class TestPdfParserIntegration:
     """실제 5MB 이하 PDF로 docling 정상 경로 검증. 큰 정부 PDF는 별도 manual 스크립트."""
 
     async def test_real_pdf_produces_nonempty_markdown(self, tmp_path: Path):
-        from src.clients.parser_client import PdfParser
+        from src.clients.parser import PdfParser
 
         pdf = _REAL_PDFS[0]
         parser = PdfParser(cache=ParseCache(root=tmp_path / "cache"))

@@ -1,0 +1,265 @@
+"""Vector RAG indexing — single source end-to-end.
+
+Pipeline: parse → upsert ``project_sources`` → chunk → embed → insert
+``chunks``. The orchestrator owns ordering and DB transactions only; each
+stage is delegated to its specialist (parser registry, chunking service,
+embedding client).
+
+Transactional model: short, sequential sessions. One session for the
+source UPSERT/DELETE-existing-chunks block, then the session closes
+before BGE-M3 runs — embedding is the slow stage and must not hold a DB
+transaction open. A second session reopens to bulk-insert the new chunks.
+
+Sibling files in this directory will own RAG variants that *consume*
+``chunks`` (e.g. ``raptor.py``, ``graph.py``). They are not extensions of
+this file.
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal
+from uuid import UUID
+
+import structlog
+from pydantic import BaseModel, model_validator
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+from src.db.models.chunk import Chunk as ChunkModel
+from src.db.models.project_source import ProjectSource
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from src.clients.embedding_client import EmbeddingClient
+    from src.clients.parser import ParserRegistry
+    from src.services.indexing._chunking import ChunkingService
+
+logger = structlog.get_logger(__name__)
+
+
+SourceType = Literal["library", "upload"]
+Track = Literal["content", "style"]
+
+
+class SourceInput(BaseModel):
+    """One source to ingest into the vector index.
+
+    Exactly one of ``library_node_id`` / ``upload_path`` must be set,
+    matching ``source_type``. ``web_search`` sources are not handled here
+    — they have no file to parse and need their own ingestion path.
+    """
+
+    project_id: UUID
+    source_type: SourceType
+    file_path: Path
+    library_node_id: UUID | None = None
+    upload_path: str | None = None
+    track: Track = "content"
+    title: str | None = None
+    url: str | None = None
+    reliability: Literal["high", "medium", "low"] | None = None
+
+    @model_validator(mode="after")
+    def _check_key(self) -> SourceInput:
+        if self.source_type == "library":
+            if self.library_node_id is None or self.upload_path is not None:
+                raise ValueError(
+                    "source_type='library' requires library_node_id (and no upload_path)"
+                )
+        elif self.source_type == "upload":
+            if self.upload_path is None or self.library_node_id is not None:
+                raise ValueError(
+                    "source_type='upload' requires upload_path (and no library_node_id)"
+                )
+        return self
+
+
+class IndexingResult(BaseModel):
+    """Outcome of a single source indexing run."""
+
+    source_id: UUID
+    chunks_created: int
+    parse_cached: bool
+    elapsed_ms: float
+
+
+class VectorIndexingService:
+    """End-to-end vector RAG indexer for one source at a time.
+
+    The constructor only collects dependencies; all I/O happens in
+    :meth:`index_source`. Safe to instantiate once and reuse across many
+    sources because each call opens its own short-lived DB sessions and
+    builds a fresh per-call ``SemanticChunker`` inside ``ChunkingService``.
+    """
+
+    def __init__(
+        self,
+        *,
+        parser_registry: ParserRegistry,
+        chunking_service: ChunkingService,
+        embedding_client: EmbeddingClient,
+        session_maker: async_sessionmaker,
+    ) -> None:
+        self._parser_registry = parser_registry
+        self._chunking_service = chunking_service
+        self._embedding_client = embedding_client
+        self._session_maker = session_maker
+
+    async def index_source(self, source: SourceInput) -> IndexingResult:
+        """Run the full pipeline for one source.
+
+        Steps: parse → UPSERT source row → DELETE existing chunks for that
+        source → chunk markdown → embed chunks → bulk INSERT chunks.
+
+        Args:
+            source: What to index. The file at ``source.file_path`` is
+                read by the parser registry; library/upload keys decide
+                the UPSERT path on ``project_sources``.
+
+        Returns:
+            :class:`IndexingResult` with the source UUID (existing or new),
+            number of chunks created, parse cache hit flag, and elapsed
+            wall-clock time.
+        """
+        t0 = time.perf_counter()
+        logger.info(
+            "indexing.start",
+            project_id=str(source.project_id),
+            source_type=source.source_type,
+            file_path=str(source.file_path),
+        )
+
+        parse_result = await self._parser_registry.parse(source.file_path)
+        logger.info(
+            "indexing.parsed",
+            project_id=str(source.project_id),
+            parse_cached=parse_result.cached,
+            markdown_length=len(parse_result.markdown),
+        )
+
+        # 세션 #1: source UPSERT + 기존 chunks 청소. 임베딩 호출 전에 commit하고 닫는다.
+        async with self._session_maker() as session:
+            source_id = await self._upsert_source(session, source)
+            deleted = await self._delete_existing_chunks(session, source_id)
+            await session.commit()
+        logger.info(
+            "indexing.upserted",
+            project_id=str(source.project_id),
+            source_id=str(source_id),
+            deleted_chunks=deleted,
+        )
+
+        chunks = await self._chunking_service.chunk_markdown(parse_result.markdown, source_id)
+        if not chunks:
+            elapsed = (time.perf_counter() - t0) * 1000
+            logger.info(
+                "indexing.complete",
+                source_id=str(source_id),
+                chunks_created=0,
+                elapsed_ms=round(elapsed, 1),
+            )
+            return IndexingResult(
+                source_id=source_id,
+                chunks_created=0,
+                parse_cached=parse_result.cached,
+                elapsed_ms=elapsed,
+            )
+
+        # 본문 임베딩은 외부 I/O — DB 세션 밖에서. BGE-M3 자체 캐시가 재실행 시 비용을 흡수.
+        embed_results = await self._embedding_client.embed_batch([c.content for c in chunks])
+
+        # 세션 #2: 새 chunks 일괄 INSERT.
+        async with self._session_maker() as session:
+            session.add_all(
+                [
+                    ChunkModel(
+                        project_id=source.project_id,
+                        source_id=source_id,
+                        track=source.track,
+                        content=c.content,
+                        embedding=embed_results[i].embedding,
+                        chunk_index=c.chunk_index,
+                        metadata_=c.metadata,
+                    )
+                    for i, c in enumerate(chunks)
+                ]
+            )
+            await session.commit()
+
+        elapsed = (time.perf_counter() - t0) * 1000
+        logger.info(
+            "indexing.complete",
+            source_id=str(source_id),
+            chunks_created=len(chunks),
+            elapsed_ms=round(elapsed, 1),
+        )
+        return IndexingResult(
+            source_id=source_id,
+            chunks_created=len(chunks),
+            parse_cached=parse_result.cached,
+            elapsed_ms=elapsed,
+        )
+
+    async def _upsert_source(self, session, source: SourceInput) -> UUID:
+        """Upsert into project_sources via the appropriate partial UNIQUE index.
+
+        Returns the resulting source UUID (existing on conflict, or new).
+        The two source types route to different partial indexes so a
+        library row never conflicts with an upload row sharing a project.
+        """
+        values = {
+            "project_id": source.project_id,
+            "library_node_id": source.library_node_id,
+            "upload_path": source.upload_path,
+            "source_type": source.source_type,
+            "title": source.title,
+            "url": source.url,
+            "reliability": source.reliability,
+        }
+        stmt = pg_insert(ProjectSource).values(**values)
+
+        if source.source_type == "library":
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["project_id", "library_node_id"],
+                index_where=ProjectSource.library_node_id.isnot(None),
+                set_={
+                    "title": stmt.excluded.title,
+                    "url": stmt.excluded.url,
+                    "reliability": stmt.excluded.reliability,
+                },
+            )
+        else:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["project_id", "upload_path"],
+                index_where=ProjectSource.upload_path.isnot(None),
+                set_={
+                    "title": stmt.excluded.title,
+                    "url": stmt.excluded.url,
+                    "reliability": stmt.excluded.reliability,
+                },
+            )
+        stmt = stmt.returning(ProjectSource.id)
+        result = await session.execute(stmt)
+        return result.scalar_one()
+
+    @staticmethod
+    async def _delete_existing_chunks(session, source_id: UUID) -> int:
+        """Delete chunks belonging to a source. Returns the row count removed."""
+        # 재인덱싱 멱등성 — 새 INSERT 전에 기존 청크를 비워 같은 source_id에 중복이 쌓이지
+        # 않게 한다. raptor/graph 노드는 chunks.source_id를 직접 참조하지 않으므로 영향 없음.
+        result = await session.execute(delete(ChunkModel).where(ChunkModel.source_id == source_id))
+        return result.rowcount or 0
+
+    async def source_exists(self, project_id: UUID, source_id: UUID) -> bool:
+        """True if the given source row exists under the project."""
+        async with self._session_maker() as session:
+            result = await session.execute(
+                select(ProjectSource.id).where(
+                    ProjectSource.id == source_id,
+                    ProjectSource.project_id == project_id,
+                )
+            )
+            return result.first() is not None

@@ -14,7 +14,7 @@ class _StdoutHandler(logging.StreamHandler):
     """
 
     @property
-    def stream(self):  # type: ignore[override]
+    def stream(self):
         return sys.stdout
 
     @stream.setter

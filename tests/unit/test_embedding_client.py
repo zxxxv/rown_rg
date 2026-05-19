@@ -13,9 +13,7 @@ from src.clients.embedding_client import (
     BgeM3Client,
     EmbeddingCache,
     EmbeddingClient,
-    EmbeddingGemmaClient,
     EmbeddingResult,
-    Qwen3EmbeddingClient,
 )
 
 # ---------- EmbeddingResult ----------
@@ -94,8 +92,6 @@ class TestEmbeddingClientABC:
 
     def test_bge_m3_subclasses_embedding_client(self):
         assert issubclass(BgeM3Client, EmbeddingClient)
-        assert issubclass(Qwen3EmbeddingClient, EmbeddingClient)
-        assert issubclass(EmbeddingGemmaClient, EmbeddingClient)
 
     def test_dimension_is_classvar(self):
         assert BgeM3Client.DIMENSION == 1024
@@ -290,19 +286,6 @@ class TestMaxCharsOverrideHardCap:
         too_big = int(auto * m) + 1
         with pytest.raises(ValueError, match="exceeds hard cap"):
             BgeM3Client(max_chars_per_batch=too_big)
-
-
-# ---------- 미구현 스텁 ----------
-
-
-class TestStubs:
-    def test_qwen3_stub_raises(self):
-        with pytest.raises(NotImplementedError):
-            Qwen3EmbeddingClient()
-
-    def test_gemma_stub_raises(self):
-        with pytest.raises(NotImplementedError):
-            EmbeddingGemmaClient()
 
 
 # ---------- BgeM3Client (실제 모델) ----------

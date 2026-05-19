@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     embedding_model_path: str = "./models/bge-m3-onnx-int8"
     embedding_cache_dir: str = "./cache/embeddings"
 
+    # 청킹 (튜닝 가능 — 길이 범위·헤더 레벨 등 라이브러리 상수는 서비스 ClassVar)
+    chunking_breakpoint_amount: int = 95
+
     @property
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION

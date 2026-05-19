@@ -435,9 +435,8 @@ def write_report(
     else:
         verdict = "**판정: FAIL** ✗\n\n실패 항목:\n" + "\n".join(f"- `{f}`" for f in failures)
         verdict += (
-            "\n\n**대안 모델 검토**: Qwen3-Embedding-0.6B 또는 EmbeddingGemma-300M "
-            "(둘 다 `src/clients/embedding_client.py`에 스텁 존재). "
-            "현 BGE-M3 INT8 보다 작은 차원·메모리 vs 한국어 품질 trade-off 평가 필요."
+            "\n\n**대안 모델 검토**: 한국어 품질 기준 미달 시 다른 다국어 임베딩 백엔드 "
+            "(예: Qwen3-Embedding, EmbeddingGemma 등) 추가 평가 권장."
         )
 
     sections.append("## 4. 합격 기준 평가\n\n" + pass_table + "\n\n" + verdict)
@@ -569,10 +568,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if not verdict_ok:
         print(f"\n[FAIL] 합격 기준 미달: {failures}")
-        print(
-            "대안 모델 검토 안내: Qwen3-Embedding-0.6B 또는 EmbeddingGemma-300M "
-            "(현 BGE-M3 대비 메모리·차원·한국어 품질 trade-off 평가 필요)."
-        )
         print(f"리포트: {REPORT_PATH}")
         return 1
 

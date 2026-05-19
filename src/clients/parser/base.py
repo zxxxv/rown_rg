@@ -1,0 +1,185 @@
+"""Parser package primitives.
+
+Models, errors, the ``ParserClient`` ABC, shared markdown post-processing
+helpers, and the file-based ``ParseCache``. This module has no parser-
+library dependencies (python-hwpx, docling): adapter modules pull in those
+heavy imports themselves so importing :mod:`src.clients.parser` stays cheap.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from abc import ABC, abstractmethod
+from pathlib import Path
+
+import structlog
+from pydantic import BaseModel, Field
+
+logger = structlog.get_logger(__name__)
+
+
+_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$", re.MULTILINE)
+_TABLE_LINE = re.compile(r"^\s*\|.*\|\s*$")
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+\S", re.MULTILINE)
+_PAGE_NUMBER_LINE = re.compile(
+    r"^\s*(?:[-–—]\s*\d+\s*[-–—]|\d+\s*/\s*\d+|\d+)\s*$",
+    re.MULTILINE,
+)
+_SEPARATOR_CELL = re.compile(r"^\s*:?-{2,}:?\s*$")
+
+
+class ParseMetadata(BaseModel):
+    page_count: int | None = None
+    char_count: int = 0
+    table_count: int = 0
+    heading_count: int = 0
+    image_count: int = 0
+    header_footer_removed: bool = False
+
+
+class ParseResult(BaseModel):
+    source_path: Path
+    markdown: str
+    metadata: ParseMetadata = Field(default_factory=ParseMetadata)
+    warnings: list[str] = Field(default_factory=list)
+    cached: bool = False
+
+
+class ParserError(Exception):
+    pass
+
+
+class UnsupportedFormatError(ParserError):
+    pass
+
+
+class ParserClient(ABC):
+    @abstractmethod
+    async def parse(self, file_path: Path) -> ParseResult: ...
+
+    @abstractmethod
+    def supports(self, file_path: Path) -> bool: ...
+
+
+def _count_table_blocks(markdown: str) -> int:
+    lines = markdown.split("\n")
+    n = len(lines)
+    count = 0
+    i = 0
+    while i < n:
+        if _TABLE_LINE.match(lines[i]):
+            count += 1
+            while i < n and _TABLE_LINE.match(lines[i]):
+                i += 1
+            continue
+        i += 1
+    return count
+
+
+def _measure_markdown(markdown: str) -> tuple[int, int, int]:
+    char_count = len(markdown)
+    table_count = _count_table_blocks(markdown)
+    heading_count = sum(1 for _ in _HEADING.finditer(markdown))
+    return char_count, table_count, heading_count
+
+
+def _strip_page_numbers(markdown: str) -> str:
+    return _PAGE_NUMBER_LINE.sub("", markdown)
+
+
+def _extract_cells(line: str) -> list[str]:
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _is_separator_row(cells: list[str]) -> bool:
+    return bool(cells) and all(_SEPARATOR_CELL.match(c) for c in cells)
+
+
+def _is_meaningful_table(block: list[str]) -> bool:
+    rows = [_extract_cells(line) for line in block]
+    if not rows:
+        return False
+    sep_idx: int | None = None
+    for i, cells in enumerate(rows):
+        if _is_separator_row(cells):
+            sep_idx = i
+            break
+    if sep_idx is None:
+        return True
+    header_rows = rows[:sep_idx]
+    data_rows = rows[sep_idx + 1 :]
+    if not data_rows:
+        return False
+    total_text = "".join(c for row in (header_rows + data_rows) for c in row).strip()
+    return len(total_text) >= 5
+
+
+def _filter_empty_tables(markdown: str) -> str:
+    lines = markdown.split("\n")
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if _TABLE_LINE.match(lines[i]):
+            start = i
+            while i < n and _TABLE_LINE.match(lines[i]):
+                i += 1
+            block = lines[start:i]
+            if _is_meaningful_table(block):
+                out.extend(block)
+            continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
+class ParseCache:
+    def __init__(self, root: Path = Path("./cache/parsed")) -> None:
+        self.root = root
+
+    @staticmethod
+    def _key(file_path: Path) -> str:
+        abs_path = str(file_path.resolve())
+        mtime = file_path.stat().st_mtime_ns
+        raw = f"{abs_path}:{mtime}".encode()
+        return hashlib.sha256(raw).hexdigest()[:16]
+
+    def _path_for(self, key: str) -> Path:
+        return self.root / f"{key}.json"
+
+    def load(self, file_path: Path) -> ParseResult | None:
+        try:
+            key = self._key(file_path)
+        except FileNotFoundError:
+            return None
+        cache_file = self._path_for(key)
+        if not cache_file.exists():
+            return None
+        try:
+            data = cache_file.read_text(encoding="utf-8")
+            result = ParseResult.model_validate_json(data)
+        except Exception as e:
+            logger.warning(
+                "parser_cache.load_failed",
+                cache_file=str(cache_file),
+                error_type=type(e).__name__,
+            )
+            return None
+        result.cached = True
+        return result
+
+    def store(self, file_path: Path, result: ParseResult) -> None:
+        try:
+            key = self._key(file_path)
+        except FileNotFoundError:
+            return
+        self.root.mkdir(parents=True, exist_ok=True)
+        cache_file = self._path_for(key)
+        payload = result.model_copy(update={"cached": False})
+        cache_file.write_text(payload.model_dump_json(), encoding="utf-8")

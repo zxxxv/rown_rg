@@ -1,342 +1,31 @@
+"""PDF 어댑터 — docling 1차, pymupdf4llm 폴백.
+
+docling import는 무거워 호출 시점까지 지연.
+"""
+
 from __future__ import annotations
 
 import asyncio
 import atexit
-import hashlib
 import queue
-import re
 import threading
 import time
-from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar
 
 import structlog
-from pydantic import BaseModel, Field
+
+from src.clients.parser.base import (
+    ParseCache,
+    ParseMetadata,
+    ParserClient,
+    ParseResult,
+    _filter_empty_tables,
+    _measure_markdown,
+    _strip_page_numbers,
+)
 
 logger = structlog.get_logger(__name__)
-
-
-_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$", re.MULTILINE)
-_TABLE_LINE = re.compile(r"^\s*\|.*\|\s*$")
-_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+\S", re.MULTILINE)
-_PAGE_NUMBER_LINE = re.compile(
-    r"^\s*(?:[-–—]\s*\d+\s*[-–—]|\d+\s*/\s*\d+|\d+)\s*$",
-    re.MULTILINE,
-)
-_SEPARATOR_CELL = re.compile(r"^\s*:?-{2,}:?\s*$")
-
-_HEADING_RULES: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"^제\s*\d+\s*장\s+.+$"), "# "),
-    (re.compile(r"^제\s*\d+\s*절\s+.+$"), "## "),
-    (re.compile(r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+\.\s+.+$"), "# "),
-    (re.compile(r"^\d+\.\s+[가-힣].+$"), "### "),
-    (re.compile(r"^[가나다라마바사아자차]\.\s+.+$"), "#### "),
-]
-
-
-class ParseMetadata(BaseModel):
-    page_count: int | None = None
-    char_count: int = 0
-    table_count: int = 0
-    heading_count: int = 0
-    image_count: int = 0
-    header_footer_removed: bool = False
-
-
-class ParseResult(BaseModel):
-    source_path: Path
-    markdown: str
-    metadata: ParseMetadata = Field(default_factory=ParseMetadata)
-    warnings: list[str] = Field(default_factory=list)
-    cached: bool = False
-
-
-class ParserError(Exception):
-    pass
-
-
-class UnsupportedFormatError(ParserError):
-    pass
-
-
-class ParserClient(ABC):
-    @abstractmethod
-    async def parse(self, file_path: Path) -> ParseResult: ...
-
-    @abstractmethod
-    def supports(self, file_path: Path) -> bool: ...
-
-
-class ParseCache:
-    def __init__(self, root: Path = Path("./cache/parsed")) -> None:
-        self.root = root
-
-    @staticmethod
-    def _key(file_path: Path) -> str:
-        abs_path = str(file_path.resolve())
-        mtime = file_path.stat().st_mtime_ns
-        raw = f"{abs_path}:{mtime}".encode()
-        return hashlib.sha256(raw).hexdigest()[:16]
-
-    def _path_for(self, key: str) -> Path:
-        return self.root / f"{key}.json"
-
-    def load(self, file_path: Path) -> ParseResult | None:
-        try:
-            key = self._key(file_path)
-        except FileNotFoundError:
-            return None
-        cache_file = self._path_for(key)
-        if not cache_file.exists():
-            return None
-        try:
-            data = cache_file.read_text(encoding="utf-8")
-            result = ParseResult.model_validate_json(data)
-        except Exception as e:
-            logger.warning(
-                "parser_cache.load_failed",
-                cache_file=str(cache_file),
-                error_type=type(e).__name__,
-            )
-            return None
-        result.cached = True
-        return result
-
-    def store(self, file_path: Path, result: ParseResult) -> None:
-        try:
-            key = self._key(file_path)
-        except FileNotFoundError:
-            return
-        self.root.mkdir(parents=True, exist_ok=True)
-        cache_file = self._path_for(key)
-        payload = result.model_copy(update={"cached": False})
-        cache_file.write_text(payload.model_dump_json(), encoding="utf-8")
-
-
-def _count_table_blocks(markdown: str) -> int:
-    lines = markdown.split("\n")
-    n = len(lines)
-    count = 0
-    i = 0
-    while i < n:
-        if _TABLE_LINE.match(lines[i]):
-            count += 1
-            while i < n and _TABLE_LINE.match(lines[i]):
-                i += 1
-            continue
-        i += 1
-    return count
-
-
-def _measure_markdown(markdown: str) -> tuple[int, int, int]:
-    char_count = len(markdown)
-    table_count = _count_table_blocks(markdown)
-    heading_count = sum(1 for _ in _HEADING.finditer(markdown))
-    return char_count, table_count, heading_count
-
-
-def _strip_page_numbers(markdown: str) -> str:
-    return _PAGE_NUMBER_LINE.sub("", markdown)
-
-
-def _apply_heading_rules(lines: list[str]) -> list[str]:
-    out: list[str] = []
-    in_code = False
-    for raw in lines:
-        stripped = raw.lstrip()
-        if stripped.startswith("```"):
-            in_code = not in_code
-            out.append(raw)
-            continue
-        if in_code:
-            out.append(raw)
-            continue
-        if stripped.startswith("#") or _TABLE_LINE.match(raw):
-            out.append(raw)
-            continue
-        new_line = raw
-        for pattern, prefix in _HEADING_RULES:
-            if pattern.match(stripped):
-                new_line = prefix + stripped.rstrip()
-                break
-        out.append(new_line)
-    return out
-
-
-def _extract_cells(line: str) -> list[str]:
-    s = line.strip()
-    if s.startswith("|"):
-        s = s[1:]
-    if s.endswith("|"):
-        s = s[:-1]
-    return [c.strip() for c in s.split("|")]
-
-
-def _is_separator_row(cells: list[str]) -> bool:
-    return bool(cells) and all(_SEPARATOR_CELL.match(c) for c in cells)
-
-
-def _is_meaningful_table(block: list[str]) -> bool:
-    rows = [_extract_cells(line) for line in block]
-    if not rows:
-        return False
-    sep_idx: int | None = None
-    for i, cells in enumerate(rows):
-        if _is_separator_row(cells):
-            sep_idx = i
-            break
-    if sep_idx is None:
-        return True
-    header_rows = rows[:sep_idx]
-    data_rows = rows[sep_idx + 1 :]
-    if not data_rows:
-        return False
-    total_text = "".join(c for row in (header_rows + data_rows) for c in row).strip()
-    return len(total_text) >= 5
-
-
-def _filter_empty_tables(markdown: str) -> str:
-    lines = markdown.split("\n")
-    out: list[str] = []
-    i = 0
-    n = len(lines)
-    while i < n:
-        if _TABLE_LINE.match(lines[i]):
-            start = i
-            while i < n and _TABLE_LINE.match(lines[i]):
-                i += 1
-            block = lines[start:i]
-            if _is_meaningful_table(block):
-                out.extend(block)
-            continue
-        out.append(lines[i])
-        i += 1
-    return "\n".join(out)
-
-
-class HwpxParser(ParserClient):
-    EXTENSIONS = (".hwpx",)
-
-    def __init__(self, cache: ParseCache | None = None) -> None:
-        self.cache = cache or ParseCache()
-
-    def supports(self, file_path: Path) -> bool:
-        return file_path.suffix.lower() in self.EXTENSIONS
-
-    async def parse(self, file_path: Path) -> ParseResult:
-        path = Path(file_path)
-        if not path.exists():
-            raise FileNotFoundError(path)
-
-        cached = self.cache.load(path)
-        if cached is not None:
-            logger.info("hwpx.parse.cache_hit", path=str(path))
-            return cached
-
-        logger.info("hwpx.parse.started", path=str(path), size_bytes=path.stat().st_size)
-        t0 = time.perf_counter()
-
-        markdown, warnings, header_footer_removed = self._extract(path)
-        markdown = self._postprocess_markdown(markdown)
-
-        char_count, table_count, heading_count = _measure_markdown(markdown)
-        warnings.extend(
-            [
-                "page_count_unavailable",
-                "figure_count_deferred",
-                "footnote_count_deferred",
-            ]
-        )
-
-        result = ParseResult(
-            source_path=path,
-            markdown=markdown,
-            metadata=ParseMetadata(
-                page_count=None,
-                char_count=char_count,
-                table_count=table_count,
-                heading_count=heading_count,
-                header_footer_removed=header_footer_removed,
-            ),
-            warnings=warnings,
-        )
-        self.cache.store(path, result)
-
-        logger.info(
-            "hwpx.parse.completed",
-            path=str(path),
-            duration_ms=round((time.perf_counter() - t0) * 1000, 2),
-            char_count=char_count,
-            table_count=table_count,
-            heading_count=heading_count,
-            header_footer_removed=header_footer_removed,
-        )
-        return result
-
-    def _extract(self, path: Path) -> tuple[str, list[str], bool]:
-        warnings: list[str] = []
-        try:
-            from hwpx import HwpxDocument
-            from hwpx.tools.exporter import export_markdown
-
-            doc = HwpxDocument.open(path)
-            header_footer_removed = self._strip_header_footer(doc, warnings)
-            markdown = export_markdown(doc, include_tables=True)
-            return markdown, warnings, header_footer_removed
-        except Exception as e:
-            logger.warning(
-                "hwpx.parse.fallback",
-                reason="exporter_failed",
-                error_type=type(e).__name__,
-                error_message=str(e),
-                path=str(path),
-            )
-            warnings.append(f"exporter_failed:{type(e).__name__}")
-            markdown = self._fallback_text_extract(path)
-            return markdown, warnings, False
-
-    @staticmethod
-    def _postprocess_markdown(markdown: str) -> str:
-        markdown = _strip_page_numbers(markdown)
-        lines = markdown.split("\n")
-        lines = _apply_heading_rules(lines)
-        markdown = "\n".join(lines)
-        markdown = _filter_empty_tables(markdown)
-        return markdown
-
-    @staticmethod
-    def _strip_header_footer(doc: object, warnings: list[str]) -> bool:
-        removed = False
-        for op_name in ("remove_header", "remove_footer"):
-            op = getattr(doc, op_name, None)
-            if op is None:
-                warnings.append(f"{op_name}_unavailable")
-                continue
-            try:
-                op()
-                removed = True
-            except Exception as e:
-                logger.warning(
-                    "hwpx.header_footer.strip_failed",
-                    op=op_name,
-                    error_type=type(e).__name__,
-                )
-                warnings.append(f"{op_name}_failed:{type(e).__name__}")
-        return removed
-
-    @staticmethod
-    def _fallback_text_extract(path: Path) -> str:
-        from hwpx import TextExtractor
-
-        lines: list[str] = []
-        with TextExtractor(str(path)) as extractor:
-            for section in extractor.iter_sections():
-                for para in extractor.iter_paragraphs(section):
-                    text = para.text()
-                    if text:
-                        lines.append(text)
-        return "\n\n".join(lines)
 
 
 _DOCLING_CONVERTER: object | None = None
@@ -653,24 +342,7 @@ class PdfParser(ParserClient):
 
     @staticmethod
     def _postprocess(markdown: str) -> str:
-        # 페이지 번호 줄 제거 + 빈 표 블록 제거 (HwpxParser 후처리와 동일 정책으로 일관성 유지).
+        # HwpxParser 후처리와 동일 정책으로 일관성 유지.
         markdown = _strip_page_numbers(markdown)
         markdown = _filter_empty_tables(markdown)
         return markdown
-
-
-class ParserRegistry:
-    def __init__(self, parsers: list[ParserClient] | None = None) -> None:
-        self._parsers: list[ParserClient] = parsers or [HwpxParser(), PdfParser()]
-
-    def register(self, parser: ParserClient) -> None:
-        self._parsers.append(parser)
-
-    def resolve(self, file_path: Path) -> ParserClient:
-        for parser in self._parsers:
-            if parser.supports(file_path):
-                return parser
-        raise UnsupportedFormatError(f"No parser for {file_path.suffix!r} ({file_path.name})")
-
-    async def parse(self, file_path: Path) -> ParseResult:
-        return await self.resolve(file_path).parse(file_path)

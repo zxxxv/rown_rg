@@ -2,8 +2,6 @@
 
 Provides an abstract :class:`EmbeddingClient` interface, a disk-backed cache,
 and a concrete :class:`BgeM3Client` adapter backed by an ONNX INT8 model.
-Two further adapters (:class:`Qwen3EmbeddingClient`, :class:`EmbeddingGemmaClient`)
-are declared as stubs for future model evaluation.
 """
 
 from __future__ import annotations
@@ -13,7 +11,7 @@ import hashlib
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 import psutil
@@ -21,6 +19,9 @@ import structlog
 from pydantic import BaseModel
 
 from src.core.config import settings
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
 
 logger = structlog.get_logger(__name__)
 
@@ -225,6 +226,16 @@ class BgeM3Client(EmbeddingClient):
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
         )
 
+    @property
+    def tokenizer(self) -> PreTrainedTokenizerBase:
+        """Expose the HF tokenizer for downstream reuse (e.g. token counting).
+
+        Returning the same instance avoids paying the from_pretrained cost
+        twice and ensures truncation/special-token handling stays consistent
+        across embedding and any tokenizer-based estimators.
+        """
+        return self._tokenizer
+
     @staticmethod
     def auto_max_chars_per_batch() -> int:
         """Return the host-RAM-based default for ``max_chars_per_batch``.
@@ -416,41 +427,3 @@ class BgeM3Client(EmbeddingClient):
         norms = np.linalg.norm(cls, axis=1, keepdims=True)
         normalized = cls / np.clip(norms, a_min=1e-12, a_max=None)
         return normalized.astype(np.float32)
-
-
-class Qwen3EmbeddingClient(EmbeddingClient):
-    """Stub for an alternative backend — Qwen3-Embedding-0.6B.
-
-    Kept as a typed placeholder so factory wiring and tests can reference
-    the symbol. Implementation is deferred until BGE-M3 underperforms in
-    a production-shaped evaluation.
-    """
-
-    DIMENSION: ClassVar[int] = 0  # 모델 평가 후 확정
-
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        raise NotImplementedError("Qwen3-Embedding-0.6B adapter is a future candidate.")
-
-    async def embed(self, text: str) -> EmbeddingResult:
-        raise NotImplementedError
-
-    async def embed_batch(self, texts: list[str]) -> list[EmbeddingResult]:
-        raise NotImplementedError
-
-
-class EmbeddingGemmaClient(EmbeddingClient):
-    """Stub for an alternative backend — EmbeddingGemma-300M.
-
-    See :class:`Qwen3EmbeddingClient` for rationale.
-    """
-
-    DIMENSION: ClassVar[int] = 0  # 모델 평가 후 확정
-
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        raise NotImplementedError("EmbeddingGemma-300M adapter is a future candidate.")
-
-    async def embed(self, text: str) -> EmbeddingResult:
-        raise NotImplementedError
-
-    async def embed_batch(self, texts: list[str]) -> list[EmbeddingResult]:
-        raise NotImplementedError

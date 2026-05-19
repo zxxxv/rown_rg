@@ -25,7 +25,7 @@ from typing import Any
 
 import structlog
 
-from src.clients.parser_client import (
+from src.clients.parser import (
     HwpxParser,
     ParseCache,
     ParserClient,

@@ -1,13 +1,15 @@
-"""Ad-hoc benchmark: CPU INT8 vs GPU FP16 on parsed hwpx/pdf paragraphs.
+"""Ad-hoc benchmark: CPU INT8 vs GPU INT8 vs GPU FP16 on parsed hwpx/pdf paragraphs.
 
-Pinned to the dtype/device policy decided for this project:
+The three-way comparison empirically verifies the prior dtype/device policy:
     CPU only         -> bge-m3-onnx-int8   (AVX-VNNI accelerated)
-    Turing GPU       -> bge-m3-onnx-fp16   (no Tensor Core => INT8 unprofitable)
+    Turing GPU       -> bge-m3-onnx-fp16   (no Tensor Core => INT8 expected unprofitable)
 
-The script parses one hwpx + one pdf, caps paragraphs at 200 per source, and
-measures embedding latency/throughput + cross-dtype cosine similarity. It does
-not modify ``benchmark_embedding.py`` because the standing benchmark assumes a
-single dtype.
+GPU INT8 is included so we can re-check whether the "Turing => INT8 wasted"
+assumption still holds on this exact MX450 with the current ORT/CUDA versions.
+
+The script reads pre-parsed hwpx + pdf markdown from /tmp/bench_inputs, caps
+paragraphs at 200 per source, and measures embedding latency/throughput plus
+cross-config cosine similarity (to confirm dtype changes do not corrupt vectors).
 """
 
 from __future__ import annotations
@@ -99,28 +101,44 @@ def cosine_pairs(a: np.ndarray, b: np.ndarray) -> dict[str, float]:
 async def amain() -> None:
     print(f"[{now()}] === loading pre-parsed sources ===")
     hwpx_md = (INPUTS_DIR / "hwpx.md").read_text()
-    pdf_md = (INPUTS_DIR / "pdf.md").read_text()
     hwpx_paras = split_paragraphs(hwpx_md)[:PARAGRAPH_CAP]
-    pdf_paras = split_paragraphs(pdf_md)[:PARAGRAPH_CAP]
     print(f"  hwpx: {len(hwpx_paras)} paras (capped)", flush=True)
-    print(f"  pdf : {len(pdf_paras)} paras (capped)", flush=True)
 
     print()
     print(f"[{now()}] === benchmarks ===")
-    for input_label, paras in [("hwpx", hwpx_paras), ("pdf", pdf_paras)]:
+    for input_label, paras in [("hwpx", hwpx_paras)]:
         print(f"\n--- {input_label} ({len(paras)} paras) ---")
         gpu_snapshot("before")
-        t_cpu, vec_cpu = await measure("CPU INT8", "models/bge-m3-onnx-int8", "cpu", paras)
-        gpu_snapshot("after_cpu")
-        t_gpu, vec_gpu = await measure("GPU FP16", "models/bge-m3-onnx-fp16", "cuda", paras)
-        gpu_snapshot("after_gpu")
+        t_cpu_int8, vec_cpu_int8 = await measure(
+            "CPU INT8", "models/bge-m3-onnx-int8", "cpu", paras
+        )
+        gpu_snapshot("after_cpu_int8")
+        t_gpu_int8, vec_gpu_int8 = await measure(
+            "GPU INT8", "models/bge-m3-onnx-int8", "cuda", paras
+        )
+        gpu_snapshot("after_gpu_int8")
+        t_gpu_fp16, vec_gpu_fp16 = await measure(
+            "GPU FP16", "models/bge-m3-onnx-fp16", "cuda", paras
+        )
+        gpu_snapshot("after_gpu_fp16")
 
-        speedup = t_cpu / t_gpu if t_gpu > 0 else float("inf")
-        sims = cosine_pairs(vec_cpu, vec_gpu)
+        sp_gpu_int8 = t_cpu_int8 / t_gpu_int8 if t_gpu_int8 > 0 else float("inf")
+        sp_gpu_fp16 = t_cpu_int8 / t_gpu_fp16 if t_gpu_fp16 > 0 else float("inf")
+        sims_int8 = cosine_pairs(vec_cpu_int8, vec_gpu_int8)
+        sims_fp16 = cosine_pairs(vec_cpu_int8, vec_gpu_fp16)
         print(
-            f"  speedup x{speedup:.1f}  "
-            f"cosine(INT8 vs FP16): mean={sims['mean']:.4f} "
-            f"min={sims['min']:.4f} p5={sims['p5']:.4f}",
+            f"  speedup vs CPU-INT8 — GPU-INT8: x{sp_gpu_int8:.1f}  "
+            f"GPU-FP16: x{sp_gpu_fp16:.1f}",
+            flush=True,
+        )
+        print(
+            f"  cosine(CPU-INT8 vs GPU-INT8): mean={sims_int8['mean']:.4f} "
+            f"min={sims_int8['min']:.4f} p5={sims_int8['p5']:.4f}",
+            flush=True,
+        )
+        print(
+            f"  cosine(CPU-INT8 vs GPU-FP16): mean={sims_fp16['mean']:.4f} "
+            f"min={sims_fp16['min']:.4f} p5={sims_fp16['p5']:.4f}",
             flush=True,
         )
 
