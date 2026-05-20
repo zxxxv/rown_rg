@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # 청킹 (튜닝 가능 — 길이 범위·헤더 레벨 등 라이브러리 상수는 서비스 ClassVar)
     chunking_breakpoint_amount: int = 95
 
+    # 리랭커 (어댑터 내부 동작 상수는 ClassVar, 운영 토글·경로만 환경 변수)
+    reranker_model_path: str = "./models/bge-reranker-v2-m3-onnx-int8"
+    reranker_batch_size: int = 16
+    reranker_max_length: int = 512
+    reranker_enabled: bool = True
+
     @property
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION

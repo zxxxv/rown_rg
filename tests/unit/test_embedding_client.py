@@ -82,7 +82,7 @@ class TestEmbeddingCache:
         assert cache.load("새 텍스트") is not None
 
 
-# ---------- ABC contract ----------
+# ---------- ABC 규약 ----------
 
 
 class TestEmbeddingClientABC:

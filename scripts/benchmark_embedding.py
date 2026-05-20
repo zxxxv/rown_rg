@@ -533,7 +533,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"RAM={res['peak_ram_gb']:.2f}GB"
             )
 
-    # === Stage 3: cold vs warm (sample) ===
+    # === 스테이지 3: cold vs warm (샘플) ===
     cold_warm: tuple[dict, dict] | None = None
     if sample:
         print("\n[3] cold vs warm 캐시 효과")

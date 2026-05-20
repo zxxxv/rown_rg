@@ -188,7 +188,7 @@ class TestRssWatchdog:
 
     def test_raises_when_exceeding_limit(self):
         proc = MagicMock()
-        # cutoff + 100 MB
+        # 컷오프 + 100 MB
         proc.memory_info.return_value = MagicMock(rss=int((RSS_HARD_LIMIT_GB + 0.1) * 1024**3))
         with pytest.raises(RuntimeError, match="exceeded hard cutoff"):
             check_rss_or_abort(proc, 3, 10)

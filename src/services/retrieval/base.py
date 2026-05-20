@@ -13,7 +13,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-ScoreSource = Literal["keyword", "semantic", "hybrid"]
+ScoreSource = Literal["keyword", "semantic", "hybrid", "reranker"]
 Track = Literal["content", "style"]
 
 

@@ -1,0 +1,45 @@
+# 평가 쿼리 정의 파일
+#
+# 회사 보고서 내용을 보고 직접 작성한다. 채점은 `uv run python scripts/eval_search.py`로
+# 시작하면 4가지 검색 모드(semantic_only / keyword_only / hybrid / hybrid_rerank) 결과를
+# CLI에서 한 화면씩 띄워주고 0~3점으로 채점한다. 채점 결과는 ./eval/scores.json에 저장되고
+# 중간 종료 후 재시작해도 이어진다.
+#
+# 채점 기준 (graded relevance)
+#   0 = 무관 (정답 아님)
+#   1 = 약간 관련 (배경 정보 정도)
+#   2 = 관련 (보고서에 인용 가능)
+#   3 = 정답 (질문에 직접 답)
+#
+# 카테고리는 자유 문자열. 리포트의 카테고리별 NDCG@10 분해에 사용. 예시 카테고리:
+#   경제성 / 수치_조회 / 약어_조회 / 자연어 / 짧은_쿼리 / 복합
+
+queries:
+  - id: q01
+    text: "본 사업의 경제적 파급효과는?"
+    category: 경제성
+
+  - id: q02
+    text: "총 사업비는 얼마인가?"
+    category: 수치_조회
+
+  - id: q03
+    text: "SOC 사업의 평가 기준"
+    category: 약어_조회
+
+  # PM이 작성해 넣을 슬롯 (예시 — 자유롭게 추가/삭제)
+  # - id: q04
+  #   text: "B/C 비율"
+  #   category: 약어_조회
+  # - id: q05
+  #   text: "이 사업의 경제성을 어떻게 평가하나"
+  #   category: 자연어
+  # - id: q06
+  #   text: "예비타당성"
+  #   category: 짧은_쿼리
+  # - id: q07
+  #   text: "STEEP 분석"
+  #   category: 약어_조회
+  # - id: q08
+  #   text: "한국 정부 인프라 투자 정책 효과"
+  #   category: 복합

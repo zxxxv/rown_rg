@@ -48,7 +48,7 @@ class ProjectSource(Base):
         DateTime, server_default=func.now(), nullable=False
     )
 
-    # Relationships
+    # 관계 매핑
     project: Mapped[Project] = relationship(back_populates="sources", lazy="raise")
     library_node: Mapped[LibraryNode | None] = relationship(lazy="raise")
     chunks: Mapped[list[Chunk]] = relationship(back_populates="source", lazy="raise")

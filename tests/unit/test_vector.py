@@ -174,14 +174,14 @@ class TestPipelineOrdering:
             )
         )
 
-        # 2 sessions opened: upsert+delete, then insert.
+        # 세션 2개 사용: upsert+delete 1개, insert 1개.
         assert maker_call_count["n"] == 2
-        # Embedding is called between sessions, with chunk contents in order.
+        # 임베딩은 두 세션 사이에 청크 콘텐츠 순서대로 호출된다.
         embed.embed_batch.assert_awaited_once_with(["hello world"])
-        # Chunking received the source_id returned by upsert.
+        # 청킹은 upsert가 반환한 source_id를 받는다.
         chunking.chunk_markdown.assert_awaited_once()
         assert chunking.chunk_markdown.call_args.args[1] == source_id
-        # Final result reflects state.
+        # 최종 결과는 상태를 반영한다.
         assert isinstance(result, IndexingResult)
         assert result.source_id == source_id
         assert result.chunks_created == 1
@@ -305,7 +305,7 @@ class TestEmbeddingOrderAlignment:
         )
 
         embed.embed_batch.assert_awaited_once_with([f"text-{i}" for i in range(3)])
-        # add_all was called with rows in the same order as the chunks.
+        # add_all은 청크 순서 그대로 행을 받는다.
         assert len(added_rows) == 1
         rows = added_rows[0]
         assert [r.chunk_index for r in rows] == [0, 1, 2]

@@ -1,8 +1,8 @@
 """Keyword (BM25-style) retrieval over chunks via pgroonga.
 
 Module-private: callers route through :class:`HybridSearchClient` in
-``hybrid.py`` (added in 작업 11). Direct external use is intentionally not
-re-exported from the package ``__init__``.
+``hybrid.py``. Direct external use is intentionally not re-exported from
+the package ``__init__``.
 
 The query passes through pgroonga's ``&@~`` operator. Default tokenizer
 (``TokenBigramSplitSymbolAlphaDigit``-class) handles Korean particle

@@ -94,6 +94,12 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = [
+    "unit: 단위 테스트 (빠름, mock 위주)",
+    "integration: 통합 테스트 (DB·외부 서비스 사용)",
+    "slow: 1초 이상 걸리는 테스트",
+    "requires_model: ML 모델 로딩 필요 (BGE-M3·Reranker 등)",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

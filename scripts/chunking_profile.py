@@ -72,10 +72,7 @@ async def amain() -> None:
     print(f"wall clock       : {elapsed:.1f}s")
     print(f"embed_batch calls: {total_calls}")
     print(f"embed_batch texts: {total_texts}")
-    print(
-        f"embed time       : {total_embed_s:.1f}s "
-        f"({total_embed_s / elapsed * 100:.0f}% of wall)"
-    )
+    print(f"embed time       : {total_embed_s:.1f}s ({total_embed_s / elapsed * 100:.0f}% of wall)")
     if total_calls:
         print(f"avg per call     : {total_embed_s / total_calls * 1000:.0f}ms")
         print(f"avg batch size   : {total_texts / total_calls:.1f}")

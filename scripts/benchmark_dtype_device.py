@@ -127,8 +127,7 @@ async def amain() -> None:
         sims_int8 = cosine_pairs(vec_cpu_int8, vec_gpu_int8)
         sims_fp16 = cosine_pairs(vec_cpu_int8, vec_gpu_fp16)
         print(
-            f"  speedup vs CPU-INT8 — GPU-INT8: x{sp_gpu_int8:.1f}  "
-            f"GPU-FP16: x{sp_gpu_fp16:.1f}",
+            f"  speedup vs CPU-INT8 — GPU-INT8: x{sp_gpu_int8:.1f}  GPU-FP16: x{sp_gpu_fp16:.1f}",
             flush=True,
         )
         print(

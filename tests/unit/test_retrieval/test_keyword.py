@@ -83,7 +83,7 @@ async def _seed_corpus(session: AsyncSession, test_session_maker) -> dict:
     source_b = await _seed_source(session, project_b)
 
     chunks_data = [
-        # project_a, content track
+        # project_a, content 트랙
         (project_a.id, source_a.id, "비용편익 분석은 ABC 방법론을 따른다.", 0, "content"),
         (project_a.id, source_a.id, "사업의 경제성을 분석한다.", 1, "content"),
         (project_a.id, source_a.id, "사업을 진행한다.", 2, "content"),

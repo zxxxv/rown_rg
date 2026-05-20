@@ -1,10 +1,20 @@
 """Retrieval layer public API.
 
-Only the contract (:class:`SearchClient`, :class:`SearchHit`) is exposed.
-Concrete backends live in ``_keyword``, ``_semantic``, ``_hybrid`` and are
-module-private — callers route through the hybrid facade added in 작업 11.
+Only the contract (:class:`SearchClient`, :class:`SearchHit`) plus the
+:class:`HybridSearchClient` facade and :func:`rerank_hits` helper are
+exposed. Concrete backends in ``_keyword``, ``_semantic``, ``_reranking``
+are module-private — external callers route through the facade.
 """
 
+from src.services.retrieval._reranking import rerank_hits
 from src.services.retrieval.base import ScoreSource, SearchClient, SearchHit, Track
+from src.services.retrieval.hybrid import HybridSearchClient
 
-__all__ = ["ScoreSource", "SearchClient", "SearchHit", "Track"]
+__all__ = [
+    "HybridSearchClient",
+    "ScoreSource",
+    "SearchClient",
+    "SearchHit",
+    "Track",
+    "rerank_hits",
+]

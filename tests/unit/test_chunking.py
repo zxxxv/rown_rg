@@ -328,7 +328,7 @@ class TestPlaceholderSafety:
         assert out == "앞 <<<TABLE_2>>> 뒤"
 
 
-# ---------- Prewarming ----------
+# ---------- 프리워밍 ----------
 
 
 class _CountingEmbedding(_DummyEmbedding):

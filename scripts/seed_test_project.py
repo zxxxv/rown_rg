@@ -1,4 +1,4 @@
-"""Create the Week 2 fixed-UUID test project.
+"""Create the fixed-UUID test project for indexing/retrieval validation.
 
 Idempotent — if a project with the fixed UUID already exists, prints and
 exits 0. Requires at least one ``super_admin`` user; uses the first one
@@ -21,8 +21,8 @@ from src.db.models.user import User
 from src.db.session import async_engine, async_session_maker
 
 FIXTURE_PROJECT_ID = UUID("11111111-1111-1111-1111-111111111111")
-FIXTURE_TITLE = "Week 2 검증용 테스트 프로젝트"
-FIXTURE_TOPIC = "Week 2 인덱싱·검색 파이프라인 검증"
+FIXTURE_TITLE = "검증용 테스트 프로젝트"
+FIXTURE_TOPIC = "인덱싱·검색 파이프라인 검증"
 
 
 async def main() -> int:
