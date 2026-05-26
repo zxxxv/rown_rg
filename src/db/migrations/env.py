@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from src.core.asyncio_compat import configure_event_loop
 from src.db.base import Base
 from src.db.models import *  # noqa: F401, F403 — 모든 모델 import 강제
 
@@ -58,6 +59,7 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
+    configure_event_loop()
     asyncio.run(run_async_migrations())
 
 

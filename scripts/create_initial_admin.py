@@ -13,9 +13,12 @@ import sys
 
 from sqlalchemy import select
 
+from src.core.asyncio_compat import configure_event_loop
 from src.db.models.user import User
 from src.db.session import async_engine, async_session_maker
 from src.infrastructure.auth.password_handler import hash_password, validate_password_policy
+
+configure_event_loop()
 
 
 async def main() -> int:

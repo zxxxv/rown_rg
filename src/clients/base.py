@@ -1,4 +1,4 @@
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +31,5 @@ class CompletionResponse(BaseModel):
     stop_reason: str
 
 
-@runtime_checkable
 class LLMClient(Protocol):
     async def complete(self, request: CompletionRequest) -> CompletionResponse: ...

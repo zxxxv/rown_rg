@@ -29,6 +29,8 @@ class Settings(BaseSettings):
 
     # LLM
     anthropic_api_key: str = ""
+    gemini_api_key: str = ""
+    openai_api_key: str = ""
 
     # JWT
     jwt_secret_key: str = "change-me-32-chars-or-more"

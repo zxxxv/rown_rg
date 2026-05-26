@@ -75,7 +75,7 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP"]
+select = ["E", "F", "I", "W", "UP"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["src", "tests"]
