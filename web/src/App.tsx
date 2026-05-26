@@ -1,0 +1,143 @@
+import { lazy, Suspense } from "react";
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { RequireAuth } from "@/components/auth/RequireAuth";
+import { Toaster } from "@/components/ui/sonner";
+import ForbiddenPage from "@/pages/403";
+import AdminDashboardPage from "@/pages/admin/dashboard";
+import LibraryPage from "@/pages/library";
+import LoginPage from "@/pages/login";
+import ProjectsPage from "@/pages/projects";
+import EditorPage from "@/pages/projects/[id]/editor";
+import ExportPage from "@/pages/projects/[id]/export";
+import OverviewPage from "@/pages/projects/[id]/overview";
+import PreviewPage from "@/pages/projects/[id]/preview";
+import ProgressPage from "@/pages/projects/[id]/progress";
+import ReconcilePage from "@/pages/projects/[id]/reconcile";
+import SourcesPage from "@/pages/projects/[id]/sources";
+import NewProjectPage from "@/pages/projects/new";
+
+const routes = [
+  {
+    path: "/",
+    element: <div className="p-8">Hello</div>,
+  },
+  {
+    path: "/login",
+    element: <LoginPage />,
+  },
+  {
+    path: "/projects",
+    element: (
+      <RequireAuth>
+        <ProjectsPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/library",
+    element: (
+      <RequireAuth>
+        <LibraryPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/projects/new",
+    element: (
+      <RequireAuth>
+        <NewProjectPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/projects/:id/overview",
+    element: (
+      <RequireAuth>
+        <OverviewPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/projects/:id/sources",
+    element: (
+      <RequireAuth>
+        <SourcesPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/projects/:id/reconcile",
+    element: (
+      <RequireAuth>
+        <ReconcilePage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/projects/:id/export",
+    element: (
+      <RequireAuth>
+        <ExportPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/projects/:id/editor",
+    element: (
+      <RequireAuth>
+        <EditorPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/projects/:id/preview",
+    element: (
+      <RequireAuth>
+        <PreviewPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/projects/:id/progress",
+    element: (
+      <RequireAuth>
+        <ProgressPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/admin/dashboard",
+    element: (
+      <RequireAuth minRole="admin">
+        <AdminDashboardPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/403",
+    element: <ForbiddenPage />,
+  },
+];
+
+if (import.meta.env.DEV) {
+  const ComponentsGalleryPage = lazy(() => import("@/pages/__components"));
+  routes.push({
+    path: "/__components",
+    element: (
+      <Suspense fallback={<div className="p-8 text-fg-tertiary">Loading…</div>}>
+        <ComponentsGalleryPage />
+      </Suspense>
+    ),
+  });
+}
+
+const router = createBrowserRouter(routes);
+
+export function App() {
+  return (
+    <>
+      <RouterProvider router={router} />
+      <Toaster />
+    </>
+  );
+}

@@ -1,0 +1,125 @@
+import ky, { HTTPError, type Options } from "ky";
+import { toast } from "sonner";
+import { env } from "@/env";
+
+export class ApiError extends Error {
+  readonly code: string;
+  readonly status?: number;
+  readonly details?: Record<string, unknown>;
+
+  constructor(code: string, message: string, status?: number, details?: Record<string, unknown>) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.status = status;
+    this.details = details;
+  }
+}
+
+type Handler = () => void;
+let onUnauthorized: Handler | null = null;
+let onForbidden: Handler | null = null;
+
+export function setUnauthorizedHandler(fn: Handler | null) {
+  onUnauthorized = fn;
+}
+
+export function setForbiddenHandler(fn: Handler | null) {
+  onForbidden = fn;
+}
+
+const AUTH_PATHS = ["/auth/login", "/auth/me", "/auth/logout"];
+
+function resolvePrefixUrl(raw: string): string {
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (typeof window !== "undefined") {
+    return new URL(raw, window.location.origin).toString();
+  }
+  return raw;
+}
+
+const baseClient = ky.create({
+  prefix: resolvePrefixUrl(env.VITE_API_BASE_URL),
+  credentials: "include",
+  retry: 0,
+  timeout: 30_000,
+  hooks: {
+    afterResponse: [
+      ({ request, response }) => {
+        const url = new URL(request.url);
+        const suppressAuth = AUTH_PATHS.some((p) => url.pathname.endsWith(p));
+
+        if (response.status === 401 && !suppressAuth) {
+          onUnauthorized?.();
+        } else if (response.status === 403 && !suppressAuth) {
+          onForbidden?.();
+        } else if (response.status >= 500) {
+          toast.error("서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.", {
+            description: `HTTP ${response.status}`,
+          });
+        }
+        return response;
+      },
+    ],
+  },
+});
+
+interface SuccessEnvelope<T> {
+  data: T;
+}
+interface ErrorEnvelope {
+  error: { code: string; message: string; details?: Record<string, unknown> };
+}
+
+function isErrorEnvelope(v: unknown): v is ErrorEnvelope {
+  return typeof v === "object" && v !== null && "error" in v;
+}
+
+function isSuccessEnvelope<T>(v: unknown): v is SuccessEnvelope<T> {
+  return typeof v === "object" && v !== null && "data" in v;
+}
+
+async function request<T>(method: string, path: string, init?: Options): Promise<T> {
+  try {
+    const res = await baseClient(path, { ...init, method });
+    const text = await res.text();
+    if (!text) return undefined as T;
+
+    const json: unknown = JSON.parse(text);
+    if (isErrorEnvelope(json)) {
+      throw new ApiError(json.error.code, json.error.message, res.status, json.error.details);
+    }
+    if (isSuccessEnvelope<T>(json)) {
+      return json.data;
+    }
+    return json as T;
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if (err instanceof HTTPError) {
+      let envelope: unknown = null;
+      try {
+        envelope = await err.response.clone().json();
+      } catch {
+        envelope = null;
+      }
+      if (isErrorEnvelope(envelope)) {
+        throw new ApiError(
+          envelope.error.code,
+          envelope.error.message,
+          err.response.status,
+          envelope.error.details,
+        );
+      }
+      throw new ApiError("http_error", `HTTP ${err.response.status}`, err.response.status);
+    }
+    throw err;
+  }
+}
+
+export const apiClient = {
+  get: <T>(path: string, init?: Options) => request<T>("GET", path, init),
+  post: <T>(path: string, init?: Options) => request<T>("POST", path, init),
+  put: <T>(path: string, init?: Options) => request<T>("PUT", path, init),
+  patch: <T>(path: string, init?: Options) => request<T>("PATCH", path, init),
+  delete: <T>(path: string, init?: Options) => request<T>("DELETE", path, init),
+};
