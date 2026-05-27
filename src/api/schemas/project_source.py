@@ -6,7 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SourceType = Literal["library", "upload", "web_search"]
+from src.core.types import SourceType
+
 Reliability = Literal["high", "medium", "low"]
 
 

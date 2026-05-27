@@ -1,4 +1,3 @@
-from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
@@ -18,6 +17,7 @@ from src.api.schemas.auth import (
     TokenPair,
 )
 from src.api.schemas.user import UserCreate, UserRead
+from src.core.clock import now
 from src.core.exceptions import AuthenticationError, ValidationError
 from src.db.models.user import User
 from src.infrastructure.auth import (
@@ -28,10 +28,6 @@ from src.infrastructure.auth import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-def _now_naive() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -96,7 +92,7 @@ async def login(
             raise AuthenticationError(message="TOTP 코드가 올바르지 않습니다", code="INVALID_TOTP")
 
     lockout_handler.reset_attempts(user)
-    user.last_login_at = _now_naive()
+    user.last_login_at = now()
 
     return TokenPair(
         access_token=jwt_handler.create_access_token(user.id, user.role),
@@ -147,5 +143,5 @@ async def change_password(
         )
     password_handler.validate_password_policy(data.new_password)
     current_user.password_hash = password_handler.hash_password(data.new_password)
-    current_user.password_changed_at = _now_naive()
+    current_user.password_changed_at = now()
     return LogoutResponse(success=True)
