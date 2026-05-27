@@ -50,15 +50,15 @@ pnpm dev
 | `/projects/:id/progress` | 진행 패널 | WebSocket 시나리오 재생 |
 | `/projects/:id/preview` | 섹션 미리보기 | [ref:id] 출처 호버 |
 
-### 모킹 화면 (클릭·전환 작동, 백엔드 실작동은 Phase 4~5)
+### 모킹 화면 (클릭·전환 작동, 백엔드 실작동은)
 
 | 라우트 | 화면 | 실작동 시점 |
 |---|---|---|
-| `/projects/:id/reconcile` | 자료 모순 해결 | Phase 4 (세션 23) |
-| `/projects/:id/editor` | 3-패널 편집기 셸 | Phase 5 (세션 29, Tiptap) |
-| `/projects/:id/export` | HWPX 다운로드 | Phase 4 (세션 28) |
-| `/admin/dashboard` | 관리자 대시보드 | Phase 5 (세션 35) |
-| `/library` | 자료 폴더 라이브러리 | Phase 4 (세션 24, react-arborist) |
+| `/projects/:id/reconcile` | 자료 모순 해결 | (세션 23) |
+| `/projects/:id/editor` | 3-패널 편집기 셸 | (세션 29, Tiptap) |
+| `/projects/:id/export` | HWPX 다운로드 | (세션 28) |
+| `/admin/dashboard` | 관리자 대시보드 | (세션 35) |
+| `/library` | 자료 폴더 라이브러리 | (세션 24, react-arborist) |
 
 ### 권한 페이지
 
