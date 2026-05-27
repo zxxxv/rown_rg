@@ -161,6 +161,9 @@ init-scripts/           # PostgreSQL 컨테이너 초기화 SQL (확장 활성�
 | 자신의 프로젝트 CRUD | ✓ | ✓ | ✓ | |
 | 프로젝트 읽기·보고서 다운로드 | ✓ | ✓ | ✓ | ✓ |
 
+> 자료 라이브러리·프로젝트 자료 도메인 모델은 프론트 mock에서 먼저 잡혀 있음 —
+> 백엔드 도입 시 [`web/src/api/types.ts`](web/src/api/types.ts) (`LibraryFileMeta`, `Source`) 참고.
+
 ## 기여 가이드
 
 ### 브랜치 전략
