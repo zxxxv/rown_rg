@@ -19,7 +19,7 @@ const OPTIONS: SourceOption[] = [
     name: "config.sources.use_library",
     id: "source-library",
     label: "회사 자료 라이브러리",
-    description: "사내 저장소의 검증된 자료. (Phase 4부터 실작동)",
+    description: "사내 저장소의 검증된 자료. (실 연동 준비 중)",
   },
   {
     name: "config.sources.use_upload",

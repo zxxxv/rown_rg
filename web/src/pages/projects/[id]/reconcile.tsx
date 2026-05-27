@@ -114,7 +114,7 @@ export default function ReconcilePage() {
             <span className="text-fg-tertiary">전체 {counts.total}</span>
           </div>
           <p className="rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
-            본 화면은 Phase 4에서 실작동 전환됩니다. 현재는 모킹된 데이터로 결정 흐름을 시연합니다.
+            현재는 모킹 단계입니다. 실 작동은 추후 구현 예정 — 결정 흐름은 정상 시연됩니다.
           </p>
         </header>
 

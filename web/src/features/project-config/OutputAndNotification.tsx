@@ -112,7 +112,7 @@ export function OutputAndNotification() {
                     label={CHANNEL_LABEL[k]}
                     checked={selected.has(k)}
                     onToggle={() => toggle(k)}
-                    badge={k === "naver_works" ? "Phase 4" : undefined}
+                    badge={k === "naver_works" ? "준비 중" : undefined}
                   />
                 ))}
               </div>

@@ -1,4 +1,5 @@
 import { HttpResponse, http } from "msw";
+import { createProjectFolderForLibrary } from "@/api/mock/fixtures/library";
 import { DEMO_PROJECTS } from "@/api/mock/fixtures/projects";
 import { DEMO_ADMIN_USER } from "@/api/mock/fixtures/users";
 import type { Project, ProjectSort, ProjectStatus } from "@/api/types";
@@ -15,12 +16,6 @@ function sortProjects(items: Project[], sort: ProjectSort): Project[] {
   const copy = [...items];
   copy.sort((a, b) => {
     if (sort === "title_asc") return a.title.localeCompare(b.title, "ko");
-    if (sort === "deadline_asc") {
-      if (!a.deadline && !b.deadline) return 0;
-      if (!a.deadline) return 1;
-      if (!b.deadline) return -1;
-      return a.deadline.localeCompare(b.deadline);
-    }
     return b.created_at.localeCompare(a.created_at);
   });
   return copy;
@@ -78,10 +73,10 @@ export const projectsHandlers = [
       owner_id: DEMO_ADMIN_USER.id,
       created_at: nowIso,
       updated_at: nowIso,
-      deadline: v.deadline,
       progress: 0,
     };
     DEMO_PROJECTS.unshift(project);
+    createProjectFolderForLibrary(project);
     return HttpResponse.json({ data: project }, { status: 201 });
   }),
 

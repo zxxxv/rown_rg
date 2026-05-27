@@ -92,7 +92,7 @@ export function RewriteDialog() {
     closeRewrite();
     toast.success("재작성 시작됨", {
       description:
-        "Phase 5에서 진행 패널과 통합되어 작성 모델에 전송됩니다. 완료 후 비교 뷰가 표시됩니다.",
+        "진행 패널과 통합되어 작성 모델에 전송되고, 완료 후 비교 뷰가 표시됩니다. (현재는 모킹 단계)",
       duration: 5000,
     });
   };
@@ -185,7 +185,7 @@ export function RewriteDialog() {
               size="sm"
               className="w-fit"
               onClick={() =>
-                toast("Phase 5에서 자료실 선택 다이얼로그가 열립니다", {
+                toast("자료실 선택 다이얼로그 — 구현 예정", {
                   description: "자료 라이브러리·검색·업로드 자료에서 선택 가능합니다.",
                 })
               }

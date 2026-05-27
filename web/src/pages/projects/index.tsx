@@ -36,7 +36,6 @@ const STATUS_TABS: { value: "all" | ProjectStatus; label: string }[] = [
 
 const SORT_OPTIONS: { value: ProjectSort; label: string }[] = [
   { value: "created_desc", label: "최신순" },
-  { value: "deadline_asc", label: "마감일순" },
   { value: "title_asc", label: "제목순" },
 ];
 

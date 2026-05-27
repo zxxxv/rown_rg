@@ -183,18 +183,18 @@ function CompletedView({ project }: { project: Project }) {
           />
           <ExtraRow
             label="편집 이력 (JSON)"
-            description="Phase 5 편집기 도입 후 활성"
-            disabledReason="편집 이력 없음 (Phase 5)"
+            description="편집기 본격 작동 후 활성"
+            disabledReason="편집 이력 없음 — 추후 활성화"
           />
           <ExtraRow
             label="일관성 그래프 (JSON)"
             description="섹션 간 주장·수치 그래프"
-            disabledReason="Phase 3에서 활성화"
+            disabledReason="추후 활성화"
           />
           <ExtraRow
             label="약어·용어집 (HWPX 부록)"
             description="자동 추출된 용어 정의"
-            disabledReason="Phase 5에서 활성화"
+            disabledReason="추후 활성화"
           />
         </ul>
       </section>

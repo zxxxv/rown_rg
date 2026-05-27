@@ -78,27 +78,23 @@ export default function LibraryPage() {
             <div>
               <h1 className="text-3xl font-semibold text-fg">자료 라이브러리</h1>
               <p className="text-sm text-fg-secondary">
-                회사 공통 자료·클라이언트 자료·분석 표준 양식을 프로젝트별로 끌어다 사용합니다.
+                프로젝트별 자료와 공용 자료(클라이언트·공통·분석 양식)를 한 곳에서 관리합니다.
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => toast("폴더 추가 (Phase 4에서 작동)")}
-              >
+              <Button variant="outline" size="sm" onClick={() => toast("폴더 추가 — 구현 예정")}>
                 <FolderPlus className="mr-1 h-4 w-4" />
                 폴더 추가
               </Button>
-              <Button size="sm" onClick={() => toast("파일 업로드 (Phase 4에서 작동)")}>
+              <Button size="sm" onClick={() => toast("파일 업로드 — 구현 예정")}>
                 <Upload className="mr-1 h-4 w-4" />
                 파일 업로드
               </Button>
             </div>
           </div>
           <div className="rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
-            Phase 4에서 react-arborist + 실 백엔드 연동으로 본격 작동 전환됩니다. 현재 업로드·폴더
-            추가·권한 설정은 모킹 토스트로 표시됩니다.
+            현재는 모킹 단계입니다. 실 백엔드 연동·고급 트리(react-arborist) 도입은 추후 구현 예정 —
+            업로드·폴더 추가·권한 설정은 지금은 안내 토스트로만 동작합니다.
           </div>
         </header>
 
