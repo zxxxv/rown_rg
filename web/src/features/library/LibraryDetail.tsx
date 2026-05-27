@@ -1,5 +1,15 @@
-import { Download, FilePlus2, FileText, Settings, Shield } from "lucide-react";
+import {
+  ArrowUpRight,
+  Download,
+  FilePlus2,
+  FileText,
+  FolderOpen,
+  Settings,
+  Shield,
+} from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { useProject } from "@/api/projects";
 import type { LibraryNode, SourceKind } from "@/api/types";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { Badge } from "@/components/ui/badge";
@@ -86,7 +96,7 @@ function FolderBody({ node }: { node: Extract<LibraryNode, { type: "folder" }> }
       <div className="flex flex-wrap gap-2">
         <Button
           onClick={() =>
-            toast("이 폴더 전체를 현재 프로젝트에 추가 (Phase 4에서 작동)", {
+            toast("이 폴더 전체를 현재 프로젝트에 추가 — 구현 예정", {
               description: `${stats.files}개 파일이 후보로 추가됩니다.`,
             })
           }
@@ -128,7 +138,7 @@ function FolderBody({ node }: { node: Extract<LibraryNode, { type: "folder" }> }
           title="비어있는 폴더"
           description="파일을 업로드하거나 폴더를 추가하세요."
           action={
-            <Button variant="outline" onClick={() => toast("파일 업로드 (Phase 4에서 작동)")}>
+            <Button variant="outline" onClick={() => toast("파일 업로드 — 구현 예정")}>
               파일 업로드
             </Button>
           }
@@ -161,6 +171,16 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
+        {meta.project_id ? (
+          <Badge variant="default" className="font-mono text-xs">
+            <FolderOpen className="mr-1 h-3 w-3" aria-hidden />
+            프로젝트 자료
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="font-mono text-xs">
+            공용 자료
+          </Badge>
+        )}
         <Badge variant="secondary" className="font-mono">
           {KIND_LABEL[meta.source_kind]}
         </Badge>
@@ -170,12 +190,14 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
         ) : null}
       </div>
 
+      {meta.project_id ? <ProjectLinkRow projectId={meta.project_id} /> : null}
+
       <div
         role="img"
         aria-label={`${node.name} 미리보기`}
         className="flex aspect-[4/3] items-center justify-center rounded border border-dashed border-border bg-bg-secondary text-xs text-fg-tertiary"
       >
-        Phase 4에서 미리보기 활성화 — PDF·HWPX 1페이지 썸네일
+        미리보기 준비 중 — PDF·HWPX 1페이지 썸네일로 표시됩니다
       </div>
 
       <dl className="grid grid-cols-2 gap-3 rounded border border-border bg-bg p-3 text-sm">
@@ -188,13 +210,13 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
       </dl>
 
       <section>
-        <h3 className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-fg-tertiary">
-          <Shield className="h-3 w-3" aria-hidden />
+        <h3 className="mb-2 flex items-center gap-2 text-sm font-medium uppercase tracking-wide text-fg-tertiary">
+          <Shield className="h-3.5 w-3.5" aria-hidden />
           접근 권한
         </h3>
         <div className="flex flex-wrap gap-1.5">
           {meta.visible_to_roles.map((r) => (
-            <Badge key={r} variant="secondary" className="font-mono text-[10px]">
+            <Badge key={r} variant="secondary" className="font-mono text-xs">
               {r}
             </Badge>
           ))}
@@ -204,7 +226,7 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
       <footer className="flex flex-wrap gap-2 border-t border-border pt-3">
         <Button
           onClick={() =>
-            toast(`현재 프로젝트에 추가 (Phase 4) — ${node.name}`, {
+            toast(`현재 프로젝트에 추가 — 구현 예정 (${node.name})`, {
               description: "자료 검토 단계에서 자동 후보로 등록됩니다.",
             })
           }
@@ -212,11 +234,11 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
           <FilePlus2 className="mr-1 h-4 w-4" />
           현재 프로젝트에 추가
         </Button>
-        <Button variant="outline" onClick={() => toast(`다운로드 (Phase 4) — ${node.name}`)}>
+        <Button variant="outline" onClick={() => toast(`다운로드 — 구현 예정 (${node.name})`)}>
           <Download className="mr-1 h-4 w-4" />
           다운로드
         </Button>
-        <Button variant="ghost" onClick={() => toast("권한 설정 (Phase 4)")}>
+        <Button variant="ghost" onClick={() => toast("권한 설정 — 구현 예정")}>
           <Settings className="mr-1 h-4 w-4" />
           권한 설정
         </Button>
@@ -236,5 +258,24 @@ function Stat({ label, value }: { label: string; value: string }) {
       <dt className="text-xs text-fg-tertiary">{label}</dt>
       <dd className="font-mono text-sm text-fg">{value}</dd>
     </div>
+  );
+}
+
+function ProjectLinkRow({ projectId }: { projectId: string }) {
+  const navigate = useNavigate();
+  const projectQuery = useProject(projectId);
+  const title = projectQuery.data?.title ?? projectId;
+  return (
+    <button
+      type="button"
+      onClick={() => navigate(`/projects/${projectId}/overview`)}
+      className="flex items-center justify-between gap-2 rounded border border-border bg-bg-secondary px-3 py-2 text-left text-sm transition-colors hover:border-border-strong hover:bg-bg"
+    >
+      <span className="flex flex-col gap-0.5">
+        <span className="text-xs text-fg-tertiary">소속 프로젝트</span>
+        <span className="font-medium text-fg">{title}</span>
+      </span>
+      <ArrowUpRight className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
+    </button>
   );
 }

@@ -149,7 +149,6 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
     title: project.title,
     topic: project.topic,
     config: project.config,
-    ...(project.deadline ? { deadline: project.deadline } : {}),
   };
 
   return (
@@ -170,7 +169,6 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               {project.updated_at ? (
                 <Meta label="최근 수정" value={project.updated_at.slice(0, 10)} />
               ) : null}
-              <Meta label="마감일" value={project.deadline ?? "—"} />
               <Meta label="소유자" value={project.owner_id} />
             </dl>
           </div>
@@ -430,8 +428,8 @@ function QuickActions({
         <QuickAction
           icon={SquarePen}
           title="보고서 편집"
-          description="3-패널 편집기 (Phase 5 본격 작동 예정)"
-          badge={{ text: "Phase 5", tone: "muted" }}
+          description="3-패널 편집기 (텍스트 편집 본격 작동 준비 중)"
+          badge={{ text: "준비 중", tone: "muted" }}
           disabled={project.status === "draft"}
           onClick={() => onNavigate(`/projects/${project.id}/editor`)}
         />

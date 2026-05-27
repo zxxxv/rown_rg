@@ -1,4 +1,4 @@
-import { CalendarClock } from "lucide-react";
+import { Calendar } from "lucide-react";
 import type { Preset, Project, ProjectStatus } from "@/api/types";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { Badge } from "@/components/ui/badge";
@@ -35,26 +35,6 @@ const PRESET_LABEL: Record<Preset, string> = {
   blank: "빈 양식",
 };
 
-type DeadlineKind = "none" | "future" | "near" | "overdue";
-
-function deadlineKind(deadline: string | undefined): DeadlineKind {
-  if (!deadline) return "none";
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const target = new Date(deadline);
-  const diffDays = Math.floor((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-  if (diffDays < 0) return "overdue";
-  if (diffDays <= 7) return "near";
-  return "future";
-}
-
-const DEADLINE_CLASS: Record<DeadlineKind, string> = {
-  none: "text-fg-tertiary",
-  future: "text-fg-secondary",
-  near: "text-fg-warning",
-  overdue: "text-fg-danger",
-};
-
 export interface ProjectCardProps {
   project: Project;
   onClick?: () => void;
@@ -64,7 +44,6 @@ export interface ProjectCardProps {
 export function ProjectCard({ project, onClick, className }: ProjectCardProps) {
   const interactive = Boolean(onClick);
   const progress = Math.max(0, Math.min(100, project.progress ?? 0));
-  const dlKind = deadlineKind(project.deadline);
 
   return (
     <article
@@ -110,12 +89,9 @@ export function ProjectCard({ project, onClick, className }: ProjectCardProps) {
         </div>
       </div>
 
-      <footer className="flex items-center gap-1.5 pt-1 text-xs">
-        <CalendarClock className={cn("h-3.5 w-3.5", DEADLINE_CLASS[dlKind])} aria-hidden />
-        <span className={cn("font-mono", DEADLINE_CLASS[dlKind])}>
-          {project.deadline ? `마감 ${project.deadline}` : "마감일 미설정"}
-          {dlKind === "near" ? " · 임박" : dlKind === "overdue" ? " · 지남" : ""}
-        </span>
+      <footer className="flex items-center gap-1.5 pt-1 text-xs text-fg-tertiary">
+        <Calendar className="h-3.5 w-3.5" aria-hidden />
+        <span className="font-mono">생성일 {project.created_at.slice(0, 10)}</span>
       </footer>
     </article>
   );

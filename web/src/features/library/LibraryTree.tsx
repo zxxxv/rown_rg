@@ -39,7 +39,9 @@ export interface LibraryTreeProps {
 }
 
 export function LibraryTree({ tree, selectedId, onSelect, search }: LibraryTreeProps) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(["group_proj", "group_shared"]),
+  );
   const q = search.trim().toLowerCase();
 
   const autoExpanded = useMemo(() => {

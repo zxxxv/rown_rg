@@ -1,4 +1,5 @@
-import type { Source } from "@/api/types";
+import { getLibraryFilesForProject } from "@/api/mock/fixtures/library";
+import type { LibraryNode, Source, SourceKind } from "@/api/types";
 
 type SourceTemplate = Omit<Source, "id" | "project_id">;
 
@@ -313,15 +314,34 @@ function hashCode(s: string): number {
 
 const sourcesByProject = new Map<string, Source[]>();
 
+function firstFileIdByKind(files: LibraryNode[], kind: SourceKind): string | undefined {
+  for (const n of files) {
+    if (n.type === "file" && n.file_meta.source_kind === kind) return n.id;
+  }
+  return undefined;
+}
+
 export function getSourcesForProject(projectId: string): Source[] {
   let existing = sourcesByProject.get(projectId);
   if (!existing) {
     const count = 15 + (hashCode(projectId) % 11);
-    existing = POOL.slice(0, count).map((tpl, i) => ({
-      ...tpl,
-      id: `src_${projectId}_${String(i + 1).padStart(3, "0")}`,
-      project_id: projectId,
-    }));
+    const libFiles = getLibraryFilesForProject(projectId);
+    const assignedByKind: Record<string, boolean> = {};
+    existing = POOL.slice(0, count).map((tpl, i) => {
+      const src: Source = {
+        ...tpl,
+        id: `src_${projectId}_${String(i + 1).padStart(3, "0")}`,
+        project_id: projectId,
+      };
+      if (!assignedByKind[tpl.source_kind]) {
+        const fid = firstFileIdByKind(libFiles, tpl.source_kind);
+        if (fid) {
+          src.library_file_id = fid;
+          assignedByKind[tpl.source_kind] = true;
+        }
+      }
+      return src;
+    });
     sourcesByProject.set(projectId, existing);
   }
   return existing;

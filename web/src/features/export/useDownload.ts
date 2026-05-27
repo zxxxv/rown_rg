@@ -17,7 +17,7 @@ export function useDownload() {
     a.click();
     document.body.removeChild(a);
     toast.success(`${req.label ?? req.filename} 다운로드를 시작했습니다`, {
-      description: "현재는 시연용 더미 파일입니다. Phase 4에서 실 백엔드 변환으로 교체됩니다.",
+      description: "현재는 시연용 더미 파일입니다. 실 백엔드 변환은 추후 구현 예정.",
     });
   }, []);
 }

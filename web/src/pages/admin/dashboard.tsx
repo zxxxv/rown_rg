@@ -91,13 +91,13 @@ function PeriodSelect() {
       <SelectContent>
         <SelectItem value="this_month">이번 달</SelectItem>
         <SelectItem value="last_month" disabled>
-          지난 달 (Phase 5)
+          지난 달 (준비 중)
         </SelectItem>
         <SelectItem value="last_7d" disabled>
-          최근 7일 (Phase 5)
+          최근 7일 (준비 중)
         </SelectItem>
         <SelectItem value="last_30d" disabled>
-          최근 30일 (Phase 5)
+          최근 30일 (준비 중)
         </SelectItem>
       </SelectContent>
     </Select>
@@ -347,7 +347,7 @@ function UsageTable({ rows }: { rows: UserUsageRow[] }) {
                       variant="ghost"
                       size="sm"
                       onClick={() =>
-                        toast(`${row.name}의 한도 조정 (Phase 5에서 작동)`, {
+                        toast(`${row.name}의 한도 조정 — 구현 예정`, {
                           description: `현재 한도: $${row.limit_usd}`,
                         })
                       }

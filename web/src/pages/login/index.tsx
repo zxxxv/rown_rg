@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/useAuth";
 
 interface LocationFromState {
-  from?: { pathname?: string };
+  from?: { pathname?: string; search?: string; hash?: string };
 }
 
 export default function LoginPage() {
@@ -36,8 +36,15 @@ export default function LoginPage() {
   const submit = handleSubmit(async (values) => {
     try {
       await login(values);
-      const from = (location.state as LocationFromState | null)?.from?.pathname;
-      navigate(from && from !== "/login" ? from : "/projects", { replace: true });
+      const fromLocation = (location.state as LocationFromState | null)?.from;
+      const fromPath = fromLocation?.pathname;
+      if (fromPath && fromPath !== "/login") {
+        const search = fromLocation?.search ?? "";
+        const hash = fromLocation?.hash ?? "";
+        navigate(`${fromPath}${search}${hash}`, { replace: true });
+      } else {
+        navigate("/projects", { replace: true });
+      }
     } catch (err) {
       const status = err instanceof ApiError ? err.status : undefined;
       const message =

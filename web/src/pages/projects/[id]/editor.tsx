@@ -76,19 +76,19 @@ export default function EditorPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => toast("HWPX 미리보기 (Phase 5 또는 별도 세션)")}
+                onClick={() => toast("HWPX 미리보기 — 구현 예정")}
               >
                 <FileText className="mr-1 h-4 w-4" /> HWPX 미리보기
               </Button>
-              <Button size="sm" onClick={() => toast("저장 (Phase 5에서 본격 작동)")}>
+              <Button size="sm" onClick={() => toast("저장 — 본격 작동은 구현 예정")}>
                 <Save className="mr-1 h-4 w-4" /> 저장
               </Button>
             </div>
           </header>
 
           <div className="rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
-            이 화면은 Phase 2 셸입니다. Phase 5에서 Tiptap 에디터로 본격 작동 전환됩니다 — 텍스트
-            입력·재작성·저장 등은 현재 모킹 토스트로 표시됩니다.
+            현재는 모킹 단계입니다. 텍스트 편집기 본격 작동은 추후 구현 예정 — 입력·재작성·저장은
+            지금은 안내 토스트로만 동작합니다.
           </div>
 
           <ResizablePanelGroup
@@ -108,7 +108,7 @@ export default function EditorPage() {
                     return;
                   }
                   setSectionId(EDITOR_SAMPLE.section_id);
-                  toast(`섹션 이동 (Phase 5에서 작동) — ${id}`, {
+                  toast(`섹션 이동 — 구현 예정 (${id})`, {
                     description: "현재는 데모 섹션(2.3) 한 개만 렌더됩니다.",
                   });
                 }}

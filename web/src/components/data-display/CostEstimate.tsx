@@ -4,6 +4,7 @@ export interface CostEstimateProps {
   estimatedHours: number;
   estimatedTokens: number;
   estimatedCostUsd: number;
+  subtitle?: string;
   className?: string;
 }
 
@@ -27,19 +28,23 @@ export function CostEstimate({
   estimatedHours,
   estimatedTokens,
   estimatedCostUsd,
+  subtitle,
   className,
 }: CostEstimateProps) {
   return (
-    <dl
+    <div
       className={cn(
-        "grid grid-cols-3 gap-3 rounded border border-border bg-bg-secondary p-3",
+        "flex flex-col gap-2 rounded border border-border bg-bg-secondary p-3",
         className,
       )}
     >
-      <Item label="예상 시간" value={formatHours(estimatedHours)} />
-      <Item label="예상 토큰" value={formatTokens(estimatedTokens)} />
-      <Item label="예상 비용" value={formatUsd(estimatedCostUsd)} />
-    </dl>
+      {subtitle ? <p className="text-xs text-fg-tertiary">{subtitle}</p> : null}
+      <dl className="grid grid-cols-3 gap-3">
+        <Item label="예상 시간" value={formatHours(estimatedHours)} />
+        <Item label="예상 토큰" value={formatTokens(estimatedTokens)} />
+        <Item label="예상 비용" value={formatUsd(estimatedCostUsd)} />
+      </dl>
+    </div>
   );
 }
 

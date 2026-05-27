@@ -1,4 +1,5 @@
-import type { LibraryFileMeta, LibraryNode, SourceKind, UserRoleType } from "@/api/types";
+import { DEMO_PROJECTS } from "@/api/mock/fixtures/projects";
+import type { LibraryFileMeta, LibraryNode, Project, SourceKind, UserRoleType } from "@/api/types";
 
 interface FileSpec {
   name: string;
@@ -8,6 +9,7 @@ interface FileSpec {
   source_kind: SourceKind;
   page_count?: number;
   visible_to_roles?: UserRoleType[];
+  project_id?: string;
 }
 
 const NOW = new Date("2026-05-27T00:00:00Z");
@@ -28,6 +30,7 @@ function file(spec: FileSpec): LibraryNode {
     source_kind: spec.source_kind,
     visible_to_roles: spec.visible_to_roles ?? ["viewer", "worker", "admin", "super_admin"],
     ...(spec.page_count !== undefined ? { page_count: spec.page_count } : {}),
+    ...(spec.project_id !== undefined ? { project_id: spec.project_id } : {}),
   };
   return { id: nextId("file"), name: spec.name, type: "file", file_meta: meta };
 }
@@ -36,7 +39,51 @@ function folder(name: string, children: LibraryNode[]): LibraryNode {
   return { id: nextId("dir"), name, type: "folder", children };
 }
 
-export const LIBRARY_TREE: LibraryNode[] = [
+function projectFolder(project: Project, children: LibraryNode[] = []): LibraryNode {
+  const base = `pf_${project.id}`;
+  return {
+    id: base,
+    name: project.title,
+    type: "folder",
+    children: [
+      {
+        id: `${base}_ai`,
+        name: "AI 수집 자료",
+        type: "folder",
+        children: children.filter(isAiKind),
+      },
+      {
+        id: `${base}_up`,
+        name: "사용자 업로드",
+        type: "folder",
+        children: children.filter(isUploadKind),
+      },
+      {
+        id: `${base}_lib`,
+        name: "라이브러리 참조",
+        type: "folder",
+        children: children.filter(isLibraryKind),
+      },
+    ],
+  };
+}
+
+function isAiKind(n: LibraryNode): boolean {
+  return (
+    n.type === "file" &&
+    (n.file_meta.source_kind === "gov" ||
+      n.file_meta.source_kind === "academic" ||
+      n.file_meta.source_kind === "media")
+  );
+}
+function isUploadKind(n: LibraryNode): boolean {
+  return n.type === "file" && n.file_meta.source_kind === "upload";
+}
+function isLibraryKind(n: LibraryNode): boolean {
+  return n.type === "file" && n.file_meta.source_kind === "library";
+}
+
+const SHARED_CHILDREN: LibraryNode[] = [
   folder("클라이언트A", [
     folder("2024-Q1 사업", [
       file({
@@ -265,3 +312,124 @@ export const LIBRARY_TREE: LibraryNode[] = [
     ]),
   ]),
 ];
+
+const W4_DEMO_SAMPLE_FILES: LibraryNode[] = [
+  file({
+    name: "국토부_광역교통_2030_계획.pdf",
+    size_bytes: 2_400_000,
+    days_ago: 6,
+    registered_by: "AI 수집",
+    source_kind: "gov",
+    page_count: 96,
+    project_id: "proj_demo_w4",
+  }),
+  file({
+    name: "KDI_SOC_사업_분석_사례.pdf",
+    size_bytes: 1_800_000,
+    days_ago: 6,
+    registered_by: "AI 수집",
+    source_kind: "academic",
+    page_count: 64,
+    project_id: "proj_demo_w4",
+  }),
+  file({
+    name: "조선일보_GTX_연장_특집.pdf",
+    size_bytes: 320_000,
+    days_ago: 5,
+    registered_by: "AI 수집",
+    source_kind: "media",
+    page_count: 6,
+    project_id: "proj_demo_w4",
+  }),
+  file({
+    name: "현장조사_OO지역.docx",
+    size_bytes: 480_000,
+    days_ago: 3,
+    registered_by: "최재웅",
+    source_kind: "upload",
+    page_count: 18,
+    project_id: "proj_demo_w4",
+  }),
+  file({
+    name: "예비타당성조사_운용지침.pdf",
+    size_bytes: 540_000,
+    days_ago: 4,
+    registered_by: "최재웅",
+    source_kind: "library",
+    page_count: 42,
+    project_id: "proj_demo_w4",
+  }),
+];
+
+function sampleFilesForProject(p: Project): LibraryNode[] {
+  if (p.id === "proj_demo_w4") return W4_DEMO_SAMPLE_FILES;
+  if (p.status === "draft") return [];
+  const seed = p.id.length;
+  const items: LibraryNode[] = [
+    file({
+      name: "AI수집_정부보고서.pdf",
+      size_bytes: 1_200_000 + seed * 1000,
+      days_ago: 4,
+      registered_by: "AI 수집",
+      source_kind: "gov",
+      page_count: 48,
+      project_id: p.id,
+    }),
+    file({
+      name: "AI수집_학술논문.pdf",
+      size_bytes: 980_000 + seed * 1000,
+      days_ago: 4,
+      registered_by: "AI 수집",
+      source_kind: "academic",
+      page_count: 32,
+      project_id: p.id,
+    }),
+  ];
+  if (seed % 2 === 0) {
+    items.push(
+      file({
+        name: "현장자료.docx",
+        size_bytes: 320_000,
+        days_ago: 2,
+        registered_by: "박지영",
+        source_kind: "upload",
+        project_id: p.id,
+      }),
+    );
+  }
+  return items;
+}
+
+export const LIBRARY_TREE: LibraryNode[] = [
+  {
+    id: "group_proj",
+    name: "[프로젝트]",
+    type: "folder",
+    children: DEMO_PROJECTS.map((p) => projectFolder(p, sampleFilesForProject(p))),
+  },
+  {
+    id: "group_shared",
+    name: "[공용]",
+    type: "folder",
+    children: SHARED_CHILDREN,
+  },
+];
+
+export function createProjectFolderForLibrary(project: Project): void {
+  const group = LIBRARY_TREE.find((n) => n.id === "group_proj");
+  if (!group || group.type !== "folder") return;
+  if (group.children.some((n) => n.id === `pf_${project.id}`)) return;
+  group.children.unshift(projectFolder(project));
+}
+
+export function getLibraryFilesForProject(projectId: string): LibraryNode[] {
+  const group = LIBRARY_TREE.find((n) => n.id === "group_proj");
+  if (!group || group.type !== "folder") return [];
+  const pf = group.children.find((n) => n.id === `pf_${projectId}`);
+  if (!pf || pf.type !== "folder") return [];
+  const result: LibraryNode[] = [];
+  for (const sub of pf.children) {
+    if (sub.type === "folder") result.push(...sub.children);
+  }
+  return result;
+}

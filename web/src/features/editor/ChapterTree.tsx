@@ -91,17 +91,17 @@ function Item({
         <IconAction
           icon={RotateCw}
           label={`${id} 재작성`}
-          onClick={() => toast("재작성 (Phase 5에서 작동)")}
+          onClick={() => toast("재작성 (구현 예정)")}
         />
         <IconAction
           icon={Eye}
           label={`${id} 미리보기`}
-          onClick={() => toast("미리보기 (Phase 5에서 작동)")}
+          onClick={() => toast("미리보기 (구현 예정)")}
         />
         <IconAction
           icon={MoreHorizontal}
           label={`${id} 더보기`}
-          onClick={() => toast("더보기 (Phase 5에서 작동)")}
+          onClick={() => toast("더보기 (구현 예정)")}
         />
       </div>
     </div>

@@ -6,7 +6,6 @@ import type { ProjectFormValues } from "@/features/project-config/schema";
 const EDIT_DEFAULT: ProjectFormValues = {
   title: "광역교통망 확충 사업 예비타당성조사",
   topic: "수도권 광역교통망의 5년간 추진 현황을 점검하고 잔여 노선의 추진 우선순위를 재정렬한다.",
-  deadline: "2026-08-15",
   config: PRESET_DEFAULTS.preliminary_feasibility,
 };
 

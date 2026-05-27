@@ -76,7 +76,6 @@ export const ProjectSchema = z.object({
   owner_id: z.string(),
   created_at: z.string(),
   updated_at: z.string().optional(),
-  deadline: z.string().optional(),
   progress: z.number().min(0).max(100).optional(),
 });
 export type Project = z.infer<typeof ProjectSchema>;
@@ -87,7 +86,7 @@ export const ProjectListResponseSchema = z.object({
 });
 export type ProjectListResponse = z.infer<typeof ProjectListResponseSchema>;
 
-export const ProjectSortSchema = z.enum(["created_desc", "deadline_asc", "title_asc"]);
+export const ProjectSortSchema = z.enum(["created_desc", "title_asc"]);
 export type ProjectSort = z.infer<typeof ProjectSortSchema>;
 
 export const SourceKindSchema = z.enum(["gov", "academic", "media", "library", "upload"]);
@@ -107,6 +106,7 @@ export const SourceSchema = z.object({
   is_included: z.boolean().nullable(),
   quotes: z.array(z.string()).optional(),
   preview: z.string().optional(),
+  library_file_id: z.string().optional(),
 });
 export type Source = z.infer<typeof SourceSchema>;
 
@@ -201,6 +201,7 @@ export const LibraryFileMetaSchema = z.object({
   source_kind: SourceKindSchema,
   page_count: z.number().int().nonnegative().optional(),
   visible_to_roles: z.array(UserRoleSchema),
+  project_id: z.string().optional(),
 });
 export type LibraryFileMeta = z.infer<typeof LibraryFileMetaSchema>;
 

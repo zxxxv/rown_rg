@@ -26,7 +26,7 @@ export function EditorBody({ components, editMode, selectedId, onSelect }: Edito
       return;
     }
     toast(`${ACTION_LABEL[kind]} — ${compId}`, {
-      description: "Phase 5에서 본격 작동합니다.",
+      description: "본격 작동은 구현 예정입니다.",
     });
   };
 

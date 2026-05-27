@@ -238,10 +238,6 @@ function BasicInfo({ readOnly }: { readOnly?: boolean }) {
         />
         {errors.topic ? <p className="text-xs text-fg-danger">{errors.topic.message}</p> : null}
       </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="pf-deadline">마감일 (선택)</Label>
-        <Input id="pf-deadline" type="date" {...register("deadline")} className="w-fit" />
-      </div>
     </div>
   );
 }

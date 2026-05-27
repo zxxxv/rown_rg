@@ -38,7 +38,7 @@ const ADMIN_NAV: NavItem[] = [
     icon: Users,
     minRole: "admin",
     disabled: true,
-    phaseBadge: "Phase 5",
+    phaseBadge: "준비 중",
   },
   {
     to: "/admin/tokens",
@@ -46,7 +46,7 @@ const ADMIN_NAV: NavItem[] = [
     icon: Activity,
     minRole: "admin",
     disabled: true,
-    phaseBadge: "Phase 5",
+    phaseBadge: "준비 중",
   },
   {
     to: "/admin/ip",
@@ -54,7 +54,7 @@ const ADMIN_NAV: NavItem[] = [
     icon: Globe,
     minRole: "super_admin",
     disabled: true,
-    phaseBadge: "Phase 4",
+    phaseBadge: "준비 중",
   },
   {
     to: "/admin/hwpx-style",
@@ -62,7 +62,7 @@ const ADMIN_NAV: NavItem[] = [
     icon: SquareStack,
     minRole: "admin",
     disabled: true,
-    phaseBadge: "Phase 4",
+    phaseBadge: "준비 중",
   },
 ];
 

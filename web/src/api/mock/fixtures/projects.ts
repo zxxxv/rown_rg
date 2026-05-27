@@ -149,23 +149,6 @@ function offsetDate(days: number): string {
   return d.toISOString();
 }
 
-function pickDeadline(i: number): string | undefined {
-  switch (i % 6) {
-    case 0:
-      return undefined;
-    case 1:
-      return offsetDate(45 + (i % 30)).slice(0, 10);
-    case 2:
-      return offsetDate(5 + (i % 3)).slice(0, 10);
-    case 3:
-      return offsetDate(-(7 + (i % 14))).slice(0, 10);
-    case 4:
-      return offsetDate(20 + (i % 10)).slice(0, 10);
-    default:
-      return offsetDate(2).slice(0, 10);
-  }
-}
-
 function pickProgress(status: ProjectStatus, i: number): number {
   if (status === "completed" || status === "archived") return 100;
   if (status === "draft") return 0;
@@ -198,7 +181,6 @@ const W4_DEMO_PROJECT: Project = {
   owner_id: "u_admin_001",
   created_at: offsetDate(-7),
   updated_at: offsetDate(0),
-  deadline: offsetDate(21).slice(0, 10),
   progress: 67,
 };
 
@@ -218,7 +200,6 @@ export const DEMO_PROJECTS: Project[] = [
       owner_id: "u_admin_001",
       created_at: offsetDate(-(i * 2 + 1)),
       updated_at: offsetDate(-(i % 5)),
-      deadline: pickDeadline(i),
       progress: pickProgress(status, i),
     };
   }),
