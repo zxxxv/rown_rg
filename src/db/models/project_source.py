@@ -45,7 +45,7 @@ class ProjectSource(Base):
         "metadata", JSONB, server_default="{}", nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     # 관계 매핑
