@@ -15,7 +15,7 @@ from src.clients.cassette_manager import (
     resolve_cache_key,
 )
 from src.clients.exceptions import CassetteNotFoundError
-from src.clients.factory import create_llm_client
+from src.clients.llm_factory import create_llm_client
 from src.clients.token_tracker import token_context
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User

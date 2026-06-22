@@ -12,7 +12,7 @@ from src.clients.exceptions import (
     LLMClientError,
     LLMRateLimitError,
 )
-from src.clients.factory import create_llm_client, get_llm_client, reset_llm_client
+from src.clients.llm_factory import create_llm_client, get_llm_client, reset_llm_client
 from src.clients.token_tracker import (
     get_context,
     get_operation,

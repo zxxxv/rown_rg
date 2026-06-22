@@ -5,8 +5,8 @@ from src.clients.anthropic_adapter import AnthropicAdapter
 from src.clients.base import LLMClient, LLMMode
 from src.clients.cassette_manager import CassetteManager
 from src.clients.gemini_adapter import GeminiAdapter
+from src.clients.llm_router import LLMRouter
 from src.clients.openai_adapter import OpenAIAdapter
-from src.clients.router import LLMRouter
 from src.core.config import Environment, settings
 
 DEFAULT_CASSETTE_DIR = Path("cassettes")

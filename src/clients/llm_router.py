@@ -3,6 +3,7 @@ from collections.abc import Callable
 from src.clients.base import CompletionRequest, CompletionResponse, LLMClient
 from src.clients.exceptions import LLMAPIError
 
+# 모델 ID 접두사 → provider 이름. 새 provider는 여기에 한 줄 추가하면 된다.
 PROVIDER_PREFIXES: dict[str, str] = {
     "claude": "anthropic",
     "gemini": "gemini",
@@ -21,8 +22,8 @@ def resolve_provider(model: str) -> str:
 
 class LLMRouter:
     """
-    모델 ID로 provider를 골라 해당 어댑터에 위임하는 LLMClient
-    어댑터는 처음 쓰일 때 lazy 생성(builder 호출)
+    모델 ID로 provider를 골라 해당 어댑터에 위임하는 LLMClient.
+    어댑터는 처음 쓰일 때 lazy 생성(builder 호출)된다.
     """
 
     def __init__(self, builders: dict[str, Callable[[], LLMClient]]):
