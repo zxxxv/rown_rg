@@ -18,6 +18,11 @@ export async function login(input: LoginInput): Promise<LoginResponse> {
   return LoginResponseSchema.parse(data);
 }
 
+export async function ssoLogin(provider: string): Promise<LoginResponse> {
+  const data = await apiClient.post<unknown>(`auth/sso/${provider}`);
+  return LoginResponseSchema.parse(data);
+}
+
 export async function logout(): Promise<void> {
   await apiClient.post<void>("auth/logout");
 }

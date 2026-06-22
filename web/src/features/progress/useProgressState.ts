@@ -3,6 +3,7 @@ import type { ProgressSnapshot } from "@/api/progress";
 import type { PhaseName, ProgressMessage, StreamChannel } from "@/api/ws-messages";
 
 const STREAM_MAX_CHARS = 500;
+const DRAFT_MAX_CHARS = 8000;
 const STREAM_CHANNELS: StreamChannel[] = [
   "critic_thinking",
   "research_keywords",
@@ -20,6 +21,8 @@ export interface ProgressUiState {
   cost_usd: number;
   eta_seconds: number | null;
   streams: Record<StreamChannel, string>;
+  writing_draft: string;
+  writing_section: string | null;
   checkpoint_id: string | null;
   checkpoint_level: 1 | 2 | null;
   error: { code: string; message: string } | null;
@@ -48,6 +51,8 @@ export function initialProgressState(): ProgressUiState {
     cost_usd: 0,
     eta_seconds: null,
     streams: emptyStreams(),
+    writing_draft: "",
+    writing_section: null,
     checkpoint_id: null,
     checkpoint_level: null,
     error: null,
@@ -61,9 +66,9 @@ type Action =
   | { type: "clear_checkpoint" }
   | { type: "clear_error" };
 
-function appendStream(prev: string, delta: string): string {
+function appendStream(prev: string, delta: string, max = STREAM_MAX_CHARS): string {
   const next = prev + delta;
-  return next.length > STREAM_MAX_CHARS ? next.slice(next.length - STREAM_MAX_CHARS) : next;
+  return next.length > max ? next.slice(next.length - max) : next;
 }
 
 function reducer(state: ProgressUiState, action: Action): ProgressUiState {
@@ -107,10 +112,22 @@ function reducer(state: ProgressUiState, action: Action): ProgressUiState {
     case "step": {
       const phase = msg.phase;
       if (msg.status === "started") {
+        // 재시도: 이전에 실패한 동일 step의 실패 표시를 해제한다.
+        const failedArr = state.failed_steps[phase] ?? [];
+        const failed_steps = failedArr.includes(msg.step)
+          ? { ...state.failed_steps, [phase]: failedArr.filter((s) => s !== msg.step) }
+          : state.failed_steps;
+        // 작성 단계: 섹션이 바뀌면 라이브 본문을 초기화한다.
+        const writing =
+          phase === "writing"
+            ? { writing_draft: "", writing_section: msg.step }
+            : { writing_draft: state.writing_draft, writing_section: state.writing_section };
         return {
           ...state,
           current_step: msg.step,
           eta_seconds: msg.eta_seconds ?? state.eta_seconds,
+          failed_steps,
+          ...writing,
         };
       }
       if (msg.status === "completed") {
@@ -140,7 +157,11 @@ function reducer(state: ProgressUiState, action: Action): ProgressUiState {
         },
       };
     case "fake_stream":
-      return state;
+      return {
+        ...state,
+        writing_section: state.writing_section ?? msg.section_id,
+        writing_draft: appendStream(state.writing_draft, msg.delta, DRAFT_MAX_CHARS),
+      };
     case "cost":
       return { ...state, tokens_used: msg.tokens_used, cost_usd: msg.cost_usd };
     case "checkpoint":

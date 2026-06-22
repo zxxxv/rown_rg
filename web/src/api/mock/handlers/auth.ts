@@ -43,11 +43,18 @@ export const authHandlers = [
       {
         error: {
           code: "invalid_credentials",
-          message: "사번/이메일 또는 비밀번호가 올바르지 않습니다.",
+          message: "이메일 또는 비밀번호가 올바르지 않습니다.",
         },
       },
       { status: 401 },
     );
+  }),
+
+  // 네이버웍스 SSO — 비밀번호 없이 항상 성공(데모용).
+  http.post(url("auth/sso/naver-works"), () => {
+    isLoggedIn = true;
+    failureCount = 0;
+    return HttpResponse.json({ data: { user: DEMO_ADMIN_USER } }, { status: 200 });
   }),
 
   http.get(url("auth/me"), () => {

@@ -1,13 +1,3 @@
-"""Hybrid retrieval — semantic + keyword fused via Reciprocal Rank Fusion.
-
-External facade. Routes search through both backends in parallel and
-combines results by rank-based RRF score so back-end-specific score
-scales (cosine vs BM25) never need normalization.
-
-Reference: Cormack et al. 2009 — Reciprocal Rank Fusion outperforms
-Condorcet and individual rank learning methods.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -72,7 +62,7 @@ class HybridSearchClient(SearchClient):
             fan_top_k=fan_top_k,
         )
 
-        # 두 검색기는 각자 session_factory를 들고 있어 별도 session으로 동시 실행 — race 없음.
+        # 두 검색기는 각자 session_factory를 들고 있어 별도 session으로 동시 실행
         semantic_hits, keyword_hits = await asyncio.gather(
             self._semantic.search(query, project_id, track, fan_top_k),
             self._keyword.search(query, project_id, track, fan_top_k),
