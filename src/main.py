@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,6 +12,8 @@ from src.api.routers import api_v1_router
 from src.core.config import settings
 from src.core.logging import configure_logging
 from src.db.session import async_engine
+
+load_dotenv()
 
 
 @asynccontextmanager

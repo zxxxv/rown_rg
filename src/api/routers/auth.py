@@ -1,7 +1,13 @@
+import base64
+import os
+import re
+import traceback
+import zlib
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +32,7 @@ from src.infrastructure.auth import (
     password_handler,
     totp_handler,
 )
+from src.infrastructure.auth.saml import init_saml_auth
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -149,3 +156,107 @@ async def change_password(
     current_user.password_hash = password_handler.hash_password(data.new_password)
     current_user.password_changed_at = _now_naive()
     return LogoutResponse(success=True)
+
+
+def get_base_url(request: Request) -> str:
+    prod_base_url = os.getenv("SAML_BASE_URL")
+    if prod_base_url:
+        return prod_base_url
+
+    proto = request.headers.get("x-forwarded-proto", "http")
+    host = request.headers.get("x-forwarded-host", request.headers.get("host", "localhost:8000"))
+    return f"{proto}://{host}"
+
+
+@router.get("/saml/login")
+async def saml_login(request: Request):
+    try:
+        base_url = get_base_url(request)
+        auth = await init_saml_auth(request, base_url)
+        return RedirectResponse(url=auth.login())
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"SAML 로그인 URL 생성 실패: {str(e)}",
+        )
+
+
+@router.post("/saml/acs")
+async def saml_acs(request: Request):
+    try:
+        form_data = await request.form()
+        saml_response_b64 = form_data.get("SAMLResponse")
+        raw_xml = ""
+
+        if saml_response_b64:
+            if not isinstance(saml_response_b64, str):
+                file_content = await saml_response_b64.read()
+                saml_response_str = file_content.decode("utf-8")
+            else:
+                saml_response_str = saml_response_b64
+
+            try:
+                decoded_bytes = base64.b64decode(saml_response_str)
+                try:
+                    raw_xml = zlib.decompress(decoded_bytes, -15).decode("utf-8")
+                except Exception:
+                    raw_xml = decoded_bytes.decode("utf-8")
+            except Exception:
+                pass
+
+        user_email = None
+        is_local = os.getenv("ENVIRONMENT", "production") == "local"
+        base_url = get_base_url(request)
+
+        try:
+            auth = await init_saml_auth(request, base_url)
+            auth.process_response()
+            errors = auth.get_errors()
+
+            if not errors and auth.is_authenticated():
+                user_email = auth.get_nameid()
+            elif not is_local:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"SAML 검증 실패: {auth.get_last_error_reason()}",
+                )
+        except HTTPException:
+            raise
+        except Exception as library_err:
+            if not is_local:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"SAML 인증 처리 중 예외 발생: {str(library_err)}",
+                )
+
+        if not user_email and raw_xml:
+            if is_local:
+                nameid_match = re.search(r"<[^>]*NameID[^>]*>([^<]+)</[^>]*NameID>", raw_xml)
+                if nameid_match:
+                    user_email = nameid_match.group(1).strip()
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="유효하지 않은 인증 정보입니다.",
+                )
+
+        if user_email:
+            return {
+                "status": "success",
+                "message": "네이버웍스 사원 인증 완료!",
+                "user_email": user_email,
+            }
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="인증에 실패했습니다.",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"서버 내부 오류 발생: {str(e)}",
+        )
