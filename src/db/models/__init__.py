@@ -5,6 +5,7 @@ from src.db.models.library_node import LibraryNode
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.raptor_node import RaptorNode
+from src.db.models.refresh_token import RefreshToken
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 
@@ -16,6 +17,7 @@ __all__ = [
     "Project",
     "ProjectSource",
     "RaptorNode",
+    "RefreshToken",
     "TokenUsage",
     "User",
 ]

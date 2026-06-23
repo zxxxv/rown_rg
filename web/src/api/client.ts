@@ -28,7 +28,7 @@ export function setForbiddenHandler(fn: Handler | null) {
   onForbidden = fn;
 }
 
-const AUTH_PATHS = ["/auth/login", "/auth/me", "/auth/logout"];
+const AUTH_PATHS = ["/auth/login", "/auth/me", "/auth/logout", "/auth/refresh"];
 
 function resolvePrefixUrl(raw: string): string {
   if (/^https?:\/\//i.test(raw)) return raw;
@@ -41,15 +41,19 @@ function resolvePrefixUrl(raw: string): string {
 const baseClient = ky.create({
   prefix: resolvePrefixUrl(env.VITE_API_BASE_URL),
   credentials: "include",
-  retry: 0,
+  retry: { limit: 1 },
   timeout: 30_000,
   hooks: {
     afterResponse: [
-      ({ request, response }) => {
+      async ({ request, response, retryCount }) => {
         const url = new URL(request.url);
         const suppressAuth = AUTH_PATHS.some((p) => url.pathname.endsWith(p));
 
         if (response.status === 401 && !suppressAuth) {
+          // 토큰 만료 추정 → 1회 자동 갱신 후 원요청 재시도. 갱신 실패 시 로그아웃 처리.
+          if (retryCount < 1 && (await refreshSession())) {
+            return ky.retry();
+          }
           onUnauthorized?.();
         } else if (response.status === 403 && !suppressAuth) {
           onForbidden?.();
@@ -63,6 +67,22 @@ const baseClient = ky.create({
     ],
   },
 });
+
+// 401 시 한 번만 토큰 자동 갱신을 시도한다(동시다발 401은 single-flight로 공유).
+let refreshInFlight: Promise<boolean> | null = null;
+
+function refreshSession(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = baseClient
+      .post("auth/refresh", { throwHttpErrors: false, retry: 0 })
+      .then((res) => res.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
 
 interface SuccessEnvelope<T> {
   data: T;

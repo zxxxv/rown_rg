@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
-from src.api.dependencies.permissions import require_role
+from src.api.dependencies.permissions import (
+    assert_can_assign_role,
+    assert_can_manage_user,
+    require_role,
+)
 from src.api.schemas.user import UserRead, UserUpdate
 from src.core.exceptions import AuthorizationError, NotFoundError
 from src.db.models.user import User
@@ -45,11 +49,15 @@ async def update_user(
     user_id: UUID,
     data: UserUpdate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    _: Annotated[User, Depends(require_role("super_admin", "admin"))],
+    current_user: Annotated[User, Depends(require_role("super_admin", "admin"))],
 ) -> User:
     user = await session.get(User, user_id)
     if user is None:
         raise NotFoundError(message="사용자를 찾을 수 없습니다", code="USER_NOT_FOUND")
+    # 상위 역할 유저는 건드릴 수 없다(admin이 super_admin 비활성화·수정 차단).
+    assert_can_manage_user(current_user, user)
+    if data.role is not None:
+        assert_can_assign_role(current_user, data.role)
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(user, key, value)
     await session.flush()

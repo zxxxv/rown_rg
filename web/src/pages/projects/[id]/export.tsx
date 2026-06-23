@@ -132,21 +132,6 @@ function CompletedView({ project }: { project: Project }) {
           }
         />
         <FormatCard
-          icon={FileText}
-          title="PDF"
-          subtitle="HWPX → PDF 변환"
-          size="~4.2 MB"
-          thumbnailLabel="PDF 미리보기"
-          showStyle
-          onDownload={() =>
-            download({
-              url: "/samples/sample.pdf",
-              filename: `${project.id}.pdf`,
-              label: "PDF",
-            })
-          }
-        />
-        <FormatCard
           icon={FileCode}
           title="Markdown"
           subtitle="기술 검토용 원본"

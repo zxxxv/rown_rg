@@ -29,7 +29,7 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
     enable_critic_agent: false,
     enable_glossary: false,
     depth_mode: "full_report",
-    output_formats: ["hwpx", "pdf"],
+    output_formats: ["hwpx"],
     notification_channels: ["email"],
   },
   business_review: {
@@ -43,7 +43,7 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
     enable_critic_agent: false,
     enable_glossary: false,
     depth_mode: "full_report",
-    output_formats: ["hwpx", "pdf"],
+    output_formats: ["hwpx"],
     notification_channels: ["email"],
   },
   policy_research: {

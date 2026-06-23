@@ -17,7 +17,6 @@ async def get_current_user(
     token: Annotated[str | None, Depends(oauth2_scheme)],
     session: Annotated[AsyncSession, Depends(get_async_session)],
 ) -> User:
-    # 일반 로그인은 Authorization 헤더, SSO는 HttpOnly 쿠키로 토큰을 전달한다.
     access_token = token or request.cookies.get("access_token")
     if not access_token:
         raise AuthenticationError(message="missing access token", code="MISSING_TOKEN")

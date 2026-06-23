@@ -137,7 +137,7 @@ const DEFAULT_CONFIG: ProjectConfig = {
   enable_critic_agent: false,
   enable_glossary: false,
   depth_mode: "full_report",
-  output_formats: ["hwpx", "pdf"],
+  output_formats: ["hwpx"],
   notification_channels: ["email"],
 };
 
@@ -173,7 +173,7 @@ const W4_DEMO_PROJECT: Project = {
     enable_critic_agent: false,
     enable_glossary: false,
     depth_mode: "full_report",
-    output_formats: ["hwpx", "pdf"],
+    output_formats: ["hwpx"],
     notification_channels: ["email"],
   },
   status: "writing",

@@ -8,7 +8,10 @@ from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Tex
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from src.core.types import ProjectStage
 from src.db.base import Base
+
+_STATUS_IN_CLAUSE = ", ".join(f"'{stage.value}'" for stage in ProjectStage)
 
 if TYPE_CHECKING:
     from src.db.models.chunk import Chunk
@@ -64,8 +67,7 @@ class Project(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('created', 'researching', 'indexing', 'writing', "
-            "'reviewing', 'completed', 'archived')",
+            f"status IN ({_STATUS_IN_CLAUSE})",
             name="projects_status_check",
         ),
         CheckConstraint(
