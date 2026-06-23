@@ -45,6 +45,9 @@ dependencies = [
     "pymupdf4llm>=0.0.17",
     "langchain-experimental>=0.4.1",
     "langchain-text-splitters>=1.1.2",
+    # SSO
+    "python3-saml>=1.16.0",
+    "pyjwt[crypto]>=2.13.0",
 ]
 
 [project.optional-dependencies]
