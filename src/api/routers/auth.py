@@ -3,10 +3,8 @@ import os
 import re
 import traceback
 import zlib
-from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
@@ -38,14 +36,8 @@ from src.infrastructure.auth.saml import init_saml_auth
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-me-32-chars-or-more")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
-
-
-def _now_naive() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -94,6 +86,12 @@ async def login(
 
     if not user.is_active:
         raise AuthenticationError(message="비활성화된 계정입니다", code="INACTIVE_USER")
+
+    if user.password_hash is None:
+        raise AuthenticationError(
+            message="비밀번호 로그인이 설정되지 않은 계정입니다. 네이버웍스로 로그인하세요",
+            code="SSO_ONLY_ACCOUNT",
+        )
 
     if not password_handler.verify_password(data.password, user.password_hash):
         lockout_handler.record_failed_attempt(user)
@@ -180,7 +178,10 @@ async def saml_login(request: Request):
     try:
         base_url = get_base_url(request)
         auth = await init_saml_auth(request, base_url)
-        return RedirectResponse(url=auth.login())
+        # RelayState(return_to)를 로그인 진입점이 아니라 프론트로 지정.
+        # 안 그러면 IdP가 RelayState로 되돌려보낼 때 /saml/login → IdP → … 무한 리다이렉트.
+        react_frontend_url = os.getenv("REACT_FRONTEND_URL", "http://localhost:5173")
+        return RedirectResponse(url=auth.login(return_to=react_frontend_url))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -189,7 +190,10 @@ async def saml_login(request: Request):
 
 
 @router.post("/saml/acs")
-async def saml_acs(request: Request):
+async def saml_acs(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+):
     try:
         form_data = await request.form()
         saml_response_b64 = form_data.get("SAMLResponse")
@@ -248,24 +252,30 @@ async def saml_acs(request: Request):
                 )
 
         if user_email:
-            # 토큰 생성
-            access_token_expires = datetime.now(UTC) + timedelta(
-                minutes=ACCESS_TOKEN_EXPIRE_MINUTES
-            )
-            access_payload = {
-                "sub": user_email,
-                "exp": access_token_expires,
-                "type": "access",
-            }
-            access_token = jwt.encode(access_payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+            # DB에서 이메일로 유저 조회 → 없으면 JIT 생성(기본 역할 viewer, 비밀번호 없음)
+            stmt = select(User).where(User.email == user_email)
+            user = (await session.execute(stmt)).scalar_one_or_none()
+            if user is None:
+                user = User(
+                    email=user_email,
+                    name=user_email.split("@")[0],
+                    role="viewer",
+                    password_hash=None,
+                    is_active=True,
+                )
+                session.add(user)
+                await session.flush()  # user.id(UUID) 채우기
+            elif not user.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="비활성화된 계정입니다.",
+                )
 
-            refresh_token_expires = datetime.now(UTC) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-            refresh_payload = {
-                "sub": user_email,
-                "exp": refresh_token_expires,
-                "type": "refresh",
-            }
-            refresh_token = jwt.encode(refresh_payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+            user.last_login_at = now()
+
+            # 일반 로그인과 동일하게 토큰 발급 (sub=user.id(UUID), role 포함)
+            access_token = jwt_handler.create_access_token(user.id, user.role)
+            refresh_token = jwt_handler.create_refresh_token(user.id)
 
             # 리다이렉트 설정
             react_frontend_url = os.getenv("REACT_FRONTEND_URL", "http://localhost:5173")
@@ -312,7 +322,10 @@ async def saml_acs(request: Request):
 
 
 @router.post("/saml/refresh")
-async def saml_refresh(request: Request):
+async def saml_refresh(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+):
     refresh_token = request.cookies.get("refresh_token")
 
     if not refresh_token:
@@ -320,63 +333,41 @@ async def saml_refresh(request: Request):
             status_code=status.HTTP_401_UNAUTHORIZED, detail="refresh token이 없습니다."
         )
 
-    try:
-        payload = jwt.decode(refresh_token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        if payload.get("type") != "refresh":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="유효하지 않은 토큰입니다.",
-            )
-
-        user_email = payload.get("sub")
-        is_local = os.getenv("ENVIRONMENT", "production") == "local"
-        is_secure = not is_local
-
-        current_time = datetime.now(UTC)
-
-        access_token_expires = current_time + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_payload = {
-            "sub": user_email,
-            "exp": access_token_expires,
-            "type": "access",
-        }
-        new_access_token = jwt.encode(access_payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
-
-        refresh_token_expires = current_time + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-        refresh_payload = {
-            "sub": user_email,
-            "exp": refresh_token_expires,
-            "type": "refresh",
-        }
-        new_refresh_token = jwt.encode(refresh_payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
-
-        response = JSONResponse(content={"status": "ok"})
-
-        response.set_cookie(
-            key="access_token",
-            value=new_access_token,
-            httponly=True,
-            secure=is_secure,
-            samesite="lax",
-            max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        )
-        response.set_cookie(
-            key="refresh_token",
-            value=new_refresh_token,
-            httponly=True,
-            secure=is_secure,
-            samesite="lax",
-            max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-        )
-
-        return response
-
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="refresh token이 만료됐습니다. 다시 로그인해주세요.",
-        )
-    except jwt.InvalidTokenError:
+    # 만료·위조 시 jwt_handler가 AuthenticationError를 던지고 공통 핸들러가 처리한다.
+    token_data = jwt_handler.decode_token(refresh_token)
+    if token_data.token_type != "refresh":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰입니다."
         )
+
+    user = await session.get(User, token_data.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="사용자를 찾을 수 없습니다."
+        )
+
+    is_local = os.getenv("ENVIRONMENT", "production") == "local"
+    is_secure = not is_local
+
+    new_access_token = jwt_handler.create_access_token(user.id, user.role)
+    new_refresh_token = jwt_handler.create_refresh_token(user.id)
+
+    response = JSONResponse(content={"status": "ok"})
+    response.set_cookie(
+        key="access_token",
+        value=new_access_token,
+        httponly=True,
+        secure=is_secure,
+        samesite="lax",
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=new_refresh_token,
+        httponly=True,
+        secure=is_secure,
+        samesite="lax",
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+    )
+
+    return response

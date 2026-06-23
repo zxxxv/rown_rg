@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,13 +13,16 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=F
 
 
 async def get_current_user(
+    request: Request,
     token: Annotated[str | None, Depends(oauth2_scheme)],
     session: Annotated[AsyncSession, Depends(get_async_session)],
 ) -> User:
-    if not token:
+    # 일반 로그인은 Authorization 헤더, SSO는 HttpOnly 쿠키로 토큰을 전달한다.
+    access_token = token or request.cookies.get("access_token")
+    if not access_token:
         raise AuthenticationError(message="missing access token", code="MISSING_TOKEN")
 
-    token_data = decode_token(token)
+    token_data = decode_token(access_token)
     if token_data.token_type != "access":
         raise AuthenticationError(message="access token required", code="WRONG_TOKEN_TYPE")
 

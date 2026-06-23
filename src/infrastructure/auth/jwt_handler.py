@@ -1,10 +1,11 @@
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Any, Literal
 from uuid import UUID
 
 from jose import JWTError, jwt
 from pydantic import BaseModel
 
+from src.core.clock import now as clock_now
 from src.core.config import settings
 from src.core.exceptions import AuthenticationError
 
@@ -18,7 +19,7 @@ class TokenData(BaseModel):
 
 
 def _encode(payload: dict[str, Any], expires_delta: timedelta) -> str:
-    now = datetime.now(UTC)
+    now = clock_now()
     to_encode = {
         **payload,
         "iat": int(now.timestamp()),
