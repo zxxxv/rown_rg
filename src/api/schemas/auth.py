@@ -29,7 +29,7 @@ class RefreshRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
-    new_password: str = Field(..., description="새 비밀번호 (정책 검증 후 적용)")
+    new_password: str = Field(..., description="새 비밀번호")
 
 
 class LogoutResponse(BaseModel):

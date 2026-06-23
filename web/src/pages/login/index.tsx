@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { AlertCircle, LockKeyhole } from "lucide-react";
-import type { KeyboardEvent } from "react";
+import { type KeyboardEvent, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ApiError } from "@/api/client";
@@ -17,9 +17,10 @@ interface LocationFromState {
 }
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, loginWithSso } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [ssoLoading, setSsoLoading] = useState(false);
 
   const {
     control,
@@ -33,18 +34,22 @@ export default function LoginPage() {
     mode: "onSubmit",
   });
 
+  const goAfterLogin = () => {
+    const fromLocation = (location.state as LocationFromState | null)?.from;
+    const fromPath = fromLocation?.pathname;
+    if (fromPath && fromPath !== "/login") {
+      const search = fromLocation?.search ?? "";
+      const hash = fromLocation?.hash ?? "";
+      navigate(`${fromPath}${search}${hash}`, { replace: true });
+    } else {
+      navigate("/projects", { replace: true });
+    }
+  };
+
   const submit = handleSubmit(async (values) => {
     try {
       await login(values);
-      const fromLocation = (location.state as LocationFromState | null)?.from;
-      const fromPath = fromLocation?.pathname;
-      if (fromPath && fromPath !== "/login") {
-        const search = fromLocation?.search ?? "";
-        const hash = fromLocation?.hash ?? "";
-        navigate(`${fromPath}${search}${hash}`, { replace: true });
-      } else {
-        navigate("/projects", { replace: true });
-      }
+      goAfterLogin();
     } catch (err) {
       const status = err instanceof ApiError ? err.status : undefined;
       const message =
@@ -59,6 +64,22 @@ export default function LoginPage() {
     }
   });
 
+  const onNaverWorks = async () => {
+    if (ssoLoading) return;
+    clearErrors("root");
+    setSsoLoading(true);
+    try {
+      await loginWithSso("naver-works");
+      goAfterLogin();
+    } catch (err) {
+      const message =
+        err instanceof ApiError ? err.message : "네이버웍스 로그인 중 오류가 발생했습니다.";
+      setError("root", { type: "auth", message });
+    } finally {
+      setSsoLoading(false);
+    }
+  };
+
   const onEnter = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter" && !isSubmitting) {
       e.preventDefault();
@@ -68,6 +89,7 @@ export default function LoginPage() {
 
   const rootError = errors.root?.message;
   const isLocked = errors.root?.type === "locked";
+  const busy = isSubmitting || ssoLoading;
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-bg-secondary px-4 py-10">
@@ -80,7 +102,7 @@ export default function LoginPage() {
             <LockKeyhole className="h-6 w-6" />
           </div>
           <CardTitle className="text-xl">AI 보고서 생성 시스템</CardTitle>
-          <CardDescription>로운인사이트 사번 또는 이메일로 로그인하세요.</CardDescription>
+          <CardDescription>로운인사이트 계정으로 로그인하세요.</CardDescription>
         </CardHeader>
 
         <CardContent className="flex flex-col gap-4">
@@ -92,18 +114,40 @@ export default function LoginPage() {
             </Alert>
           ) : null}
 
+          <Button
+            type="button"
+            className="w-full bg-[#00C300] text-white hover:bg-[#00a800]"
+            onClick={() => void onNaverWorks()}
+            disabled={busy}
+          >
+            <span
+              aria-hidden
+              className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-sm bg-white font-bold text-[#00C300] text-xs"
+            >
+              W
+            </span>
+            {ssoLoading ? "네이버웍스 연결 중…" : "네이버웍스로 로그인"}
+          </Button>
+
+          <div className="flex items-center gap-3">
+            <span className="h-px flex-1 bg-border" />
+            <span className="text-xs text-fg-tertiary">또는 이메일로 로그인</span>
+            <span className="h-px flex-1 bg-border" />
+          </div>
+
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="login-id">사번 또는 이메일</Label>
+            <Label htmlFor="login-id">이메일</Label>
             <Controller
               name="id"
               control={control}
               render={({ field }) => (
                 <Input
                   id="login-id"
-                  type="text"
-                  autoComplete="username"
-                  autoFocus
-                  disabled={isSubmitting || isLocked}
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  placeholder="name@loweninsight.kr"
+                  disabled={busy || isLocked}
                   aria-invalid={errors.id ? "true" : undefined}
                   aria-describedby={errors.id ? "login-id-error" : undefined}
                   onKeyDown={onEnter}
@@ -132,7 +176,7 @@ export default function LoginPage() {
                   id="login-password"
                   type="password"
                   autoComplete="current-password"
-                  disabled={isSubmitting || isLocked}
+                  disabled={busy || isLocked}
                   aria-invalid={errors.password ? "true" : undefined}
                   aria-describedby={errors.password ? "login-password-error" : undefined}
                   onKeyDown={onEnter}
@@ -153,11 +197,12 @@ export default function LoginPage() {
 
           <Button
             type="button"
+            variant="secondary"
             className="w-full"
             onClick={() => void submit()}
-            disabled={isSubmitting || isLocked}
+            disabled={busy || isLocked}
           >
-            {isSubmitting ? "로그인 중…" : "로그인"}
+            {isSubmitting ? "로그인 중…" : "이메일로 로그인"}
           </Button>
 
           <p className="text-center text-xs text-fg-tertiary">

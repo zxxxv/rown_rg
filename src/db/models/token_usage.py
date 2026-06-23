@@ -38,7 +38,7 @@ class TokenUsage(Base):
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False)
     mode: Mapped[str] = mapped_column(String(10), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     # Relationships

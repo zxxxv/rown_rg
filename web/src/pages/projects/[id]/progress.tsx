@@ -4,6 +4,11 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { type CheckpointDecision, useDecideCheckpoint } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
+import {
+  ADOPTED_SOURCES,
+  LEVEL1_SUMMARY,
+  OUTLINE,
+} from "@/api/mock/fixtures/scenarios/_content";
 import { useProgressSnapshot } from "@/api/progress";
 import { useProject } from "@/api/projects";
 import type { PhaseName } from "@/api/ws-messages";
@@ -21,17 +26,28 @@ import { PhaseTracker } from "@/features/progress/PhaseTracker";
 import { QAStatusList } from "@/features/progress/QAStatusList";
 import { StepStream } from "@/features/progress/StepStream";
 import { useProgressState } from "@/features/progress/useProgressState";
+import { WritingDraft } from "@/features/progress/WritingDraft";
 import { estimate } from "@/features/project-config/estimator";
 import { useAuth } from "@/hooks/useAuth";
 import { useWebSocket, type WebSocketStatus } from "@/hooks/useWebSocket";
 
 const PHASE_DETAIL_TITLE: Record<PhaseName, string> = {
-  research: "자료조사 — 검색어 생성 / 자료 평가",
-  indexing: "인덱싱 — 청크 분할 / 임베딩 생성",
-  writing: "작성 — Level 1 → 4",
+  research: "자료조사 — 검색어 생성 / 자료 검색 / 자료 평가",
+  indexing: "인덱싱 — 청크 분할 / 임베딩 / 벡터 색인",
+  writing: "작성 — 목차 · 챕터 요약 · 본문 · 교정",
   qa: "검증 — Fact / Consistency / Style / Critic",
   export: "출력 — HWPX / PDF / Markdown",
 };
+
+const WRITING_STEPS = [
+  "개요·목차 생성",
+  "챕터 요약 작성",
+  "본문 작성 · 2.3 인구·고령화 영향",
+  "본문 작성 · 3.3 비용편익비 (B/C)",
+  "통합·교정",
+];
+
+const INDEXING_STEPS = ["청크 분할", "임베딩 생성", "벡터 색인 구축"];
 
 function buildWsUrl(projectId: string, scenario: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -155,13 +171,7 @@ export default function ProgressPage() {
               disabled: decide.isPending,
             }))}
           >
-            <div className="flex items-start gap-2 text-sm text-fg-secondary">
-              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
-              <p>
-                여기에 검토 대상 본문 요약이 표시됩니다 (현재 단계: 채택된 자료의 핵심 인용구 목록과
-                구성 초안). 결정을 내리면 다음 단계로 자동 진행됩니다.
-              </p>
-            </div>
+            <CheckpointReviewContent level={state.checkpoint_level ?? 1} />
           </ReviewCheckpoint>
         ) : (
           <>
@@ -237,21 +247,24 @@ function PhaseDetail({ state }: { state: ReturnType<typeof useProgressState>["st
       return <StepStream channel="research_keywords" text={state.streams.research_keywords} />;
     case "indexing":
       return (
-        <div className="grid grid-cols-2 gap-3">
-          <Counter label="청크 분할" status={status("indexing", "청크 분할", state)} />
-          <Counter label="임베딩 생성" status={status("indexing", "임베딩 생성", state)} />
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {INDEXING_STEPS.map((label) => (
+              <Counter key={label} label={label} status={status("indexing", label, state)} />
+            ))}
+          </div>
+          <p className="text-xs text-fg-tertiary">247 청크 · 1,024차원 임베딩 · 코사인 색인</p>
         </div>
       );
     case "writing":
       return (
-        <div className="flex flex-col gap-2">
-          {[1, 2, 3, 4].map((lv) => (
-            <Counter
-              key={lv}
-              label={`Level ${lv}`}
-              status={status("writing", `Level ${lv}`, state)}
-            />
-          ))}
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            {WRITING_STEPS.map((label) => (
+              <Counter key={label} label={label} status={status("writing", label, state)} />
+            ))}
+          </div>
+          <WritingDraft title={state.writing_section} text={state.writing_draft} />
         </div>
       );
     case "qa":
@@ -261,6 +274,7 @@ function PhaseDetail({ state }: { state: ReturnType<typeof useProgressState>["st
           completedSteps={state.completed_steps.qa ?? []}
           failedSteps={state.failed_steps.qa ?? []}
           criticStream={state.streams.critic_thinking}
+          consistencyStream={state.streams.contradiction_explain}
         />
       );
     case "export":
@@ -308,6 +322,48 @@ function Counter({ label, status: s }: { label: string; status: DetailStatus }) 
     <div className="flex items-center justify-between rounded border border-border bg-bg p-3">
       <span className="text-sm font-medium text-fg">{label}</span>
       <StatusDot kind={COUNTER_KIND[s]} label={COUNTER_LABEL[s]} />
+    </div>
+  );
+}
+
+function CheckpointReviewContent({ level }: { level: 1 | 2 }) {
+  if (level === 2) {
+    return (
+      <div className="flex flex-col gap-3 text-sm">
+        <div className="flex items-start gap-2 text-fg-secondary">
+          <FileText className="mt-0.5 h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
+          <p>{LEVEL1_SUMMARY}</p>
+        </div>
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-fg-secondary">생성된 목차 (Level 1)</p>
+          <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded border border-border bg-bg-secondary p-3 font-mono text-xs leading-relaxed text-fg">
+            {OUTLINE}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3 text-sm">
+      <p className="text-fg-secondary">
+        자동 수집·평가된 자료 중 채택 후보 {ADOPTED_SOURCES.length}건입니다. 검토 후 결정을 내리면
+        다음 단계로 진행됩니다.
+      </p>
+      <ul className="flex flex-col gap-1.5">
+        {ADOPTED_SOURCES.map((src) => (
+          <li
+            key={src.title}
+            className="flex items-center justify-between gap-3 rounded border border-border bg-bg-secondary px-3 py-2"
+          >
+            <span className="min-w-0 truncate text-fg">
+              {src.title} <span className="text-fg-tertiary">· {src.org}</span>
+            </span>
+            <span className="shrink-0 font-mono text-xs text-fg-secondary">
+              신뢰도 {src.reliability.toFixed(2)}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

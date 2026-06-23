@@ -9,7 +9,12 @@ DEFAULT_CASSETTE_DIR = Path("cassettes")
 
 
 def determine_mode(environment: Environment) -> tuple[LLMMode, bool]:
-    """Return (mode, allow_replay_fallback) for the given environment."""
+    """
+    환경에 따라 모드 설정
+    PRODUCTION(live)    api 호출 O | 저장 X | 실제 사용
+    STAGING(record)     api 호출 O | 저장 O | 개발(녹화)
+    LOCAL(replay)       api 호출 X | 로드   | 개발(재생)
+    """
     if environment == Environment.PRODUCTION:
         return "live", False
     if environment == Environment.STAGING:

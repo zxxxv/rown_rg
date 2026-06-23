@@ -1,16 +1,3 @@
-"""Cross-encoder reranker clients.
-
-Provides an abstract :class:`RerankerClient` interface and a concrete
-:class:`BgeRerankerV2M3Client` adapter backed by the ONNX INT8 build
-produced by ``scripts/setup_bge_reranker.py``.
-
-The adapter scores ``(query, passage)`` pairs as a cross-encoder: each pair
-is fed as a single tokenized sequence (``[CLS] query [SEP] passage [SEP]``),
-yielding one logit per pair which is squashed through sigmoid into ``[0, 1]``.
-Sorting and top-k truncation are caller responsibilities — see
-``score_pairs`` for the rationale.
-"""
-
 from __future__ import annotations
 
 import time
@@ -30,27 +17,13 @@ logger = structlog.get_logger(__name__)
 
 
 class RerankerClient(ABC):
-    """Abstract cross-encoder reranker.
-
-    Implementations score each ``(query, passage)`` pair and return one
-    float per passage in input order. Sorting, top-k, and the no-op
-    ``reranker_enabled=False`` branch are caller concerns.
-    """
-
     @abstractmethod
     async def score_pairs(self, query: str, passages: list[str]) -> list[float]:
         """Return one ``[0, 1]`` score per passage, aligned with input order."""
 
 
 class BgeRerankerV2M3Client(RerankerClient):
-    """BGE Reranker v2-m3 ONNX INT8 client.
-
-    Backed by the INT8 model produced in ``reports/bge_reranker_setup.md``
-    (logit |Δ| ≤ 0.028 vs PyTorch, 0.71s/50쌍 on CPU). Long passages are
-    truncated tail-first via ``truncation="only_second"`` so the query is
-    always preserved verbatim — cross-encoders need the full question
-    visible to the attention stack to score relevance correctly.
-    """
+    """BGE Reranker v2-m3 ONNX INT8 client."""
 
     # XLM-RoBERTa 최대 입력. 한국어 800자 ≈ 400~500 토큰, 512에서 안전 절단.
     MAX_LENGTH: ClassVar[int] = 512

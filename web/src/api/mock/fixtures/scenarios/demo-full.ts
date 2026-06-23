@@ -1,11 +1,15 @@
+import { RICH_2_3, RICH_3_3 } from "@/api/mock/fixtures/section-content";
 import type { ProgressMessage } from "@/api/ws-messages";
-import { sleep, typewriter } from "./_utils";
-
-const CRITIC_THOUGHT =
-  "이 섹션은 인구 고령화율 추세를 근거로 정책 효과를 추정하고 있다. 자료 A의 19.2% 수치와 자료 B의 17.1% 수치가 충돌한다. 자료 A는 통계청 2024년 표본 집계 결과로 신뢰도가 높다. 자료 B는 2022년 추정치를 사용했다. 추가 검증이 필요하다.";
-
-const RESEARCH_KEYWORDS =
-  "광역교통망, GTX, 통근 시간, 비용편익, 예비타당성, 인구 고령화, 수도권 집중도, 지방소멸";
+import {
+  CHAPTER_SUMMARY,
+  CONTRA,
+  CRITIC_THOUGHT,
+  OUTLINE,
+  POLISH_NOTE,
+  RESEARCH_KEYWORDS,
+  SOURCE_EVAL,
+} from "./_content";
+import { draftTypewriter, sleep, typewriter } from "./_utils";
 
 export async function* demoFullScenario(costStep = 1): AsyncGenerator<ProgressMessage> {
   let tokens = 0;
@@ -15,10 +19,12 @@ export async function* demoFullScenario(costStep = 1): AsyncGenerator<ProgressMe
     cost += c;
     return { type: "cost", tokens_used: tokens, cost_usd: Number(cost.toFixed(2)) };
   };
+  const nap = (ms: number) => sleep(ms / costStep);
 
-  // RESEARCH
+  // ========== RESEARCH ==========
   yield { type: "phase", phase: "research", status: "started" };
-  await sleep(600 / costStep);
+  await nap(600);
+
   yield {
     type: "step",
     phase: "research",
@@ -26,30 +32,45 @@ export async function* demoFullScenario(costStep = 1): AsyncGenerator<ProgressMe
     status: "started",
     eta_seconds: 5400,
   };
-  await sleep(400 / costStep);
-  yield* typewriter("research_keywords", RESEARCH_KEYWORDS, 25 / costStep);
-  yield { type: "step", phase: "research", step: "검색어 생성", status: "completed" };
+  await nap(400);
+  yield* typewriter("research_keywords", RESEARCH_KEYWORDS, 26 / costStep);
   yield bumpCost(180_000, 6);
-  await sleep(500 / costStep);
+  yield { type: "step", phase: "research", step: "검색어 생성", status: "completed" };
+  await nap(500);
+
+  yield {
+    type: "step",
+    phase: "research",
+    step: "자료 검색 (듀얼 트랙)",
+    status: "started",
+    eta_seconds: 4800,
+  };
+  await nap(3000);
+  yield bumpCost(90_000, 3);
+  yield { type: "step", phase: "research", step: "자료 검색 (듀얼 트랙)", status: "completed" };
+  await nap(500);
+
   yield { type: "step", phase: "research", step: "자료 평가", status: "started" };
-  await sleep(1500 / costStep);
+  await nap(900);
+  yield* typewriter("research_keywords", SOURCE_EVAL, 24 / costStep);
   yield bumpCost(120_000, 4);
   yield { type: "step", phase: "research", step: "자료 평가", status: "completed" };
   yield { type: "phase", phase: "research", status: "completed" };
 
-  // CHECKPOINT #1 (자료 검토)
-  await sleep(400 / costStep);
+  // ========== CHECKPOINT #1 (자료 검토) ==========
+  await nap(400);
   yield {
     type: "checkpoint",
     checkpoint_id: "cp_sources_review",
     level: 1,
     requires_user_decision: true,
   };
-  await sleep(3000 / costStep);
+  await nap(3500);
 
-  // INDEXING
+  // ========== INDEXING ==========
   yield { type: "phase", phase: "indexing", status: "started" };
-  await sleep(500 / costStep);
+  await nap(500);
+
   yield {
     type: "step",
     phase: "indexing",
@@ -57,62 +78,143 @@ export async function* demoFullScenario(costStep = 1): AsyncGenerator<ProgressMe
     status: "started",
     eta_seconds: 4200,
   };
-  await sleep(1200 / costStep);
+  await nap(2500);
   yield bumpCost(80_000, 1);
   yield { type: "step", phase: "indexing", step: "청크 분할", status: "completed" };
+  await nap(300);
+
   yield { type: "step", phase: "indexing", step: "임베딩 생성", status: "started" };
-  await sleep(2200 / costStep);
+  await nap(3500);
   yield bumpCost(150_000, 3);
   yield { type: "step", phase: "indexing", step: "임베딩 생성", status: "completed" };
+  await nap(300);
+
+  yield { type: "step", phase: "indexing", step: "벡터 색인 구축", status: "started" };
+  await nap(2600);
+  yield bumpCost(40_000, 1);
+  yield { type: "step", phase: "indexing", step: "벡터 색인 구축", status: "completed" };
   yield { type: "phase", phase: "indexing", status: "completed" };
 
-  // WRITING
+  // ========== WRITING ==========
   yield { type: "phase", phase: "writing", status: "started" };
-  await sleep(400 / costStep);
-  for (let lv = 1; lv <= 4; lv++) {
+  await nap(400);
+
+  // Level 1 — 개요·목차
+  yield {
+    type: "step",
+    phase: "writing",
+    step: "개요·목차 생성",
+    status: "started",
+    eta_seconds: 3600,
+  };
+  await nap(400);
+  yield* draftTypewriter("outline", OUTLINE, 26 / costStep);
+  yield bumpCost(250_000, 12);
+  yield { type: "step", phase: "writing", step: "개요·목차 생성", status: "completed" };
+  await nap(400);
+
+  // Level 2 — 챕터 요약 → Checkpoint #2
+  yield {
+    type: "step",
+    phase: "writing",
+    step: "챕터 요약 작성",
+    status: "started",
+    eta_seconds: 2400,
+  };
+  await nap(400);
+  yield* draftTypewriter("chapter_summary", CHAPTER_SUMMARY, 22 / costStep);
+  yield bumpCost(500_000, 24);
+  yield { type: "step", phase: "writing", step: "챕터 요약 작성", status: "completed" };
+
+  await nap(400);
+  yield {
+    type: "checkpoint",
+    checkpoint_id: "cp_structure_review",
+    level: 2,
+    requires_user_decision: true,
+  };
+  await nap(3500);
+
+  // Level 3 — 섹션 본문 상세 작성 (Preview 화면과 동일 본문 재활용)
+  const SECTIONS: { id: string; title: string; body: string }[] = [
+    { id: "2.3", title: "본문 작성 · 2.3 인구·고령화 영향", body: RICH_2_3 },
+    { id: "3.3", title: "본문 작성 · 3.3 비용편익비 (B/C)", body: RICH_3_3 },
+  ];
+  for (const sec of SECTIONS) {
     yield {
       type: "step",
       phase: "writing",
-      step: `Level ${lv}`,
+      step: sec.title,
       status: "started",
-      eta_seconds: 3600 / lv,
+      eta_seconds: 1800,
     };
-    await sleep(1200 / costStep);
-    yield bumpCost(250_000 * lv, 12 * lv);
-    yield { type: "step", phase: "writing", step: `Level ${lv}`, status: "completed" };
-
-    if (lv === 2) {
-      // Checkpoint #2 (구조 검토)
-      yield {
-        type: "checkpoint",
-        checkpoint_id: "cp_structure_review",
-        level: 2,
-        requires_user_decision: true,
-      };
-      await sleep(2500 / costStep);
-    }
+    await nap(400);
+    yield* draftTypewriter(sec.id, sec.body, 18 / costStep);
+    yield bumpCost(750_000, 36);
+    yield { type: "step", phase: "writing", step: sec.title, status: "completed" };
+    await nap(300);
   }
+
+  // Level 4 — 통합·교정
+  yield { type: "step", phase: "writing", step: "통합·교정", status: "started", eta_seconds: 600 };
+  await nap(400);
+  yield* draftTypewriter("polish", POLISH_NOTE, 22 / costStep);
+  yield bumpCost(300_000, 14);
+  yield { type: "step", phase: "writing", step: "통합·교정", status: "completed" };
   yield { type: "phase", phase: "writing", status: "completed" };
 
-  // QA
+  // ========== QA ==========
   yield { type: "phase", phase: "qa", status: "started" };
-  await sleep(400 / costStep);
-  for (const step of ["Fact-check", "Consistency", "Style", "Critic"]) {
-    yield { type: "step", phase: "qa", step, status: "started" };
-    await sleep(800 / costStep);
-    if (step === "Critic") {
-      yield* typewriter("critic_thinking", CRITIC_THOUGHT, 35 / costStep);
-    }
-    yield bumpCost(120_000, 3);
-    yield { type: "step", phase: "qa", step, status: "completed" };
-  }
+  await nap(400);
+
+  // Fact-check
+  yield { type: "step", phase: "qa", step: "Fact-check", status: "started" };
+  await nap(2000);
+  yield bumpCost(120_000, 3);
+  yield { type: "step", phase: "qa", step: "Fact-check", status: "completed" };
+
+  // Consistency — 모순 발견 → 실패 → 재시도 → 통과
+  yield { type: "step", phase: "qa", step: "Consistency", status: "started" };
+  await nap(800);
+  yield* typewriter("contradiction_explain", CONTRA, 30 / costStep);
+  yield { type: "step", phase: "qa", step: "Consistency", status: "failed" };
+  await nap(1200);
+  yield { type: "step", phase: "qa", step: "Consistency", status: "started" };
+  await nap(1800);
+  yield bumpCost(140_000, 4);
+  yield { type: "step", phase: "qa", step: "Consistency", status: "completed" };
+
+  // Style
+  yield { type: "step", phase: "qa", step: "Style", status: "started" };
+  await nap(2000);
+  yield bumpCost(90_000, 2);
+  yield { type: "step", phase: "qa", step: "Style", status: "completed" };
+
+  // Critic
+  yield { type: "step", phase: "qa", step: "Critic", status: "started" };
+  await nap(900);
+  yield* typewriter("critic_thinking", CRITIC_THOUGHT, 35 / costStep);
+  yield bumpCost(160_000, 5);
+  yield { type: "step", phase: "qa", step: "Critic", status: "completed" };
   yield { type: "phase", phase: "qa", status: "completed" };
 
-  // EXPORT
+  // ========== EXPORT ==========
   yield { type: "phase", phase: "export", status: "started" };
-  await sleep(500 / costStep);
+  await nap(600);
+
   yield { type: "step", phase: "export", step: "HWPX 변환", status: "started" };
-  await sleep(900 / costStep);
+  await nap(2000);
+  yield bumpCost(60_000, 2);
   yield { type: "step", phase: "export", step: "HWPX 변환", status: "completed" };
+  await nap(300);
+
+  yield { type: "step", phase: "export", step: "PDF 변환", status: "started" };
+  await nap(1500);
+  yield { type: "step", phase: "export", step: "PDF 변환", status: "completed" };
+  await nap(300);
+
+  yield { type: "step", phase: "export", step: "Markdown 정리", status: "started" };
+  await nap(1000);
+  yield { type: "step", phase: "export", step: "Markdown 정리", status: "completed" };
   yield { type: "phase", phase: "export", status: "completed" };
 }
