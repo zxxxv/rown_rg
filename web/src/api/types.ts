@@ -60,7 +60,7 @@ export const ProjectConfigSchema = z.object({
   enable_critic_agent: z.boolean(),
   enable_glossary: z.boolean(),
   depth_mode: DepthModeSchema,
-  output_formats: z.array(z.enum(["hwpx", "pdf", "markdown"])),
+  output_formats: z.array(z.enum(["hwpx", "markdown"])),
   notification_channels: z.array(z.enum(["email", "naver_works"])),
 });
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;

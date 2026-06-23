@@ -17,7 +17,7 @@ interface LocationFromState {
 }
 
 export default function LoginPage() {
-  const { login, loginWithSso } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [ssoLoading, setSsoLoading] = useState(false);
@@ -64,20 +64,13 @@ export default function LoginPage() {
     }
   });
 
-  const onNaverWorks = async () => {
+  const onNaverWorks = () => {
     if (ssoLoading) return;
     clearErrors("root");
     setSsoLoading(true);
-    try {
-      await loginWithSso("naver-works");
-      goAfterLogin();
-    } catch (err) {
-      const message =
-        err instanceof ApiError ? err.message : "네이버웍스 로그인 중 오류가 발생했습니다.";
-      setError("root", { type: "auth", message });
-    } finally {
-      setSsoLoading(false);
-    }
+    // SAML SSO는 브라우저 전체 이동이어야 한다(XHR 불가).
+    // 백엔드가 네이버웍스로 리다이렉트하고, 로그인 후 /callback 으로 돌아온다.
+    window.location.href = "/api/v1/auth/saml/login";
   };
 
   const onEnter = (e: KeyboardEvent<HTMLInputElement>) => {

@@ -2,11 +2,11 @@ import asyncio
 import hashlib
 import json
 import re
-from datetime import UTC, datetime
 from pathlib import Path
 
 from src.clients.base import CompletionRequest, CompletionResponse
 from src.clients.exceptions import CassetteNotFoundError
+from src.core.clock import now
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -67,7 +67,7 @@ class CassetteManager:
             "input_hash": input_hash,
             "request": request.model_dump(),
             "response": response.model_dump(),
-            "recorded_at": datetime.now(UTC).isoformat(),
+            "recorded_at": now().isoformat(),
         }
         async with self._get_lock(path):
             path.write_text(

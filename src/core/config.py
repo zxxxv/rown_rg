@@ -1,5 +1,8 @@
 from enum import StrEnum
+from pathlib import Path
+from typing import Self
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,9 +12,15 @@ class Environment(StrEnum):
     PRODUCTION = "production"
 
 
+# config.py 위치 기준으로 프로젝트 루트(.env 위치)를 고정 — 실행 CWD와 무관하게 .env를 찾는다.
+# config.py = <root>/src/core/config.py 이므로 parents[2] = <root>.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_JWT_SECRET = "change-me-32-chars-or-more"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -33,10 +42,14 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
 
     # JWT
-    jwt_secret_key: str = "change-me-32-chars-or-more"
+    jwt_secret_key: str = _DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     refresh_token_expire_days: int = 7
+
+    # SAML SSO / 프론트엔드 (네이버웍스 로그인 리다이렉트)
+    saml_base_url: str = ""  # 운영 공개 베이스 URL (비면 요청 헤더로 추론)
+    react_frontend_url: str = "http://localhost:5173"
 
     # 임베딩 (환경별 변동 가능 — 모델 특성 상수는 클라이언트 ClassVar로 관리)
     embedding_model_path: str = "./models/bge-m3-onnx-int8"
@@ -56,10 +69,30 @@ class Settings(BaseSettings):
         return self.environment == Environment.PRODUCTION
 
     @property
+    def is_local(self) -> bool:
+        return self.environment == Environment.LOCAL
+
+    @property
     def cors_origins(self) -> list[str]:
         if self.environment == Environment.LOCAL:
             return ["*"]
         return ["https://app.loune-insight.co.kr"]
+
+    @model_validator(mode="after")
+    def _guard_production_secrets(self) -> Self:
+        """
+        운영 환경에서 안전하지 않은 JWT 키면 부팅을 차단한다 (fail-fast).
+
+        .env/OS 환경변수로 키 주입을 깜빡했을 때 기본값으로 조용히 뜨는 사고를 방지.
+        """
+        if self.is_production and (
+            self.jwt_secret_key == _DEFAULT_JWT_SECRET or len(self.jwt_secret_key) < 32
+        ):
+            raise ValueError(
+                "운영 환경(production)에서 JWT_SECRET_KEY가 기본값이거나 32자 미만입니다. "
+                "안전한 무작위 키(32자 이상)를 환경변수로 주입하세요."
+            )
+        return self
 
 
 settings = Settings()

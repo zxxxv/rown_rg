@@ -6,9 +6,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ProjectStatus = Literal[
-    "created", "researching", "indexing", "writing", "reviewing", "completed", "archived"
-]
+from src.core.types import ProjectStage
+
+# status는 ProjectStage(core)를 단일 진실로 삼아 파생한다. 별도 Literal로 중복 정의하지 않는다.
+ProjectStatus = ProjectStage
 DepthMode = Literal["outline_only", "standard", "full_report", "deep_dive"]
 
 

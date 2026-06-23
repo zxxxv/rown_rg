@@ -4,12 +4,11 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import type { ProjectFormValues } from "./schema";
 
-type OutputFormat = "hwpx" | "pdf" | "markdown";
+type OutputFormat = "hwpx" | "markdown";
 type Channel = "email" | "naver_works";
 
 const OUTPUT_LABEL: Record<OutputFormat, string> = {
   hwpx: "HWPX (회사 표준)",
-  pdf: "PDF",
   markdown: "Markdown (기술 검토용)",
 };
 
@@ -18,7 +17,7 @@ const CHANNEL_LABEL: Record<Channel, string> = {
   naver_works: "네이버 웍스",
 };
 
-const OUTPUT_ORDER: OutputFormat[] = ["hwpx", "pdf", "markdown"];
+const OUTPUT_ORDER: OutputFormat[] = ["hwpx", "markdown"];
 const CHANNEL_ORDER: Channel[] = ["email", "naver_works"];
 
 function ToggleRow({

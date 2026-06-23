@@ -4,6 +4,7 @@ import { RequireAuth } from "@/components/auth/RequireAuth";
 import { Toaster } from "@/components/ui/sonner";
 import ForbiddenPage from "@/pages/403";
 import AdminDashboardPage from "@/pages/admin/dashboard";
+import CallbackPage from "@/pages/callback";
 import LibraryPage from "@/pages/library";
 import LoginPage from "@/pages/login";
 import ProjectsPage from "@/pages/projects";
@@ -24,6 +25,10 @@ const routes = [
   {
     path: "/login",
     element: <LoginPage />,
+  },
+  {
+    path: "/callback",
+    element: <CallbackPage />,
   },
   {
     path: "/projects",

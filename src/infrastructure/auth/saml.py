@@ -1,9 +1,10 @@
 import base64
-import os
 import re
 
 from fastapi import Request
 from onelogin.saml2.auth import OneLogin_Saml2_Auth
+
+from src.core.config import settings
 
 
 def get_saml_settings(base_url: str) -> dict:
@@ -11,19 +12,24 @@ def get_saml_settings(base_url: str) -> dict:
         "strict": True,
         "debug": False,
         "sp": {
-            "entityId": f"{base_url}/api/v1/auth/saml/metadata",  # 네이버웍스 Developer Console/SSO/WORKS as IdP에서 SP Issuer에 등록
+            # 네이버웍스 Developer Console/SSO/WORKS as IdP에서 SP Issuer에 등록
+            "entityId": f"{base_url}/api/v1/auth/saml/metadata",
             "assertionConsumerService": {
                 "url": f"{base_url}/api/v1/auth/saml/acs",  # ACS URL에 등록
                 "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST",
             },
         },
         "idp": {
-            "entityId": "https://auth.worksmobile.com/saml2/oseop.by-works.net",  # NAVER WORKS Identity Provider 정보에서 Response Issuer 복사/붙여넣기
+            # NAVER WORKS Identity Provider 정보에서 Response Issuer 복사/붙여넣기
+            "entityId": "https://auth.worksmobile.com/saml2/oseop.by-works.net",
             "singleSignOnService": {
-                "url": "https://auth.worksmobile.com/saml2/idp/oseop.by-works.net",  # NAVER WORKS Identity Provider 정보에서 SSO URL 복사/붙여넣기
+                # NAVER WORKS Identity Provider 정보에서 SSO URL 복사/붙여넣기
+                "url": "https://auth.worksmobile.com/saml2/idp/oseop.by-works.net",
                 "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
-            },  # NAVER WORKS Identity Provider 정보에서 Certificate 다운로드 후 내용 한 줄로 복사/붙여넣기
-            "x509cert": "MIIC6jCCAdKgAwIBAgIIX0B8jtiXKtYwDQYJKoZIhvcNAQELBQAwNTETMBEGA1UEAwwKTElORSBXT1JLUzERMA8GA1UEBwwIU0VPTkdOQU0xCzAJBgNVBAYTAktSMB4XDTI2MDUzMDEyMzc0N1oXDTMxMDUzMDEyMzc0N1owNTETMBEGA1UEAwwKTElORSBXT1JLUzERMA8GA1UEBwwIU0VPTkdOQU0xCzAJBgNVBAYTAktSMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvnAOMLaXoeEto9PryxQVpqt0FrlWpTbIQDcCenCbI70F2HMkAh5twBCPY6Mv5NLNYFDJF4NselJcMYCFwtF2otUGLINzUXtAVrksRMsvIjHmh7ldQRvyK7k/WJLHdSX3qEyJre6sdvlWWshA+nX51vS2x5XR8r/KXYN6OTKgtTyBYaRvPO58hNUvXC8ZY0sss2zWdiFweuprkxI6wF8TQDSKWf02vi26nRNMsfcigK12QRNcni1sVPUEdiDbxfhBON0GgInXeVU+Oqd6cMC8bjnHaA7o6loVGlk17V+2l2cidZEhI7bkJAoY7yxKjDJERB1fZ45TipTyrtz6rhSbrwIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQBljuK68BXDAg/SrP8cmgK0Rlwh0nYg21M/7pNj5T+bDDuyWZzsw9djWmIlXjzr8kALiz+miUtDRIBNoyANi68Ed1NlIDXa4yP++IoJDdMeAF9YScPsQgEX23+CY1sxHKhoTUuznvFdAqmkSJ/uhJMXkMliZtQdShRQcK3pVoZ9NYTIy2GXIlXN9W17rAd/EfR0DV4AFUYbvanrUPrRLcqn3LEn1414W6AQBk0atCL4Y3ZYZQfyeIwCf2oqBqHmfQxkkSwaGjbP2FuczIGrFvXb7BI311feFQyPN5BASWMtPjiTtL+Kgf8AjTho/Xrw9wRsrX5jD10+EmiFp16eBaED",
+            },
+            # NAVER WORKS Identity Provider 정보에서 Certificate 다운로드 후
+            # 내용을 한 줄로 복사/붙여넣기
+            "x509cert": "MIIC6jCCAdKgAwIBAgIIX0B8jtiXKtYwDQYJKoZIhvcNAQELBQAwNTETMBEGA1UEAwwKTElORSBXT1JLUzERMA8GA1UEBwwIU0VPTkdOQU0xCzAJBgNVBAYTAktSMB4XDTI2MDUzMDEyMzc0N1oXDTMxMDUzMDEyMzc0N1owNTETMBEGA1UEAwwKTElORSBXT1JLUzERMA8GA1UEBwwIU0VPTkdOQU0xCzAJBgNVBAYTAktSMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvnAOMLaXoeEto9PryxQVpqt0FrlWpTbIQDcCenCbI70F2HMkAh5twBCPY6Mv5NLNYFDJF4NselJcMYCFwtF2otUGLINzUXtAVrksRMsvIjHmh7ldQRvyK7k/WJLHdSX3qEyJre6sdvlWWshA+nX51vS2x5XR8r/KXYN6OTKgtTyBYaRvPO58hNUvXC8ZY0sss2zWdiFweuprkxI6wF8TQDSKWf02vi26nRNMsfcigK12QRNcni1sVPUEdiDbxfhBON0GgInXeVU+Oqd6cMC8bjnHaA7o6loVGlk17V+2l2cidZEhI7bkJAoY7yxKjDJERB1fZ45TipTyrtz6rhSbrwIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQBljuK68BXDAg/SrP8cmgK0Rlwh0nYg21M/7pNj5T+bDDuyWZzsw9djWmIlXjzr8kALiz+miUtDRIBNoyANi68Ed1NlIDXa4yP++IoJDdMeAF9YScPsQgEX23+CY1sxHKhoTUuznvFdAqmkSJ/uhJMXkMliZtQdShRQcK3pVoZ9NYTIy2GXIlXN9W17rAd/EfR0DV4AFUYbvanrUPrRLcqn3LEn1414W6AQBk0atCL4Y3ZYZQfyeIwCf2oqBqHmfQxkkSwaGjbP2FuczIGrFvXb7BI311feFQyPN5BASWMtPjiTtL+Kgf8AjTho/Xrw9wRsrX5jD10+EmiFp16eBaED",  # noqa: E501
         },
         "security": {
             "wantMessagesSigned": True,
@@ -35,7 +41,7 @@ def get_saml_settings(base_url: str) -> dict:
 async def prepare_fastapi_saml_request(request: Request) -> dict:
     headers = request.headers
 
-    prod_base_url = os.getenv("SAML_BASE_URL")
+    prod_base_url = settings.saml_base_url
     if prod_base_url:
         host = prod_base_url.split("://")[-1]
         proto = "https"
@@ -64,8 +70,8 @@ async def prepare_fastapi_saml_request(request: Request) -> dict:
 
 async def init_saml_auth(request: Request, base_url: str) -> OneLogin_Saml2_Auth:
     req_data = await prepare_fastapi_saml_request(request)
-    is_local = os.getenv("ENVIRONMENT", "production") == "local"
-    settings = get_saml_settings(base_url)
+    is_local = settings.is_local
+    saml_settings = get_saml_settings(base_url)
 
     if is_local:
         if req_data.get("post_data") and req_data["post_data"].get("SAMLResponse"):
@@ -84,11 +90,11 @@ async def init_saml_auth(request: Request, base_url: str) -> OneLogin_Saml2_Auth
             except Exception:
                 pass
 
-        settings["strict"] = False
-        settings["debug"] = True
-        settings["security"] = {
+        saml_settings["strict"] = False
+        saml_settings["debug"] = True
+        saml_settings["security"] = {
             "wantMessagesSigned": False,
             "wantAssertionsSigned": False,
         }
 
-    return OneLogin_Saml2_Auth(req_data, settings)
+    return OneLogin_Saml2_Auth(req_data, saml_settings)

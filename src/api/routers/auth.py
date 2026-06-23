@@ -1,23 +1,19 @@
 import base64
-import os
 import re
 import traceback
 import zlib
-from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
-from src.api.dependencies.permissions import require_role
+from src.api.dependencies.permissions import assert_can_assign_role, require_role
 from src.api.schemas.auth import (
-    AccessToken,
     ChangePasswordRequest,
     LoginRequest,
     LogoutResponse,
@@ -26,34 +22,53 @@ from src.api.schemas.auth import (
 )
 from src.api.schemas.user import UserCreate, UserRead
 from src.core.clock import now
+from src.core.config import settings
 from src.core.exceptions import AuthenticationError, ValidationError
 from src.db.models.user import User
 from src.infrastructure.auth import (
     jwt_handler,
     lockout_handler,
     password_handler,
+    refresh_token_handler,
     totp_handler,
 )
 from src.infrastructure.auth.saml import init_saml_auth
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-me-32-chars-or-more")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
-REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.access_token_expire_minutes
+REFRESH_TOKEN_EXPIRE_DAYS = settings.refresh_token_expire_days
 
 
-def _now_naive() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    """access/refresh를 HttpOnly 쿠키로 설정한다(일반 로그인·SSO·refresh 공통)."""
+    is_secure = not settings.is_local
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=is_secure,
+        samesite="lax",
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=is_secure,
+        samesite="lax",
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+    )
 
 
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 async def register(
     data: UserCreate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    _: Annotated[User, Depends(require_role("super_admin", "admin"))],
+    current_user: Annotated[User, Depends(require_role("super_admin", "admin"))],
 ) -> User:
+    # 계층 기반: 호출자는 자기보다 낮은 역할만 부여할 수 있다(권한 상승 차단).
+    assert_can_assign_role(current_user, data.role)
     password_handler.validate_password_policy(data.password)
     user = User(
         email=data.email,
@@ -74,6 +89,7 @@ async def register(
 
 @router.post("/login", response_model=TokenPair)
 async def login(
+    response: Response,
     data: LoginRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
 ) -> TokenPair:
@@ -95,6 +111,12 @@ async def login(
     if not user.is_active:
         raise AuthenticationError(message="비활성화된 계정입니다", code="INACTIVE_USER")
 
+    if user.password_hash is None:
+        raise AuthenticationError(
+            message="비밀번호 로그인이 설정되지 않은 계정입니다. 네이버웍스로 로그인하세요",
+            code="SSO_ONLY_ACCOUNT",
+        )
+
     if not password_handler.verify_password(data.password, user.password_hash):
         lockout_handler.record_failed_attempt(user)
         await session.commit()
@@ -112,33 +134,55 @@ async def login(
     lockout_handler.reset_attempts(user)
     user.last_login_at = now()
 
+    refresh_token = await refresh_token_handler.issue(session, user.id)
+    access_token = jwt_handler.create_access_token(user.id)
+    _set_auth_cookies(response, access_token, refresh_token)
     return TokenPair(
-        access_token=jwt_handler.create_access_token(user.id, user.role),
-        refresh_token=jwt_handler.create_refresh_token(user.id),
+        access_token=access_token,
+        refresh_token=refresh_token,
         user=UserRead.model_validate(user),
     )
 
 
-@router.post("/refresh", response_model=AccessToken)
+@router.post("/refresh", response_model=TokenPair)
 async def refresh_access_token(
-    data: RefreshRequest,
+    request: Request,
+    response: Response,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-) -> AccessToken:
-    token_data = jwt_handler.decode_token(data.refresh_token)
-    if token_data.token_type != "refresh":
-        raise AuthenticationError(message="refresh token이 아닙니다", code="WRONG_TOKEN_TYPE")
+    data: RefreshRequest | None = None,
+) -> TokenPair:
+    # 쿠키(브라우저) 또는 body(API 클라이언트) 어느 쪽이든 refresh 토큰을 받는다.
+    refresh_token = (data.refresh_token if data else None) or request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise AuthenticationError(message="refresh token이 없습니다", code="MISSING_TOKEN")
 
-    user = await session.get(User, token_data.user_id)
+    # RTR: 검증·회전 + 재사용 감지. 옛 refresh는 소비되고 새 refresh가 발급된다.
+    user_id, new_refresh_token = await refresh_token_handler.rotate(session, refresh_token)
+
+    user = await session.get(User, user_id)
     if user is None or not user.is_active:
         raise AuthenticationError(message="사용자를 찾을 수 없습니다", code="USER_NOT_FOUND")
 
-    return AccessToken(access_token=jwt_handler.create_access_token(user.id, user.role))
+    access_token = jwt_handler.create_access_token(user.id)
+    _set_auth_cookies(response, access_token, new_refresh_token)
+    return TokenPair(
+        access_token=access_token,
+        refresh_token=new_refresh_token,
+        user=UserRead.model_validate(user),
+    )
 
 
 @router.post("/logout", response_model=LogoutResponse)
 async def logout(
-    _: Annotated[User, Depends(get_current_active_user)],
+    response: Response,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    session: Annotated[AsyncSession, Depends(get_async_session)],
 ) -> LogoutResponse:
+    # RTR: 유저의 모든 refresh 토큰 폐기(전체 세션 종료) 후 SSO 쿠키 삭제
+    await refresh_token_handler.revoke_all_for_user(session, current_user.id)
+    is_secure = not settings.is_local
+    response.delete_cookie("access_token", httponly=True, secure=is_secure, samesite="lax")
+    response.delete_cookie("refresh_token", httponly=True, secure=is_secure, samesite="lax")
     return LogoutResponse(success=True)
 
 
@@ -166,7 +210,7 @@ async def change_password(
 
 
 def get_base_url(request: Request) -> str:
-    prod_base_url = os.getenv("SAML_BASE_URL")
+    prod_base_url = settings.saml_base_url
     if prod_base_url:
         return prod_base_url
 
@@ -180,7 +224,8 @@ async def saml_login(request: Request):
     try:
         base_url = get_base_url(request)
         auth = await init_saml_auth(request, base_url)
-        return RedirectResponse(url=auth.login())
+        react_frontend_url = settings.react_frontend_url
+        return RedirectResponse(url=auth.login(return_to=react_frontend_url))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -189,7 +234,10 @@ async def saml_login(request: Request):
 
 
 @router.post("/saml/acs")
-async def saml_acs(request: Request):
+async def saml_acs(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+):
     try:
         form_data = await request.form()
         saml_response_b64 = form_data.get("SAMLResponse")
@@ -212,7 +260,7 @@ async def saml_acs(request: Request):
                 pass
 
         user_email = None
-        is_local = os.getenv("ENVIRONMENT", "production") == "local"
+        is_local = settings.is_local
         base_url = get_base_url(request)
 
         try:
@@ -248,51 +296,39 @@ async def saml_acs(request: Request):
                 )
 
         if user_email:
-            # 토큰 생성
-            access_token_expires = datetime.now(UTC) + timedelta(
-                minutes=ACCESS_TOKEN_EXPIRE_MINUTES
-            )
-            access_payload = {
-                "sub": user_email,
-                "exp": access_token_expires,
-                "type": "access",
-            }
-            access_token = jwt.encode(access_payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+            stmt = select(User).where(User.email == user_email)
+            user = (await session.execute(stmt)).scalar_one_or_none()
+            if user is None:
+                user = User(
+                    email=user_email,
+                    name=user_email.split("@")[0],
+                    role="viewer",
+                    password_hash=None,
+                    is_active=True,
+                )
+                session.add(user)
+                await session.flush()  # user.id(UUID) 채우기
+            elif not user.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="비활성화된 계정입니다.",
+                )
 
-            refresh_token_expires = datetime.now(UTC) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-            refresh_payload = {
-                "sub": user_email,
-                "exp": refresh_token_expires,
-                "type": "refresh",
-            }
-            refresh_token = jwt.encode(refresh_payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+            user.last_login_at = now()
+
+            # 일반 로그인과 동일하게 토큰 발급 (sub=user.id(UUID), role 포함)
+            access_token = jwt_handler.create_access_token(user.id)
+            refresh_token = await refresh_token_handler.issue(session, user.id)
 
             # 리다이렉트 설정
-            react_frontend_url = os.getenv("REACT_FRONTEND_URL", "http://localhost:5173")
+            react_frontend_url = settings.react_frontend_url
             response = RedirectResponse(
                 url=f"{react_frontend_url}/callback",
                 status_code=status.HTTP_303_SEE_OTHER,
             )
 
             # HttpOnly 쿠키 설정
-            is_secure = not is_local
-
-            response.set_cookie(
-                key="access_token",
-                value=access_token,
-                httponly=True,
-                secure=is_secure,
-                samesite="lax",
-                max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            )
-            response.set_cookie(
-                key="refresh_token",
-                value=refresh_token,
-                httponly=True,
-                secure=is_secure,
-                samesite="lax",
-                max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-            )
+            _set_auth_cookies(response, access_token, refresh_token)
 
             return response
 
@@ -308,75 +344,4 @@ async def saml_acs(request: Request):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"서버 내부 오류 발생: {str(e)}",
-        )
-
-
-@router.post("/saml/refresh")
-async def saml_refresh(request: Request):
-    refresh_token = request.cookies.get("refresh_token")
-
-    if not refresh_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="refresh token이 없습니다."
-        )
-
-    try:
-        payload = jwt.decode(refresh_token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        if payload.get("type") != "refresh":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="유효하지 않은 토큰입니다.",
-            )
-
-        user_email = payload.get("sub")
-        is_local = os.getenv("ENVIRONMENT", "production") == "local"
-        is_secure = not is_local
-
-        current_time = datetime.now(UTC)
-
-        access_token_expires = current_time + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_payload = {
-            "sub": user_email,
-            "exp": access_token_expires,
-            "type": "access",
-        }
-        new_access_token = jwt.encode(access_payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
-
-        refresh_token_expires = current_time + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-        refresh_payload = {
-            "sub": user_email,
-            "exp": refresh_token_expires,
-            "type": "refresh",
-        }
-        new_refresh_token = jwt.encode(refresh_payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
-
-        response = JSONResponse(content={"status": "ok"})
-
-        response.set_cookie(
-            key="access_token",
-            value=new_access_token,
-            httponly=True,
-            secure=is_secure,
-            samesite="lax",
-            max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        )
-        response.set_cookie(
-            key="refresh_token",
-            value=new_refresh_token,
-            httponly=True,
-            secure=is_secure,
-            samesite="lax",
-            max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-        )
-
-        return response
-
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="refresh token이 만료됐습니다. 다시 로그인해주세요.",
-        )
-    except jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰입니다."
         )
