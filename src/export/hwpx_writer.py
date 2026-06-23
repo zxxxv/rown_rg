@@ -108,7 +108,8 @@ def _apply_company_chrome(doc: HwpxDocument) -> None:
 def _add_heading(doc: HwpxDocument, heading: Heading) -> None:
     level = max(1, min(heading.level, MAX_HEADING_LEVEL))
     char_id = doc.ensure_run_style(font=HEADING_FONT, size=HEADING_SIZE_PT[level], bold=True)
-    para = doc.add_paragraph(heading.text, char_pr_id_ref=char_id)
+    # inherit_style=False: 앞 문단의 paraPr(특히 개요)을 물려받지 않고 깨끗하게 시작한다.
+    para = doc.add_paragraph(heading.text, char_pr_id_ref=char_id, inherit_style=False)
     idx = doc.paragraphs.index(para)
     # outline_level: 자동 목차 필드가 수집하는 개요 수준(한컴에서 최종 매핑 검증 필요).
     doc.set_paragraph_format(
@@ -122,7 +123,8 @@ def _add_heading(doc: HwpxDocument, heading: Heading) -> None:
 
 def _add_body(doc: HwpxDocument, text: str) -> None:
     char_id = doc.ensure_run_style(font=BODY_FONT, size=BODY_SIZE_PT)
-    para = doc.add_paragraph(text, char_pr_id_ref=char_id)
+    # inherit_style=False: 앞 제목의 개요(OUTLINE) paraPr 상속을 차단 → 본문이 목차에 안 잡힘.
+    para = doc.add_paragraph(text, char_pr_id_ref=char_id, inherit_style=False)
     idx = doc.paragraphs.index(para)
     doc.set_paragraph_format(paragraph_index=idx, line_spacing_percent=LINE_SPACING_PERCENT)
 

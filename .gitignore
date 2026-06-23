@@ -67,3 +67,6 @@ test_data/pdf/*
 !test_data/hwpx/README.md
 !test_data/pdf/README.md
 test_data/parsed/
+
+# PoC/실험 산출물
+scripts/_out_poc.hwpx
