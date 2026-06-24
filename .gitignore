@@ -48,8 +48,8 @@ cassettes/
 # 파서/임베딩 등 디스크 캐시
 cache/
 
-# 모델 가중치 + 자동 생성 리포트
-models/
+# 모델 가중치 + 자동 생성 리포트 (루트 한정 — src/db/models 소스가 무시되지 않도록 앵커)
+/models/
 reports/
 
 # Claude
