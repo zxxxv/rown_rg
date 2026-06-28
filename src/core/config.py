@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     saml_base_url: str = ""  # 운영 공개 베이스 URL (비면 요청 헤더로 추론)
     react_frontend_url: str = "http://localhost:5173"
 
+    # X-API-Key
+    internal_api_key: str = ""
+
     # 임베딩 (환경별 변동 가능 — 모델 특성 상수는 클라이언트 ClassVar로 관리)
     embedding_model_path: str = "./models/bge-m3-onnx-int8"
     embedding_cache_dir: str = "./cache/embeddings"
