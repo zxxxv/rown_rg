@@ -8,6 +8,7 @@ from src.api.middleware.error_handler import register_error_handlers
 from src.api.middleware.ip_whitelist import IPWhitelistMiddleware
 from src.api.middleware.logging import LoggingMiddleware
 from src.api.routers import api_v1_router
+from src.api.routers.notify import router as notify_router
 from src.core.config import settings
 from src.core.logging import configure_logging
 from src.db.session import async_engine
@@ -42,6 +43,7 @@ app.add_middleware(
 register_error_handlers(app)
 
 app.include_router(api_v1_router)
+app.include_router(notify_router, prefix="/api/v1")
 
 
 @app.get("/health")

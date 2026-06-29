@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     # X-API-Key
     internal_api_key: str = ""
 
+    # NAVER WORKS API
+    nw_client_id: str
+    nw_client_secret: str
+    nw_service_account: str
+    nw_private_key: str
+    nw_bot_id: str
+    nw_token_expire_sec: int = 3600
+    nw_refresh_buffer: int = 60
+
     # 임베딩 (환경별 변동 가능 — 모델 특성 상수는 클라이언트 ClassVar로 관리)
     embedding_model_path: str = "./models/bge-m3-onnx-int8"
     embedding_cache_dir: str = "./cache/embeddings"
@@ -81,6 +90,10 @@ class Settings(BaseSettings):
             return ["*"]
         return ["https://app.loune-insight.co.kr"]
 
+    @property
+    def nw_private_key_pem(self) -> str:
+        return self.nw_private_key.replace("\\n", "\n")
+
     @model_validator(mode="after")
     def _guard_production_secrets(self) -> Self:
         """
@@ -98,4 +111,4 @@ class Settings(BaseSettings):
         return self
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]
