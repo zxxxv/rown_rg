@@ -19,12 +19,14 @@ async def _dispatch_notifications(
     target_email: str,
     user_name: str,
     result_url: str,
+    result_type: str,
 ) -> None:
     try:
         await send_bot_message(
             target_email=target_email,
             user_name=user_name,
             result_url=result_url,
+            result_type=result_type,
         )
     except Exception:
         logger.exception("notify.bot.failed", extra={"target": target_email})
@@ -34,6 +36,7 @@ async def _dispatch_notifications(
     #        target_email=target_email,
     #        user_name=user_name,
     #        result_url=result_url,
+    #        result_type=result_type,
     #    )
     # except Exception:
     #    logger.exception("notify.mail.failed", extra={"target": target_email})
@@ -67,5 +70,6 @@ async def notify_llm_complete(
         target_email=user.email,
         user_name=user.name,
         result_url=payload.result_url,
+        result_type=payload.result_type.value,
     )
     return {"status": "accepted"}
