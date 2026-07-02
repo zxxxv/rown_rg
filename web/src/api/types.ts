@@ -8,6 +8,12 @@ export const UserSchema = z.object({
   email: z.string().email(),
   name: z.string(),
   role: UserRoleSchema,
+  // 프로필(마이페이지)용 — /auth/me 만 채워줌. 로그인 응답 등에선 생략될 수 있어 optional.
+  is_active: z.boolean().optional(),
+  has_password: z.boolean().optional(),
+  last_login_at: z.string().nullish(),
+  password_changed_at: z.string().nullish(),
+  created_at: z.string().optional(),
 });
 export type User = z.infer<typeof UserSchema>;
 
@@ -244,3 +250,50 @@ export type LoginResponse = z.infer<typeof LoginResponseSchema>;
 
 export const MeResponseSchema = UserSchema;
 export type MeResponse = z.infer<typeof MeResponseSchema>;
+
+// 마이페이지 — 내 토큰 사용량 (cost_usd 는 백엔드가 Decimal→문자열로 줄 수 있어 coerce)
+export const TokenUsageDailyPointSchema = z.object({
+  date: z.string(),
+  input_tokens: z.number().int().nonnegative(),
+  output_tokens: z.number().int().nonnegative(),
+  cost_usd: z.coerce.number().nonnegative(),
+});
+export type TokenUsageDailyPoint = z.infer<typeof TokenUsageDailyPointSchema>;
+
+export const TokenUsageByModelSchema = z.object({
+  model: z.string(),
+  input_tokens: z.number().int().nonnegative(),
+  output_tokens: z.number().int().nonnegative(),
+  cost_usd: z.coerce.number().nonnegative(),
+  request_count: z.number().int().nonnegative(),
+});
+export type TokenUsageByModel = z.infer<typeof TokenUsageByModelSchema>;
+
+export const MyTokenUsageSchema = z.object({
+  period_start: z.string(),
+  period_end: z.string(),
+  total_input_tokens: z.number().int().nonnegative(),
+  total_output_tokens: z.number().int().nonnegative(),
+  total_cost_usd: z.coerce.number().nonnegative(),
+  request_count: z.number().int().nonnegative(),
+  daily: z.array(TokenUsageDailyPointSchema),
+  by_model: z.array(TokenUsageByModelSchema),
+});
+export type MyTokenUsage = z.infer<typeof MyTokenUsageSchema>;
+
+// 마이페이지 — 비밀번호 변경
+export const ChangePasswordInputSchema = z
+  .object({
+    current_password: z.string().min(1, "현재 비밀번호를 입력하세요"),
+    new_password: z.string().min(8, "새 비밀번호는 8자 이상이어야 합니다"),
+    confirm_password: z.string().min(1, "새 비밀번호를 한 번 더 입력하세요"),
+  })
+  .refine((v) => v.new_password === v.confirm_password, {
+    message: "새 비밀번호가 일치하지 않습니다",
+    path: ["confirm_password"],
+  })
+  .refine((v) => v.new_password !== v.current_password, {
+    message: "현재 비밀번호와 다른 비밀번호를 사용하세요",
+    path: ["new_password"],
+  });
+export type ChangePasswordInput = z.infer<typeof ChangePasswordInputSchema>;

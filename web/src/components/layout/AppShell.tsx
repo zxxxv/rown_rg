@@ -1,7 +1,7 @@
 import { LogOut, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { useState } from "react";
-import { Outlet, useSearchParams } from "react-router-dom";
+import { Link, Outlet, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import type { UserRole } from "@/components/auth/RequireAuth";
 import { Sidebar } from "@/components/layout/Sidebar";
@@ -58,13 +58,19 @@ export function AppShell({ user, tokenUsage, onLogout, children }: AppShellProps
 
             {user ? (
               <div className="flex items-center gap-2">
-                <span
-                  aria-hidden
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-accent font-mono text-xs text-accent-foreground"
+                <Link
+                  to="/profile"
+                  className="flex items-center gap-2 rounded-full py-0.5 pl-0.5 pr-2 transition-colors hover:bg-bg-tertiary"
+                  aria-label="마이페이지"
                 >
-                  {user.name.slice(0, 1)}
-                </span>
-                <span className="text-sm text-fg">{user.name}</span>
+                  <span
+                    aria-hidden
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-accent font-mono text-xs text-accent-foreground"
+                  >
+                    {user.name.slice(0, 1)}
+                  </span>
+                  <span className="text-sm text-fg">{user.name}</span>
+                </Link>
                 {onLogout ? (
                   <Button variant="ghost" size="sm" onClick={onLogout} aria-label="로그아웃">
                     <LogOut className="h-4 w-4" />

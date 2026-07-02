@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import { Toaster } from "@/components/ui/sonner";
 import ForbiddenPage from "@/pages/403";
@@ -7,6 +7,7 @@ import AdminDashboardPage from "@/pages/admin/dashboard";
 import CallbackPage from "@/pages/callback";
 import LibraryPage from "@/pages/library";
 import LoginPage from "@/pages/login";
+import ProfilePage from "@/pages/profile";
 import ProjectsPage from "@/pages/projects";
 import EditorPage from "@/pages/projects/[id]/editor";
 import ExportPage from "@/pages/projects/[id]/export";
@@ -20,7 +21,7 @@ import NewProjectPage from "@/pages/projects/new";
 const routes = [
   {
     path: "/",
-    element: <div className="p-8">Hello</div>,
+    element: <Navigate to="/projects" replace />,
   },
   {
     path: "/login",
@@ -43,6 +44,14 @@ const routes = [
     element: (
       <RequireAuth>
         <LibraryPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/profile",
+    element: (
+      <RequireAuth>
+        <ProfilePage />
       </RequireAuth>
     ),
   },

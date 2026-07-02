@@ -4,6 +4,7 @@ import { checkpointsHandlers } from "./handlers/checkpoints";
 import { contradictionsHandlers } from "./handlers/contradictions";
 import { libraryHandlers } from "./handlers/library";
 import { presetsHandlers } from "./handlers/presets";
+import { profileHandlers } from "./handlers/profile";
 import { progressHandlers } from "./handlers/progress";
 import { projectsHandlers } from "./handlers/projects";
 import { sectionsHandlers } from "./handlers/sections";
@@ -21,5 +22,6 @@ export const handlers = [
   ...checkpointsHandlers,
   ...adminHandlers,
   ...libraryHandlers,
+  ...profileHandlers,
   ...wsHandlers,
 ];
