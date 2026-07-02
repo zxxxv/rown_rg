@@ -1,3 +1,4 @@
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Self
@@ -50,6 +51,10 @@ class Settings(BaseSettings):
     # SAML SSO / 프론트엔드 (네이버웍스 로그인 리다이렉트)
     saml_base_url: str = ""  # 운영 공개 베이스 URL (비면 요청 헤더로 추론)
     react_frontend_url: str = "http://localhost:5173"
+
+    # 관리자 — 조직 월 비용 한도(USD). 관리자 대시보드 KPI 표시·예산 경고용.
+    # (사용자별 한도는 user_quotas 테이블, 역할별 기본값은 src.core.quota)
+    org_monthly_cost_limit_usd: Decimal = Decimal("3000")
 
     # 임베딩 (환경별 변동 가능 — 모델 특성 상수는 클라이언트 ClassVar로 관리)
     embedding_model_path: str = "./models/bge-m3-onnx-int8"

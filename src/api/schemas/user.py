@@ -30,6 +30,9 @@ class UserRead(UserBase):
 
     id: UUID
     is_active: bool
+    # SSO 전용 계정은 비밀번호가 없다 → 프론트에서 비밀번호 변경 UI 노출 여부 판단에 사용
+    has_password: bool
     last_login_at: datetime | None
+    password_changed_at: datetime | None
     created_at: datetime
     updated_at: datetime

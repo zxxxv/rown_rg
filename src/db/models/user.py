@@ -14,7 +14,9 @@ if TYPE_CHECKING:
     from src.db.models.ip_whitelist import IpWhitelist
     from src.db.models.library_node import LibraryNode
     from src.db.models.project import Project
+    from src.db.models.quota_request import QuotaRequest
     from src.db.models.token_usage import TokenUsage
+    from src.db.models.user_quota import UserQuota
 
 
 class User(Base):
@@ -47,11 +49,28 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
+    @property
+    def has_password(self) -> bool:
+        """비밀번호 로그인 가능 여부(SSO 전용 계정은 False)."""
+        return self.password_hash is not None
+
     # Relationships
     projects: Mapped[list[Project]] = relationship(back_populates="owner", lazy="raise")
     ip_whitelists: Mapped[list[IpWhitelist]] = relationship(back_populates="creator", lazy="raise")
     library_nodes: Mapped[list[LibraryNode]] = relationship(back_populates="creator", lazy="raise")
     token_usages: Mapped[list[TokenUsage]] = relationship(back_populates="user", lazy="raise")
+    # 한도/증액요청 — users.id로 향하는 FK가 둘이라(updated_by·decided_by) FK를 명시한다.
+    quota: Mapped[UserQuota | None] = relationship(
+        back_populates="user",
+        lazy="raise",
+        uselist=False,
+        foreign_keys="UserQuota.user_id",
+    )
+    quota_requests: Mapped[list[QuotaRequest]] = relationship(
+        back_populates="user",
+        lazy="raise",
+        foreign_keys="QuotaRequest.user_id",
+    )
 
     __table_args__ = (
         CheckConstraint(
