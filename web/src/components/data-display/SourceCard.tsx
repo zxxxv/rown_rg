@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { ConfidenceBadge } from "@/components/data-display/ConfidenceBadge";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 export interface SourceCardProps {
@@ -9,6 +10,7 @@ export interface SourceCardProps {
   pages?: number;
   reliability?: number;
   summary?: string;
+  kindLabel?: string;
   onClick?: () => void;
   actions?: ReactNode;
   className?: string;
@@ -21,6 +23,7 @@ export function SourceCard({
   pages,
   reliability,
   summary,
+  kindLabel,
   onClick,
   actions,
   className,
@@ -46,7 +49,10 @@ export function SourceCard({
     >
       <header className="flex items-start justify-between gap-3">
         <h3 className="line-clamp-2 text-base font-semibold text-fg">{title}</h3>
-        {reliability !== undefined ? <ConfidenceBadge value={reliability} /> : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {kindLabel ? <Badge variant="secondary">{kindLabel}</Badge> : null}
+          {reliability !== undefined ? <ConfidenceBadge value={reliability} /> : null}
+        </div>
       </header>
 
       <dl className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-fg-tertiary">

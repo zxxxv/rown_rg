@@ -4,6 +4,55 @@ import type { LibraryNode, Source, SourceKind } from "@/api/types";
 type SourceTemplate = Omit<Source, "id" | "project_id">;
 
 const POOL: SourceTemplate[] = [
+  // 웹 검색으로 수집한 후보 출처(WebResearchService의 CollectedSource를 Source로 매핑한 형태).
+  // 페이지 수(pages)는 웹 문서라 없음. reliability는 high/medium/low를 0~1로 환산.
+  {
+    title: "2026년 전기차 구매보조금 업무처리지침",
+    source: "ev.or.kr",
+    source_kind: "web_search",
+    url: "https://ev.or.kr/portal/subsidy/2026",
+    published_at: "2026-01-08",
+    reliability: 0.92,
+    summary:
+      "환경부 무공해차 통합누리집. 2026년 국비 보조금 단가·차종별 상한·신청 절차 안내. 웹 검색으로 수집.",
+    is_included: null,
+    quotes: ["승용 전기차 국비 보조금 상한은 차량가 5,300만원 미만 기준 최대 650만원."],
+  },
+  {
+    title: "전기차 보조금 2026 — 차종별 지원금 총정리",
+    source: "news.example.co.kr",
+    source_kind: "web_search",
+    url: "https://news.example.co.kr/ev-subsidy-2026",
+    published_at: "2026-01-15",
+    reliability: 0.66,
+    summary:
+      "주요 전기 승용·화물 모델별 예상 보조금 비교 기사. 일부 수치는 잠정치로 공식 공고와 차이 가능. 웹 검색으로 수집.",
+    is_included: null,
+    quotes: ["경형 전기화물차는 국비 1,100만원에 지자체 보조가 추가된다."],
+  },
+  {
+    title: "지자체별 전기차 추가 보조금 한눈에 보기",
+    source: "blog.example.com",
+    source_kind: "web_search",
+    url: "https://blog.example.com/ev-local-subsidy",
+    published_at: "2025-12-20",
+    reliability: 0.48,
+    summary:
+      "개인 블로그가 정리한 지자체 추가 보조금 표. 신뢰도 낮고 갱신 누락 가능 — 교차검증 권장. 웹 검색으로 수집.",
+    is_included: null,
+    quotes: ["서울시 추가 보조금은 예산 소진 시 조기 마감될 수 있다."],
+  },
+  {
+    title: "2026년도 환경부 예산안 — 무공해차 보급",
+    source: "me.go.kr",
+    source_kind: "web_search",
+    url: "https://me.go.kr/budget/2026",
+    published_at: "2025-12-03",
+    reliability: 0.9,
+    summary: "환경부 2026 예산안 중 전기·수소차 보급 예산 규모와 전년 대비 증감. 웹 검색으로 수집.",
+    is_included: null,
+    quotes: ["2026년 무공해차 보급 예산은 전년 대비 4.2% 증액 편성됐다."],
+  },
   {
     title: "2024 인구주택총조사 표본 집계 결과",
     source: "통계청",

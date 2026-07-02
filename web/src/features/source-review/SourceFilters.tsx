@@ -27,6 +27,7 @@ const KIND_LABEL: Record<SourceKind, string> = {
   media: "언론",
   library: "회사 라이브러리",
   upload: "사용자 업로드",
+  web_search: "웹 검색",
 };
 
 const KIND_ORDER = SourceKindSchema.options;

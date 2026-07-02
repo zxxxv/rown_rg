@@ -26,6 +26,7 @@ const KIND_LABEL: Record<SourceKind, string> = {
   media: "언론",
   library: "내부",
   upload: "업로드",
+  web_search: "웹 검색",
 };
 
 function formatSize(bytes: number): string {

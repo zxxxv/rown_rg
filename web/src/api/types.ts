@@ -95,7 +95,14 @@ export type ProjectListResponse = z.infer<typeof ProjectListResponseSchema>;
 export const ProjectSortSchema = z.enum(["created_desc", "title_asc"]);
 export type ProjectSort = z.infer<typeof ProjectSortSchema>;
 
-export const SourceKindSchema = z.enum(["gov", "academic", "media", "library", "upload"]);
+export const SourceKindSchema = z.enum([
+  "gov",
+  "academic",
+  "media",
+  "library",
+  "upload",
+  "web_search",
+]);
 export type SourceKind = z.infer<typeof SourceKindSchema>;
 
 export const SourceSchema = z.object({
