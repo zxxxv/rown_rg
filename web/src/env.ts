@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const EnvSchema = z.object({
-  VITE_API_BASE_URL: z.string().min(1).default("/api"),
+  VITE_API_BASE_URL: z.string().min(1).default("/api/v1"),
   VITE_WS_BASE_URL: z.string().min(1).default("/ws"),
 });
 
