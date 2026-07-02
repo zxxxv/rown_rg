@@ -12,7 +12,9 @@ _SLUG_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 def compute_input_hash(request: CompletionRequest) -> str:
-    payload = request.model_dump_json(exclude={"cache_key"})
+    # web_search는 live 모드 전용(외부 실시간 데이터, 캐셋 미사용)이므로 해시에서 제외해
+    # 기존 단발 호출 캐셋이 무효화되지 않게 한다.
+    payload = request.model_dump_json(exclude={"cache_key", "web_search"})
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

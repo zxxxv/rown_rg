@@ -24,4 +24,7 @@ class OpenAIAdapter(BaseLLMAdapter):
         raise NotImplementedError("OpenAIAdapter._classify_error 구현 예정")
 
     async def _call_provider(self, request: CompletionRequest) -> CompletionResponse:
+        if request.web_search is not None:
+            # 인터페이스는 중립이지만 OpenAI 측 웹검색(Responses API 등) 번역·정규화는 미구현.
+            raise NotImplementedError("web_search not supported for openai yet")
         raise NotImplementedError("OpenAIAdapter._call_provider 구현 예정")

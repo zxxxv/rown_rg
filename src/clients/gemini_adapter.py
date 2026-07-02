@@ -24,4 +24,6 @@ class GeminiAdapter(BaseLLMAdapter):
         raise NotImplementedError("GeminiAdapter._classify_error 구현 예정")
 
     async def _call_provider(self, request: CompletionRequest) -> CompletionResponse:
+        if request.web_search is not None:
+            raise NotImplementedError("web_search not supported for gemini yet")
         raise NotImplementedError("GeminiAdapter._call_provider 구현 예정")
