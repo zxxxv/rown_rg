@@ -7,6 +7,7 @@ from src.db.models.project_source import ProjectSource
 from src.db.models.quota_request import QuotaRequest
 from src.db.models.raptor_node import RaptorNode
 from src.db.models.refresh_token import RefreshToken
+from src.db.models.review_point import ReviewPoint
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from src.db.models.user_quota import UserQuota
@@ -21,6 +22,7 @@ __all__ = [
     "QuotaRequest",
     "RaptorNode",
     "RefreshToken",
+    "ReviewPoint",
     "TokenUsage",
     "User",
     "UserQuota",
