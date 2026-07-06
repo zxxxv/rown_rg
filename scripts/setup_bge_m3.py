@@ -169,7 +169,7 @@ def export_onnx_fp32(output_dir: Path) -> Path:
         MODEL_ID,
         output=str(output_dir),
         task="feature-extraction",
-        library_name="sentence_transformers",
+        library_name="transformers",
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     size_mb = directory_size_mb(output_dir)
