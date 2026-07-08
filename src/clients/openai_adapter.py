@@ -19,7 +19,7 @@ class OpenAIAdapter(BaseLLMAdapter):
         return httpx.AsyncClient(timeout=60.0)
 
     def _classify_error(self, exc: Exception) -> RetryKind | None:
-        if isinstance(exc, httpx.HTTPStatusError):
+        if isinstance(exc, httpx.RequestError):
             return "retryable"
 
         if isinstance(exc, httpx.HTTPStatusError):
@@ -28,8 +28,10 @@ class OpenAIAdapter(BaseLLMAdapter):
             if status_code == 429:
                 return "rate_limit"
 
-            if status_code == 500:
+            if status_code >= 500:
                 return "retryable"
+
+            return "fatal"
 
         return None
 
