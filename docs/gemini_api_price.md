@@ -18,7 +18,7 @@ Gemini API 가격을 볼 때는 두 가지 티어를 분리해서 이해해야 �
 | Usage Tier 1 / 2 / 3 | 프로젝트의 사용 한도, rate limit, billing cap을 정하는 등급 | 직접적인 토큰 단가 차이 없음 |
 | 실행 티어: Standard / Batch / Flex / Priority | 같은 모델을 어떤 처리 방식으로 호출할지 정하는 가격 구조 | 있음 |
 
-즉, **Tier 1/2/3가 올라간다고 1M 토큰 단가가 싸지는 구조가 아니다.**  
+즉, **Tier 1/2/3가 올라간다고 1M 토큰 단가가 싸지는 구조가 아니다.**
 실제 토큰 비용은 **모델별 가격 + 실행 티어(Standard, Batch, Flex, Priority)** 로 계산된다.
 
 ---
@@ -56,7 +56,7 @@ Gemini API 가격을 볼 때는 두 가지 티어를 분리해서 이해해야 �
 
 # 4. Gemini 3.x 가격표
 
-단위는 **USD / 1M tokens**이다.  
+단위는 **USD / 1M tokens**이다.
 Output price에는 공식 문서 기준으로 **thinking tokens 포함**이다.
 
 ## 4-1. `gemini-3.5-flash`
@@ -132,7 +132,7 @@ Output price에는 공식 문서 기준으로 **thinking tokens 포함**이다.
 
 # 5. Gemini 2.x 가격표
 
-단위는 **USD / 1M tokens**이다.  
+단위는 **USD / 1M tokens**이다.
 Output price에는 공식 문서 기준으로 **thinking tokens 포함**이다.
 
 ## 5-1. `gemini-2.5-pro`
