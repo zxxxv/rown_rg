@@ -1,22 +1,16 @@
 from decimal import Decimal
 
-# 모델별 1M 토큰당 USD 단가 (2026-05 기준)
+from src.clients.llm.models import MODELS
+
+# 모델별 1M 토큰당 USD 단가. 카탈로그(models.py)에서 파생 — 단가 미책정 모델은 제외된다.
 PRICING: dict[str, dict[str, Decimal]] = {
-    "claude-sonnet-4-6": {
-        "input": Decimal("3"),
-        "output": Decimal("15"),
-        "cached_input": Decimal("0.30"),
-    },
-    "claude-haiku-4-5": {
-        "input": Decimal("1"),
-        "output": Decimal("5"),
-        "cached_input": Decimal("0.10"),
-    },
-    "claude-opus-4-7": {
-        "input": Decimal("5"),
-        "output": Decimal("25"),
-        "cached_input": Decimal("0.50"),
-    },
+    m.id: {
+        "input": m.pricing.input,
+        "output": m.pricing.output,
+        "cached_input": m.pricing.cached_input,
+    }
+    for m in MODELS
+    if m.pricing is not None
 }
 
 PER_MILLION = Decimal("1000000")

@@ -8,13 +8,13 @@ from anthropic import (
     RateLimitError,
 )
 
-from src.clients.base import (
+from src.clients.llm.adapters.base import BaseLLMAdapter, RetryKind
+from src.clients.llm.base import (
     CompletionRequest,
     CompletionResponse,
     WebSearchConfig,
     WebSource,
 )
-from src.clients.base_adapter import BaseLLMAdapter, RetryKind
 
 # 서버 도구 루프가 pause_turn으로 끊길 때 재호출하는 최대 횟수(무한루프 가드)
 _MAX_TOOL_TURNS = 8
@@ -169,8 +169,9 @@ class AnthropicAdapter(BaseLLMAdapter):
                     if url and text:
                         s = sources.setdefault(url, {"url": url})
                         s["content_md"] = text
-                        if getattr(doc, "title", None) and not s.get("title"):
-                            s["title"] = doc.title
+                        doc_title = getattr(doc, "title", None)
+                        if doc_title and not s.get("title"):
+                            s["title"] = doc_title
 
     @staticmethod
     def _extract_doc_text(doc: Any) -> str | None:

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
 from src.api.dependencies.permissions import (
+    ADMINS,
     assert_can_assign_role,
     assert_can_manage_user,
     require_role,
@@ -23,6 +24,7 @@ from src.api.schemas.token_usage import (
 from src.api.schemas.user import UserRead, UserUpdate
 from src.core.clock import now
 from src.core.exceptions import AuthorizationError, NotFoundError
+from src.core.types import Role
 from src.db.models.quota_request import QuotaRequest
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
@@ -136,7 +138,7 @@ async def create_my_quota_request(
 @router.get("", response_model=list[UserRead])
 async def list_users(
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    _: Annotated[User, Depends(require_role("super_admin", "admin"))],
+    _: Annotated[User, Depends(require_role(*ADMINS))],
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[User]:
@@ -150,7 +152,7 @@ async def get_user(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> User:
-    if current_user.id != user_id and current_user.role not in ("super_admin", "admin"):
+    if current_user.id != user_id and current_user.role not in ADMINS:
         raise AuthorizationError(message="권한이 없습니다", code="FORBIDDEN")
     user = await session.get(User, user_id)
     if user is None:
@@ -163,7 +165,7 @@ async def update_user(
     user_id: UUID,
     data: UserUpdate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(require_role("super_admin", "admin"))],
+    current_user: Annotated[User, Depends(require_role(*ADMINS))],
 ) -> User:
     user = await session.get(User, user_id)
     if user is None:
@@ -182,7 +184,7 @@ async def update_user(
 async def soft_delete_user(
     user_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    _: Annotated[User, Depends(require_role("super_admin"))],
+    _: Annotated[User, Depends(require_role(Role.SUPER_ADMIN))],
 ) -> None:
     user = await session.get(User, user_id)
     if user is None:

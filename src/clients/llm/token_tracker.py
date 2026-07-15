@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import structlog
 
-from src.clients.base import LLMMode
+from src.clients.llm.base import LLMMode
 from src.db.models.token_usage import TokenUsage
 from src.db.session import async_session_maker
 

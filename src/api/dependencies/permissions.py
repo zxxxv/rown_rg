@@ -5,7 +5,12 @@ from fastapi import Depends
 
 from src.api.dependencies.auth import get_current_active_user
 from src.core.exceptions import AuthorizationError
+from src.core.types import Role
 from src.db.models.user import User
+
+# "관리자 이상" 역할 그룹 - 유저 목록/조회/수정·계정 생성 권한.
+# 엔드포인트 곳곳에 ("super_admin", "admin") 리터럴을 흩뿌리지 않고 이 이름 하나로 참조한다.
+ADMINS: tuple[Role, ...] = (Role.SUPER_ADMIN, Role.ADMIN)
 
 
 def require_role(*roles: str) -> Callable[..., Coroutine[Any, Any, User]]:
@@ -23,10 +28,10 @@ def require_role(*roles: str) -> Callable[..., Coroutine[Any, Any, User]]:
 
 
 ROLE_LEVEL: dict[str, int] = {
-    "viewer": 0,
-    "worker": 1,
-    "admin": 2,
-    "super_admin": 3,
+    Role.VIEWER: 0,
+    Role.WORKER: 1,
+    Role.ADMIN: 2,
+    Role.SUPER_ADMIN: 3,
 }
 
 

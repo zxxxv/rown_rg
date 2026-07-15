@@ -4,8 +4,8 @@ import json
 import re
 from pathlib import Path
 
-from src.clients.base import CompletionRequest, CompletionResponse
-from src.clients.exceptions import CassetteNotFoundError
+from src.clients.llm.base import CompletionRequest, CompletionResponse
+from src.clients.llm.exceptions import CassetteNotFoundError
 from src.core.clock import now
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9_.-]+")
