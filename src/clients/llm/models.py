@@ -58,8 +58,19 @@ MODELS: tuple[ModelSpec, ...] = (
         "gemini",
         ModelPricing(Decimal("0.30"), Decimal("2.50"), Decimal("0.03")),
     ),
-    # OpenAI (GPT) 모델·단가 미정(어댑터 스텁)
-    # 라우팅은 router.py 접두사 폴백이 처리
+    # OpenAI (GPT) — Standard tier 단가, cached_input=cached input
+    # 출처: developers.openai.com/api/docs/pricing
+    ModelSpec(
+        "gpt-5.4-nano",
+        "openai",
+        ModelPricing(Decimal("0.20"), Decimal("1.25"), Decimal("0.02")),
+        default=True,
+    ),
+    ModelSpec(
+        "gpt-5.4-mini",
+        "openai",
+        ModelPricing(Decimal("0.75"), Decimal("4.50"), Decimal("0.075")),
+    ),
 )
 
 BY_ID: dict[str, ModelSpec] = {m.id: m for m in MODELS}

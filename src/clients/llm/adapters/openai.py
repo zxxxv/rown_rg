@@ -1,30 +1,129 @@
-from typing import Any
+from typing import Any, Final
+
+import httpx
 
 from src.clients.llm.adapters.base import BaseLLMAdapter, RetryKind
 from src.clients.llm.base import CompletionRequest, CompletionResponse
+from src.clients.llm.exceptions import LLMAPIError
+from src.clients.llm.models import supported_ids
+
+# 지원목록은 카탈로그(models.py)에서 파생 — 단일 진실. 기본 모델은 models.default_id("openai").
+SUPPORTED_OPENAI_MODELS: Final[frozenset[str]] = supported_ids("openai")
 
 
 class OpenAIAdapter(BaseLLMAdapter):
-    """
-    OpenAI(GPT)
-
-    BaseLLMAdapter의 공통 로직(캐셋·재시도·비용추적)은 상속받아 그대로 동작하고,
-    아래 provider별 3개 메서드만 채우면 됨:
-      - _create_client : openai.AsyncOpenAI 생성 (lazy import)
-      - _call_provider : chat.completions.create 호출 + 응답 변환
-      - _classify_error: openai 예외 > 재시도 분류
-    """
+    """OpenAI(GPT) — Responses API(/v1/responses) 기반."""
 
     provider = "openai"
+    base_url = "https://api.openai.com/v1"
 
     def _create_client(self, api_key: str) -> Any:
-        raise NotImplementedError("OpenAIAdapter._create_client 구현 예정")
+        if not api_key:
+            raise LLMAPIError("OPENAI_API_KEY가 설정되지 않았습니다.")
+        return httpx.AsyncClient(timeout=60.0)
 
     def _classify_error(self, exc: Exception) -> RetryKind | None:
-        raise NotImplementedError("OpenAIAdapter._classify_error 구현 예정")
+        if isinstance(exc, httpx.RequestError):
+            return "retryable"
+        if isinstance(exc, httpx.HTTPStatusError):
+            status_code = exc.response.status_code
+            if status_code == 429:
+                return "rate_limit"
+            if status_code >= 500:
+                return "retryable"
+            return "fatal"
+        return None
 
     async def _call_provider(self, request: CompletionRequest) -> CompletionResponse:
+        assert self._client is not None
+
         if request.web_search is not None:
-            # 인터페이스는 중립이지만 OpenAI 측 웹검색(Responses API 등) 번역·정규화는 미구현.
             raise NotImplementedError("web_search not supported for openai yet")
-        raise NotImplementedError("OpenAIAdapter._call_provider 구현 예정")
+
+        if request.model not in SUPPORTED_OPENAI_MODELS:
+            supported = ", ".join(sorted(SUPPORTED_OPENAI_MODELS))
+            raise LLMAPIError(
+                f"지원하지 않는 OpenAI 모델입니다: {request.model}. 지원 모델: {supported}"
+            )
+
+        response = await self._client.post(
+            f"{self.base_url}/responses",
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            json=self._build_payload(request),
+        )
+        response.raise_for_status()
+
+        return self._parse_response(response.json(), fallback_model=request.model)
+
+    def _build_payload(self, request: CompletionRequest) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": request.model,
+            "input": [
+                {"role": message.role, "content": message.content}
+                for message in request.messages
+                if message.role != "system"
+            ],
+            "max_output_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        }
+
+        system_text = self._system_text(request)
+        if system_text:
+            payload["instructions"] = system_text
+
+        return payload
+
+    def _system_text(self, request: CompletionRequest) -> str:
+        system_messages = [
+            message.content for message in request.messages if message.role == "system"
+        ]
+        if request.system:
+            system_messages.insert(0, request.system)
+        return "\n\n".join(system_messages).strip()
+
+    def _parse_response(
+        self,
+        data: dict[str, Any],
+        *,
+        fallback_model: str,
+    ) -> CompletionResponse:
+        if data.get("error"):
+            raise LLMAPIError(f"OpenAI 응답 오류: {data['error']}")
+
+        text_parts: list[str] = []
+        for item in data.get("output") or []:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            for part in item.get("content") or []:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "output_text":
+                    text_parts.append(part.get("text", ""))
+                elif part.get("type") == "refusal":
+                    text_parts.append(part.get("refusal", ""))
+
+        content = "".join(text_parts)
+        if not content:
+            raise LLMAPIError(f"OpenAI 응답에 텍스트 출력이 없습니다: {data}")
+
+        usage = data.get("usage") or {}
+        input_token_details = usage.get("input_tokens_details") or {}
+
+        status = data.get("status") or "completed"
+        if status == "incomplete":
+            incomplete_details = data.get("incomplete_details") or {}
+            stop_reason = incomplete_details.get("reason") or status
+        else:
+            stop_reason = status
+
+        return CompletionResponse(
+            content=content,
+            input_tokens=usage.get("input_tokens", 0) or 0,
+            output_tokens=usage.get("output_tokens", 0) or 0,
+            cached_input_tokens=(input_token_details.get("cached_tokens", 0) or 0),
+            model=data.get("model") or fallback_model,
+            stop_reason=stop_reason,
+        )
