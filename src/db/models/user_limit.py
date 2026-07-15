@@ -15,11 +15,13 @@ if TYPE_CHECKING:
     from src.db.models.user import User
 
 
-class UserQuota(Base):
+class UserLimit(Base):
     """사용자별 월 비용 한도(USD).
 
-    행이 없으면 역할별 기본 한도(`src.core.quota.default_quota_for`)로 폴백한다
+    행이 없으면 역할별 기본 한도(`src.core.limit.default_limit_for`)로 폴백한다
     → 한도 점진 도입 가능. 사용자당 1행(1:1).
+
+    테이블명은 legacy 이름 `user_quotas`를 유지한다(마이그레이션 회피 — 물리명만 quota).
     """
 
     __tablename__ = "user_quotas"
@@ -42,4 +44,4 @@ class UserQuota(Base):
     )
 
     # Relationships — users.id로 향하는 FK가 둘(user_id, updated_by)이라 명시적으로 지정한다.
-    user: Mapped[User] = relationship(back_populates="quota", lazy="raise", foreign_keys=[user_id])
+    user: Mapped[User] = relationship(back_populates="limit", lazy="raise", foreign_keys=[user_id])

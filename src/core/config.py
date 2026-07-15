@@ -1,3 +1,4 @@
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Self
@@ -52,8 +53,8 @@ class Settings(BaseSettings):
     react_frontend_url: str = "http://localhost:5173"
 
     # 관리자 — 조직 월 비용 한도(USD). 관리자 대시보드 KPI 표시·예산 경고용.
-    # (사용자별 한도는 user_quotas 테이블, 역할별 기본값은 src.core.quota)
-    # org_monthly_cost_limit_usd: Decimal = Decimal("3000")
+    # (사용자별 한도는 user_quotas 테이블, 역할별 기본값은 src.core.limit)
+    org_monthly_cost_limit_usd: Decimal = Decimal("3000")
     # X-API-Key
     internal_api_key: str = ""
 

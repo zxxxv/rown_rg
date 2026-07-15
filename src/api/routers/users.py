@@ -15,7 +15,7 @@ from src.api.dependencies.permissions import (
     assert_can_manage_user,
     require_role,
 )
-from src.api.schemas.admin import CreateQuotaRequestInput, QuotaRequestRead
+from src.api.schemas.admin import CreateLimitRequestInput, LimitRequestRead
 from src.api.schemas.token_usage import (
     MyTokenUsageResponse,
     TokenUsageByModel,
@@ -25,7 +25,7 @@ from src.api.schemas.user import UserRead, UserUpdate
 from src.core.clock import now
 from src.core.exceptions import AuthorizationError, NotFoundError
 from src.core.types import Role
-from src.db.models.quota_request import QuotaRequest
+from src.db.models.limit_request import LimitRequest
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 
@@ -105,17 +105,17 @@ async def my_token_usage(
 
 
 @router.post(
-    "/me/quota-requests",
-    response_model=QuotaRequestRead,
+    "/me/quota-requests",  # 경로는 프론트 계약상 quota-requests 유지
+    response_model=LimitRequestRead,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_my_quota_request(
-    data: CreateQuotaRequestInput,
+async def create_my_limit_request(
+    data: CreateLimitRequestInput,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
-) -> QuotaRequestRead:
+) -> LimitRequestRead:
     """현재 사용자가 월 한도 증액을 신청한다(pending). 관리자가 승인/거절한다."""
-    req = QuotaRequest(
+    req = LimitRequest(
         user_id=current_user.id,
         amount_usd=Decimal(str(data.amount_usd)),
         reason=data.reason,
@@ -124,7 +124,7 @@ async def create_my_quota_request(
     )
     session.add(req)
     await session.flush()
-    return QuotaRequestRead(
+    return LimitRequestRead(
         id=req.id,
         user_id=req.user_id,
         user_name=current_user.name,

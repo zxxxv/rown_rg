@@ -37,7 +37,7 @@ class UserUsageRow(BaseModel):
     last_active: datetime
 
 
-class QuotaRequestRead(BaseModel):
+class LimitRequestRead(BaseModel):
     id: UUID
     user_id: UUID
     user_name: str
@@ -57,18 +57,19 @@ class AdminDashboardData(BaseModel):
     kpis: AdminKPI
     daily_costs: list[DailyCostPoint]
     user_usage: list[UserUsageRow]
-    quota_requests: list[QuotaRequestRead]
+    # 프론트 계약상 JSON 키는 quota_requests 유지(web dashboard가 data.quota_requests 사용).
+    quota_requests: list[LimitRequestRead]
 
 
-class QuotaDecisionInput(BaseModel):
+class LimitDecisionInput(BaseModel):
     decision: Literal["approved", "rejected"]
 
 
-class SetUserQuotaInput(BaseModel):
+class SetUserLimitInput(BaseModel):
     monthly_limit_usd: float = Field(..., ge=0, description="새 월 한도(USD)")
 
 
-class UserQuotaRead(BaseModel):
+class UserLimitRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     user_id: UUID
@@ -76,6 +77,6 @@ class UserQuotaRead(BaseModel):
     updated_at: datetime
 
 
-class CreateQuotaRequestInput(BaseModel):
+class CreateLimitRequestInput(BaseModel):
     amount_usd: float = Field(..., gt=0, description="증액 요청 금액(USD)")
     reason: str = Field(..., min_length=1, max_length=2000, description="요청 사유")

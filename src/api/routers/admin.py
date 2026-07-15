@@ -14,21 +14,21 @@ from src.api.schemas.admin import (
     AdminDashboardPeriod,
     AdminKPI,
     DailyCostPoint,
-    QuotaDecisionInput,
-    QuotaRequestRead,
-    SetUserQuotaInput,
-    UserQuotaRead,
+    LimitDecisionInput,
+    LimitRequestRead,
+    SetUserLimitInput,
+    UserLimitRead,
     UserUsageRow,
 )
 from src.core.clock import now
 from src.core.config import settings
 from src.core.exceptions import NotFoundError, ValidationError
-from src.core.quota import default_quota_for
+from src.core.limit import default_limit_for
+from src.db.models.limit_request import LimitRequest
 from src.db.models.project import Project
-from src.db.models.quota_request import QuotaRequest
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
-from src.db.models.user_quota import UserQuota
+from src.db.models.user_limit import UserLimit
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -133,10 +133,10 @@ async def get_admin_dashboard(
                 User,
                 func.coalesce(usage_subq.c.tokens, 0).label("tokens"),
                 func.coalesce(usage_subq.c.cost, 0).label("cost"),
-                UserQuota.monthly_limit_usd.label("limit"),
+                UserLimit.monthly_limit_usd.label("limit"),
             )
             .outerjoin(usage_subq, User.id == usage_subq.c.user_id)
-            .outerjoin(UserQuota, User.id == UserQuota.user_id)
+            .outerjoin(UserLimit, User.id == UserLimit.user_id)
             .where(User.is_active.is_(True))
             .order_by(func.coalesce(usage_subq.c.cost, 0).desc(), User.created_at.desc())
         )
@@ -149,7 +149,7 @@ async def get_admin_dashboard(
             role=r.User.role,
             tokens_used=int(r.tokens),
             cost_usd=float(r.cost),
-            limit_usd=float(r.limit if r.limit is not None else default_quota_for(r.User.role)),
+            limit_usd=float(r.limit if r.limit is not None else default_limit_for(r.User.role)),
             last_active=r.User.last_login_at or r.User.created_at,
         )
         for r in usage_rows
@@ -158,13 +158,13 @@ async def get_admin_dashboard(
     # --- 증액 요청 (대기 중) ---
     qr_rows = (
         await session.execute(
-            select(QuotaRequest, User.name.label("user_name"))
-            .join(User, QuotaRequest.user_id == User.id)
-            .where(QuotaRequest.status == "pending")
-            .order_by(QuotaRequest.requested_at.desc())
+            select(LimitRequest, User.name.label("user_name"))
+            .join(User, LimitRequest.user_id == User.id)
+            .where(LimitRequest.status == "pending")
+            .order_by(LimitRequest.requested_at.desc())
         )
     ).all()
-    quota_requests = [_to_quota_request_read(row.QuotaRequest, row.user_name) for row in qr_rows]
+    quota_requests = [_to_limit_request_read(row.LimitRequest, row.user_name) for row in qr_rows]
 
     return AdminDashboardData(
         period=AdminDashboardPeriod(label=today.strftime("%Y-%m")),
@@ -175,13 +175,13 @@ async def get_admin_dashboard(
     )
 
 
-@router.patch("/users/{user_id}/quota", response_model=UserQuotaRead)
-async def set_user_quota(
+@router.patch("/users/{user_id}/quota", response_model=UserLimitRead)
+async def set_user_limit(
     user_id: UUID,
-    data: SetUserQuotaInput,
+    data: SetUserLimitInput,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(require_role("super_admin", "admin"))],
-) -> UserQuota:
+) -> UserLimit:
     """사용자의 월 한도를 지정(없으면 생성, 있으면 갱신)한다."""
     user = await session.get(User, user_id)
     if user is None:
@@ -189,27 +189,27 @@ async def set_user_quota(
     # 자기보다 상위 역할 사용자의 한도는 조정할 수 없다.
     assert_can_manage_user(current_user, user)
     limit = Decimal(str(data.monthly_limit_usd))
-    quota = await session.get(UserQuota, user_id)
-    if quota is None:
-        quota = UserQuota(user_id=user_id, monthly_limit_usd=limit, updated_by=current_user.id)
-        session.add(quota)
+    user_limit = await session.get(UserLimit, user_id)
+    if user_limit is None:
+        user_limit = UserLimit(user_id=user_id, monthly_limit_usd=limit, updated_by=current_user.id)
+        session.add(user_limit)
     else:
-        quota.monthly_limit_usd = limit
-        quota.updated_by = current_user.id
+        user_limit.monthly_limit_usd = limit
+        user_limit.updated_by = current_user.id
     await session.flush()
-    await session.refresh(quota)
-    return quota
+    await session.refresh(user_limit)
+    return user_limit
 
 
-@router.post("/quota-requests/{request_id}/decide", response_model=QuotaRequestRead)
-async def decide_quota_request(
+@router.post("/quota-requests/{request_id}/decide", response_model=LimitRequestRead)
+async def decide_limit_request(
     request_id: UUID,
-    data: QuotaDecisionInput,
+    data: LimitDecisionInput,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(require_role("super_admin", "admin"))],
-) -> QuotaRequestRead:
+) -> LimitRequestRead:
     """증액 요청을 승인/거절한다. 승인 시 해당 사용자 한도를 증액분만큼 올린다."""
-    req = await session.get(QuotaRequest, request_id)
+    req = await session.get(LimitRequest, request_id)
     if req is None:
         raise NotFoundError(message="요청을 찾을 수 없습니다", code="QUOTA_REQUEST_NOT_FOUND")
     if req.status != "pending":
@@ -228,25 +228,25 @@ async def decide_quota_request(
     req.decided_at = now()
 
     if data.decision == "approved":
-        quota = await session.get(UserQuota, req.user_id)
-        if quota is None:
-            base = default_quota_for(target.role)
-            quota = UserQuota(
+        user_limit = await session.get(UserLimit, req.user_id)
+        if user_limit is None:
+            base = default_limit_for(target.role)
+            user_limit = UserLimit(
                 user_id=req.user_id,
                 monthly_limit_usd=base + req.amount_usd,
                 updated_by=current_user.id,
             )
-            session.add(quota)
+            session.add(user_limit)
         else:
-            quota.monthly_limit_usd = quota.monthly_limit_usd + req.amount_usd
-            quota.updated_by = current_user.id
+            user_limit.monthly_limit_usd = user_limit.monthly_limit_usd + req.amount_usd
+            user_limit.updated_by = current_user.id
 
     await session.flush()
-    return _to_quota_request_read(req, target.name)
+    return _to_limit_request_read(req, target.name)
 
 
-def _to_quota_request_read(req: QuotaRequest, user_name: str) -> QuotaRequestRead:
-    return QuotaRequestRead(
+def _to_limit_request_read(req: LimitRequest, user_name: str) -> LimitRequestRead:
+    return LimitRequestRead(
         id=req.id,
         user_id=req.user_id,
         user_name=user_name,

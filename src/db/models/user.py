@@ -16,10 +16,10 @@ _ROLE_IN_CLAUSE = ", ".join(f"'{role.value}'" for role in Role)
 if TYPE_CHECKING:
     from src.db.models.ip_whitelist import IpWhitelist
     from src.db.models.library_node import LibraryNode
+    from src.db.models.limit_request import LimitRequest
     from src.db.models.project import Project
-    from src.db.models.quota_request import QuotaRequest
     from src.db.models.token_usage import TokenUsage
-    from src.db.models.user_quota import UserQuota
+    from src.db.models.user_limit import UserLimit
 
 
 class User(Base):
@@ -63,16 +63,16 @@ class User(Base):
     library_nodes: Mapped[list[LibraryNode]] = relationship(back_populates="creator", lazy="raise")
     token_usages: Mapped[list[TokenUsage]] = relationship(back_populates="user", lazy="raise")
     # 한도/증액요청 — users.id로 향하는 FK가 둘이라(updated_by·decided_by) FK를 명시한다.
-    quota: Mapped[UserQuota | None] = relationship(
+    limit: Mapped[UserLimit | None] = relationship(
         back_populates="user",
         lazy="raise",
         uselist=False,
-        foreign_keys="UserQuota.user_id",
+        foreign_keys="UserLimit.user_id",
     )
-    quota_requests: Mapped[list[QuotaRequest]] = relationship(
+    limit_requests: Mapped[list[LimitRequest]] = relationship(
         back_populates="user",
         lazy="raise",
-        foreign_keys="QuotaRequest.user_id",
+        foreign_keys="LimitRequest.user_id",
     )
 
     __table_args__ = (
