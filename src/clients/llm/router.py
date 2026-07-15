@@ -1,9 +1,11 @@
 from collections.abc import Callable
 
-from src.clients.base import CompletionRequest, CompletionResponse, LLMClient
-from src.clients.exceptions import LLMAPIError
+from src.clients.llm.base import CompletionRequest, CompletionResponse, LLMClient
+from src.clients.llm.exceptions import LLMAPIError
+from src.clients.llm.models import BY_ID
 
-# 모델 ID 접두사 → provider 이름. 새 provider는 여기에 한 줄 추가하면 된다.
+# 카탈로그에 없는(미등록/신규) 모델 ID의 provider 접두사 폴백.
+# 알려진 모델은 models.py 카탈로그가 우선한다.
 PROVIDER_PREFIXES: dict[str, str] = {
     "claude": "anthropic",
     "gemini": "gemini",
@@ -14,6 +16,9 @@ PROVIDER_PREFIXES: dict[str, str] = {
 
 
 def resolve_provider(model: str) -> str:
+    spec = BY_ID.get(model)
+    if spec is not None:
+        return spec.provider
     for prefix, provider in PROVIDER_PREFIXES.items():
         if model.startswith(prefix):
             return provider

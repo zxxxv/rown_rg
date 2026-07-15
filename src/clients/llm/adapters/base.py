@@ -5,15 +5,15 @@ from typing import Any
 
 import structlog
 
-from src.clients import token_tracker
-from src.clients.base import CompletionRequest, CompletionResponse, LLMMode
-from src.clients.cassette_manager import (
+from src.clients.llm import token_tracker
+from src.clients.llm.base import CompletionRequest, CompletionResponse, LLMMode
+from src.clients.llm.cassette import (
     CassetteManager,
     compute_input_hash,
     resolve_cache_key,
 )
-from src.clients.cost_calculator import CostCalculator
-from src.clients.exceptions import CassetteNotFoundError, LLMAPIError, LLMRateLimitError
+from src.clients.llm.cost import CostCalculator
+from src.clients.llm.exceptions import CassetteNotFoundError, LLMAPIError, LLMRateLimitError
 
 logger = structlog.get_logger(__name__)
 

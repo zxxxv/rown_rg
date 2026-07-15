@@ -8,15 +8,15 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.clients.base import CompletionRequest, CompletionResponse, Message
-from src.clients.cassette_manager import (
+from src.clients.llm.base import CompletionRequest, CompletionResponse, Message
+from src.clients.llm.cassette import (
     CassetteManager,
     compute_input_hash,
     resolve_cache_key,
 )
-from src.clients.exceptions import CassetteNotFoundError
-from src.clients.llm_factory import create_llm_client
-from src.clients.token_tracker import token_context
+from src.clients.llm.exceptions import CassetteNotFoundError
+from src.clients.llm.factory import create_llm_client
+from src.clients.llm.token_tracker import token_context
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from tests.conftest import FIXTURE_PASSWORD

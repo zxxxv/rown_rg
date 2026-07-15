@@ -8,8 +8,8 @@ from anthropic import (
     RateLimitError,
 )
 
-from src.clients.base import CompletionRequest, CompletionResponse
-from src.clients.base_adapter import BaseLLMAdapter, RetryKind
+from src.clients.llm.adapters.base import BaseLLMAdapter, RetryKind
+from src.clients.llm.base import CompletionRequest, CompletionResponse
 
 
 class AnthropicAdapter(BaseLLMAdapter):

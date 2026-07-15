@@ -7,6 +7,20 @@ from pydantic import BaseModel, Field
 from src.core.clock import now
 
 
+class Role(StrEnum):
+    """
+    사용자 역할 (권한 계층 단일 진실).
+
+    DB users.role 제약과 API UserRole이 모두 이 enum에서 파생된다.
+    계층 순서·admin 그룹 등 "인가 정책"은 api/dependencies/permissions.py가 담는다.
+    """
+
+    SUPER_ADMIN = "super_admin"  # 전권 (유저 삭제 등 최상위 작업)
+    ADMIN = "admin"  # 유저 관리 (자기 이하 역할 부여)
+    WORKER = "worker"  # 보고서 작성 작업자
+    VIEWER = "viewer"  # 열람 전용 (SSO JIT 기본값)
+
+
 class ProjectStage(StrEnum):
     """
     프로젝트 진행 단계 (라이프사이클 단일 진실).

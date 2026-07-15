@@ -2,15 +2,16 @@
 
 import asyncio
 
-from src.clients.base import Message
-from src.clients.gemini_models import GeminiCompletionRequest
-from src.clients.llm_factory import create_llm_client
+from src.clients.llm.base import CompletionRequest, Message
+from src.clients.llm.factory import create_llm_client
+from src.clients.llm.models import default_id
 
 
 async def main() -> None:
     client = create_llm_client(mode="live")
 
-    request = GeminiCompletionRequest(
+    request = CompletionRequest(
+        model=default_id("gemini"),  # 카탈로그 기본 모델 = gemini-2.5-flash-lite
         messages=[
             Message(
                 role="user",

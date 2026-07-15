@@ -8,7 +8,10 @@ from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from src.core.types import Role
 from src.db.base import Base
+
+_ROLE_IN_CLAUSE = ", ".join(f"'{role.value}'" for role in Role)
 
 if TYPE_CHECKING:
     from src.db.models.ip_whitelist import IpWhitelist
@@ -55,7 +58,7 @@ class User(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "role IN ('super_admin', 'admin', 'worker', 'viewer')",
+            f"role IN ({_ROLE_IN_CLAUSE})",
             name="users_role_check",
         ),
     )

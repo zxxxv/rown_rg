@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-UserRole = Literal["super_admin", "admin", "worker", "viewer"]
+from src.core.types import Role
+
+# role은 Role(core)를 단일 진실로 삼아 파생한다. 별도 Literal로 중복 정의하지 않는다.
+UserRole = Role
 
 
 class UserBase(BaseModel):

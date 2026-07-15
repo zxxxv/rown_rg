@@ -1,11 +1,13 @@
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
-from src.clients.base import CompletionRequest, CompletionResponse, Message
-from src.clients.base_adapter import BaseLLMAdapter, RetryKind
-from src.clients.exceptions import LLMAPIError
-from src.clients.gemini_models import SUPPORTED_GEMINI_MODELS
+from src.clients.llm.adapters.base import BaseLLMAdapter, RetryKind
+from src.clients.llm.base import CompletionRequest, CompletionResponse, Message
+from src.clients.llm.exceptions import LLMAPIError
+from src.clients.llm.models import supported_ids
+
+SUPPORTED_GEMINI_MODELS: Final[frozenset[str]] = supported_ids("gemini")
 
 
 class GeminiAdapter(BaseLLMAdapter):

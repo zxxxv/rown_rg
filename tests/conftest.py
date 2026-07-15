@@ -94,7 +94,7 @@ async def test_session(
     app.dependency_overrides[get_async_session] = _override_get_async_session
     monkeypatch.setattr("src.db.session.async_session_maker", test_session_maker)
     monkeypatch.setattr("src.api.middleware.ip_whitelist.async_session_maker", test_session_maker)
-    monkeypatch.setattr("src.clients.token_tracker.async_session_maker", test_session_maker)
+    monkeypatch.setattr("src.clients.llm.token_tracker.async_session_maker", test_session_maker)
 
     try:
         async with test_session_maker() as session:

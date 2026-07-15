@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
-from src.api.dependencies.permissions import assert_can_assign_role, require_role
+from src.api.dependencies.permissions import ADMINS, assert_can_assign_role, require_role
 from src.api.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
@@ -24,6 +24,7 @@ from src.api.schemas.user import UserCreate, UserRead
 from src.core.clock import now
 from src.core.config import settings
 from src.core.exceptions import AuthenticationError, ValidationError
+from src.core.types import Role
 from src.db.models.user import User
 from src.infrastructure.auth import (
     jwt_handler,
@@ -65,7 +66,7 @@ def _set_auth_cookies(response: Response, access_token: str, refresh_token: str)
 async def register(
     data: UserCreate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(require_role("super_admin", "admin"))],
+    current_user: Annotated[User, Depends(require_role(*ADMINS))],
 ) -> User:
     # 계층 기반: 호출자는 자기보다 낮은 역할만 부여할 수 있다(권한 상승 차단).
     assert_can_assign_role(current_user, data.role)
@@ -302,7 +303,7 @@ async def saml_acs(
                 user = User(
                     email=user_email,
                     name=user_email.split("@")[0],
-                    role="viewer",
+                    role=Role.VIEWER,
                     password_hash=None,
                     is_active=True,
                 )
