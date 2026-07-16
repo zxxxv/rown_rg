@@ -57,6 +57,7 @@ class ReviewGate(StrEnum):
     CONTRADICTION = "contradiction"  # 모순 해결
     LEVEL_1 = "level_1"  # 전체 요약
     LEVEL_2 = "level_2"  # 챕터 요약
+    QA_SELECT = "qa_select"  # 섹션별 후보 선택 (정적 게이트 통과분 중 사람이 픽)
     FINAL = "final"  # 최종 편집
 
 
@@ -125,6 +126,69 @@ class SectionDraft(BaseModel):
     section_id: UUID
     content: str
     cited_chunk_ids: list[UUID]
+
+
+# QA 후보 검사 — AI는 후보만 생성, 합격/불합격은 정적 코드, 최종 선택은 사람.
+class CheckSeverity(StrEnum):
+    """
+    정적 검사 실패의 처리 강도.
+    """
+
+    HARD = "hard"  # 실패 → 후보 제외 (사람에게 노출 안 함)
+    SOFT = "soft"  # 실패 → 경고만, 사람에게 주석으로 표시
+
+
+class GateResult(BaseModel):
+    """
+    정적 검사 1건의 결과
+    """
+
+    check: str  # 검사 이름 (예: "citation_resolves")
+    severity: CheckSeverity
+    passed: bool
+    detail: str | None = None  # 실패 사유 — 사람이 읽는 설명
+
+
+class StaticCheckReport(BaseModel):
+    """
+    한 후보에 대한 정적 검사 종합
+    """
+
+    results: list[GateResult] = Field(default_factory=list)
+
+    @property
+    def excluded(self) -> bool:
+        """HARD 검사가 하나라도 실패하면 후보 제외."""
+        return any(not r.passed and r.severity is CheckSeverity.HARD for r in self.results)
+
+    @property
+    def warnings(self) -> list[GateResult]:
+        """실패한 SOFT 검사 — 사람에게 표시할 경고."""
+        return [r for r in self.results if not r.passed and r.severity is CheckSeverity.SOFT]
+
+
+class SectionCandidate(BaseModel):
+    """
+    섹션 1개에 대한 후보 초안 + 정적 검사 결과
+    """
+
+    candidate_id: UUID = Field(default_factory=uuid4)
+    draft: SectionDraft
+    report: StaticCheckReport = Field(default_factory=StaticCheckReport)
+
+
+class SectionCandidateSet(BaseModel):
+    """
+    한 섹션의 후보 N개 묶음
+    """
+
+    section_id: UUID
+    candidates: list[SectionCandidate] = Field(default_factory=list)
+
+    @property
+    def survivors(self) -> list[SectionCandidate]:
+        """HARD 검사를 통과해 사람에게 노출되는 후보들."""
+        return [c for c in self.candidates if not c.report.excluded]
 
 
 # 검토 게이트

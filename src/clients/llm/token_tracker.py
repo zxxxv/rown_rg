@@ -1,6 +1,6 @@
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from decimal import Decimal
 
@@ -17,13 +17,13 @@ _project_id: ContextVar[uuid.UUID | None] = ContextVar("llm_project_id", default
 _operation: ContextVar[str | None] = ContextVar("llm_operation", default=None)
 
 
-@asynccontextmanager
-async def token_context(
+@contextmanager
+def token_context(
     *,
     user_id: uuid.UUID | None = None,
     project_id: uuid.UUID | None = None,
     operation: str,
-) -> AsyncIterator[None]:
+) -> Iterator[None]:
     tokens = (
         _user_id.set(user_id),
         _project_id.set(project_id),

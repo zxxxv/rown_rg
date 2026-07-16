@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 from src.core.clock import now
 from src.core.types import (
     ProjectStage,
+    SectionCandidateSet,
+    SectionDraft,
     SectionPlan,
     SourceRef,
     UserReviewPoint,
@@ -34,6 +36,10 @@ class ProjectState(BaseModel):
     indexed_source_ids: list[UUID] = Field(default_factory=list)  # 임베딩 완료된 자료
     section_plan: list[SectionPlan] = Field(default_factory=list)  # 섹션별 계획
     completed_section_ids: list[UUID] = Field(default_factory=list)  # 작성 완료 섹션 ID
+
+    # QA 후보 선택 (write 스테이지가 적재, QA_SELECT 게이트에서 사람이 고름)
+    section_candidates: list[SectionCandidateSet] = Field(default_factory=list)
+    section_selections: dict[UUID, UUID] = Field(default_factory=dict)  # section_id → candidate_id
 
     # 검토 게이트
     pending_review: UserReviewPoint | None = None
@@ -92,6 +98,35 @@ class ProjectState(BaseModel):
         섹션 작성 완료 기록
         """
         return self._touch(completed_section_ids=[*self.completed_section_ids, section_id])
+
+    def with_section_candidates(self, candidate_sets: list[SectionCandidateSet]) -> Self:
+        """
+        섹션별 후보+정적검사 결과 적재 (write 스테이지 산출)
+        """
+        return self._touch(section_candidates=candidate_sets)
+
+    def record_selection(self, section_id: UUID, candidate_id: UUID) -> Self:
+        """
+        사람이 고른 섹션 후보 기록 (QA_SELECT 게이트 결정)
+        """
+        return self._touch(section_selections={**self.section_selections, section_id: candidate_id})
+
+    def selected_drafts(self) -> list[SectionDraft]:
+        """
+        선택된 후보의 draft를 section_plan 순서대로 반환. 미선택·미존재 섹션은 건너뛴다.
+        """
+        by_section = {cs.section_id: cs for cs in self.section_candidates}
+        drafts: list[SectionDraft] = []
+        for section in self.section_plan:
+            chosen = self.section_selections.get(section.section_id)
+            cset = by_section.get(section.section_id)
+            if chosen is None or cset is None:
+                continue
+            for cand in cset.candidates:
+                if cand.candidate_id == chosen:
+                    drafts.append(cand.draft)
+                    break
+        return drafts
 
     # 질의 메서드
     def is_waiting_user(self) -> bool:

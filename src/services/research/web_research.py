@@ -18,8 +18,8 @@ import re
 import structlog
 from pydantic import BaseModel
 
-from src.clients.base import CompletionRequest, LLMClient, Message, WebSearchConfig, WebSource
-from src.clients.llm_factory import create_llm_client
+from src.clients.llm.base import CompletionRequest, LLMClient, Message, WebSearchConfig, WebSource
+from src.clients.llm.factory import create_llm_client
 
 logger = structlog.get_logger(__name__)
 

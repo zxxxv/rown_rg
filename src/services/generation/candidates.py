@@ -1,0 +1,138 @@
+"""섹션 후보 생성 — LLM router로 N개 초안을 뽑는다 (판정 아님, 생성만).
+
+무한성 캡: N은 상수. Writer↔Critic 루프가 아니라 1회 fan-out이다.
+인용은 UUID를 모델에 노출하지 않고 [번호] 마커로 받아 인덱스→chunk_id로 매핑한다
+(LLM이 긴 UUID를 정확히 복제하지 못하는 문제 회피 + hallucinated 인용 구조적 차단).
+합격/불합격 판정은 여기서 하지 않는다 — gate.py의 정적 검사 몫이다.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import re
+from collections.abc import Sequence
+from uuid import UUID
+
+from src.clients.llm.base import CompletionRequest, LLMClient, Message
+from src.clients.llm.factory import get_llm_client
+from src.clients.llm.token_tracker import token_context
+from src.core.types import RetrievedChunk, SectionDraft, SectionPlan
+
+DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_N = 2
+DEFAULT_MAX_TOKENS = 2048
+TEMPERATURE_STEP = 0.15  # 후보 간 다양성용 temperature 증분
+TEMPERATURE_CEILING = 1.0
+
+_CITE_RE = re.compile(r"\[(\d+)\]")
+
+_SYSTEM = (
+    "너는 정부·공공 보고서의 한 섹션을 작성하는 전문 작성자다. "
+    "반드시 제공된 근거 자료만 사용하고, 각 주장 끝에 근거를 [번호]로 인용하라. "
+    "근거에 없는 수치·고유명사·주장은 절대 쓰지 마라."
+)
+
+
+def _build_prompt(section: SectionPlan, chunks: Sequence[RetrievedChunk]) -> str:
+    lines = [
+        f"작성할 섹션: {section.chapter_number}.{section.section_number} {section.title}",
+        "",
+        "근거 자료:",
+    ]
+    for i, ch in enumerate(chunks, start=1):
+        lines.append(f"[{i}] {ch.content}")
+    lines.extend(
+        [
+            "",
+            "위 근거만으로 해당 섹션 본문을 작성하라. 각 주장 끝에 근거 번호를 [n]으로 표기하라.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _extract_cited_ids(content: str, chunks: Sequence[RetrievedChunk]) -> list[UUID]:
+    """본문의 [n] 마커를 인덱스로 해석해 chunk_id로 매핑. 범위 밖 마커는 무시.
+
+    등장 순서를 보존하며 중복 제거한다. 범위 밖 번호는 버리므로 여기서 나온
+    cited_chunk_ids는 항상 chunks 풀 안에 있다(gate의 citation_resolves는 수동
+    편집·다른 생성 경로를 위한 방어선으로 남는다).
+    """
+    ids: list[UUID] = []
+    seen: set[UUID] = set()
+    for m in _CITE_RE.finditer(content):
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(chunks):
+            cid = chunks[idx].chunk_id
+            if cid not in seen:
+                seen.add(cid)
+                ids.append(cid)
+    return ids
+
+
+async def _one_candidate(
+    client: LLMClient,
+    section: SectionPlan,
+    chunks: Sequence[RetrievedChunk],
+    prompt: str,
+    *,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+) -> SectionDraft:
+    request = CompletionRequest(
+        messages=[Message(role="user", content=prompt)],
+        model=model,
+        system=_SYSTEM,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    response = await client.complete(request)
+    return SectionDraft(
+        section_id=section.section_id,
+        content=response.content,
+        cited_chunk_ids=_extract_cited_ids(response.content, chunks),
+    )
+
+
+async def generate_section_candidates(
+    section: SectionPlan,
+    chunks: Sequence[RetrievedChunk],
+    *,
+    n: int = DEFAULT_N,
+    model: str = DEFAULT_MODEL,
+    client: LLMClient | None = None,
+    base_temperature: float = 0.7,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    user_id: UUID | None = None,
+    project_id: UUID | None = None,
+) -> list[SectionDraft]:
+    """한 섹션에 대해 후보 초안 N개를 생성한다. N은 상수(무한성 캡).
+
+    후보마다 temperature를 조금씩 올려 다양성을 확보한다. 토큰 사용량은
+    token_context로 (user_id, project_id, operation)에 귀속된다.
+    """
+    if n < 1:
+        raise ValueError("n은 1 이상이어야 합니다")
+    client = client or get_llm_client()
+    prompt = _build_prompt(section, chunks)
+    temps = [min(base_temperature + i * TEMPERATURE_STEP, TEMPERATURE_CEILING) for i in range(n)]
+    with token_context(
+        user_id=user_id,
+        project_id=project_id,
+        operation=f"section_write:{section.chapter_number}.{section.section_number}",
+    ):
+        drafts = await asyncio.gather(
+            *(
+                _one_candidate(
+                    client,
+                    section,
+                    chunks,
+                    prompt,
+                    model=model,
+                    temperature=t,
+                    max_tokens=max_tokens,
+                )
+                for t in temps
+            )
+        )
+    return list(drafts)
