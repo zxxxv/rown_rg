@@ -8,11 +8,18 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from src.clients.llm.base import LLMClient
 from src.core.state import ProjectState
-from src.core.types import GateResult, SectionCandidateSet, SectionDraft
+from src.core.types import (
+    GateResult,
+    SectionCandidate,
+    SectionCandidateSet,
+    SectionDraft,
+    SectionPlan,
+)
 from src.services.generation.candidates import (
     DEFAULT_MODEL,
     DEFAULT_N,
@@ -75,10 +82,55 @@ def qa_select_payload(state: ProjectState) -> dict[str, object]:
                 "all_excluded": not survivors,
             }
         )
+    # section_plan도 실어 resume 시 재수화 가능하게 (plan·후보는 projects 테이블에 없음).
+    plan = [
+        {
+            "section_id": str(s.section_id),
+            "chapter_number": s.chapter_number,
+            "section_number": s.section_number,
+            "title": s.title,
+        }
+        for s in state.section_plan
+    ]
     return {
         "message": "섹션별로 후보를 하나씩 고르세요. (정적검사 통과분만 표시)",
+        "section_plan": plan,
         "sections": sections,
     }
+
+
+def rehydrate_from_payload(state: ProjectState, payload: dict[str, Any]) -> ProjectState:
+    """QA_SELECT review payload에서 section_plan·section_candidates를 복원.
+
+    resume는 별도 프로세스라 in-memory ProjectState가 사라진다 — 게이트 payload에
+    실어둔 값으로 되살린다. 후보는 survivors만 복원되며(payload에 그것만 있음), 이는
+    선택 대상과 일치한다. report는 이미 게이트를 통과한 값이라 빈 채로 둔다.
+    """
+    plan = [
+        SectionPlan(
+            section_id=UUID(s["section_id"]),
+            chapter_number=s["chapter_number"],
+            section_number=s["section_number"],
+            title=s["title"],
+        )
+        for s in payload.get("section_plan", [])
+    ]
+    candidate_sets: list[SectionCandidateSet] = []
+    for sec in payload.get("sections", []):
+        section_id = UUID(sec["section_id"])
+        candidates = [
+            SectionCandidate(
+                candidate_id=UUID(c["candidate_id"]),
+                draft=SectionDraft(
+                    section_id=section_id,
+                    content=c["content"],
+                    cited_chunk_ids=[UUID(x) for x in c["cited_chunk_ids"]],
+                ),
+            )
+            for c in sec["candidates"]
+        ]
+        candidate_sets.append(SectionCandidateSet(section_id=section_id, candidates=candidates))
+    return state.with_section_plan(plan).with_section_candidates(candidate_sets)
 
 
 def apply_selection(state: ProjectState, selections: dict[str, str]) -> ProjectState:

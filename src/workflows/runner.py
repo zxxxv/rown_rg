@@ -24,10 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.clock import now as clock_now
 from src.core.state import ProjectState
+from src.core.types import ProjectStage, ReviewGate
 from src.db.models.project import Project
 from src.db.models.review_point import ReviewPoint
 from src.db.session import async_session_maker
 from src.workflows.pipeline import Paused, advance
+from src.workflows.write_loop import apply_selection, rehydrate_from_payload
 
 logger = structlog.get_logger(__name__)
 
@@ -50,6 +52,38 @@ def _state_from_project(project: Project) -> ProjectState:
     )
 
 
+async def _rehydrate_qa_selection(
+    session: AsyncSession, project_id: uuid.UUID, state: ProjectState
+) -> ProjectState:
+    """resume 시 QA_SELECT review의 payload(후보·plan)+decision(선택)을 state에 되살린다.
+
+    section_plan·section_candidates는 projects 테이블에 없어 재구성 못 하므로, 게이트가
+    payload에 실어둔 값에서 복원한다. REVIEWING 단계가 아니거나 해결된 QA_SELECT review가
+    없으면 그대로 둔다(멱등).
+    """
+    if state.current_stage is not ProjectStage.REVIEWING:
+        return state
+    review = (
+        await session.execute(
+            select(ReviewPoint)
+            .where(
+                ReviewPoint.project_id == project_id,
+                ReviewPoint.gate == ReviewGate.QA_SELECT.value,
+                ReviewPoint.status == "resolved",
+            )
+            .order_by(ReviewPoint.resolved_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if review is None:
+        return state
+    state = rehydrate_from_payload(state, review.payload)
+    selections = (review.decision or {}).get("selections", {})
+    if selections:
+        state = apply_selection(state, selections)
+    return state
+
+
 async def _execute(project_id: uuid.UUID) -> None:
     """척추를 현재 단계부터 게이트 또는 완료까지 한 구간 전진시키고 영속화한다."""
     try:
@@ -59,7 +93,9 @@ async def _execute(project_id: uuid.UUID) -> None:
                 logger.warning("project.missing", project_id=str(project_id))
                 return
 
-            outcome = await advance(_state_from_project(project))
+            state = _state_from_project(project)
+            state = await _rehydrate_qa_selection(session, project.id, state)
+            outcome = await advance(state)
             project.status = outcome.state.current_stage.value
 
             if isinstance(outcome, Paused):

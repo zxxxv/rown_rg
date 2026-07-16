@@ -19,7 +19,8 @@ from dataclasses import dataclass
 
 from src.core.state import ProjectState
 from src.core.types import ProjectStage, ReviewGate, UserReviewPoint
-from src.workflows.stages import research, write
+from src.workflows.stages import assemble, research, write
+from src.workflows.write_loop import qa_select_payload
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,11 @@ def _source_pool_gate(state: ProjectState) -> UserReviewPoint:
     )
 
 
+def _qa_select_gate(state: ProjectState) -> UserReviewPoint:
+    """write가 적재한 섹션별 후보 중 사람이 하나씩 고르는 게이트."""
+    return UserReviewPoint(gate=ReviewGate.QA_SELECT, payload=qa_select_payload(state))
+
+
 @dataclass(frozen=True)
 class Phase:
     """단계 1개: current_stage == when일 때 run을 실행하고 advance_to로 전이한다."""
@@ -62,10 +68,11 @@ class Phase:
     gate: Callable[[ProjectState], UserReviewPoint] | None = None
 
 
-# 척추 단계 정의(스켈레톤). research·write가 LangGraph seam.
+# 척추 단계 정의. research→(자료 승인)→write→(QA 후보 선택)→assemble→완료.
 PHASES: list[Phase] = [
     Phase(ProjectStage.CREATED, research, ProjectStage.RESEARCHING, gate=_source_pool_gate),
-    Phase(ProjectStage.RESEARCHING, write, ProjectStage.COMPLETED, gate=None),
+    Phase(ProjectStage.RESEARCHING, write, ProjectStage.REVIEWING, gate=_qa_select_gate),
+    Phase(ProjectStage.REVIEWING, assemble, ProjectStage.COMPLETED, gate=None),
 ]
 
 
