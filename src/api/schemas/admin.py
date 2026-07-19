@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
@@ -47,8 +48,17 @@ class LimitRequestRead(BaseModel):
     status: Literal["pending", "approved", "rejected"]
 
 
+class DashboardPeriod(StrEnum):
+    """대시보드 조회 기간 옵션."""
+
+    THIS_MONTH = "this_month"
+    LAST_MONTH = "last_month"
+    LAST_7_DAYS = "last_7_days"
+    LAST_30_DAYS = "last_30_days"
+
+
 class AdminDashboardPeriod(BaseModel):
-    type: Literal["this_month"] = "this_month"
+    type: DashboardPeriod
     label: str
 
 

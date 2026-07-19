@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,7 @@ from src.api.schemas.admin import (
     AdminDashboardPeriod,
     AdminKPI,
     DailyCostPoint,
+    DashboardPeriod,
     LimitDecisionInput,
     LimitRequestRead,
     SetUserLimitInput,
@@ -34,24 +35,41 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 # DB의 ProjectStage 값 기준 '진행 중' 상태 (created/completed/archived 제외)
 _ACTIVE_PROJECT_STATUSES = ("researching", "indexing", "writing", "reviewing")
-# 일별 비용 차트 윈도우(일)
-_DAILY_WINDOW_DAYS = 30
+
+
+def _resolve_period_range(period: DashboardPeriod, today: datetime) -> tuple[datetime, datetime]:
+    """period를 (range_start, range_end)로 변환한다. start는 포함, end는 배타적 상한."""
+    midnight = datetime(today.year, today.month, today.day, tzinfo=today.tzinfo)
+    this_month_start = datetime(today.year, today.month, 1, tzinfo=today.tzinfo)
+
+    if period == DashboardPeriod.THIS_MONTH:
+        return this_month_start, today
+    if period == DashboardPeriod.LAST_MONTH:
+        if today.month == 1:
+            last_month_start = datetime(today.year - 1, 12, 1, tzinfo=today.tzinfo)
+        else:
+            last_month_start = datetime(today.year, today.month - 1, 1, tzinfo=today.tzinfo)
+        return last_month_start, this_month_start
+    if period == DashboardPeriod.LAST_7_DAYS:
+        return midnight - timedelta(days=6), today
+    return midnight - timedelta(days=29), today
 
 
 @router.get("/dashboard", response_model=AdminDashboardData)
 async def get_admin_dashboard(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     _: Annotated[User, Depends(require_role("super_admin", "admin"))],
+    period: Annotated[DashboardPeriod, Query()] = DashboardPeriod.THIS_MONTH,
 ) -> AdminDashboardData:
     """관리자 대시보드 — KPI·일별 비용·사용자별 사용량·증액 요청을 한 번에 집계한다."""
     today = now()
-    month_start = datetime(today.year, today.month, 1, tzinfo=today.tzinfo)
+    range_start, range_end = _resolve_period_range(period, today)
 
     # --- KPIs ---
     total_cost = (
         await session.execute(
             select(func.coalesce(func.sum(TokenUsage.cost_usd), 0)).where(
-                TokenUsage.created_at >= month_start
+                TokenUsage.created_at >= range_start, TokenUsage.created_at < range_end
             )
         )
     ).scalar_one()
@@ -59,7 +77,11 @@ async def get_admin_dashboard(
         await session.execute(
             select(func.count())
             .select_from(User)
-            .where(User.is_active.is_(True), User.last_login_at >= month_start)
+            .where(
+                User.is_active.is_(True),
+                User.last_login_at >= range_start,
+                User.last_login_at < range_end,
+            )
         )
     ).scalar_one()
     active_projects = (
@@ -73,7 +95,11 @@ async def get_admin_dashboard(
         await session.execute(
             select(func.count())
             .select_from(Project)
-            .where(Project.status == "completed", Project.updated_at >= month_start)
+            .where(
+                Project.status == "completed",
+                Project.updated_at >= range_start,
+                Project.updated_at < range_end,
+            )
         )
     ).scalar_one()
 
@@ -85,9 +111,7 @@ async def get_admin_dashboard(
         completed_reports=completed_reports,
     )
 
-    # --- 일별 비용 (최근 30일, 누락일은 0으로 채워 연속 시리즈로 반환) ---
-    today_midnight = datetime(today.year, today.month, today.day, tzinfo=today.tzinfo)
-    window_start = today_midnight - timedelta(days=_DAILY_WINDOW_DAYS - 1)
+    # --- 일별 비용 (선택 기간 전체, 누락일은 0으로 채워 연속 시리즈로 반환) ---
     day_col = func.date(TokenUsage.created_at)
     daily_rows = (
         await session.execute(
@@ -96,15 +120,16 @@ async def get_admin_dashboard(
                 func.coalesce(func.sum(TokenUsage.cost_usd), 0).label("cost_usd"),
                 func.count(func.distinct(TokenUsage.user_id)).label("users"),
             )
-            .where(TokenUsage.created_at >= window_start)
+            .where(TokenUsage.created_at >= range_start, TokenUsage.created_at < range_end)
             .group_by(day_col)
             .order_by(day_col)
         )
     ).all()
     by_day = {r.day: r for r in daily_rows}
+    last_day = (range_end - timedelta(microseconds=1)).date()
     daily_costs: list[DailyCostPoint] = []
-    for i in range(_DAILY_WINDOW_DAYS):
-        d = (window_start + timedelta(days=i)).date()
+    d = range_start.date()
+    while d <= last_day:
         row = by_day.get(d)
         daily_costs.append(
             DailyCostPoint(
@@ -113,6 +138,7 @@ async def get_admin_dashboard(
                 users=int(row.users) if row is not None else 0,
             )
         )
+        d += timedelta(days=1)
 
     # --- 사용자별 사용량 (활성 사용자 전체, 비용 높은 순) ---
     usage_subq = (
@@ -123,7 +149,7 @@ async def get_admin_dashboard(
             ),
             func.coalesce(func.sum(TokenUsage.cost_usd), 0).label("cost"),
         )
-        .where(TokenUsage.created_at >= month_start)
+        .where(TokenUsage.created_at >= range_start, TokenUsage.created_at < range_end)
         .group_by(TokenUsage.user_id)
         .subquery()
     )
@@ -167,7 +193,7 @@ async def get_admin_dashboard(
     quota_requests = [_to_limit_request_read(row.LimitRequest, row.user_name) for row in qr_rows]
 
     return AdminDashboardData(
-        period=AdminDashboardPeriod(label=today.strftime("%Y-%m")),
+        period=AdminDashboardPeriod(type=period, label=f"{range_start.date()} ~ {last_day}"),
         kpis=kpis,
         daily_costs=daily_costs,
         user_usage=user_usage,

@@ -1,5 +1,5 @@
 import { Activity, DollarSign, FileCheck2, Users } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -12,7 +12,12 @@ import {
 import { toast } from "sonner";
 import { useAdminDashboard, useApproveQuotaExtension } from "@/api/admin";
 import { ApiError } from "@/api/client";
-import type { AdminDashboardData, QuotaRequest, UserUsageRow } from "@/api/mock/fixtures/admin";
+import type {
+  AdminDashboardData,
+  AdminDashboardPeriod,
+  QuotaRequest,
+  UserUsageRow,
+} from "@/api/mock/fixtures/admin";
 import { StatCard } from "@/components/data-display/StatCard";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -39,9 +44,17 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
+const PERIOD_LABEL: Record<AdminDashboardPeriod, string> = {
+  this_month: "이번 달",
+  last_month: "지난 달",
+  last_7_days: "최근 7일",
+  last_30_days: "최근 30일",
+};
+
 export default function AdminDashboardPage() {
   const { user, logout } = useAuth();
-  const dashboard = useAdminDashboard();
+  const [period, setPeriod] = useState<AdminDashboardPeriod>("this_month");
+  const dashboard = useAdminDashboard({ period });
 
   return (
     <AppShell
@@ -55,11 +68,11 @@ export default function AdminDashboardPage() {
             <h1 className="text-3xl font-semibold text-fg">관리자 대시보드</h1>
             <p className="text-sm text-fg-secondary">
               {dashboard.data
-                ? `이번 달 ${dashboard.data.period.label} 사용 현황`
+                ? `${PERIOD_LABEL[dashboard.data.period.type]} 사용 현황 (${dashboard.data.period.label})`
                 : "사용 현황 불러오는 중…"}
             </p>
           </div>
-          <PeriodSelect />
+          <PeriodSelect value={period} onChange={setPeriod} />
         </header>
 
         {dashboard.isLoading ? (
@@ -82,23 +95,23 @@ export default function AdminDashboardPage() {
   );
 }
 
-function PeriodSelect() {
+function PeriodSelect({
+  value,
+  onChange,
+}: {
+  value: AdminDashboardPeriod;
+  onChange: (period: AdminDashboardPeriod) => void;
+}) {
   return (
-    <Select defaultValue="this_month">
+    <Select value={value} onValueChange={(v) => onChange(v as AdminDashboardPeriod)}>
       <SelectTrigger className="w-40">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="this_month">이번 달</SelectItem>
-        <SelectItem value="last_month" disabled>
-          지난 달 (준비 중)
-        </SelectItem>
-        <SelectItem value="last_7d" disabled>
-          최근 7일 (준비 중)
-        </SelectItem>
-        <SelectItem value="last_30d" disabled>
-          최근 30일 (준비 중)
-        </SelectItem>
+        <SelectItem value="last_month">지난 달</SelectItem>
+        <SelectItem value="last_7_days">최근 7일</SelectItem>
+        <SelectItem value="last_30_days">최근 30일</SelectItem>
       </SelectContent>
     </Select>
   );
@@ -107,12 +120,13 @@ function PeriodSelect() {
 function DashboardBody({ data }: { data: AdminDashboardData }) {
   const costPct = (data.kpis.total_cost_usd / data.kpis.cost_limit_usd) * 100;
   const costTone = costPct >= 90 ? "danger" : costPct >= 70 ? "warning" : "default";
+  const periodLabel = PERIOD_LABEL[data.period.type];
 
   return (
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          label="이번 달 총 비용"
+          label={`${periodLabel} 총 비용`}
           value={`$${data.kpis.total_cost_usd.toLocaleString()}`}
           hint={`한도 $${data.kpis.cost_limit_usd.toLocaleString()} 중 ${costPct.toFixed(0)}%`}
           icon={DollarSign}
@@ -122,7 +136,7 @@ function DashboardBody({ data }: { data: AdminDashboardData }) {
         <StatCard
           label="활성 사용자"
           value={`${data.kpis.active_users}명`}
-          hint="이번 달 1회 이상 로그인"
+          hint={`${periodLabel} 1회 이상 로그인`}
           icon={Users}
         />
         <StatCard
@@ -134,7 +148,7 @@ function DashboardBody({ data }: { data: AdminDashboardData }) {
         <StatCard
           label="완료된 보고서"
           value={`${data.kpis.completed_reports}건`}
-          hint="이번 달 완료"
+          hint={`${periodLabel} 완료`}
           icon={FileCheck2}
           tone="success"
         />
@@ -143,7 +157,7 @@ function DashboardBody({ data }: { data: AdminDashboardData }) {
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
           <div>
-            <CardTitle className="text-base">일별 비용 추세 (최근 30일)</CardTitle>
+            <CardTitle className="text-base">일별 비용 추세 ({periodLabel})</CardTitle>
             <CardDescription>USD 기준, 일별 총 사용 비용</CardDescription>
           </div>
           <span className="font-mono text-xs text-fg-tertiary">
@@ -158,7 +172,7 @@ function DashboardBody({ data }: { data: AdminDashboardData }) {
       </Card>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <UsageTable rows={data.user_usage} />
+        <UsageTable rows={data.user_usage} periodLabel={periodLabel} />
         <QuotaRequestsPanel requests={data.quota_requests} />
       </div>
     </div>
@@ -261,12 +275,12 @@ const ROLE_LABEL: Record<string, string> = {
   viewer: "뷰어",
 };
 
-function UsageTable({ rows }: { rows: UserUsageRow[] }) {
+function UsageTable({ rows, periodLabel }: { rows: UserUsageRow[]; periodLabel: string }) {
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">사용자별 사용량</CardTitle>
-        <CardDescription>이번 달 토큰·비용 누적</CardDescription>
+        <CardDescription>{periodLabel} 토큰·비용 누적</CardDescription>
       </CardHeader>
       <CardContent className="p-0">
         <Table>
