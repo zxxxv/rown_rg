@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.auth import get_current_active_user
+from src.api.dependencies.cost_limit import enforce_cost_limit
 from src.api.dependencies.db import get_async_session
 from src.api.schemas.execution import DecideRequest, ProgressResponse, RunResponse
 from src.api.schemas.project import ProjectCreate, ProjectRead
@@ -66,6 +67,7 @@ async def run_project(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
+    _cost_check: Annotated[User, Depends(enforce_cost_limit)],
 ) -> RunResponse:
     project = await _get_authorized_project(project_id, session, current_user)
     # 스켈레톤: 새로 생성된 프로젝트만 실행(thread_id=project_id 재사용 충돌 회피).
@@ -99,6 +101,7 @@ async def decide_gate(
     data: DecideRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
+    _cost_check: Annotated[User, Depends(enforce_cost_limit)],
 ) -> RunResponse:
     project = await _get_authorized_project(project_id, session, current_user)
     if await get_pending_gate(session, project.id) is None:

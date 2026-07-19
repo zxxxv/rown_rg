@@ -27,3 +27,7 @@ class LLMError(BaseError):
 
 class DatabaseError(BaseError):
     pass
+
+
+class CostLimitExceededError(BaseError):
+    pass

@@ -6,6 +6,7 @@ from src.core.exceptions import (
     AuthenticationError,
     AuthorizationError,
     BaseError,
+    CostLimitExceededError,
     DatabaseError,
     LLMError,
     NotFoundError,
@@ -47,6 +48,11 @@ def register_error_handlers(app: FastAPI) -> None:
     async def _llm(_: Request, exc: LLMError) -> JSONResponse:
         logger.error("llm.error", code=exc.code, message=exc.message)
         return _response(502, _code(exc, "LLM_ERROR"), exc.message)
+
+    @app.exception_handler(CostLimitExceededError)
+    async def _cost_limit(_: Request, exc: CostLimitExceededError) -> JSONResponse:
+        logger.warning("cost_limit.blocked", code=exc.code, message=exc.message)
+        return _response(429, _code(exc, "COST_LIMIT_EXCEEDED"), exc.message)
 
     @app.exception_handler(DatabaseError)
     async def _db(_: Request, exc: DatabaseError) -> JSONResponse:

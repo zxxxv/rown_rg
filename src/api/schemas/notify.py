@@ -1,9 +1,9 @@
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, EmailStr
 
 
-class ResultType(str, Enum):
+class ResultType(StrEnum):
     success = "success"
     partial = "partial"
     failed = "failed"
