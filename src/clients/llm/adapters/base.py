@@ -5,7 +5,7 @@ from typing import Any
 
 import structlog
 
-from src.clients.llm import token_tracker
+from src.clients.llm import quota_gate, token_tracker
 from src.clients.llm.base import CompletionRequest, CompletionResponse, LLMMode
 from src.clients.llm.cassette import (
     CassetteManager,
@@ -87,6 +87,8 @@ class BaseLLMAdapter(ABC):
         if effective_mode == "replay":
             response = self.cassette_manager.load(operation, cache_key, input_hash)
         else:
+            # 실호출 경로에서만 한도 검사 — replay는 실비용이 없어 통과.
+            await quota_gate.enforce()
             response = await self._call_with_retry(request)
             if effective_mode == "record":
                 await self.cassette_manager.save(

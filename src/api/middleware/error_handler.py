@@ -9,6 +9,7 @@ from src.core.exceptions import (
     DatabaseError,
     LLMError,
     NotFoundError,
+    QuotaExceededError,
     ValidationError,
 )
 
@@ -47,6 +48,11 @@ def register_error_handlers(app: FastAPI) -> None:
     async def _llm(_: Request, exc: LLMError) -> JSONResponse:
         logger.error("llm.error", code=exc.code, message=exc.message)
         return _response(502, _code(exc, "LLM_ERROR"), exc.message)
+
+    @app.exception_handler(QuotaExceededError)
+    async def _quota(_: Request, exc: QuotaExceededError) -> JSONResponse:
+        logger.warning("quota.exceeded", code=exc.code, message=exc.message)
+        return _response(429, _code(exc, "QUOTA_EXCEEDED"), exc.message)
 
     @app.exception_handler(DatabaseError)
     async def _db(_: Request, exc: DatabaseError) -> JSONResponse:
