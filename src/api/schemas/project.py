@@ -18,9 +18,21 @@ class ProjectBase(BaseModel):
     topic: str = Field(..., min_length=1, description="보고서 주제")
 
 
+class PresetRead(BaseModel):
+    """생성 화면 프리셋 선택용 카탈로그 항목. 생성 시 preset에 id 또는 name을 넣는다."""
+
+    id: str
+    name: str
+    desc: str
+    n_chapters: int
+    n_sections: int
+
+
 class ProjectCreate(ProjectBase):
     preset: str | None = Field(
-        None, max_length=100, description="프리셋 (예: preliminary_feasibility)"
+        None,
+        max_length=100,
+        description="보고서 유형 프리셋 키 (예: 예비타당성조사). None=자유 주제",
     )
     config: dict[str, Any] = Field(default_factory=dict, description="모듈식 옵션")
     depth_mode: DepthMode = Field("full_report", description="보고서 깊이")

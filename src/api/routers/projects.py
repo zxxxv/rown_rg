@@ -1,20 +1,45 @@
+from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
+from fastapi.responses import FileResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
 from src.api.schemas.execution import DecideRequest, ProgressResponse, RunResponse
-from src.api.schemas.project import ProjectCreate, ProjectRead
+from src.api.schemas.project import PresetRead, ProjectCreate, ProjectRead
+from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from src.core.types import ProjectStage
 from src.db.models.project import Project
 from src.db.models.user import User
+from src.prompts import list_presets, load_preset
 from src.workflows.runner import get_pending_gate, resume_run, start_run
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+# 생성 화면 프리셋 드롭다운용 — 카탈로그(src.prompts)가 단일 진실.
+presets_router = APIRouter(prefix="/presets", tags=["presets"])
+
+
+@presets_router.get("", response_model=list[PresetRead])
+async def get_presets(
+    _: Annotated[User, Depends(get_current_active_user)],
+) -> list[PresetRead]:
+    """보고서 유형 프리셋 카탈로그. 자유 주제는 preset=None으로 생성하면 된다."""
+    return [
+        PresetRead(
+            id=p.id,
+            name=p.name,
+            desc=p.desc,
+            n_chapters=len(p.chapters),
+            n_sections=sum(len(ch.sections) for ch in p.chapters),
+        )
+        for p in list_presets()
+    ]
 
 
 async def _get_authorized_project(
@@ -37,6 +62,17 @@ async def create_project(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> Project:
+    # preset은 파일 카탈로그(src.prompts)가 단일 진실 — 생성 시점에 키를 검증해 확정한다.
+    # None이면 자유 주제(프리셋 없는 일반 목차 설계)로 진행된다.
+    if data.preset is not None:
+        try:
+            load_preset(data.preset)
+        except KeyError:
+            available = ", ".join(p.name for p in list_presets())
+            raise ValidationError(
+                message=f"알 수 없는 프리셋입니다: {data.preset} (가능: {available})",
+                code="UNKNOWN_PRESET",
+            ) from None
     project = Project(
         title=data.title,
         topic=data.topic,
@@ -50,6 +86,20 @@ async def create_project(
     await session.flush()
     await session.refresh(project)
     return project
+
+
+@router.get("", response_model=list[ProjectRead])
+async def list_projects(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Project]:
+    """내 프로젝트 목록(최신순). admin·super_admin은 전체를 본다."""
+    stmt = select(Project).order_by(Project.created_at.desc()).limit(limit).offset(offset)
+    if current_user.role not in ("super_admin", "admin"):
+        stmt = stmt.where(Project.owner_id == current_user.id)
+    return list((await session.execute(stmt)).scalars())
 
 
 @router.get("/{project_id}", response_model=ProjectRead)
@@ -90,6 +140,31 @@ async def get_progress(
         project_id=str(project.id),
         status=ProjectStage(project.status),
         pending_gate=await get_pending_gate(session, project.id),
+    )
+
+
+@router.get("/{project_id}/export")
+async def download_export(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> FileResponse:
+    """완성된 보고서 HWPX 다운로드.
+
+    assemble이 <export_dir>/<project_id>.hwpx 결정적 경로에 렌더하므로 상태 기록
+    없이 경로 규칙만으로 찾는다. 파일이 없으면(미완료·렌더 스킵) 404.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    path = Path(settings.export_dir) / f"{project.id}.hwpx"
+    if not path.is_file():
+        raise NotFoundError(
+            message="보고서 파일이 아직 없습니다 (작성 미완료이거나 렌더되지 않음)",
+            code="EXPORT_NOT_READY",
+        )
+    return FileResponse(
+        path,
+        filename=f"{project.title}.hwpx",
+        media_type="application/octet-stream",
     )
 
 

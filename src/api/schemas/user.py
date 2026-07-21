@@ -34,6 +34,8 @@ class UserRead(UserBase):
     is_active: bool
     # SSO 전용 계정은 비밀번호가 없다 → 프론트에서 비밀번호 변경 UI 노출 여부 판단에 사용
     has_password: bool
+    # 로그인 실패 잠금 만료 시각 — 미래면 잠김. admin 사용자 관리의 잠금 표시·해제 버튼 판단용
+    locked_until: datetime | None
     last_login_at: datetime | None
     password_changed_at: datetime | None
     created_at: datetime
