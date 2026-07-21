@@ -182,9 +182,12 @@ class TestBgeRerankerV2M3ClientReal:
         assert scores == []
 
     def test_batch_split_consistency(self, reranker_client: BgeRerankerV2M3Client):
-        """같은 (query, passage) 쌍은 배치 위치와 무관하게 같은 점수를 줘야 한다.
+        """같은 (query, passage) 쌍은 배치 위치와 무관하게 비슷한 점수·같은 순위여야 한다.
 
-        cross-encoder는 쌍 단위 추론이라 batch padding이 점수에 영향을 줘선 안 됨.
+        INT8 동적 양자화는 배치 padding 길이에 따라 활성값 스케일이 달라져 절대
+        점수가 최대 ~0.04까지 흔들린다(변환 환경별 상이 — onnxruntime 1.27 산출물
+        실측 0.037). 리랭커의 계약은 절대 점수가 아니라 '순위 재정렬'이므로,
+        절대 오차는 0.05로 두고 순위 보존을 엄격 검증한다.
         """
         passages = [
             "SOC 투자의 B/C 비율은 1.32로 측정됐다.",
@@ -194,5 +197,9 @@ class TestBgeRerankerV2M3ClientReal:
         single = [asyncio.run(reranker_client.score_pairs("SOC 경제성", [p]))[0] for p in passages]
         batched = asyncio.run(reranker_client.score_pairs("SOC 경제성", passages))
         for s, b in zip(single, batched, strict=True):
-            # padding이 모델 출력에 미세 영향을 주므로 0.01 tolerance
-            assert abs(s - b) < 0.01, f"batch padding으로 점수 변동: {s} vs {b}"
+            assert abs(s - b) < 0.05, f"batch padding으로 점수 변동: {s} vs {b}"
+
+        def rank_order(scores: list[float]) -> list[int]:
+            return sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+
+        assert rank_order(single) == rank_order(batched), "배치 분할로 순위가 바뀜"

@@ -165,11 +165,15 @@ def export_onnx_fp32(output_dir: Path) -> Path:
 
     logger.info("bge_m3.onnx.export.started", model=MODEL_ID, output_dir=str(output_dir))
     t0 = time.perf_counter()
+    # library_name은 "transformers"로 고정한다 — sentence_transformers 경로는
+    # optimum 2.x + sentence-transformers 5.x 조합에서 깨진다(모델 config가 읽기전용
+    # property로 바뀌어 standardize_model_attributes가 AttributeError). 어차피
+    # 그래프 출력은 동일한 last_hidden_state이고 CLS 풀링은 embedding_client가 한다.
     main_export(
         MODEL_ID,
         output=str(output_dir),
         task="feature-extraction",
-        library_name="sentence_transformers",
+        library_name="transformers",
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     size_mb = directory_size_mb(output_dir)
