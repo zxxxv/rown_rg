@@ -1,28 +1,81 @@
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
-import { PhaseNameSchema } from "@/api/ws-messages";
+import type { PhaseName } from "@/api/ws-messages";
 
-export const ProgressSnapshotSchema = z.object({
-  phase: PhaseNameSchema,
-  phase_status: z.enum(["started", "completed"]),
-  completed_phases: z.array(PhaseNameSchema),
-  active_step: z.string().optional(),
-  tokens_used: z.number().nonnegative(),
-  cost_usd: z.number().nonnegative(),
-  eta_seconds: z.number().nonnegative().optional(),
-  pending_checkpoint_id: z.string().nullable(),
+// ─── 실계약: GET /projects/{id}/progress ────────────────────────────────
+// 응답 = {project_id, status(백엔드 ProjectStage), pending_gate|null}
+
+export const PendingGateSchema = z.object({
+  review_point_id: z.string(),
+  gate: z.string(), // source_pool | contradiction | level_1 | level_2 | qa_select | final
+  payload: z.record(z.string(), z.unknown()),
 });
-export type ProgressSnapshot = z.infer<typeof ProgressSnapshotSchema>;
+export type PendingGate = z.infer<typeof PendingGateSchema>;
+
+export const ProjectProgressSchema = z.object({
+  project_id: z.string(),
+  status: z.string(), // created | researching | indexing | writing | reviewing | completed | archived
+  pending_gate: PendingGateSchema.nullable(),
+});
+export type ProjectProgress = z.infer<typeof ProjectProgressSchema>;
+
+// ─── 기존 소비처(useProgressState)용 스냅샷 어댑터 ──────────────────────
+// 백엔드 progress에는 토큰·비용·ETA가 없으므로 optional로 두고, 리듀서가
+// 값이 없으면 기존(WS로 수신한) 값을 유지한다.
+
+export interface ProgressSnapshot {
+  phase: PhaseName;
+  phase_status: "started" | "completed";
+  completed_phases: PhaseName[];
+  active_step?: string;
+  tokens_used?: number;
+  cost_usd?: number;
+  eta_seconds?: number;
+  pending_checkpoint_id: string | null;
+  pending_gate: PendingGate | null;
+}
+
+const PHASE_ORDER: PhaseName[] = ["research", "indexing", "writing", "qa", "export"];
+
+const STATUS_TO_PHASE: Record<string, PhaseName> = {
+  created: "research",
+  researching: "research",
+  indexing: "indexing",
+  writing: "writing",
+  reviewing: "qa",
+  completed: "export",
+  archived: "export",
+};
+
+export function toProgressSnapshot(res: ProjectProgress): ProgressSnapshot {
+  const phase = STATUS_TO_PHASE[res.status] ?? "research";
+  const finished = res.status === "completed" || res.status === "archived";
+  const phaseIdx = PHASE_ORDER.indexOf(phase);
+  const completed_phases = finished
+    ? [...PHASE_ORDER]
+    : PHASE_ORDER.slice(0, Math.max(0, phaseIdx));
+  return {
+    phase,
+    phase_status: finished ? "completed" : "started",
+    completed_phases,
+    pending_checkpoint_id: res.pending_gate?.review_point_id ?? null,
+    pending_gate: res.pending_gate,
+  };
+}
 
 export const progressKeys = {
   all: ["progress"] as const,
   snapshot: (projectId: string) => [...progressKeys.all, "snapshot", projectId] as const,
 };
 
+export async function getProjectProgress(projectId: string): Promise<ProjectProgress> {
+  const data = await apiClient.get<unknown>(`projects/${projectId}/progress`);
+  return ProjectProgressSchema.parse(data);
+}
+
 export async function getProgressSnapshot(projectId: string): Promise<ProgressSnapshot> {
-  const data = await apiClient.get<unknown>(`projects/${projectId}/progress/snapshot`);
-  return ProgressSnapshotSchema.parse(data);
+  return toProgressSnapshot(await getProjectProgress(projectId));
 }
 
 export function useProgressSnapshot(projectId: string, enabled = true) {

@@ -1,7 +1,8 @@
 import { Calendar } from "lucide-react";
-import type { Preset, Project, ProjectStatus } from "@/api/types";
+import type { Project, ProjectStatus } from "@/api/types";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { Badge } from "@/components/ui/badge";
+import { presetLabel } from "@/features/project-config/presets";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<ProjectStatus, string> = {
@@ -26,13 +27,6 @@ const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
   completed: "success",
   archived: "tertiary",
   failed: "danger",
-};
-
-const PRESET_LABEL: Record<Preset, string> = {
-  preliminary_feasibility: "예비타당성",
-  business_review: "사업타당성",
-  policy_research: "정책연구",
-  blank: "빈 양식",
 };
 
 export interface ProjectCardProps {
@@ -65,7 +59,7 @@ export function ProjectCard({ project, onClick, className }: ProjectCardProps) {
     >
       <header className="flex items-center justify-between gap-2">
         <Badge variant="secondary" className="font-mono text-xs">
-          {PRESET_LABEL[project.preset]}
+          {presetLabel(project.preset)}
         </Badge>
         <StatusDot kind={STATUS_KIND[project.status]} label={STATUS_LABEL[project.status]} />
       </header>

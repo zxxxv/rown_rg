@@ -1,5 +1,5 @@
 import { HttpResponse, http } from "msw";
-import { decideCheckpointForProject } from "@/api/mock/fixtures/scenarios/state";
+import { resolveAnyPendingCheckpoint } from "@/api/mock/fixtures/scenarios/state";
 import { env } from "@/env";
 
 function url(path: string): string {
@@ -8,35 +8,29 @@ function url(path: string): string {
 }
 
 interface DecideBody {
-  decision: "approve" | "request_changes" | "halt" | "deeper";
-  feedback?: string;
+  decision?: Record<string, unknown>;
 }
 
 export const checkpointsHandlers = [
-  http.post(url("projects/:id/checkpoints/:cid/decide"), async ({ params, request }) => {
+  // 실계약: POST /projects/{id}/decide — body {decision: dict}, 서버는 최신 pending 게이트를 해소
+  http.post(url("projects/:id/decide"), async ({ params, request }) => {
     const projectId = String(params.id);
-    const cid = String(params.cid);
     const body = (await request.json()) as DecideBody;
-    const ok = decideCheckpointForProject(projectId, cid);
+    if (!body || typeof body.decision !== "object" || body.decision === null) {
+      return HttpResponse.json(
+        { error: { code: "validation_failed", message: "decision 객체가 필요합니다." } },
+        { status: 422 },
+      );
+    }
+    const ok = resolveAnyPendingCheckpoint(projectId);
     if (!ok) {
       return HttpResponse.json(
-        {
-          error: {
-            code: "checkpoint_not_pending",
-            message: "현재 대기 중인 검토 지점이 없습니다.",
-          },
-        },
-        { status: 409 },
+        { error: { code: "NO_PENDING_GATE", message: "대기 중인 검토 게이트가 없습니다" } },
+        { status: 422 },
       );
     }
     return HttpResponse.json(
-      {
-        data: {
-          checkpoint_id: cid,
-          decision: body.decision,
-          accepted_at: new Date().toISOString(),
-        },
-      },
+      { data: { project_id: projectId, status: "researching" } },
       { status: 200 },
     );
   }),

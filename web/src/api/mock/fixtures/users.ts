@@ -1,10 +1,11 @@
 import type { User } from "@/api/types";
 
+// super_admin: /admin/ip(최고관리자 전용) 화면까지 MSW로 렌더 가능하도록 상향
 export const DEMO_ADMIN_USER: User = {
   id: "u_admin_001",
   email: "admin@loweninsight.kr",
   name: "관리자",
-  role: "admin",
+  role: "super_admin",
   is_active: true,
   has_password: true,
   last_login_at: "2026-06-29T08:30:00Z",

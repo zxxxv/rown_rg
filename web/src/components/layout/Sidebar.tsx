@@ -32,14 +32,7 @@ const MAIN_NAV: NavItem[] = [
 
 const ADMIN_NAV: NavItem[] = [
   { to: "/admin/dashboard", label: "대시보드", icon: ShieldCheck, minRole: "admin" },
-  {
-    to: "/admin/users",
-    label: "사용자",
-    icon: Users,
-    minRole: "admin",
-    disabled: true,
-    phaseBadge: "준비 중",
-  },
+  { to: "/admin/users", label: "사용자", icon: Users, minRole: "admin" },
   {
     to: "/admin/tokens",
     label: "토큰 한도",
@@ -48,14 +41,7 @@ const ADMIN_NAV: NavItem[] = [
     disabled: true,
     phaseBadge: "준비 중",
   },
-  {
-    to: "/admin/ip",
-    label: "IP 관리",
-    icon: Globe,
-    minRole: "super_admin",
-    disabled: true,
-    phaseBadge: "준비 중",
-  },
+  { to: "/admin/ip", label: "IP 관리", icon: Globe, minRole: "super_admin" },
   {
     to: "/admin/hwpx-style",
     label: "HWPX 양식",

@@ -1,16 +1,24 @@
 import { HttpResponse, http } from "msw";
+import { z } from "zod";
 import { createProjectFolderForLibrary } from "@/api/mock/fixtures/library";
 import { DEMO_PROJECTS } from "@/api/mock/fixtures/projects";
 import { DEMO_ADMIN_USER } from "@/api/mock/fixtures/users";
 import type { Project, ProjectSort, ProjectStatus } from "@/api/types";
-import { ProjectConfigSchema } from "@/api/types";
+import { DepthModeSchema, ProjectConfigSchema } from "@/api/types";
 import { env } from "@/env";
-import { ProjectFormSchema } from "@/features/project-config/schema";
 
 function url(path: string): string {
   const base = env.VITE_API_BASE_URL.replace(/\/$/, "");
   return `${base}/${path.replace(/^\//, "")}`;
 }
+
+const ProjectCreateBodySchema = z.object({
+  title: z.string().min(1).max(255),
+  topic: z.string().min(1),
+  preset: z.string().max(100).nullable(),
+  config: ProjectConfigSchema,
+  depth_mode: DepthModeSchema,
+});
 
 function sortProjects(items: Project[], sort: ProjectSort): Project[] {
   const copy = [...items];
@@ -46,7 +54,8 @@ export const projectsHandlers = [
 
   http.post(url("projects"), async ({ request }) => {
     const body = await request.json();
-    const parsed = ProjectFormSchema.safeParse(body);
+    // 백엔드 ProjectCreate 계약: preset·depth_mode 최상위 필드
+    const parsed = ProjectCreateBodySchema.safeParse(body);
     if (!parsed.success) {
       return HttpResponse.json(
         {
@@ -66,10 +75,10 @@ export const projectsHandlers = [
       id: `proj_${crypto.randomUUID().slice(0, 8)}`,
       title: v.title,
       topic: v.topic,
-      preset: v.config.preset,
+      preset: v.preset,
       config: v.config,
       status: "draft",
-      depth_mode: v.config.depth_mode,
+      depth_mode: v.depth_mode,
       owner_id: DEMO_ADMIN_USER.id,
       created_at: nowIso,
       updated_at: nowIso,
@@ -78,6 +87,58 @@ export const projectsHandlers = [
     DEMO_PROJECTS.unshift(project);
     createProjectFolderForLibrary(project);
     return HttpResponse.json({ data: project }, { status: 201 });
+  }),
+
+  // POST /projects/{id}/run — 백그라운드 실행 시작(202)
+  http.post(url("projects/:id/run"), ({ params }) => {
+    const id = String(params.id);
+    const project = DEMO_PROJECTS.find((p) => p.id === id);
+    if (!project) {
+      return HttpResponse.json(
+        { error: { code: "PROJECT_NOT_FOUND", message: "프로젝트를 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    if (project.status !== "draft") {
+      return HttpResponse.json(
+        {
+          error: {
+            code: "PROJECT_NOT_RUNNABLE",
+            message: `실행할 수 없는 상태입니다(현재: ${project.status})`,
+          },
+        },
+        { status: 422 },
+      );
+    }
+    project.status = "researching";
+    project.progress = 5;
+    project.updated_at = new Date().toISOString();
+    return HttpResponse.json(
+      { data: { project_id: project.id, status: "researching" } },
+      { status: 202 },
+    );
+  }),
+
+  // GET /projects/{id}/export — HWPX 파일(더미 blob)
+  http.get(url("projects/:id/export"), ({ params }) => {
+    const id = String(params.id);
+    const project = DEMO_PROJECTS.find((p) => p.id === id);
+    if (!project) {
+      return HttpResponse.json(
+        { error: { code: "PROJECT_NOT_FOUND", message: "프로젝트를 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    const blob = new Blob([`HWPX demo file for ${project.title}`], {
+      type: "application/octet-stream",
+    });
+    return new HttpResponse(blob, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${encodeURIComponent(project.title)}.hwpx"`,
+      },
+    });
   }),
 
   http.get(url("projects/:id"), ({ params }) => {

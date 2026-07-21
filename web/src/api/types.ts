@@ -17,6 +17,8 @@ export const UserSchema = z.object({
 });
 export type User = z.infer<typeof UserSchema>;
 
+// 로컬 기본값 카탈로그(features/project-config/presets.ts)용 레거시 키.
+// 실제 프리셋 카탈로그는 백엔드 GET /presets 가 단일 진실이며 id/name 문자열을 쓴다.
 export const PresetSchema = z.enum([
   "preliminary_feasibility",
   "business_review",
@@ -52,7 +54,8 @@ export const AnalyzerSchema = z.enum([
 export type Analyzer = z.infer<typeof AnalyzerSchema>;
 
 export const ProjectConfigSchema = z.object({
-  preset: PresetSchema,
+  // 백엔드 계약: 프리셋은 카탈로그 id/name 문자열 또는 null(자유 주제)
+  preset: z.string().nullable(),
   sources: z.object({
     use_library: z.boolean(),
     use_upload: z.boolean(),
@@ -75,7 +78,7 @@ export const ProjectSchema = z.object({
   id: z.string(),
   title: z.string(),
   topic: z.string(),
-  preset: PresetSchema,
+  preset: z.string().nullable(),
   config: ProjectConfigSchema,
   status: ProjectStatusSchema,
   depth_mode: DepthModeSchema,

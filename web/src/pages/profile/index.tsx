@@ -9,7 +9,7 @@ import {
   ShieldCheck,
   ShieldHalf,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { Link } from "react-router-dom";
 import {
@@ -23,7 +23,7 @@ import {
 } from "recharts";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
-import { useChangePassword, useMyTokenUsage } from "@/api/profile";
+import { useChangePassword, useCreateQuotaRequest, useMyTokenUsage } from "@/api/profile";
 import {
   type ChangePasswordInput,
   ChangePasswordInputSchema,
@@ -49,6 +49,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/useAuth";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -127,6 +128,7 @@ export default function ProfilePage() {
           ) : (
             <UsageSection data={usage.data} />
           )}
+          <QuotaRequestCard />
         </section>
 
         <section className="flex flex-col gap-3">
@@ -333,6 +335,88 @@ function UsageSection({ data }: { data: MyTokenUsage }) {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function QuotaRequestCard() {
+  const createRequest = useCreateQuotaRequest();
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+
+  const parsedAmount = Number(amount);
+  const amountValid = amount.trim() !== "" && Number.isFinite(parsedAmount) && parsedAmount > 0;
+  const reasonValid = reason.trim().length >= 1 && reason.trim().length <= 2000;
+
+  const submit = () => {
+    if (!amountValid || !reasonValid) return;
+    createRequest.mutate(
+      { amount_usd: parsedAmount, reason: reason.trim() },
+      {
+        onSuccess: () => {
+          toast.success("신청됨(관리자 승인 대기)", {
+            description: `증액 요청 $${parsedAmount} 이 접수되었습니다.`,
+          });
+          setAmount("");
+          setReason("");
+        },
+        onError: (err) => {
+          const msg = err instanceof ApiError ? err.message : "신청 처리 중 오류가 발생했습니다.";
+          toast.error("신청 실패", { description: msg });
+        },
+      },
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Coins className="h-4 w-4" aria-hidden />
+          한도 증액 신청
+        </CardTitle>
+        <CardDescription>
+          이번 달 한도가 부족하면 증액을 신청하세요. 관리자 승인 후 즉시 반영됩니다.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5 sm:max-w-56">
+          <Label htmlFor="quota-amount">증액 금액 (USD)</Label>
+          <Input
+            id="quota-amount"
+            type="number"
+            min={1}
+            step={10}
+            inputMode="decimal"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="예: 50"
+          />
+          {amount.trim() !== "" && !amountValid ? (
+            <p className="text-xs text-fg-danger">증액 금액은 0보다 큰 숫자여야 합니다.</p>
+          ) : null}
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="quota-reason">사유</Label>
+          <Textarea
+            id="quota-reason"
+            rows={3}
+            maxLength={2000}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="예: 긴급 보고서 마감으로 이번 달 사용량이 급증했습니다."
+          />
+          <p className="text-right font-mono text-[11px] text-fg-tertiary">{reason.length}/2000</p>
+        </div>
+        <Button
+          type="button"
+          className="w-fit"
+          onClick={submit}
+          disabled={!amountValid || !reasonValid || createRequest.isPending}
+        >
+          {createRequest.isPending ? "신청 중…" : "증액 신청"}
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 

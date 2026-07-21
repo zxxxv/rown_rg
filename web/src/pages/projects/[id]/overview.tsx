@@ -33,7 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { estimate } from "@/features/project-config/estimator";
 import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
-import { PRESET_LABEL } from "@/features/project-config/presets";
+import { presetLabel } from "@/features/project-config/presets";
 import type { ProjectFormValues } from "@/features/project-config/schema";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -158,7 +158,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
               <Badge variant="secondary" className="font-mono">
-                {PRESET_LABEL[project.preset]}
+                {presetLabel(project.preset)}
               </Badge>
               <StatusDot kind={STATUS_KIND[project.status]} label={STATUS_LABEL[project.status]} />
             </div>

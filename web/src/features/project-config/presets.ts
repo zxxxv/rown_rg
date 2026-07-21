@@ -7,6 +7,32 @@ export const PRESET_LABEL: Record<Preset, string> = {
   blank: "빈 양식",
 };
 
+/** 자유 주제(null)·백엔드 카탈로그 id(한국어)·레거시 키 모두를 표시용 라벨로 변환한다. */
+export function presetLabel(preset: string | null | undefined): string {
+  if (!preset || preset === "blank") return "자유 주제";
+  if (preset in PRESET_LABEL) return PRESET_LABEL[preset as Preset];
+  return preset; // 백엔드 카탈로그 id/name은 한국어 그 자체가 라벨
+}
+
+/** 백엔드 카탈로그 프리셋 id → 로컬 기본 옵션 매핑(없으면 보수적 기본값). */
+const CATALOG_DEFAULT_KEY: Record<string, Preset> = {
+  예비타당성조사: "preliminary_feasibility",
+  경영컨설팅보고서: "business_review",
+  정책기획보고서: "policy_research",
+  산업동향보고서: "policy_research",
+  조사분석보고서: "policy_research",
+};
+
+/** 프리셋 선택 시 적용할 로컬 기본 config. preset 필드는 선택값 그대로 유지한다. */
+export function defaultsForPreset(preset: string | null): ProjectConfig {
+  if (preset === null) return { ...PRESET_DEFAULTS.blank, preset: null };
+  const key =
+    preset in PRESET_DEFAULTS
+      ? (preset as Preset)
+      : (CATALOG_DEFAULT_KEY[preset] ?? "preliminary_feasibility");
+  return { ...PRESET_DEFAULTS[key], preset };
+}
+
 export const PRESET_DESCRIPTION: Record<Preset, string> = {
   preliminary_feasibility:
     "공공사업 예비타당성 보고서 양식. 비용편익·STEEP·리스크 분석 + 검증 도구 풀세트.",

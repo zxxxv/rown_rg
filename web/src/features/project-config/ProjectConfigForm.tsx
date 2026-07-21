@@ -3,7 +3,6 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef } from "react";
 import { FormProvider, useForm, useFormContext } from "react-hook-form";
 import { toast } from "sonner";
-import type { Preset } from "@/api/types";
 import { CostEstimate } from "@/components/data-display/CostEstimate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,7 +17,7 @@ import { DifferentiatorToggle } from "./DifferentiatorToggle";
 import { estimate } from "./estimator";
 import { OutputAndNotification } from "./OutputAndNotification";
 import { PresetSelect } from "./PresetSelect";
-import { PRESET_DEFAULTS, PRESET_LABEL } from "./presets";
+import { defaultsForPreset, presetLabel } from "./presets";
 import { SourceTypeCheckboxes } from "./SourceTypeCheckboxes";
 import { ProjectFormSchema, type ProjectFormValues } from "./schema";
 
@@ -35,7 +34,8 @@ export interface ProjectConfigFormProps {
 const EMPTY_DEFAULTS: ProjectFormValues = {
   title: "",
   topic: "",
-  config: PRESET_DEFAULTS.preliminary_feasibility,
+  // 기본 프리셋은 백엔드 카탈로그 id 기준(생성 시 그대로 전송 가능한 값)
+  config: defaultsForPreset("예비타당성조사"),
 };
 
 const DEPTH_LABEL = {
@@ -67,9 +67,9 @@ export function ProjectConfigForm({
   } = form;
   const isEdit = mode === "edit";
 
-  const onPresetChange = (preset: Preset) => {
+  const onPresetChange = (preset: string | null) => {
     const current = getValues();
-    const nextConfig = PRESET_DEFAULTS[preset];
+    const nextConfig = defaultsForPreset(preset);
     const dirtyConfig = (dirtyFields as { config?: unknown }).config;
     const merged = mergeKeepDirty(current.config, nextConfig, dirtyConfig);
     reset(
@@ -141,7 +141,7 @@ export function ProjectConfigForm({
           <div className="flex flex-col gap-2 rounded border border-border bg-bg p-4">
             <p className="text-xs font-medium text-fg-secondary">선택 옵션 요약</p>
             <div className="flex flex-wrap gap-1.5">
-              <Badge variant="secondary">프리셋 · {PRESET_LABEL[watchedConfig.preset]}</Badge>
+              <Badge variant="secondary">프리셋 · {presetLabel(watchedConfig.preset)}</Badge>
               <Badge variant="secondary">깊이 · {DEPTH_LABEL[watchedConfig.depth_mode]}</Badge>
               <Badge variant="secondary">
                 분석 도구 {watchedConfig.enabled_analyzers.length}개

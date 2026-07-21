@@ -1,18 +1,42 @@
 import { Controller, useFormContext } from "react-hook-form";
-import { type Preset, PresetSchema } from "@/api/types";
+import { usePresets } from "@/api/presets";
+import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { cn } from "@/lib/utils";
-import { PRESET_DESCRIPTION, PRESET_LABEL } from "./presets";
 import type { ProjectFormValues } from "./schema";
 
 export interface PresetSelectProps {
-  onPresetChange: (preset: Preset) => void;
+  onPresetChange: (preset: string | null) => void;
   disabled?: boolean;
 }
 
-const PRESET_ORDER = PresetSchema.options;
+interface PresetOption {
+  value: string | null;
+  label: string;
+  description: string;
+}
+
+const FREE_TOPIC_OPTION: PresetOption = {
+  value: null,
+  label: "자유 주제 (프리셋 없음)",
+  description: "정해진 목차 골격 없이 주제에 맞는 일반 목차를 새로 설계합니다.",
+};
 
 export function PresetSelect({ onPresetChange, disabled }: PresetSelectProps) {
   const { control } = useFormContext<ProjectFormValues>();
+  const presetsQuery = usePresets();
+
+  if (presetsQuery.isLoading) {
+    return <LoadingSkeleton variant="card" count={3} />;
+  }
+
+  const options: PresetOption[] = [
+    ...(presetsQuery.data ?? []).map((p) => ({
+      value: p.id,
+      label: p.name,
+      description: `${p.desc} · ${p.n_chapters}챕터 ${p.n_sections}섹션 골격`,
+    })),
+    FREE_TOPIC_OPTION,
+  ];
 
   return (
     <Controller
@@ -21,15 +45,15 @@ export function PresetSelect({ onPresetChange, disabled }: PresetSelectProps) {
       render={({ field }) => (
         <fieldset
           disabled={disabled}
-          className="grid grid-cols-1 gap-3 border-0 p-0 sm:grid-cols-2 xl:grid-cols-4"
+          className="grid grid-cols-1 gap-3 border-0 p-0 sm:grid-cols-2 xl:grid-cols-3"
         >
           <legend className="sr-only">보고서 유형</legend>
-          {PRESET_ORDER.map((p) => {
-            const checked = field.value === p;
-            const inputId = `preset-${p}`;
+          {options.map((opt) => {
+            const checked = field.value === opt.value;
+            const inputId = `preset-${opt.value ?? "free"}`;
             return (
               <label
-                key={p}
+                key={opt.value ?? "free"}
                 htmlFor={inputId}
                 className={cn(
                   "relative flex cursor-pointer flex-col items-start gap-2 rounded-lg border p-4 text-left transition-colors",
@@ -44,17 +68,17 @@ export function PresetSelect({ onPresetChange, disabled }: PresetSelectProps) {
                   id={inputId}
                   type="radio"
                   name={field.name}
-                  value={p}
+                  value={opt.value ?? ""}
                   checked={checked}
                   disabled={disabled}
                   onChange={() => {
-                    field.onChange(p);
-                    onPresetChange(p);
+                    field.onChange(opt.value);
+                    onPresetChange(opt.value);
                   }}
                   className="sr-only"
                 />
                 <div className="flex w-full items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-fg">{PRESET_LABEL[p]}</span>
+                  <span className="text-sm font-semibold text-fg">{opt.label}</span>
                   <span
                     aria-hidden
                     className={cn(
@@ -63,7 +87,7 @@ export function PresetSelect({ onPresetChange, disabled }: PresetSelectProps) {
                     )}
                   />
                 </div>
-                <p className="text-xs leading-relaxed text-fg-secondary">{PRESET_DESCRIPTION[p]}</p>
+                <p className="text-xs leading-relaxed text-fg-secondary">{opt.description}</p>
               </label>
             );
           })}

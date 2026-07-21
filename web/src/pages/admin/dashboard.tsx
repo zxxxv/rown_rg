@@ -1,5 +1,5 @@
 import { Activity, DollarSign, FileCheck2, Users } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { useAdminDashboard, useApproveQuotaExtension } from "@/api/admin";
 import { ApiError } from "@/api/client";
 import type { AdminDashboardData, QuotaRequest, UserUsageRow } from "@/api/mock/fixtures/admin";
+import { useSetUserQuota } from "@/api/users";
 import { StatCard } from "@/components/data-display/StatCard";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -21,6 +22,16 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -262,6 +273,7 @@ const ROLE_LABEL: Record<string, string> = {
 };
 
 function UsageTable({ rows }: { rows: UserUsageRow[] }) {
+  const [quotaTarget, setQuotaTarget] = useState<UserUsageRow | null>(null);
   return (
     <Card>
       <CardHeader>
@@ -343,15 +355,7 @@ function UsageTable({ rows }: { rows: UserUsageRow[] }) {
                     {row.last_active.slice(0, 10)}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        toast(`${row.name}의 한도 조정 — 구현 예정`, {
-                          description: `현재 한도: $${row.limit_usd}`,
-                        })
-                      }
-                    >
+                    <Button variant="ghost" size="sm" onClick={() => setQuotaTarget(row)}>
                       한도 조정
                     </Button>
                   </TableCell>
@@ -361,7 +365,79 @@ function UsageTable({ rows }: { rows: UserUsageRow[] }) {
           </TableBody>
         </Table>
       </CardContent>
+      <QuotaAdjustDialog target={quotaTarget} onClose={() => setQuotaTarget(null)} />
     </Card>
+  );
+}
+
+function QuotaAdjustDialog({
+  target,
+  onClose,
+}: {
+  target: UserUsageRow | null;
+  onClose: () => void;
+}) {
+  const setQuota = useSetUserQuota();
+  const [amount, setAmount] = useState("");
+
+  const close = () => {
+    setAmount("");
+    onClose();
+  };
+
+  const parsed = Number(amount);
+  const valid = amount.trim() !== "" && Number.isFinite(parsed) && parsed >= 0;
+
+  const submit = () => {
+    if (!target || !valid) return;
+    setQuota.mutate(
+      { userId: target.user_id, monthly_limit_usd: parsed },
+      {
+        // useSetUserQuota가 성공 시 admin dashboard 쿼리를 invalidate한다
+        onSuccess: (res) => {
+          toast.success(`${target.name}의 월 한도를 $${res.monthly_limit_usd}로 설정했습니다.`);
+          close();
+        },
+        onError: (err) => {
+          const msg = err instanceof ApiError ? err.message : "처리 중 오류";
+          toast.error("한도 조정 실패", { description: msg });
+        },
+      },
+    );
+  };
+
+  return (
+    <Dialog open={target !== null} onOpenChange={(open) => (!open ? close() : undefined)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>월 한도 조정 — {target?.name}</DialogTitle>
+          <DialogDescription>
+            현재 한도 ${target?.limit_usd} · 이번 달 사용 ${target?.cost_usd}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="dashboard-quota-amount">새 월 한도 (USD)</Label>
+          <Input
+            id="dashboard-quota-amount"
+            type="number"
+            min={0}
+            step={10}
+            inputMode="decimal"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder={target ? String(target.limit_usd) : "예: 200"}
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={close} disabled={setQuota.isPending}>
+            취소
+          </Button>
+          <Button onClick={submit} disabled={!valid || setQuota.isPending}>
+            {setQuota.isPending ? "처리 중…" : "저장"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

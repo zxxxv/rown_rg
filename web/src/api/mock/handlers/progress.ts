@@ -1,5 +1,7 @@
 import { HttpResponse, http } from "msw";
+import { DEMO_PROJECTS } from "@/api/mock/fixtures/projects";
 import { getAnyRunnerState } from "@/api/mock/fixtures/scenarios/state";
+import type { PhaseName } from "@/api/ws-messages";
 import { env } from "@/env";
 
 function url(path: string): string {
@@ -7,40 +9,44 @@ function url(path: string): string {
   return `${base}/${path.replace(/^\//, "")}`;
 }
 
+// 시나리오 phase → 백엔드 ProjectStage
+const PHASE_TO_STATUS: Record<PhaseName, string> = {
+  research: "researching",
+  indexing: "indexing",
+  writing: "writing",
+  qa: "reviewing",
+  export: "completed",
+};
+
 export const progressHandlers = [
-  http.get(url("projects/:id/progress/snapshot"), ({ params }) => {
+  // 실계약: GET /projects/{id}/progress → {project_id, status, pending_gate|null}
+  http.get(url("projects/:id/progress"), ({ params }) => {
     const projectId = String(params.id);
     const state = getAnyRunnerState(projectId);
+
     if (!state) {
+      const project = DEMO_PROJECTS.find((p) => p.id === projectId);
+      const status = project?.status === "completed" ? "completed" : "researching";
       return HttpResponse.json(
-        {
-          data: {
-            phase: "research",
-            phase_status: "started",
-            completed_phases: [],
-            active_step: null,
-            tokens_used: 0,
-            cost_usd: 0,
-            eta_seconds: null,
-            pending_checkpoint_id: null,
-          },
-        },
+        { data: { project_id: projectId, status, pending_gate: null } },
         { status: 200 },
       );
     }
+
+    const status =
+      state.finished && state.completed_phases.includes("export")
+        ? "completed"
+        : (PHASE_TO_STATUS[state.active_phase] ?? "researching");
+    const pending_gate = state.pending_checkpoint_id
+      ? {
+          review_point_id: state.pending_checkpoint_id,
+          gate: state.active_phase === "qa" ? "qa_select" : "source_pool",
+          payload: {},
+        }
+      : null;
+
     return HttpResponse.json(
-      {
-        data: {
-          phase: state.active_phase,
-          phase_status: state.phase_status,
-          completed_phases: state.completed_phases,
-          active_step: state.active_step,
-          tokens_used: state.tokens_used,
-          cost_usd: state.cost_usd,
-          eta_seconds: state.eta_seconds,
-          pending_checkpoint_id: state.pending_checkpoint_id,
-        },
-      },
+      { data: { project_id: projectId, status, pending_gate } },
       { status: 200 },
     );
   }),

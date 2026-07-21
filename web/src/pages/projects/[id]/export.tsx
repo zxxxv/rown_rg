@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { env } from "@/env";
 import { useDownload } from "@/features/export/useDownload";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -125,8 +126,9 @@ function CompletedView({ project }: { project: Project }) {
           showStyle
           onDownload={() =>
             download({
-              url: "/samples/sample.hwpx",
-              filename: `${project.id}.hwpx`,
+              // 파일 응답 — ky 언래핑 없이 브라우저 다운로드로 직접 연결한다.
+              url: `${env.VITE_API_BASE_URL.replace(/\/$/, "")}/projects/${project.id}/export`,
+              filename: `${project.title}.hwpx`,
               label: "HWPX",
             })
           }

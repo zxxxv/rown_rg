@@ -42,8 +42,30 @@ export function useProjectList(filters: ProjectFilters) {
   });
 }
 
+/** 백엔드 ProjectCreate 계약 — preset·depth_mode는 config 중첩이 아니라 최상위 필드다. */
+export interface ProjectCreateBody {
+  title: string;
+  topic: string;
+  preset: string | null;
+  config: ProjectConfig;
+  depth_mode: ProjectConfig["depth_mode"];
+}
+
+export function toProjectCreateBody(input: ProjectFormValues): ProjectCreateBody {
+  // 레거시 "blank" 값·빈 문자열은 자유 주제(null)로 정규화한다.
+  const preset =
+    !input.config.preset || input.config.preset === "blank" ? null : input.config.preset;
+  return {
+    title: input.title,
+    topic: input.topic,
+    preset,
+    config: { ...input.config, preset },
+    depth_mode: input.config.depth_mode,
+  };
+}
+
 export async function createProject(input: ProjectFormValues): Promise<Project> {
-  const data = await apiClient.post<unknown>("projects", { json: input });
+  const data = await apiClient.post<unknown>("projects", { json: toProjectCreateBody(input) });
   return ProjectSchema.parse(data);
 }
 
@@ -53,6 +75,28 @@ export function useCreateProject() {
     mutationKey: [...projectKeys.all, "create"],
     mutationFn: createProject,
     onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: projectKeys.all });
+    },
+  });
+}
+
+/** POST /projects/{id}/run — 백그라운드 실행 시작(202). */
+export interface RunProjectResponse {
+  project_id: string;
+  status: string;
+}
+
+export async function runProject(id: string): Promise<RunProjectResponse> {
+  return apiClient.post<RunProjectResponse>(`projects/${id}/run`);
+}
+
+export function useRunProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...projectKeys.all, "run"],
+    mutationFn: runProject,
+    onSuccess: (_res, id) => {
+      void qc.invalidateQueries({ queryKey: projectKeys.detail(id) });
       void qc.invalidateQueries({ queryKey: projectKeys.all });
     },
   });

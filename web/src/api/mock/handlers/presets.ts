@@ -9,6 +9,6 @@ function url(path: string): string {
 
 export const presetsHandlers = [
   http.get(url("presets"), () => {
-    return HttpResponse.json({ data: { items: DEMO_PRESETS } }, { status: 200 });
+    return HttpResponse.json({ data: DEMO_PRESETS }, { status: 200 });
   }),
 ];

@@ -1,0 +1,115 @@
+import type { AdminUser } from "@/api/users";
+
+// 잠금 데모: 항상 "지금부터 20분 뒤"까지 잠겨 있도록 동적으로 계산한다.
+function lockedUntilSoon(): string {
+  return new Date(Date.now() + 20 * 60 * 1000).toISOString();
+}
+
+// 관리자 사용자 관리 화면 픽스처 — admin 대시보드 ADMIN_USAGE와 동일한 user_id 체계.
+export const DEMO_ADMIN_USERS: AdminUser[] = [
+  {
+    id: "u_admin_001",
+    email: "admin@loweninsight.kr",
+    name: "최재웅",
+    role: "super_admin",
+    is_active: true,
+    has_password: true,
+    last_login_at: "2026-05-27T10:42:00Z",
+    password_changed_at: "2026-04-02T09:00:00Z",
+    created_at: "2026-01-15T09:00:00Z",
+    updated_at: "2026-05-27T10:42:00Z",
+    locked_until: null,
+  },
+  {
+    id: "u_worker_001",
+    email: "jiyoung.park@loweninsight.kr",
+    name: "박지영",
+    role: "worker",
+    is_active: true,
+    has_password: true,
+    last_login_at: "2026-05-27T09:14:00Z",
+    password_changed_at: "2026-03-11T09:00:00Z",
+    created_at: "2026-01-20T09:00:00Z",
+    updated_at: "2026-05-27T09:14:00Z",
+    locked_until: null,
+  },
+  {
+    id: "u_worker_002",
+    email: "sumin.lee@loweninsight.kr",
+    name: "이수민",
+    role: "worker",
+    is_active: true,
+    has_password: true,
+    last_login_at: "2026-05-26T18:55:00Z",
+    password_changed_at: "2026-02-28T09:00:00Z",
+    created_at: "2026-01-22T09:00:00Z",
+    updated_at: "2026-05-26T18:55:00Z",
+    locked_until: null,
+  },
+  {
+    id: "u_worker_003",
+    email: "hyunwoo.jung@loweninsight.kr",
+    name: "정현우",
+    role: "worker",
+    is_active: true,
+    has_password: true,
+    last_login_at: "2026-05-27T11:08:00Z",
+    password_changed_at: "2026-05-01T09:00:00Z",
+    created_at: "2026-02-01T09:00:00Z",
+    updated_at: "2026-05-27T11:08:00Z",
+    // 로그인 5회 실패로 잠긴 사용자 (잠금 해제 버튼 데모)
+    locked_until: lockedUntilSoon(),
+  },
+  {
+    id: "u_worker_004",
+    email: "youngseo.choi@loweninsight.kr",
+    name: "최영서",
+    role: "worker",
+    is_active: true,
+    has_password: true,
+    last_login_at: "2026-05-26T16:32:00Z",
+    password_changed_at: "2026-04-18T09:00:00Z",
+    created_at: "2026-02-10T09:00:00Z",
+    updated_at: "2026-05-26T16:32:00Z",
+    locked_until: null,
+  },
+  {
+    id: "u_worker_005",
+    email: "minji.kang@loweninsight.kr",
+    name: "강민지",
+    role: "worker",
+    is_active: true,
+    has_password: false, // SSO 전용 계정
+    last_login_at: "2026-05-27T08:21:00Z",
+    password_changed_at: null,
+    created_at: "2026-03-02T09:00:00Z",
+    updated_at: "2026-05-27T08:21:00Z",
+    locked_until: null,
+  },
+  {
+    id: "u_worker_006",
+    email: "seoyeon.yun@loweninsight.kr",
+    name: "윤서연",
+    role: "worker",
+    is_active: false, // 비활성 계정 데모
+    has_password: true,
+    last_login_at: "2026-05-20T07:45:00Z",
+    password_changed_at: "2026-01-30T09:00:00Z",
+    created_at: "2026-03-15T09:00:00Z",
+    updated_at: "2026-05-20T07:45:00Z",
+    locked_until: null,
+  },
+  {
+    id: "u_viewer_001",
+    email: "doyoon.han@loweninsight.kr",
+    name: "한도윤",
+    role: "viewer",
+    is_active: true,
+    has_password: false, // SSO JIT 계정
+    last_login_at: "2026-05-25T14:02:00Z",
+    password_changed_at: null,
+    created_at: "2026-04-01T09:00:00Z",
+    updated_at: "2026-05-25T14:02:00Z",
+    locked_until: null,
+  },
+];

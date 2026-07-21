@@ -4,6 +4,8 @@ import { RequireAuth } from "@/components/auth/RequireAuth";
 import { Toaster } from "@/components/ui/sonner";
 import ForbiddenPage from "@/pages/403";
 import AdminDashboardPage from "@/pages/admin/dashboard";
+import AdminIpPage from "@/pages/admin/ip";
+import AdminUsersPage from "@/pages/admin/users";
 import CallbackPage from "@/pages/callback";
 import LibraryPage from "@/pages/library";
 import LoginPage from "@/pages/login";
@@ -124,6 +126,22 @@ const routes = [
     element: (
       <RequireAuth minRole="admin">
         <AdminDashboardPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/admin/users",
+    element: (
+      <RequireAuth minRole="admin">
+        <AdminUsersPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/admin/ip",
+    element: (
+      <RequireAuth minRole="super_admin">
+        <AdminIpPage />
       </RequireAuth>
     ),
   },

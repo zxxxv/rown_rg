@@ -2,7 +2,7 @@ import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
-import { useCreateProject } from "@/api/projects";
+import { useCreateProject, useRunProject } from "@/api/projects";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
@@ -13,11 +13,21 @@ export default function NewProjectPage() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const createProject = useCreateProject();
+  const runProject = useRunProject();
 
   const handleSubmit = async (values: ProjectFormValues) => {
     try {
       const project = await createProject.mutateAsync(values);
       toast.success("새 프로젝트가 생성됐습니다.", { description: project.title });
+      try {
+        // 생성 직후 백그라운드 실행 시작 → 진행 화면으로 이동
+        await runProject.mutateAsync(project.id);
+      } catch (runErr) {
+        const msg = runErr instanceof ApiError ? runErr.message : "실행 시작에 실패했습니다.";
+        toast.error("실행 시작 실패", {
+          description: `${msg} — 개요 화면에서 다시 시작할 수 있습니다.`,
+        });
+      }
       navigate(`/projects/${project.id}/progress`, { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
@@ -62,7 +72,7 @@ export default function NewProjectPage() {
           mode="create"
           onSubmit={handleSubmit}
           onCancel={() => navigate("/projects")}
-          submitting={createProject.isPending}
+          submitting={createProject.isPending || runProject.isPending}
         />
       </div>
     </AppShell>

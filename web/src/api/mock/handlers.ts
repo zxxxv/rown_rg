@@ -2,6 +2,7 @@ import { adminHandlers } from "./handlers/admin";
 import { authHandlers } from "./handlers/auth";
 import { checkpointsHandlers } from "./handlers/checkpoints";
 import { contradictionsHandlers } from "./handlers/contradictions";
+import { ipWhitelistHandlers } from "./handlers/ip-whitelist";
 import { libraryHandlers } from "./handlers/library";
 import { presetsHandlers } from "./handlers/presets";
 import { profileHandlers } from "./handlers/profile";
@@ -9,6 +10,7 @@ import { progressHandlers } from "./handlers/progress";
 import { projectsHandlers } from "./handlers/projects";
 import { sectionsHandlers } from "./handlers/sections";
 import { sourcesHandlers } from "./handlers/sources";
+import { usersHandlers } from "./handlers/users";
 import { wsHandlers } from "./handlers/ws";
 
 export const handlers = [
@@ -22,6 +24,9 @@ export const handlers = [
   ...checkpointsHandlers,
   ...adminHandlers,
   ...libraryHandlers,
+  // profileHandlers(users/me/*)가 usersHandlers(users/:id)보다 먼저 매칭되어야 한다
   ...profileHandlers,
+  ...usersHandlers,
+  ...ipWhitelistHandlers,
   ...wsHandlers,
 ];

@@ -79,10 +79,11 @@ function reducer(state: ProgressUiState, action: Action): ProgressUiState {
       active_phase: s.phase,
       phase_status: s.phase_status,
       completed_phases: new Set(s.completed_phases),
-      current_step: s.active_step ?? null,
-      tokens_used: s.tokens_used,
-      cost_usd: s.cost_usd,
-      eta_seconds: s.eta_seconds ?? null,
+      current_step: s.active_step ?? state.current_step,
+      // 백엔드 progress 응답에는 토큰·비용·ETA가 없다 — 없으면 WS로 수신한 기존 값을 유지
+      tokens_used: s.tokens_used ?? state.tokens_used,
+      cost_usd: s.cost_usd ?? state.cost_usd,
+      eta_seconds: s.eta_seconds ?? state.eta_seconds,
       checkpoint_id: s.pending_checkpoint_id,
     };
   }
