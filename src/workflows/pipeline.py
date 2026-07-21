@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from src.core.state import ProjectState
 from src.core.types import ProjectStage, ReviewGate, UserReviewPoint
 from src.workflows.stages import assemble, research, write
-from src.workflows.write_loop import qa_select_payload
+from src.workflows.write_loop import qa_select_payload, section_plan_payload
 
 
 @dataclass(frozen=True)
@@ -44,10 +44,16 @@ Outcome = Paused | Done
 
 
 def _source_pool_gate(state: ProjectState) -> UserReviewPoint:
+    """자료 풀 + 목차를 함께 검토하는 게이트.
+
+    section_plan을 payload에 싣는 이유: plan은 projects 테이블에 없어, resume 시
+    runner가 이 payload에서 복원한다(QA_SELECT 게이트와 같은 계약).
+    """
     return UserReviewPoint(
         gate=ReviewGate.SOURCE_POOL,
         payload={
-            "message": "수집된 자료 풀을 검토·승인하세요.",
+            "message": "목차와 수집된 자료 풀을 검토·승인하세요.",
+            "section_plan": section_plan_payload(state.section_plan),
             "sources": [s.model_dump(mode="json") for s in state.sources],
         },
     )

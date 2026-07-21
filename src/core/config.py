@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     # 관리자 — 조직 월 비용 한도(USD). 관리자 대시보드 KPI 표시·예산 경고용.
     # (사용자별 한도는 user_quotas 테이블, 역할별 기본값은 src.core.limit)
     org_monthly_cost_limit_usd: Decimal = Decimal("3000")
+    # 한도 enforcement — 실호출(live/record) 전 당월 누적 비용 vs 한도 검사. 끄면 표시만.
+    quota_enforcement_enabled: bool = True
     # X-API-Key
     internal_api_key: str = ""
 
@@ -79,6 +81,10 @@ class Settings(BaseSettings):
     reranker_batch_size: int = 16
     reranker_max_length: int = 512
     reranker_enabled: bool = True
+
+    # 산출물(HWPX) — 완료 보고서 파일 출력
+    export_dir: str = "./exports"
+    export_template_path: str = ""  # 한컴 마스터 템플릿(.hwpx). 비면 빈 문서 + 코드 서식
 
     @property
     def is_production(self) -> bool:

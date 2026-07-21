@@ -29,7 +29,7 @@ from src.db.models.project import Project
 from src.db.models.review_point import ReviewPoint
 from src.db.session import async_session_maker
 from src.workflows.pipeline import Paused, advance
-from src.workflows.write_loop import apply_selection, rehydrate_from_payload
+from src.workflows.write_loop import apply_selection, plan_from_payload, rehydrate_from_payload
 
 logger = structlog.get_logger(__name__)
 
@@ -50,6 +50,33 @@ def _state_from_project(project: Project) -> ProjectState:
             "config": project.config,
         }
     )
+
+
+async def _rehydrate_section_plan(
+    session: AsyncSession, project_id: uuid.UUID, state: ProjectState
+) -> ProjectState:
+    """resume 시 SOURCE_POOL review payload에서 section_plan을 되살린다.
+
+    plan은 projects 테이블에 없어 게이트 payload가 유일한 복원원이다. RESEARCHING
+    (→write 재개)이 아니거나 plan이 이미 있으면 그대로 둔다(멱등).
+    """
+    if state.current_stage is not ProjectStage.RESEARCHING or state.section_plan:
+        return state
+    review = (
+        await session.execute(
+            select(ReviewPoint)
+            .where(
+                ReviewPoint.project_id == project_id,
+                ReviewPoint.gate == ReviewGate.SOURCE_POOL.value,
+                ReviewPoint.status == "resolved",
+            )
+            .order_by(ReviewPoint.resolved_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if review is None:
+        return state
+    return state.with_section_plan(plan_from_payload(review.payload))
 
 
 async def _rehydrate_qa_selection(
@@ -94,6 +121,7 @@ async def _execute(project_id: uuid.UUID) -> None:
                 return
 
             state = _state_from_project(project)
+            state = await _rehydrate_section_plan(session, project.id, state)
             state = await _rehydrate_qa_selection(session, project.id, state)
             outcome = await advance(state)
             project.status = outcome.state.current_stage.value

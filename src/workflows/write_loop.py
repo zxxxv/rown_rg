@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -58,6 +59,35 @@ async def run_write_loop(
     return state.with_section_candidates(candidate_sets)
 
 
+def section_plan_payload(plan: Sequence[SectionPlan]) -> list[dict[str, object]]:
+    """게이트 payload용 section_plan 직렬화 — SOURCE_POOL·QA_SELECT 게이트가 공유.
+
+    plan은 projects 테이블에 없어 resume 시 게이트 payload가 유일한 복원원이다.
+    """
+    return [
+        {
+            "section_id": str(s.section_id),
+            "chapter_number": s.chapter_number,
+            "section_number": s.section_number,
+            "title": s.title,
+        }
+        for s in plan
+    ]
+
+
+def plan_from_payload(payload: dict[str, Any]) -> list[SectionPlan]:
+    """게이트 payload에서 section_plan 복원 (section_plan_payload의 역변환)."""
+    return [
+        SectionPlan(
+            section_id=UUID(s["section_id"]),
+            chapter_number=s["chapter_number"],
+            section_number=s["section_number"],
+            title=s["title"],
+        )
+        for s in payload.get("section_plan", [])
+    ]
+
+
 def qa_select_payload(state: ProjectState) -> dict[str, object]:
     """QA_SELECT 게이트 payload — 섹션별 '살아남은'(HARD 통과) 후보 + soft 경고만 사람에게.
 
@@ -82,19 +112,9 @@ def qa_select_payload(state: ProjectState) -> dict[str, object]:
                 "all_excluded": not survivors,
             }
         )
-    # section_plan도 실어 resume 시 재수화 가능하게 (plan·후보는 projects 테이블에 없음).
-    plan = [
-        {
-            "section_id": str(s.section_id),
-            "chapter_number": s.chapter_number,
-            "section_number": s.section_number,
-            "title": s.title,
-        }
-        for s in state.section_plan
-    ]
     return {
         "message": "섹션별로 후보를 하나씩 고르세요. (정적검사 통과분만 표시)",
-        "section_plan": plan,
+        "section_plan": section_plan_payload(state.section_plan),
         "sections": sections,
     }
 
@@ -106,15 +126,7 @@ def rehydrate_from_payload(state: ProjectState, payload: dict[str, Any]) -> Proj
     실어둔 값으로 되살린다. 후보는 survivors만 복원되며(payload에 그것만 있음), 이는
     선택 대상과 일치한다. report는 이미 게이트를 통과한 값이라 빈 채로 둔다.
     """
-    plan = [
-        SectionPlan(
-            section_id=UUID(s["section_id"]),
-            chapter_number=s["chapter_number"],
-            section_number=s["section_number"],
-            title=s["title"],
-        )
-        for s in payload.get("section_plan", [])
-    ]
+    plan = plan_from_payload(payload)
     candidate_sets: list[SectionCandidateSet] = []
     for sec in payload.get("sections", []):
         section_id = UUID(sec["section_id"])
