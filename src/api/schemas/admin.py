@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.api.schemas.user import UserRole
 
@@ -80,3 +80,49 @@ class UserLimitRead(BaseModel):
 class CreateLimitRequestInput(BaseModel):
     amount_usd: float = Field(..., gt=0, description="증액 요청 금액(USD)")
     reason: str = Field(..., min_length=1, max_length=2000, description="요청 사유")
+
+
+class ActionResult(BaseModel):
+    """단순 관리 액션(잠금 해제·비번 리셋·삭제)의 결과 메시지."""
+
+    detail: str
+
+
+class ResetPasswordInput(BaseModel):
+    # 길이·복잡도 정책 검증은 password_handler.validate_password_policy가 담당.
+    new_password: str = Field(..., min_length=1, max_length=128)
+
+
+def _require_aware(v: datetime | None) -> datetime | None:
+    if v is not None and v.tzinfo is None:
+        raise ValueError("expires_at는 timezone-aware(UTC) 값이어야 합니다")
+    return v
+
+
+class IpWhitelistCreateInput(BaseModel):
+    ip_cidr: str = Field(..., description="허용 IP 또는 CIDR (예: 1.2.3.4, 10.0.0.0/24)")
+    description: str | None = Field(None, max_length=255)
+    expires_at: datetime | None = Field(None, description="임시 허용 만료 시각. 없으면 영구")
+
+    _aware = field_validator("expires_at")(_require_aware)
+
+
+class IpWhitelistUpdateInput(BaseModel):
+    """부분 갱신 — 명시한 필드만 반영한다(exclude_unset)."""
+
+    description: str | None = Field(None, max_length=255)
+    is_active: bool | None = None
+    expires_at: datetime | None = None
+
+    _aware = field_validator("expires_at")(_require_aware)
+
+
+class IpWhitelistRead(BaseModel):
+    id: UUID
+    ip_cidr: str
+    description: str | None
+    is_active: bool
+    expires_at: datetime | None
+    created_by: UUID | None
+    created_at: datetime
+    updated_at: datetime
