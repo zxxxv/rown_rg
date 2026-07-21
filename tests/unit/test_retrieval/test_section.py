@@ -82,3 +82,55 @@ class TestMakeSectionRetriever:
         assert [c.chunk_id for c in chunks] == [h.chunk_id for h in hits]
         assert client.calls[0][1] == pid
         assert client.calls[0][3] == 3
+
+
+class _FakeReranker:
+    """score_pairs만 흉내 — 입력 역순으로 높은 점수를 줘 재정렬을 검증한다."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, list[str]]] = []
+
+    async def score_pairs(self, query: str, passages: list[str]) -> list[float]:
+        self.calls.append((query, list(passages)))
+        return [i * 0.1 for i in range(len(passages))]
+
+
+class TestRerankerPath:
+    async def test_wide_fetch_rerank_then_truncate(self):
+        hits = [_hit(f"h{i}") for i in range(5)]
+        client = _FakeSearchClient(hits)
+        reranker = _FakeReranker()
+        chunks = await retrieve_for_section(
+            _section("경제성 분석"),
+            client=client,
+            project_id=uuid4(),
+            top_k=2,
+            reranker=reranker,  # type: ignore[arg-type]
+            fetch_k=5,
+        )
+        # 1차 검색은 fetch_k 폭으로 넓게
+        assert client.calls[0][3] == 5
+        # 재채점(역순 점수) 상위 2개로 축소·재정렬
+        assert [c.content for c in chunks] == ["h4", "h3"]
+        # 재채점 질의는 원 쿼리(섹션 제목)
+        assert reranker.calls[0][0] == "경제성 분석"
+        # 원본 점수는 audit 가능해야 하므로 score가 리랭커 점수로 교체됨
+        assert chunks[0].score == 0.4
+
+    async def test_fetch_k_never_below_top_k(self):
+        client = _FakeSearchClient([])
+        reranker = _FakeReranker()
+        await retrieve_for_section(
+            _section(),
+            client=client,
+            project_id=uuid4(),
+            top_k=40,
+            reranker=reranker,  # type: ignore[arg-type]
+            fetch_k=30,
+        )
+        assert client.calls[0][3] == 40
+
+    async def test_no_reranker_keeps_narrow_search(self):
+        client = _FakeSearchClient([])
+        await retrieve_for_section(_section(), client=client, project_id=uuid4(), top_k=10)
+        assert client.calls[0][3] == 10

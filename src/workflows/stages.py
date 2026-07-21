@@ -135,7 +135,13 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
     semantic = SemanticSearchClient(async_session_maker, embedder, query_expander=expander)
     keyword = KeywordSearchClient(async_session_maker)
     hybrid = HybridSearchClient(semantic, keyword)
-    return make_section_retriever(hybrid, state.project_id)
+
+    reranker = None
+    if settings.reranker_enabled:
+        from src.clients.reranker_factory import get_reranker_client
+
+        reranker = get_reranker_client()
+    return make_section_retriever(hybrid, state.project_id, reranker=reranker)
 
 
 def _default_exporter(state: ProjectState) -> Path:
