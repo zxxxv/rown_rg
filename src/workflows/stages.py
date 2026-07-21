@@ -117,6 +117,7 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
     아직 미배선이면 인덱스가 비어 빈 결과가 나올 수 있다(구조는 정상).
     """
     from src.clients.embedding_factory import get_embedding_client
+    from src.core.config import settings
     from src.db.session import async_session_maker
     from src.services.retrieval import HybridSearchClient
     from src.services.retrieval._keyword import KeywordSearchClient
@@ -124,7 +125,14 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
     from src.services.retrieval.section import make_section_retriever
 
     embedder = get_embedding_client()
-    semantic = SemanticSearchClient(async_session_maker, embedder)
+    expander = None
+    if settings.hyde_enabled:
+        from src.services.retrieval._hyde import make_hyde_expander
+
+        expander = make_hyde_expander(
+            model=settings.hyde_model, user_id=state.user_id, project_id=state.project_id
+        )
+    semantic = SemanticSearchClient(async_session_maker, embedder, query_expander=expander)
     keyword = KeywordSearchClient(async_session_maker)
     hybrid = HybridSearchClient(semantic, keyword)
     return make_section_retriever(hybrid, state.project_id)

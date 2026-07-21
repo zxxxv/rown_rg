@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     export_dir: str = "./exports"
     export_template_path: str = ""  # 한컴 마스터 템플릿(.hwpx). 비면 빈 문서 + 코드 서식
 
+    # HyDE 쿼리 확장 (dense 검색 전용) — 기본 off. 효과는 eval_search(nDCG)로 측정 후 결정
+    hyde_enabled: bool = False
+    hyde_model: str = "gemini-2.5-flash"
+
     @property
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION

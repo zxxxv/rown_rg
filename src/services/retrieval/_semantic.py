@@ -11,6 +11,7 @@ the SQL uses pgvector's cosine distance operator ``<=>`` aligned with the
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -69,9 +70,12 @@ class SemanticSearchClient(SearchClient):
         self,
         session_factory: async_sessionmaker[AsyncSession],
         embedder: EmbeddingClient,
+        query_expander: Callable[[str], Awaitable[str]] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._embedder = embedder
+        # HyDE 등 선택적 쿼리 확장 — dense 검색에만 적용된다(keyword는 원 쿼리 유지).
+        self._query_expander = query_expander
 
     async def search(
         self,
@@ -96,7 +100,18 @@ class SemanticSearchClient(SearchClient):
             query_length=len(query),
         )
 
-        embed_result = await self._embedder.embed(query)
+        dense_query = query
+        if self._query_expander is not None:
+            dense_query = await self._query_expander(query)
+            if dense_query != query:
+                logger.info(
+                    "semantic_search.query_expanded",
+                    project_id=str(project_id),
+                    original_length=len(query),
+                    expanded_length=len(dense_query),
+                )
+
+        embed_result = await self._embedder.embed(dense_query)
         query_vec = _vec_literal(embed_result.embedding)
 
         async with self._session_factory() as session:
