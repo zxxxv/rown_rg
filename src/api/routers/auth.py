@@ -26,6 +26,7 @@ from src.core.config import settings
 from src.core.exceptions import AuthenticationError, ValidationError
 from src.core.types import Role
 from src.db.models.user import User
+from src.db.session import persist_before_reject
 from src.infrastructure.auth import (
     jwt_handler,
     lockout_handler,
@@ -120,7 +121,8 @@ async def login(
 
     if not password_handler.verify_password(data.password, user.password_hash):
         lockout_handler.record_failed_attempt(user)
-        await session.commit()
+        # 거부 직전 영속화: 실패 카운트는 롤백되면 잠금이 동작하지 않으므로 먼저 확정한다.
+        await persist_before_reject(session)
         raise AuthenticationError(
             message="이메일 또는 비밀번호가 올바르지 않습니다",
             code="INVALID_CREDENTIALS",
@@ -129,7 +131,8 @@ async def login(
     if user.totp_secret:
         if not data.totp_code or not totp_handler.verify_totp(user.totp_secret, data.totp_code):
             lockout_handler.record_failed_attempt(user)
-            await session.commit()
+            # 거부 직전 영속화: 위와 동일 — TOTP 실패도 잠금 카운트에 반영되어야 한다.
+            await persist_before_reject(session)
             raise AuthenticationError(message="TOTP 코드가 올바르지 않습니다", code="INVALID_TOTP")
 
     lockout_handler.reset_attempts(user)

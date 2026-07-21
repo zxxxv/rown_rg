@@ -280,7 +280,7 @@ class TestLLMClient:
         client = create_llm_client(
             mode="replay", allow_replay_fallback=False, cassette_dir=cassette_tmp_dir
         )
-        async with token_context(operation="replay_op"):
+        with token_context(operation="replay_op"):
             result = await client.complete(request)
 
         await _drain_background_tasks()
@@ -300,7 +300,7 @@ class TestLLMClient:
             max_tokens=10,
         )
         with pytest.raises(CassetteNotFoundError):
-            async with token_context(operation="missing_op"):
+            with token_context(operation="missing_op"):
                 await client.complete(request)
 
     async def test_token_usage_recorded(
@@ -328,7 +328,7 @@ class TestLLMClient:
         client = create_llm_client(
             mode="replay", allow_replay_fallback=False, cassette_dir=cassette_tmp_dir
         )
-        async with token_context(operation="track_op"):
+        with token_context(operation="track_op"):
             await client.complete(request)
 
         await _drain_background_tasks()
