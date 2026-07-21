@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -21,6 +21,7 @@ from src.api.schemas.admin import (
     UserLimitRead,
     UserUsageRow,
 )
+from src.api.schemas.common import Page
 from src.core.clock import now
 from src.core.config import settings
 from src.core.exceptions import NotFoundError, ValidationError
@@ -227,6 +228,40 @@ async def set_user_limit(
     return user_limit
 
 
+@router.get("/quota-requests", response_model=Page[LimitRequestRead])
+async def list_quota_requests(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    _: Annotated[User, Depends(require_role("super_admin", "admin"))],
+    status: Annotated[Literal["pending", "approved", "rejected"] | None, Query()] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> Page[LimitRequestRead]:
+    """전체 증액 요청을 조회한다(관리자 전용).
+
+    status를 생략하면 전체 상태를 조회한다 — 필터 미지정이 특정 상태로
+    좁혀지는 버그를 막기 위해 조건절 자체를 조건부로 추가한다.
+    """
+    filters = [LimitRequest.status == status] if status is not None else []
+
+    total = (
+        await session.execute(select(func.count()).select_from(LimitRequest).where(*filters))
+    ).scalar_one()
+
+    rows = (
+        await session.execute(
+            select(LimitRequest, User.name.label("user_name"))
+            .join(User, LimitRequest.user_id == User.id)
+            .where(*filters)
+            .order_by(LimitRequest.requested_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+
+    items = [_to_limit_request_read(row.LimitRequest, row.user_name) for row in rows]
+    return Page[LimitRequestRead](total=total, page=page, page_size=page_size, items=items)
+
+
 @router.post("/quota-requests/{request_id}/decide", response_model=LimitRequestRead)
 async def decide_limit_request(
     request_id: UUID,
@@ -280,4 +315,6 @@ def _to_limit_request_read(req: LimitRequest, user_name: str) -> LimitRequestRea
         reason=req.reason,
         requested_at=req.requested_at,
         status=req.status,  # type: ignore[arg-type]
+        decided_at=req.decided_at,
+        decided_by=req.decided_by,
     )

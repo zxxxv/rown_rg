@@ -46,6 +46,9 @@ class LimitRequestRead(BaseModel):
     reason: str
     requested_at: datetime
     status: Literal["pending", "approved", "rejected"]
+    # pending 상태에서는 아직 처리되지 않았으므로 둘 다 None — 필수로 Optional 처리.
+    decided_at: datetime | None = None
+    decided_by: UUID | None = None
 
 
 class DashboardPeriod(StrEnum):

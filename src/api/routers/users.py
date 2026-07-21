@@ -16,6 +16,7 @@ from src.api.dependencies.permissions import (
     require_role,
 )
 from src.api.schemas.admin import CreateLimitRequestInput, LimitRequestRead
+from src.api.schemas.common import Page
 from src.api.schemas.token_usage import (
     MyTokenUsageResponse,
     TokenUsageByModel,
@@ -133,6 +134,54 @@ async def create_my_limit_request(
         requested_at=req.requested_at,
         status="pending",
     )
+
+
+@router.get(
+    "/me/quota-requests",  # 경로는 프론트 계약상 quota-requests 유지
+    response_model=Page[LimitRequestRead],
+)
+async def list_my_quota_requests(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> Page[LimitRequestRead]:
+    """현재 사용자 본인의 증액 신청 목록을 신청일 최신순으로 페이지네이션하여 반환한다."""
+    scope = LimitRequest.user_id == current_user.id
+
+    total = (
+        await session.execute(select(func.count()).select_from(LimitRequest).where(scope))
+    ).scalar_one()
+
+    rows = (
+        (
+            await session.execute(
+                select(LimitRequest)
+                .where(scope)
+                .order_by(LimitRequest.requested_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    items = [
+        LimitRequestRead(
+            id=req.id,
+            user_id=req.user_id,
+            user_name=current_user.name,
+            amount_usd=float(req.amount_usd),
+            reason=req.reason,
+            requested_at=req.requested_at,
+            status=req.status,  # type: ignore[arg-type]
+            decided_at=req.decided_at,
+            decided_by=req.decided_by,
+        )
+        for req in rows
+    ]
+    return Page[LimitRequestRead](total=total, page=page, page_size=page_size, items=items)
 
 
 @router.get("", response_model=list[UserRead])
