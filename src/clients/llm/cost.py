@@ -17,6 +17,21 @@ PER_MILLION = Decimal("1000000")
 COST_QUANTUM = Decimal("0.000001")
 
 
+def _resolve_pricing(model: str) -> dict[str, Decimal] | None:
+    """단가 조회 — 정확 일치 우선, 없으면 접두사 매칭.
+
+    provider API는 응답에 날짜 붙은 전체 ID를 돌려줄 수 있다(예: 요청은
+    claude-haiku-4-5, 응답 model은 claude-haiku-4-5-20251001). 접두사 매칭이
+    없으면 이런 호출이 전부 비용 0으로 기록된다(2026-07-22 스모크에서 실측).
+    """
+    if model in PRICING:
+        return PRICING[model]
+    candidates = [catalog_id for catalog_id in PRICING if model.startswith(catalog_id)]
+    if not candidates:
+        return None
+    return PRICING[max(candidates, key=len)]
+
+
 class CostCalculator:
     @staticmethod
     def calculate(
@@ -25,9 +40,9 @@ class CostCalculator:
         output_tokens: int,
         cached_input_tokens: int = 0,
     ) -> Decimal:
-        if model not in PRICING:
+        prices = _resolve_pricing(model)
+        if prices is None:
             raise ValueError(f"Unknown model: {model}")
-        prices = PRICING[model]
         cost = (
             (Decimal(input_tokens) * prices["input"])
             + (Decimal(cached_input_tokens) * prices["cached_input"])
