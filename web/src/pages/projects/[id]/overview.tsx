@@ -39,39 +39,33 @@ import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<ProjectStatus, string> = {
-  draft: "초안",
-  researching: "자료조사 중",
-  indexing: "인덱싱 중",
+  created: "생성됨",
+  researching: "자료 수집",
+  indexing: "인덱싱",
   writing: "작성 중",
-  qa: "검증 중",
-  review: "사용자 검토 대기",
+  reviewing: "검토 대기",
   completed: "완료",
   archived: "보관",
-  failed: "실패",
 };
 
 const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
-  draft: "tertiary",
+  created: "tertiary",
   researching: "info",
   indexing: "info",
   writing: "info",
-  qa: "info",
-  review: "warning",
+  reviewing: "warning",
   completed: "success",
   archived: "tertiary",
-  failed: "danger",
 };
 
 const NEXT_STEP_HINT: Record<ProjectStatus, string> = {
-  draft: "옵션 검토 후 작성을 시작하세요.",
+  created: "옵션 검토 후 작성을 시작하세요.",
   researching: "AI가 자료를 수집·평가하고 있습니다.",
   indexing: "수집한 자료를 청크·임베딩으로 변환 중입니다.",
   writing: "Level 1~4 본문을 작성 중입니다.",
-  qa: "Fact·Consistency·Style·Critic 4단계 검증을 수행 중입니다.",
-  review: "검토 지점에서 사용자 결정을 기다리는 중입니다.",
+  reviewing: "검증·검토 단계입니다. 대기 중인 검토 지점에서 결정을 내려주세요.",
   completed: "보고서가 완료됐습니다. HWPX·PDF·Markdown으로 다운로드할 수 있습니다.",
   archived: "보관된 프로젝트입니다.",
-  failed: "작업이 실패했습니다. 진행 패널에서 원인을 확인하세요.",
 };
 
 export default function OverviewPage() {
@@ -141,7 +135,7 @@ interface OverviewBodyProps {
 function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) {
   const navigate = useNavigate();
   const estimateValue = useMemo(() => estimate(project.config), [project.config]);
-  const usedFraction = project.status === "draft" ? 0 : ((project.progress ?? 0) / 100) * 0.95;
+  const usedFraction = project.status === "created" ? 0 : ((project.progress ?? 0) / 100) * 0.95;
   const tokensUsed = Math.round(estimateValue.estimatedTokens * usedFraction);
   const costUsed = Math.round(estimateValue.estimatedCostUsd * usedFraction);
 
@@ -296,7 +290,7 @@ function PrimaryAction({
   project: Project;
   onNavigate: (to: string) => void;
 }) {
-  if (project.status === "draft") {
+  if (project.status === "created") {
     return (
       <Button size="lg" onClick={() => onNavigate(`/projects/${project.id}/progress`)}>
         <PlayCircle className="mr-1 h-4 w-4" />
@@ -422,7 +416,7 @@ function QuickActions({
           icon={Eye}
           title="섹션 미리보기"
           description="작성된 본문을 챕터별로 확인"
-          disabled={project.status === "draft"}
+          disabled={project.status === "created"}
           onClick={() => onNavigate(`/projects/${project.id}/preview`)}
         />
         <QuickAction
@@ -430,7 +424,7 @@ function QuickActions({
           title="보고서 편집"
           description="3-패널 편집기 (텍스트 편집 본격 작동 준비 중)"
           badge={{ text: "준비 중", tone: "muted" }}
-          disabled={project.status === "draft"}
+          disabled={project.status === "created"}
           onClick={() => onNavigate(`/projects/${project.id}/editor`)}
         />
         <QuickAction

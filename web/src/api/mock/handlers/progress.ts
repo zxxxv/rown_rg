@@ -25,8 +25,9 @@ export const progressHandlers = [
     const state = getAnyRunnerState(projectId);
 
     if (!state) {
+      // 프론트 status 어휘 = 백엔드 ProjectStage — 픽스처 값을 그대로 통과시킨다.
       const project = DEMO_PROJECTS.find((p) => p.id === projectId);
-      const status = project?.status === "completed" ? "completed" : "researching";
+      const status = project?.status ?? "researching";
       return HttpResponse.json(
         { data: { project_id: projectId, status, pending_gate: null } },
         { status: 200 },

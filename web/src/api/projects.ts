@@ -1,44 +1,49 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/api/client";
-import {
-  type Project,
-  type ProjectConfig,
-  type ProjectListResponse,
-  ProjectListResponseSchema,
-  ProjectSchema,
-  type ProjectSort,
-  type ProjectStatus,
-} from "@/api/types";
+import { type Project, type ProjectConfig, ProjectListSchema, ProjectSchema } from "@/api/types";
 import type { ProjectFormValues } from "@/features/project-config/schema";
 
-export interface ProjectFilters {
-  status?: ProjectStatus;
-  sort?: ProjectSort;
-  q?: string;
+/** 목록 페이지 크기 — 배열 길이 < limit 이면 다음 페이지 없음으로 판단한다. */
+export const PROJECT_PAGE_SIZE = 20;
+
+export interface ProjectListParams {
   limit?: number;
+  offset?: number;
 }
 
 export const projectKeys = {
   all: ["projects"] as const,
-  list: (filters: ProjectFilters) => [...projectKeys.all, "list", filters] as const,
+  list: (params: ProjectListParams) => [...projectKeys.all, "list", params] as const,
+  listInfinite: (pageSize: number) => [...projectKeys.all, "list-infinite", pageSize] as const,
   detail: (id: string) => [...projectKeys.all, "detail", id] as const,
 };
 
-export async function getProjectList(filters: ProjectFilters): Promise<ProjectListResponse> {
+// 실백엔드 계약: GET /projects?limit&offset → ProjectRead[] (봉투·total 없음, 최신순 고정)
+export async function getProjectList(params: ProjectListParams = {}): Promise<Project[]> {
   const searchParams: Record<string, string> = {};
-  if (filters.status) searchParams.status = filters.status;
-  if (filters.sort) searchParams.sort = filters.sort;
-  if (filters.q) searchParams.q = filters.q;
-  if (filters.limit) searchParams.limit = String(filters.limit);
+  if (params.limit !== undefined) searchParams.limit = String(params.limit);
+  if (params.offset !== undefined) searchParams.offset = String(params.offset);
 
   const data = await apiClient.get<unknown>("projects", { searchParams });
-  return ProjectListResponseSchema.parse(data);
+  return ProjectListSchema.parse(data);
 }
 
-export function useProjectList(filters: ProjectFilters) {
+/** 단순 목록(사이드바 등) — 상태·검색 필터는 클라이언트에서 수행한다. */
+export function useProjectList(params: ProjectListParams = {}) {
   return useQuery({
-    queryKey: projectKeys.list(filters),
-    queryFn: () => getProjectList(filters),
+    queryKey: projectKeys.list(params),
+    queryFn: () => getProjectList(params),
+  });
+}
+
+/** 목록 화면용 offset 무한 스크롤 — 반환 배열 길이 < pageSize면 마지막 페이지. */
+export function useProjectListInfinite(pageSize = PROJECT_PAGE_SIZE) {
+  return useInfiniteQuery({
+    queryKey: projectKeys.listInfinite(pageSize),
+    queryFn: ({ pageParam }) => getProjectList({ limit: pageSize, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, _allPages, lastOffset) =>
+      lastPage.length < pageSize ? undefined : lastOffset + pageSize,
   });
 }
 

@@ -95,8 +95,17 @@ function isErrorEnvelope(v: unknown): v is ErrorEnvelope {
   return typeof v === "object" && v !== null && "error" in v;
 }
 
+// 관용적 언래핑: MSW 목업은 {data: ...} 봉투, 실백엔드는 raw 객체/배열을 반환한다.
+// 봉투는 정확히 'data' 단일 키일 때만 인정 — 'data' 필드를 우연히 포함한 raw 응답을
+// 잘못 벗기지 않는다. 배열은 봉투가 될 수 없으므로 그대로 통과한다.
 function isSuccessEnvelope<T>(v: unknown): v is SuccessEnvelope<T> {
-  return typeof v === "object" && v !== null && "data" in v;
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    !Array.isArray(v) &&
+    "data" in v &&
+    Object.keys(v).length === 1
+  );
 }
 
 async function request<T>(method: string, path: string, init?: Options): Promise<T> {

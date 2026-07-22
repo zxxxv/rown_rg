@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createProjectFolderForLibrary } from "@/api/mock/fixtures/library";
 import { DEMO_PROJECTS } from "@/api/mock/fixtures/projects";
 import { DEMO_ADMIN_USER } from "@/api/mock/fixtures/users";
-import type { Project, ProjectSort, ProjectStatus } from "@/api/types";
+import type { Project } from "@/api/types";
 import { DepthModeSchema, ProjectConfigSchema } from "@/api/types";
 import { env } from "@/env";
 
@@ -20,36 +20,17 @@ const ProjectCreateBodySchema = z.object({
   depth_mode: DepthModeSchema,
 });
 
-function sortProjects(items: Project[], sort: ProjectSort): Project[] {
-  const copy = [...items];
-  copy.sort((a, b) => {
-    if (sort === "title_asc") return a.title.localeCompare(b.title, "ko");
-    return b.created_at.localeCompare(a.created_at);
-  });
-  return copy;
-}
-
 export const projectsHandlers = [
+  // 실계약: GET /projects?limit&offset → ProjectRead[] (봉투·total 없음, 최신순 고정)
   http.get(url("projects"), ({ request }) => {
     const u = new URL(request.url);
-    const status = u.searchParams.get("status") as ProjectStatus | null;
-    const sort = (u.searchParams.get("sort") as ProjectSort | null) ?? "created_desc";
-    const q = u.searchParams.get("q")?.trim().toLowerCase() ?? "";
-    const limit = Math.max(1, Math.min(500, Number(u.searchParams.get("limit") ?? "200")));
+    const limit = Math.max(1, Math.min(500, Number(u.searchParams.get("limit") ?? "50")));
     const offset = Math.max(0, Number(u.searchParams.get("offset") ?? "0"));
 
-    let result = DEMO_PROJECTS as Project[];
-    if (status) result = result.filter((p) => p.status === status);
-    if (q) {
-      result = result.filter(
-        (p) => p.title.toLowerCase().includes(q) || p.topic.toLowerCase().includes(q),
-      );
-    }
-    result = sortProjects(result, sort);
-    const total = result.length;
-    const items = result.slice(offset, offset + limit);
+    const sorted = [...DEMO_PROJECTS].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const items = sorted.slice(offset, offset + limit);
 
-    return HttpResponse.json({ data: { items, total } }, { status: 200 });
+    return HttpResponse.json({ data: items }, { status: 200 });
   }),
 
   http.post(url("projects"), async ({ request }) => {
@@ -77,7 +58,7 @@ export const projectsHandlers = [
       topic: v.topic,
       preset: v.preset,
       config: v.config,
-      status: "draft",
+      status: "created",
       depth_mode: v.depth_mode,
       owner_id: DEMO_ADMIN_USER.id,
       created_at: nowIso,
@@ -99,7 +80,7 @@ export const projectsHandlers = [
         { status: 404 },
       );
     }
-    if (project.status !== "draft") {
+    if (project.status !== "created") {
       return HttpResponse.json(
         {
           error: {

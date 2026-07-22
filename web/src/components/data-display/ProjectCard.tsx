@@ -6,27 +6,23 @@ import { presetLabel } from "@/features/project-config/presets";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<ProjectStatus, string> = {
-  draft: "초안",
-  researching: "자료조사",
+  created: "생성됨",
+  researching: "자료 수집",
   indexing: "인덱싱",
   writing: "작성 중",
-  qa: "QA",
-  review: "검토 대기",
+  reviewing: "검토 대기",
   completed: "완료",
   archived: "보관",
-  failed: "실패",
 };
 
 const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
-  draft: "tertiary",
+  created: "tertiary",
   researching: "info",
   indexing: "info",
   writing: "info",
-  qa: "info",
-  review: "warning",
+  reviewing: "warning",
   completed: "success",
   archived: "tertiary",
-  failed: "danger",
 };
 
 export interface ProjectCardProps {

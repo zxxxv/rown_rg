@@ -363,7 +363,7 @@ const W4_DEMO_SAMPLE_FILES: LibraryNode[] = [
 
 function sampleFilesForProject(p: Project): LibraryNode[] {
   if (p.id === "proj_demo_w4") return W4_DEMO_SAMPLE_FILES;
-  if (p.status === "draft") return [];
+  if (p.status === "created") return [];
   const seed = p.id.length;
   const items: LibraryNode[] = [
     file({

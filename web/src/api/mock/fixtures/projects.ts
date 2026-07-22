@@ -111,12 +111,12 @@ const STATUS_POOL: ProjectStatus[] = [
   "writing",
   "writing",
   "writing",
-  "review",
-  "review",
+  "reviewing",
+  "reviewing",
   "completed",
   "completed",
   "archived",
-  "draft",
+  "created",
 ];
 const PRESET_POOL: Preset[] = [
   "preliminary_feasibility",
@@ -151,8 +151,8 @@ function offsetDate(days: number): string {
 
 function pickProgress(status: ProjectStatus, i: number): number {
   if (status === "completed" || status === "archived") return 100;
-  if (status === "draft") return 0;
-  if (status === "review") return 80 + (i % 15);
+  if (status === "created") return 0;
+  if (status === "reviewing") return 80 + (i % 15);
   return 10 + ((i * 13) % 75);
 }
 

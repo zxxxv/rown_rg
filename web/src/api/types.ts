@@ -30,16 +30,15 @@ export type Preset = z.infer<typeof PresetSchema>;
 export const DepthModeSchema = z.enum(["outline_only", "standard", "full_report", "deep_dive"]);
 export type DepthMode = z.infer<typeof DepthModeSchema>;
 
+// 백엔드 ProjectStage(core/types.py)와 동일한 어휘 — failed 없음, 검토 대기는 reviewing.
 export const ProjectStatusSchema = z.enum([
-  "draft",
+  "created",
   "researching",
   "indexing",
   "writing",
-  "qa",
-  "review",
+  "reviewing",
   "completed",
   "archived",
-  "failed",
 ]);
 export type ProjectStatus = z.infer<typeof ProjectStatusSchema>;
 
@@ -74,26 +73,40 @@ export const ProjectConfigSchema = z.object({
 });
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 
+// 백엔드 config는 dict[str, Any] — 빈/부분 config가 와도 UI가 죽지 않게 기본값으로 흡수한다.
+export const DEFAULT_PROJECT_CONFIG: ProjectConfig = {
+  preset: null,
+  sources: { use_library: true, use_upload: true, use_web_search: true },
+  enabled_analyzers: [],
+  enable_pre_reconciliation: false,
+  enable_consistency_graph: false,
+  enable_dual_track_search: false,
+  enable_source_tagging: false,
+  enable_critic_agent: false,
+  enable_glossary: false,
+  depth_mode: "full_report",
+  output_formats: ["hwpx"],
+  notification_channels: ["email"],
+};
+
+// 백엔드 ProjectRead(schemas/project.py)와 1:1 — progress만 프론트 전용 초과 필드(optional).
 export const ProjectSchema = z.object({
   id: z.string(),
   title: z.string(),
   topic: z.string(),
   preset: z.string().nullable(),
-  config: ProjectConfigSchema,
+  config: ProjectConfigSchema.catch(DEFAULT_PROJECT_CONFIG),
   status: ProjectStatusSchema,
   depth_mode: DepthModeSchema,
   owner_id: z.string(),
   created_at: z.string(),
-  updated_at: z.string().optional(),
+  updated_at: z.string(),
   progress: z.number().min(0).max(100).optional(),
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
-export const ProjectListResponseSchema = z.object({
-  items: z.array(ProjectSchema),
-  total: z.number().int().nonnegative(),
-});
-export type ProjectListResponse = z.infer<typeof ProjectListResponseSchema>;
+// 실백엔드 GET /projects — 페이지네이션 봉투 없이 배열을 반환한다(limit/offset 쿼리).
+export const ProjectListSchema = z.array(ProjectSchema);
 
 export const ProjectSortSchema = z.enum(["created_desc", "title_asc"]);
 export type ProjectSort = z.infer<typeof ProjectSortSchema>;

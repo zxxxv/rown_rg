@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@/App";
-import "@/env";
+import { env } from "@/env";
 import "@/styles/global.css";
 
 const queryClient = new QueryClient({
@@ -20,7 +20,8 @@ const queryClient = new QueryClient({
 });
 
 async function startMockingIfDev() {
-  if (!import.meta.env.DEV) return;
+  // VITE_USE_MOCK=false pnpm dev → MSW 없이 실백엔드(vite proxy /api → :8000)를 친다.
+  if (!(import.meta.env.DEV && env.VITE_USE_MOCK !== "false")) return;
   const { worker } = await import("@/api/mock/browser");
   await worker.start({ onUnhandledRequest: "bypass" });
 }

@@ -139,7 +139,7 @@ function DashboardBody({ data }: { data: AdminDashboardData }) {
         <StatCard
           label="진행 중 프로젝트"
           value={`${data.kpis.active_projects}건`}
-          hint="status = writing / qa / review"
+          hint="status = researching / indexing / writing / reviewing"
           icon={Activity}
         />
         <StatCard

@@ -1,7 +1,7 @@
 import { FilePlus2, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { type ProjectFilters, useProjectList } from "@/api/projects";
+import { useProjectListInfinite } from "@/api/projects";
 import {
   type ProjectSort,
   ProjectSortSchema,
@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils";
 const STATUS_TABS: { value: "all" | ProjectStatus; label: string }[] = [
   { value: "all", label: "전체" },
   { value: "writing", label: "작성 중" },
-  { value: "review", label: "검토 대기" },
+  { value: "reviewing", label: "검토 대기" },
   { value: "completed", label: "완료" },
   { value: "archived", label: "보관" },
 ];
@@ -82,17 +82,26 @@ export default function ProjectsPage() {
     );
   }, [debouncedSearch, params, setParams]);
 
-  const filters: ProjectFilters = useMemo(
-    () => ({
-      status: status === "all" ? undefined : status,
-      sort,
-      q: debouncedSearch.trim() || undefined,
-      limit: 200,
-    }),
-    [status, sort, debouncedSearch],
-  );
+  // 실백엔드 목록은 limit/offset만 지원(최신순 고정) — 상태·검색·제목순은 로드된
+  // 페이지에 대해 클라이언트에서 적용한다.
+  const { data, isLoading, isError, refetch, hasNextPage, fetchNextPage, isFetchingNextPage } =
+    useProjectListInfinite();
 
-  const { data, isLoading, isError, refetch } = useProjectList(filters);
+  const loadedItems = useMemo(() => (data?.pages ?? []).flat(), [data]);
+  const items = useMemo(() => {
+    let result = loadedItems;
+    if (status !== "all") result = result.filter((p) => p.status === status);
+    const q = debouncedSearch.trim().toLowerCase();
+    if (q) {
+      result = result.filter(
+        (p) => p.title.toLowerCase().includes(q) || p.topic.toLowerCase().includes(q),
+      );
+    }
+    if (sort === "title_asc") {
+      result = [...result].sort((a, b) => a.title.localeCompare(b.title, "ko"));
+    }
+    return result;
+  }, [loadedItems, status, debouncedSearch, sort]);
 
   const updateParam = (key: string, value: string | null) => {
     setParams((prev) => {
@@ -110,8 +119,6 @@ export default function ProjectsPage() {
     updateParam("sort", val === DEFAULT_SORT ? null : val);
   };
 
-  const items = data?.items ?? [];
-  const totalForActiveFilter = data?.total ?? 0;
   const hasActiveFilter = status !== "all" || Boolean(debouncedSearch.trim());
 
   return (
@@ -125,7 +132,8 @@ export default function ProjectsPage() {
           <div>
             <h1 className="text-3xl font-semibold text-fg">내 프로젝트</h1>
             <p className="mt-1 text-sm text-fg-secondary">
-              총 {totalForActiveFilter}건{hasActiveFilter ? " (필터 적용 중)" : ""}
+              {items.length}건{hasNextPage ? "+" : ""}
+              {hasActiveFilter ? " (필터 적용 중)" : ""}
             </p>
           </div>
           <Button onClick={() => navigate("/projects/new")}>
@@ -201,17 +209,28 @@ export default function ProjectsPage() {
           hasActiveFilter ? (
             <EmptyState
               title="조건에 맞는 프로젝트가 없습니다"
-              description="필터·검색어를 변경해 보세요."
+              description="필터·검색어를 변경하거나, 아직 불러오지 않은 페이지를 더 불러와 보세요."
               action={
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setSearchInput("");
-                    setParams({}, { replace: true });
-                  }}
-                >
-                  필터 초기화
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setSearchInput("");
+                      setParams({}, { replace: true });
+                    }}
+                  >
+                    필터 초기화
+                  </Button>
+                  {hasNextPage ? (
+                    <Button
+                      variant="outline"
+                      onClick={() => void fetchNextPage()}
+                      disabled={isFetchingNextPage}
+                    >
+                      {isFetchingNextPage ? "불러오는 중…" : "더 불러오기"}
+                    </Button>
+                  ) : null}
+                </div>
               }
             />
           ) : (
@@ -223,15 +242,28 @@ export default function ProjectsPage() {
             />
           )
         ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {items.map((p) => (
-              <ProjectCard
-                key={p.id}
-                project={p}
-                onClick={() => navigate(`/projects/${p.id}/overview`)}
-              />
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {items.map((p) => (
+                <ProjectCard
+                  key={p.id}
+                  project={p}
+                  onClick={() => navigate(`/projects/${p.id}/overview`)}
+                />
+              ))}
+            </div>
+            {hasNextPage ? (
+              <div className="flex justify-center">
+                <Button
+                  variant="outline"
+                  onClick={() => void fetchNextPage()}
+                  disabled={isFetchingNextPage}
+                >
+                  {isFetchingNextPage ? "불러오는 중…" : "더 보기"}
+                </Button>
+              </div>
+            ) : null}
+          </>
         )}
       </div>
     </AppShell>
