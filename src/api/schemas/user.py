@@ -30,6 +30,9 @@ class UserUpdate(BaseModel):
 class UserRead(UserBase):
     model_config = ConfigDict(from_attributes=True)
 
+    # 출력은 형식 검증을 하지 않는다 — DB에 있는 레거시/테스트 이메일(.local 등) 한 행이
+    # EmailStr 검증에 걸리면 목록 전체가 500이 된다. 입력 검증은 UserCreate(EmailStr) 몫.
+    email: str
     id: UUID
     is_active: bool
     # SSO 전용 계정은 비밀번호가 없다 → 프론트에서 비밀번호 변경 UI 노출 여부 판단에 사용
