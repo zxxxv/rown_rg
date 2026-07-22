@@ -82,26 +82,26 @@ export default function ProjectsPage() {
     );
   }, [debouncedSearch, params, setParams]);
 
-  // 실백엔드 목록은 limit/offset만 지원(최신순 고정) — 상태·검색·제목순은 로드된
-  // 페이지에 대해 클라이언트에서 적용한다.
+  // 상태·검색은 서버 파라미터(status·q) — 필터가 바뀌면 쿼리 키가 바뀌어 페이지가
+  // 리셋된다. 정렬은 백엔드가 최신순 고정이므로 제목순만 클라이언트에서 적용.
+  const filters = useMemo(
+    () => ({
+      ...(status !== "all" ? { status } : {}),
+      ...(debouncedSearch.trim() ? { q: debouncedSearch.trim() } : {}),
+    }),
+    [status, debouncedSearch],
+  );
   const { data, isLoading, isError, refetch, hasNextPage, fetchNextPage, isFetchingNextPage } =
-    useProjectListInfinite();
+    useProjectListInfinite(filters);
 
   const loadedItems = useMemo(() => (data?.pages ?? []).flat(), [data]);
-  const items = useMemo(() => {
-    let result = loadedItems;
-    if (status !== "all") result = result.filter((p) => p.status === status);
-    const q = debouncedSearch.trim().toLowerCase();
-    if (q) {
-      result = result.filter(
-        (p) => p.title.toLowerCase().includes(q) || p.topic.toLowerCase().includes(q),
-      );
-    }
-    if (sort === "title_asc") {
-      result = [...result].sort((a, b) => a.title.localeCompare(b.title, "ko"));
-    }
-    return result;
-  }, [loadedItems, status, debouncedSearch, sort]);
+  const items = useMemo(
+    () =>
+      sort === "title_asc"
+        ? [...loadedItems].sort((a, b) => a.title.localeCompare(b.title, "ko"))
+        : loadedItems,
+    [loadedItems, sort],
+  );
 
   const updateParam = (key: string, value: string | null) => {
     setParams((prev) => {
@@ -209,28 +209,17 @@ export default function ProjectsPage() {
           hasActiveFilter ? (
             <EmptyState
               title="조건에 맞는 프로젝트가 없습니다"
-              description="필터·검색어를 변경하거나, 아직 불러오지 않은 페이지를 더 불러와 보세요."
+              description="필터·검색어를 변경해 보세요."
               action={
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setSearchInput("");
-                      setParams({}, { replace: true });
-                    }}
-                  >
-                    필터 초기화
-                  </Button>
-                  {hasNextPage ? (
-                    <Button
-                      variant="outline"
-                      onClick={() => void fetchNextPage()}
-                      disabled={isFetchingNextPage}
-                    >
-                      {isFetchingNextPage ? "불러오는 중…" : "더 불러오기"}
-                    </Button>
-                  ) : null}
-                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setSearchInput("");
+                    setParams({}, { replace: true });
+                  }}
+                >
+                  필터 초기화
+                </Button>
               }
             />
           ) : (

@@ -18,8 +18,20 @@ const PHASE_TO_STATUS: Record<PhaseName, string> = {
   export: "completed",
 };
 
+// 백엔드 routers/projects.py _STAGE_PERCENT 미러 (단계 기반 근사 진행률)
+const STAGE_PERCENT: Record<string, number> = {
+  created: 0,
+  researching: 20,
+  indexing: 40,
+  writing: 60,
+  reviewing: 85,
+  completed: 100,
+  archived: 100,
+};
+
 export const progressHandlers = [
-  // 실계약: GET /projects/{id}/progress → {project_id, status, pending_gate|null}
+  // 실계약: GET /projects/{id}/progress
+  //   → {project_id, status, pending_gate|null, percent, tokens_used, cost_usd}
   http.get(url("projects/:id/progress"), ({ params }) => {
     const projectId = String(params.id);
     const state = getAnyRunnerState(projectId);
@@ -29,7 +41,16 @@ export const progressHandlers = [
       const project = DEMO_PROJECTS.find((p) => p.id === projectId);
       const status = project?.status ?? "researching";
       return HttpResponse.json(
-        { data: { project_id: projectId, status, pending_gate: null } },
+        {
+          data: {
+            project_id: projectId,
+            status,
+            pending_gate: null,
+            percent: STAGE_PERCENT[status] ?? 0,
+            tokens_used: 0,
+            cost_usd: 0,
+          },
+        },
         { status: 200 },
       );
     }
@@ -47,7 +68,16 @@ export const progressHandlers = [
       : null;
 
     return HttpResponse.json(
-      { data: { project_id: projectId, status, pending_gate } },
+      {
+        data: {
+          project_id: projectId,
+          status,
+          pending_gate,
+          percent: STAGE_PERCENT[status] ?? 0,
+          tokens_used: state.tokens_used,
+          cost_usd: state.cost_usd,
+        },
+      },
       { status: 200 },
     );
   }),

@@ -1,12 +1,24 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/api/client";
-import { type Project, type ProjectConfig, ProjectListSchema, ProjectSchema } from "@/api/types";
+import {
+  type Project,
+  type ProjectConfig,
+  ProjectListSchema,
+  ProjectSchema,
+  type ProjectStatus,
+} from "@/api/types";
 import type { ProjectFormValues } from "@/features/project-config/schema";
 
 /** 목록 페이지 크기 — 배열 길이 < limit 이면 다음 페이지 없음으로 판단한다. */
 export const PROJECT_PAGE_SIZE = 20;
 
-export interface ProjectListParams {
+/** 서버 필터 — status는 ProjectStage 값(오값 422), q는 제목·주제 부분검색. */
+export interface ProjectListFilters {
+  status?: ProjectStatus;
+  q?: string;
+}
+
+export interface ProjectListParams extends ProjectListFilters {
   limit?: number;
   offset?: number;
 }
@@ -14,21 +26,24 @@ export interface ProjectListParams {
 export const projectKeys = {
   all: ["projects"] as const,
   list: (params: ProjectListParams) => [...projectKeys.all, "list", params] as const,
-  listInfinite: (pageSize: number) => [...projectKeys.all, "list-infinite", pageSize] as const,
+  listInfinite: (pageSize: number, filters: ProjectListFilters) =>
+    [...projectKeys.all, "list-infinite", pageSize, filters] as const,
   detail: (id: string) => [...projectKeys.all, "detail", id] as const,
 };
 
-// 실백엔드 계약: GET /projects?limit&offset → ProjectRead[] (봉투·total 없음, 최신순 고정)
+// 실백엔드 계약: GET /projects?limit&offset&status&q → ProjectRead[] (봉투·total 없음, 최신순 고정)
 export async function getProjectList(params: ProjectListParams = {}): Promise<Project[]> {
   const searchParams: Record<string, string> = {};
   if (params.limit !== undefined) searchParams.limit = String(params.limit);
   if (params.offset !== undefined) searchParams.offset = String(params.offset);
+  if (params.status) searchParams.status = params.status;
+  if (params.q) searchParams.q = params.q;
 
   const data = await apiClient.get<unknown>("projects", { searchParams });
   return ProjectListSchema.parse(data);
 }
 
-/** 단순 목록(사이드바 등) — 상태·검색 필터는 클라이언트에서 수행한다. */
+/** 단순 목록(사이드바 등). */
 export function useProjectList(params: ProjectListParams = {}) {
   return useQuery({
     queryKey: projectKeys.list(params),
@@ -36,11 +51,14 @@ export function useProjectList(params: ProjectListParams = {}) {
   });
 }
 
-/** 목록 화면용 offset 무한 스크롤 — 반환 배열 길이 < pageSize면 마지막 페이지. */
-export function useProjectListInfinite(pageSize = PROJECT_PAGE_SIZE) {
+/** 목록 화면용 offset 무한 스크롤 — 필터가 바뀌면 쿼리 키가 바뀌어 페이지가 리셋된다. */
+export function useProjectListInfinite(
+  filters: ProjectListFilters = {},
+  pageSize = PROJECT_PAGE_SIZE,
+) {
   return useInfiniteQuery({
-    queryKey: projectKeys.listInfinite(pageSize),
-    queryFn: ({ pageParam }) => getProjectList({ limit: pageSize, offset: pageParam }),
+    queryKey: projectKeys.listInfinite(pageSize, filters),
+    queryFn: ({ pageParam }) => getProjectList({ ...filters, limit: pageSize, offset: pageParam }),
     initialPageParam: 0,
     getNextPageParam: (lastPage, _allPages, lastOffset) =>
       lastPage.length < pageSize ? undefined : lastOffset + pageSize,

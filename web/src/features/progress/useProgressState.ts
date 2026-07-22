@@ -19,6 +19,10 @@ export interface ProgressUiState {
   failed_steps: Record<string, string[]>;
   tokens_used: number;
   cost_usd: number;
+  /** WS cost 메시지를 받은 뒤에는 폴링(progress) 값이 WS 값을 덮어쓰지 않는다 */
+  cost_from_ws: boolean;
+  /** 단계 기반 근사 전체 진행률(0~100) — progress 폴링에서만 갱신 */
+  percent: number | null;
   eta_seconds: number | null;
   streams: Record<StreamChannel, string>;
   writing_draft: string;
@@ -49,6 +53,8 @@ export function initialProgressState(): ProgressUiState {
     failed_steps: {},
     tokens_used: 0,
     cost_usd: 0,
+    cost_from_ws: false,
+    percent: null,
     eta_seconds: null,
     streams: emptyStreams(),
     writing_draft: "",
@@ -80,9 +86,10 @@ function reducer(state: ProgressUiState, action: Action): ProgressUiState {
       phase_status: s.phase_status,
       completed_phases: new Set(s.completed_phases),
       current_step: s.active_step ?? state.current_step,
-      // 백엔드 progress 응답에는 토큰·비용·ETA가 없다 — 없으면 WS로 수신한 기존 값을 유지
-      tokens_used: s.tokens_used ?? state.tokens_used,
-      cost_usd: s.cost_usd ?? state.cost_usd,
+      // 토큰·비용: WS cost 메시지가 이미 왔으면 WS 값 우선, 아니면 폴링 값 사용
+      tokens_used: state.cost_from_ws ? state.tokens_used : (s.tokens_used ?? state.tokens_used),
+      cost_usd: state.cost_from_ws ? state.cost_usd : (s.cost_usd ?? state.cost_usd),
+      percent: s.percent,
       eta_seconds: s.eta_seconds ?? state.eta_seconds,
       checkpoint_id: s.pending_checkpoint_id,
     };
@@ -164,7 +171,7 @@ function reducer(state: ProgressUiState, action: Action): ProgressUiState {
         writing_draft: appendStream(state.writing_draft, msg.delta, DRAFT_MAX_CHARS),
       };
     case "cost":
-      return { ...state, tokens_used: msg.tokens_used, cost_usd: msg.cost_usd };
+      return { ...state, tokens_used: msg.tokens_used, cost_usd: msg.cost_usd, cost_from_ws: true };
     case "checkpoint":
       return {
         ...state,

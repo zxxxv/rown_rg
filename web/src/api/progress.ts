@@ -17,6 +17,10 @@ export const ProjectProgressSchema = z.object({
   project_id: z.string(),
   status: z.string(), // created | researching | indexing | writing | reviewing | completed | archived
   pending_gate: PendingGateSchema.nullable(),
+  // 단계 기반 근사 진행률(0~100) + 프로젝트 누적 토큰·비용 (구백엔드 호환 위해 default)
+  percent: z.number().min(0).max(100).default(0),
+  tokens_used: z.number().nonnegative().default(0),
+  cost_usd: z.number().nonnegative().default(0),
 });
 export type ProjectProgress = z.infer<typeof ProjectProgressSchema>;
 
@@ -29,6 +33,8 @@ export interface ProgressSnapshot {
   phase_status: "started" | "completed";
   completed_phases: PhaseName[];
   active_step?: string;
+  /** 단계 기반 근사 전체 진행률(0~100) */
+  percent: number;
   tokens_used?: number;
   cost_usd?: number;
   eta_seconds?: number;
@@ -59,6 +65,9 @@ export function toProgressSnapshot(res: ProjectProgress): ProgressSnapshot {
     phase,
     phase_status: finished ? "completed" : "started",
     completed_phases,
+    percent: res.percent,
+    tokens_used: res.tokens_used,
+    cost_usd: res.cost_usd,
     pending_checkpoint_id: res.pending_gate?.review_point_id ?? null,
     pending_gate: res.pending_gate,
   };

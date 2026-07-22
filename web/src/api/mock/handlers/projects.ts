@@ -4,7 +4,7 @@ import { createProjectFolderForLibrary } from "@/api/mock/fixtures/library";
 import { DEMO_PROJECTS } from "@/api/mock/fixtures/projects";
 import { DEMO_ADMIN_USER } from "@/api/mock/fixtures/users";
 import type { Project } from "@/api/types";
-import { DepthModeSchema, ProjectConfigSchema } from "@/api/types";
+import { DepthModeSchema, ProjectConfigSchema, ProjectStatusSchema } from "@/api/types";
 import { env } from "@/env";
 
 function url(path: string): string {
@@ -21,14 +21,36 @@ const ProjectCreateBodySchema = z.object({
 });
 
 export const projectsHandlers = [
-  // 실계약: GET /projects?limit&offset → ProjectRead[] (봉투·total 없음, 최신순 고정)
+  // 실계약: GET /projects?limit&offset&status&q → ProjectRead[] (봉투·total 없음, 최신순 고정)
+  //   status = ProjectStage 값(오값 422), q = 제목·주제 부분검색
   http.get(url("projects"), ({ request }) => {
     const u = new URL(request.url);
     const limit = Math.max(1, Math.min(500, Number(u.searchParams.get("limit") ?? "50")));
     const offset = Math.max(0, Number(u.searchParams.get("offset") ?? "0"));
+    const statusRaw = u.searchParams.get("status");
+    const q = u.searchParams.get("q")?.trim().toLowerCase() ?? "";
 
-    const sorted = [...DEMO_PROJECTS].sort((a, b) => b.created_at.localeCompare(a.created_at));
-    const items = sorted.slice(offset, offset + limit);
+    if (statusRaw !== null && !ProjectStatusSchema.safeParse(statusRaw).success) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: "INVALID_STATUS_FILTER",
+            message: `알 수 없는 status: ${statusRaw} (가능: ${ProjectStatusSchema.options.join(", ")})`,
+          },
+        },
+        { status: 422 },
+      );
+    }
+
+    let result: Project[] = [...DEMO_PROJECTS];
+    if (statusRaw !== null) result = result.filter((p) => p.status === statusRaw);
+    if (q) {
+      result = result.filter(
+        (p) => p.title.toLowerCase().includes(q) || p.topic.toLowerCase().includes(q),
+      );
+    }
+    result.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const items = result.slice(offset, offset + limit);
 
     return HttpResponse.json({ data: items }, { status: 200 });
   }),

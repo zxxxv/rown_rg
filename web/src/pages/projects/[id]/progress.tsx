@@ -4,11 +4,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { type CheckpointDecision, useDecideCheckpoint } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
-import {
-  ADOPTED_SOURCES,
-  LEVEL1_SUMMARY,
-  OUTLINE,
-} from "@/api/mock/fixtures/scenarios/_content";
+import { ADOPTED_SOURCES, LEVEL1_SUMMARY, OUTLINE } from "@/api/mock/fixtures/scenarios/_content";
 import { useProgressSnapshot } from "@/api/progress";
 import { useProject } from "@/api/projects";
 import type { PhaseName } from "@/api/ws-messages";
@@ -175,6 +171,7 @@ export default function ProgressPage() {
           </ReviewCheckpoint>
         ) : (
           <>
+            {state.percent !== null ? <OverallProgressBar percent={state.percent} /> : null}
             <PhaseTracker
               activePhase={state.active_phase}
               phaseStatus={state.phase_status}
@@ -227,6 +224,28 @@ export default function ProgressPage() {
         )}
       </div>
     </AppShell>
+  );
+}
+
+function OverallProgressBar({ percent }: { percent: number }) {
+  const clamped = Math.max(0, Math.min(100, percent));
+  return (
+    <div className="flex flex-col gap-1.5 rounded border border-border bg-bg p-4">
+      <div className="flex items-center justify-between text-xs text-fg-tertiary">
+        <span>전체 진행률 (단계 기반 근사)</span>
+        <span className="font-mono text-fg-secondary">{clamped}%</span>
+      </div>
+      <div
+        className="h-2 w-full overflow-hidden rounded-full bg-bg-tertiary"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={clamped}
+        aria-label="전체 진행률"
+      >
+        <div className="h-full bg-accent transition-[width]" style={{ width: `${clamped}%` }} />
+      </div>
+    </div>
   );
 }
 

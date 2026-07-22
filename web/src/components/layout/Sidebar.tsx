@@ -71,9 +71,9 @@ export interface SidebarProps {
 }
 
 export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
-  // 실백엔드 목록은 status 필터가 없다 — 최신 30건을 받아 작성 중인 3건만 추린다.
-  const activeQuery = useProjectList({ limit: 30 });
-  const activeProjects = (activeQuery.data ?? []).filter((p) => p.status === "writing").slice(0, 3);
+  // 서버 status 필터 사용 — 작성 중(writing) 최신 3건
+  const activeQuery = useProjectList({ status: "writing", limit: 3 });
+  const activeProjects = activeQuery.data ?? [];
   const showAdmin = ROLE_RANK[role] >= ROLE_RANK.admin;
 
   return (
