@@ -31,11 +31,17 @@ import structlog
 import yaml
 
 from src.clients.embedding_client import BgeM3Client
+from src.clients.llm.factory import create_llm_client
 from src.clients.reranker_client import BgeRerankerV2M3Client
 from src.core.config import settings
 from src.core.logging import configure_logging
 from src.db.session import async_session_maker
-from src.services.retrieval import HybridSearchClient, rerank_hits
+from src.services.retrieval import (
+    HybridSearchClient,
+    HyDEQueryGenerator,
+    HyDESearchClient,
+    rerank_hits,
+)
 from src.services.retrieval._keyword import KeywordSearchClient
 from src.services.retrieval._semantic import SemanticSearchClient
 
@@ -48,7 +54,14 @@ QUERIES_PATH = Path("./eval/queries.yaml")
 SCORES_PATH = Path("./eval/scores.json")
 REPORTS_DIR = Path("./reports")
 
-MODES: tuple[str, ...] = ("semantic_only", "keyword_only", "hybrid", "hybrid_rerank")
+MODES: tuple[str, ...] = (
+    "semantic_only",
+    "keyword_only",
+    "hybrid",
+    "hybrid_rerank",
+    "hyde_semantic",
+    "hyde_hybrid_rerank",
+)
 K = 10
 HYBRID_FANOUT_FOR_RERANK = 50
 
@@ -223,6 +236,11 @@ def build_search_modes(project_id: UUID, track: Track) -> dict[str, SearchModeFn
     hybrid = HybridSearchClient(semantic, keyword)
     reranker = BgeRerankerV2M3Client()
 
+    llm_client = create_llm_client(mode="live")
+    hyde_generator = HyDEQueryGenerator(llm_client)
+    hyde_semantic_client = HyDESearchClient(semantic, hyde_generator)
+    hyde_hybrid = HybridSearchClient(hyde_semantic_client, keyword)
+
     async def semantic_only(query: str) -> list[SearchHit]:
         return await semantic.search(query, project_id, track, top_k=K)
 
@@ -237,11 +255,25 @@ def build_search_modes(project_id: UUID, track: Track) -> dict[str, SearchModeFn
         candidates = await hybrid.search(query, project_id, track, top_k=HYBRID_FANOUT_FOR_RERANK)
         return await rerank_hits(reranker, query, candidates, top_k=K)
 
+    async def hyde_semantic(query: str) -> list[SearchHit]:
+        return await hyde_semantic_client.search(query, project_id, track, top_k=K)
+
+    async def hyde_hybrid_rerank(query: str) -> list[SearchHit]:
+        candidates = await hyde_hybrid.search(
+            query,
+            project_id,
+            track,
+            top_k=HYBRID_FANOUT_FOR_RERANK,
+        )
+        return await rerank_hits(reranker, query, candidates, top_k=K)
+
     return {
         "semantic_only": semantic_only,
         "keyword_only": keyword_only,
         "hybrid": hybrid_mode,
         "hybrid_rerank": hybrid_rerank,
+        "hyde_semantic": hyde_semantic,
+        "hyde_hybrid_rerank": hyde_hybrid_rerank,
     }
 
 
@@ -641,7 +673,7 @@ async def amain(args: argparse.Namespace) -> int:
     search_modes = build_search_modes(args.project_id, args.track)
 
     print(f"\n=== 검색 평가 시작 — 쿼리 {len(queries)}개 × 모드 {len(MODES)}개 ===\n")
-    print("Step 1: 4개 모드 검색 미리 실행 (latency 측정 포함)…")
+    print(f"Step 1: {len(MODES)}개 모드 검색 미리 실행 (latency 측정 포함)…")
     qresults = await run_all_searches(queries, search_modes)
     hit_total = sum(len(qr.hits) for qr in qresults)
     print(f"Step 1 완료: 총 hit {hit_total}건")
