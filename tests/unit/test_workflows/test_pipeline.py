@@ -64,7 +64,7 @@ class _FakeResearchService:
     def __init__(self) -> None:
         self.specs: list[ResearchSpec] = []
 
-    async def collect(self, spec: ResearchSpec) -> ResearchResult:
+    async def collect(self, spec: ResearchSpec, **_kwargs: object) -> ResearchResult:
         self.specs.append(spec)
         return ResearchResult(
             spec=spec,

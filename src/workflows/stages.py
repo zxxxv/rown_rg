@@ -19,6 +19,7 @@ import structlog
 
 from src.clients.llm.base import LLMClient
 from src.clients.llm.token_tracker import token_context
+from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import SectionPlan, SourceRef, SourceType
 from src.services.generation.planner import plan_sections
@@ -42,6 +43,7 @@ async def research(state: ProjectState) -> ProjectState:
         plan = await plan_sections(
             state.topic,
             state.preset or "blank",
+            model=settings.planner_model,
             client=_plan_client,
             user_id=state.user_id,
             project_id=state.project_id,
@@ -56,7 +58,12 @@ async def research(state: ProjectState) -> ProjectState:
     with token_context(
         user_id=state.user_id, project_id=state.project_id, operation="research.collect"
     ):
-        result = await _research_service_factory().collect(spec)
+        result = await _research_service_factory().collect(
+            spec,
+            model=settings.research_model,
+            max_uses=settings.research_max_uses,
+            max_tokens=settings.research_max_tokens,
+        )
     if result.coverage_gaps:
         logger.warning(
             "research.coverage_gaps",
@@ -117,7 +124,6 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
     아직 미배선이면 인덱스가 비어 빈 결과가 나올 수 있다(구조는 정상).
     """
     from src.clients.embedding_factory import get_embedding_client
-    from src.core.config import settings
     from src.db.session import async_session_maker
     from src.services.retrieval import HybridSearchClient
     from src.services.retrieval._keyword import KeywordSearchClient
@@ -167,7 +173,9 @@ async def write(state: ProjectState) -> ProjectState:
     """
     state = _ensure_section_plan(state)
     retrieve = _retriever_factory(state)
-    return await run_write_loop(state, retrieve=retrieve, client=_write_client)
+    return await run_write_loop(
+        state, retrieve=retrieve, client=_write_client, model=settings.write_model
+    )
 
 
 async def assemble(state: ProjectState) -> ProjectState:

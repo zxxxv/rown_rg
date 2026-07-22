@@ -42,6 +42,18 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     openai_api_key: str = ""
 
+    # LLM 역할별 기본 모델 — 테스트·비용 제어 시 .env로 교체 (예: claude-haiku-4-5)
+    planner_model: str = "claude-sonnet-4-6"
+    research_model: str = "claude-sonnet-4-6"
+    write_model: str = "claude-sonnet-4-6"
+    # 웹 리서치 비용 노브 — 검색/회수 횟수와 응답 상한
+    research_max_uses: int = 5
+    research_max_tokens: int = 8000
+    # Anthropic SDK 요청 타임아웃(초). SDK 내부 재시도는 0으로 고정한다 —
+    # 재시도는 어댑터가 소유하며, SDK가 타임아웃된 고비용 서버도구 턴을 조용히
+    # 재실행하면 과금만 배가된다(2026-07-21 스모크에서 실측).
+    llm_client_timeout_s: float = 600.0
+
     # JWT
     jwt_secret_key: str = _DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
@@ -61,6 +73,9 @@ class Settings(BaseSettings):
     internal_api_key: str = ""
 
     # NAVER WORKS API
+    # 파이프라인 이벤트(게이트 도달·완료·실패) 시 소유자 봇 알림. 로컬에서 자격증명이
+    # 더미면 NOTIFY_ENABLED=false로 끄면 경고 로그가 안 쌓인다.
+    notify_enabled: bool = True
     nw_client_id: str
     nw_client_secret: str
     nw_service_account: str

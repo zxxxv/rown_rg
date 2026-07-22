@@ -15,19 +15,37 @@ from src.clients.llm.base import (
     WebSearchConfig,
     WebSource,
 )
+from src.core.config import settings
 
 # 서버 도구 루프가 pause_turn으로 끊길 때 재호출하는 최대 횟수(무한루프 가드)
 _MAX_TOOL_TURNS = 8
-# provider-중립 web_search → Anthropic 서버 도구 버전(설치 SDK가 지원하는 최신 변형)
+# provider-중립 web_search → Anthropic 서버 도구 버전.
+# _20260209(동적 필터링)는 Opus 4.6+/Sonnet 4.6+ 전용 — Haiku 등 구형 모델은
+# basic 변형을 써야 한다(아니면 400). 모델별 선택은 _web_tool_types.
 _WEB_SEARCH_TYPE = "web_search_20260209"
 _WEB_FETCH_TYPE = "web_fetch_20260209"
+_BASIC_WEB_SEARCH_TYPE = "web_search_20250305"
+_BASIC_WEB_FETCH_TYPE = "web_fetch_20250910"
+
+
+def _web_tool_types(model: str) -> tuple[str, str]:
+    """모델이 지원하는 웹도구 변형 선택 — Haiku는 basic, 그 외는 동적 필터링 변형."""
+    if "haiku" in model:
+        return _BASIC_WEB_SEARCH_TYPE, _BASIC_WEB_FETCH_TYPE
+    return _WEB_SEARCH_TYPE, _WEB_FETCH_TYPE
 
 
 class AnthropicAdapter(BaseLLMAdapter):
     provider = "anthropic"
 
     def _create_client(self, api_key: str) -> Any:
-        return AsyncAnthropic(api_key=api_key)
+        # max_retries=0: 재시도는 BaseLLMAdapter가 소유한다. SDK가 타임아웃된
+        # 서버도구 턴을 내부에서 재실행하면 응답 없이 서버측 과금만 반복된다.
+        return AsyncAnthropic(
+            api_key=api_key,
+            timeout=settings.llm_client_timeout_s,
+            max_retries=0,
+        )
 
     def _classify_error(self, exc: Exception) -> RetryKind | None:
         if isinstance(exc, RateLimitError):
@@ -74,7 +92,7 @@ class AnthropicAdapter(BaseLLMAdapter):
         assert self._client is not None
         cfg = request.web_search
         assert cfg is not None
-        tools = self._build_web_tools(cfg)
+        tools = self._build_web_tools(cfg, request.model)
 
         anth_messages: list[dict[str, Any]] = [
             {"role": m.role, "content": m.content} for m in request.messages if m.role != "system"
@@ -125,9 +143,10 @@ class AnthropicAdapter(BaseLLMAdapter):
         )
 
     @staticmethod
-    def _build_web_tools(cfg: WebSearchConfig) -> list[dict[str, Any]]:
+    def _build_web_tools(cfg: WebSearchConfig, model: str) -> list[dict[str, Any]]:
+        search_type, fetch_type = _web_tool_types(model)
         search: dict[str, Any] = {
-            "type": _WEB_SEARCH_TYPE,
+            "type": search_type,
             "name": "web_search",
             "max_uses": cfg.max_uses,
         }
@@ -139,7 +158,7 @@ class AnthropicAdapter(BaseLLMAdapter):
             search["blocked_domains"] = cfg.blocked_domains
         tools: list[dict[str, Any]] = [search]
         if cfg.fetch_pages:
-            tools.append({"type": _WEB_FETCH_TYPE, "name": "web_fetch", "max_uses": cfg.max_uses})
+            tools.append({"type": fetch_type, "name": "web_fetch", "max_uses": cfg.max_uses})
         return tools
 
     def _collect_sources(self, blocks: Any, sources: dict[str, dict[str, Any]]) -> None:
