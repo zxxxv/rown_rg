@@ -26,7 +26,13 @@ from src.services.generation.candidates import (
     DEFAULT_N,
     generate_section_candidates,
 )
-from src.services.qa.gate import check_structure_complete, gate_candidates
+from src.services.generation.writer_context import build_writer_context
+from src.services.qa.gate import (
+    DEFAULT_MAX_CHARS,
+    DEFAULT_MIN_CHARS,
+    check_structure_complete,
+    gate_candidates,
+)
 from src.services.retrieval.section import SectionRetriever
 
 
@@ -41,10 +47,13 @@ async def run_write_loop(
     """section_plan의 각 섹션을 검색→후보 생성→정적 게이트로 처리해 state에 적재.
 
     검색은 주입된 retrieve로, 생성은 generate_section_candidates(client 주입 가능)로.
+    섹션별 WriterContext가 페르소나·방향·분량 목표를 프롬프트에 주입하고, 에이전트
+    volume_target이 있으면 정적 게이트의 길이 경계도 그것을 따른다.
     게이트 판정까지 마친 SectionCandidateSet들을 state.section_candidates에 넣어 돌려준다.
     """
     candidate_sets: list[SectionCandidateSet] = []
     for section in state.section_plan:
+        ctx = build_writer_context(section)
         chunks = await retrieve(section)
         drafts = await generate_section_candidates(
             section,
@@ -52,10 +61,19 @@ async def run_write_loop(
             n=n,
             model=model,
             client=client,
+            context=ctx,
             user_id=state.user_id,
             project_id=state.project_id,
         )
-        candidate_sets.append(gate_candidates(section.section_id, drafts, chunks))
+        candidate_sets.append(
+            gate_candidates(
+                section.section_id,
+                drafts,
+                chunks,
+                min_chars=ctx.min_chars if ctx.min_chars is not None else DEFAULT_MIN_CHARS,
+                max_chars=ctx.max_chars if ctx.max_chars is not None else DEFAULT_MAX_CHARS,
+            )
+        )
     return state.with_section_candidates(candidate_sets)
 
 
@@ -63,6 +81,8 @@ def section_plan_payload(plan: Sequence[SectionPlan]) -> list[dict[str, object]]
     """게이트 payload용 section_plan 직렬화 — SOURCE_POOL·QA_SELECT 게이트가 공유.
 
     plan은 projects 테이블에 없어 resume 시 게이트 payload가 유일한 복원원이다.
+    플래너 산출물(direction·key_points·analysts)도 함께 실어야 SOURCE_POOL 게이트
+    resume 후의 write 단계에서 WriterContext 주입이 살아남는다.
     """
     return [
         {
@@ -70,19 +90,29 @@ def section_plan_payload(plan: Sequence[SectionPlan]) -> list[dict[str, object]]
             "chapter_number": s.chapter_number,
             "section_number": s.section_number,
             "title": s.title,
+            "direction": s.direction,
+            "key_points": list(s.key_points),
+            "analysts": list(s.analysts),
         }
         for s in plan
     ]
 
 
 def plan_from_payload(payload: dict[str, Any]) -> list[SectionPlan]:
-    """게이트 payload에서 section_plan 복원 (section_plan_payload의 역변환)."""
+    """게이트 payload에서 section_plan 복원 (section_plan_payload의 역변환).
+
+    direction 등 플래너 산출물 필드는 구버전 payload(필드 없음)와의 호환을 위해
+    .get 기본값으로 읽는다 — 없으면 자유 주제와 동일하게 동작한다.
+    """
     return [
         SectionPlan(
             section_id=UUID(s["section_id"]),
             chapter_number=s["chapter_number"],
             section_number=s["section_number"],
             title=s["title"],
+            direction=s.get("direction", ""),
+            key_points=list(s.get("key_points", [])),
+            analysts=list(s.get("analysts", [])),
         )
         for s in payload.get("section_plan", [])
     ]

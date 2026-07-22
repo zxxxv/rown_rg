@@ -17,28 +17,27 @@ from src.clients.llm.base import CompletionRequest, LLMClient, Message
 from src.clients.llm.factory import get_llm_client
 from src.clients.llm.token_tracker import token_context
 from src.core.types import RetrievedChunk, SectionDraft, SectionPlan
+from src.services.generation.writer_context import WriterContext, build_writer_context
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_N = 2
-DEFAULT_MAX_TOKENS = 2048
 TEMPERATURE_STEP = 0.15  # 후보 간 다양성용 temperature 증분
 TEMPERATURE_CEILING = 1.0
 
 _CITE_RE = re.compile(r"\[(\d+)\]")
 
-_SYSTEM = (
-    "너는 정부·공공 보고서의 한 섹션을 작성하는 전문 작성자다. "
-    "반드시 제공된 근거 자료만 사용하고, 각 주장 끝에 근거를 [번호]로 인용하라. "
-    "근거에 없는 수치·고유명사·주장은 절대 쓰지 마라."
-)
 
-
-def _build_prompt(section: SectionPlan, chunks: Sequence[RetrievedChunk]) -> str:
+def _build_prompt(
+    section: SectionPlan, chunks: Sequence[RetrievedChunk], guidance: str = ""
+) -> str:
     lines = [
         f"작성할 섹션: {section.chapter_number}.{section.section_number} {section.title}",
         "",
-        "근거 자료:",
     ]
+    if guidance:
+        # 플래너 산출물(작성 방향·핵심 포인트) — 프리셋 경로에서만 채워진다.
+        lines.extend([guidance, ""])
+    lines.append("근거 자료:")
     for i, ch in enumerate(chunks, start=1):
         lines.append(f"[{i}] {ch.content}")
     lines.extend(
@@ -75,6 +74,7 @@ async def _one_candidate(
     chunks: Sequence[RetrievedChunk],
     prompt: str,
     *,
+    system: str,
     model: str,
     temperature: float,
     max_tokens: int,
@@ -82,7 +82,7 @@ async def _one_candidate(
     request = CompletionRequest(
         messages=[Message(role="user", content=prompt)],
         model=model,
-        system=_SYSTEM,
+        system=system,
         temperature=temperature,
         max_tokens=max_tokens,
     )
@@ -102,19 +102,24 @@ async def generate_section_candidates(
     model: str = DEFAULT_MODEL,
     client: LLMClient | None = None,
     base_temperature: float = 0.7,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int | None = None,
+    context: WriterContext | None = None,
     user_id: UUID | None = None,
     project_id: UUID | None = None,
 ) -> list[SectionDraft]:
     """한 섹션에 대해 후보 초안 N개를 생성한다. N은 상수(무한성 캡).
 
-    후보마다 temperature를 조금씩 올려 다양성을 확보한다. 토큰 사용량은
-    token_context로 (user_id, project_id, operation)에 귀속된다.
+    프롬프트·분량은 WriterContext가 결정한다(미지정 시 섹션에서 조립) —
+    프리셋 경로면 분석 에이전트 페르소나·작성 방향·핵심 포인트·volume_target이
+    반영된다. 후보마다 temperature를 조금씩 올려 다양성을 확보하고, 토큰
+    사용량은 token_context로 (user_id, project_id, operation)에 귀속된다.
     """
     if n < 1:
         raise ValueError("n은 1 이상이어야 합니다")
     client = client or get_llm_client()
-    prompt = _build_prompt(section, chunks)
+    ctx = context or build_writer_context(section)
+    prompt = _build_prompt(section, chunks, guidance=ctx.guidance)
+    resolved_max_tokens = max_tokens if max_tokens is not None else ctx.max_tokens
     temps = [min(base_temperature + i * TEMPERATURE_STEP, TEMPERATURE_CEILING) for i in range(n)]
     with token_context(
         user_id=user_id,
@@ -128,9 +133,10 @@ async def generate_section_candidates(
                     section,
                     chunks,
                     prompt,
+                    system=ctx.system,
                     model=model,
                     temperature=t,
-                    max_tokens=max_tokens,
+                    max_tokens=resolved_max_tokens,
                 )
                 for t in temps
             )

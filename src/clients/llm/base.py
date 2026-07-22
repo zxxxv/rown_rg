@@ -39,7 +39,7 @@ class CompletionRequest(BaseModel):
     # 설정 시 어댑터가 웹검색 도구를 켠다(provider-중립). 단발 호출엔 영향 없음.
     web_search: WebSearchConfig | None = None
     cache_key: str | None = Field(
-        None,
+        default=None,
         description="녹화·재생 시 캐셋 식별자. None이면 input_hash에서 자동 생성",
     )
 
