@@ -10,10 +10,10 @@ from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
 from src.core.clock import now
 from src.core.exceptions import CostLimitExceededError
-from src.core.limit import default_limit_for
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from src.db.models.user_limit import UserLimit
+from src.services.quota_settings import get_role_default_limit_usd
 
 logger = structlog.get_logger(__name__)
 
@@ -37,7 +37,11 @@ async def enforce_cost_limit(
     ).scalar_one()
 
     user_limit = await session.get(UserLimit, current_user.id)
-    limit = user_limit.monthly_limit_usd if user_limit else default_limit_for(current_user.role)
+    limit = (
+        user_limit.monthly_limit_usd
+        if user_limit
+        else await get_role_default_limit_usd(session, current_user.role)
+    )
 
     if current_cost >= limit:
         raise CostLimitExceededError(

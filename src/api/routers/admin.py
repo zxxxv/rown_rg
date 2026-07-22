@@ -17,6 +17,8 @@ from src.api.schemas.admin import (
     DashboardPeriod,
     LimitDecisionInput,
     LimitRequestRead,
+    QuotaSettingRead,
+    QuotaSettingsPatchBody,
     SetUserLimitInput,
     UserLimitRead,
     UserUsageRow,
@@ -25,12 +27,23 @@ from src.api.schemas.common import Page
 from src.core.clock import now
 from src.core.config import settings
 from src.core.exceptions import NotFoundError, ValidationError
-from src.core.limit import default_limit_for
+from src.core.quota_settings import (
+    QuotaSettingKey,
+    parse_quota_setting_key,
+    validate_quota_setting_value,
+)
 from src.db.models.limit_request import LimitRequest
 from src.db.models.project import Project
+from src.db.models.quota_setting import QuotaSettings
+from src.db.models.quota_setting_history import QuotaSettingsHistory
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from src.db.models.user_limit import UserLimit
+from src.services.quota_settings import (
+    get_quota_setting_int,
+    get_role_default_limit_usd,
+    invalidate_quota_setting_cache,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -104,9 +117,14 @@ async def get_admin_dashboard(
         )
     ).scalar_one()
 
+    org_cost_limit_usd = await get_quota_setting_int(
+        session,
+        QuotaSettingKey.ORG_MONTHLY_COST_LIMIT_USD,
+        default=int(settings.org_monthly_cost_limit_usd),
+    )
     kpis = AdminKPI(
         total_cost_usd=float(total_cost),
-        cost_limit_usd=float(settings.org_monthly_cost_limit_usd),
+        cost_limit_usd=float(org_cost_limit_usd),
         active_users=active_users,
         active_projects=active_projects,
         completed_reports=completed_reports,
@@ -168,6 +186,12 @@ async def get_admin_dashboard(
             .order_by(func.coalesce(usage_subq.c.cost, 0).desc(), User.created_at.desc())
         )
     ).all()
+    # UserLimit 오버라이드가 없는 사용자의 역할별 기본 한도는 역할당 한 번만 조회한다.
+    roles_needing_default = {r.User.role for r in usage_rows if r.limit is None}
+    role_default_limits = {
+        role: await get_role_default_limit_usd(session, role) for role in roles_needing_default
+    }
+
     user_usage = [
         UserUsageRow(
             user_id=r.User.id,
@@ -176,7 +200,7 @@ async def get_admin_dashboard(
             role=r.User.role,
             tokens_used=int(r.tokens),
             cost_usd=float(r.cost),
-            limit_usd=float(r.limit if r.limit is not None else default_limit_for(r.User.role)),
+            limit_usd=float(r.limit if r.limit is not None else role_default_limits[r.User.role]),
             last_active=r.User.last_login_at or r.User.created_at,
         )
         for r in usage_rows
@@ -291,7 +315,7 @@ async def decide_limit_request(
     if data.decision == "approved":
         user_limit = await session.get(UserLimit, req.user_id)
         if user_limit is None:
-            base = default_limit_for(target.role)
+            base = await get_role_default_limit_usd(session, target.role)
             user_limit = UserLimit(
                 user_id=req.user_id,
                 monthly_limit_usd=base + req.amount_usd,
@@ -304,6 +328,92 @@ async def decide_limit_request(
 
     await session.flush()
     return _to_limit_request_read(req, target.name)
+
+
+@router.get("/quota-settings", response_model=list[QuotaSettingRead])
+async def list_quota_settings(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    _: Annotated[User, Depends(require_role("super_admin", "admin"))],
+) -> list[QuotaSettings]:
+    """현재 DB에 저장된 전체 조직/사용자 한도(quota) 설정값을 조회한다."""
+    rows = (
+        (await session.execute(select(QuotaSettings).order_by(QuotaSettings.key))).scalars().all()
+    )
+    return list(rows)
+
+
+@router.patch("/quota-settings", response_model=list[QuotaSettingRead])
+async def update_quota_settings(
+    body: QuotaSettingsPatchBody,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_role("super_admin"))],
+) -> list[QuotaSettings]:
+    """quota_settings를 배치로 수정한다(단일 트랜잭션, 실패 시 전체 롤백).
+
+    수정 대상 row는 SELECT ... FOR UPDATE로 잠근 뒤 처리하고, 변경 건마다
+    quota_settings_history에 감사 로그를 남긴다. 성공 시 해당 key들의
+    인메모리 캐시를 즉시 무효화해 다음 조회부터 새 값이 반영되게 한다.
+    """
+    updates: dict[str, str] = (
+        body if isinstance(body, dict) else {item.key: item.value for item in body}
+    )
+
+    if not updates:
+        return []
+
+    # key 화이트리스트 검증 — DB 조회 전에 걸러 존재하지 않는 잠금 대상 요청을 막는다.
+    parsed_values: dict[str, int] = {}
+    for key, value in updates.items():
+        try:
+            setting_key = parse_quota_setting_key(key)
+        except ValueError as e:
+            raise NotFoundError(message=str(e), code="QUOTA_SETTING_KEY_NOT_ALLOWED") from e
+        try:
+            parsed_values[key] = validate_quota_setting_value(setting_key, value)
+        except ValueError as e:
+            raise ValidationError(message=str(e), code="QUOTA_SETTING_VALUE_INVALID") from e
+
+    # 동시성 제어 — 수정 대상 전체를 한 번에 잠근 뒤 처리한다.
+    rows = (
+        (
+            await session.execute(
+                select(QuotaSettings).where(QuotaSettings.key.in_(updates.keys())).with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    rows_by_key = {row.key: row for row in rows}
+
+    missing = set(updates.keys()) - set(rows_by_key.keys())
+    if missing:
+        raise NotFoundError(
+            message=f"존재하지 않는 quota_settings key입니다: {sorted(missing)}",
+            code="QUOTA_SETTING_NOT_FOUND",
+        )
+
+    changed_at = now()
+    for key, parsed in parsed_values.items():
+        row = rows_by_key[key]
+        new_value = str(parsed)
+        session.add(
+            QuotaSettingsHistory(
+                key=key,
+                old_value=row.value,
+                new_value=new_value,
+                changed_at=changed_at,
+                changed_by=current_user.id,
+            )
+        )
+        row.value = new_value
+        row.updated_at = changed_at
+        row.updated_by = current_user.id
+
+    await session.flush()
+    for key in updates:
+        invalidate_quota_setting_cache(key)
+
+    return [rows_by_key[key] for key in updates]
 
 
 def _to_limit_request_read(req: LimitRequest, user_name: str) -> LimitRequestRead:

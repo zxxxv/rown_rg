@@ -93,3 +93,20 @@ class UserLimitRead(BaseModel):
 class CreateLimitRequestInput(BaseModel):
     amount_usd: float = Field(..., gt=0, description="증액 요청 금액(USD)")
     reason: str = Field(..., min_length=1, max_length=2000, description="요청 사유")
+
+
+class QuotaSettingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    value: str
+    updated_at: datetime
+    updated_by: UUID | None = None
+
+
+class QuotaSettingUpdateItem(BaseModel):
+    key: str = Field(..., min_length=1, max_length=100)
+    value: str = Field(..., min_length=1, max_length=255)
+
+
+QuotaSettingsPatchBody = dict[str, str] | list[QuotaSettingUpdateItem]

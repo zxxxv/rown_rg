@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -10,9 +11,19 @@ from structlog.testing import capture_logs
 from src.api.dependencies.cost_limit import enforce_cost_limit
 from src.core.clock import now
 from src.core.exceptions import CostLimitExceededError
+from src.db.models.quota_setting import QuotaSettings
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from src.db.models.user_limit import UserLimit
+from src.services.quota_settings import invalidate_quota_setting_cache
+
+
+@pytest.fixture(autouse=True)
+def _clear_quota_settings_cache() -> Iterator[None]:
+    # 모듈 전역 캐시가 테스트 간에 새어나가지 않도록 매 테스트 전후로 비운다.
+    invalidate_quota_setting_cache()
+    yield
+    invalidate_quota_setting_cache()
 
 
 async def _add_usage(
@@ -90,3 +101,15 @@ class TestEnforceCostLimit:
         result = await enforce_cost_limit(worker_user, test_session)
 
         assert result is worker_user
+
+    async def test_uses_db_seeded_default_limit_when_present(
+        self, test_session: AsyncSession, worker_user: User
+    ) -> None:
+        # DEFAULT_LIMIT_WORKER_USD를 10으로 낮게 시딩하면, 상수 폴백(200)이 아니라
+        # 이 DB 값이 우선해서 15 USD 사용만으로도 한도 초과가 발생해야 한다.
+        test_session.add(QuotaSettings(key="DEFAULT_LIMIT_WORKER_USD", value="10"))
+        await test_session.commit()
+        await _add_usage(test_session, worker_user, Decimal("15"))
+
+        with pytest.raises(CostLimitExceededError):
+            await enforce_cost_limit(worker_user, test_session)
