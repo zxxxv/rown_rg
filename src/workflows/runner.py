@@ -23,11 +23,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.clock import now as clock_now
+from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import ProjectStage, ReviewGate
 from src.db.models.project import Project
 from src.db.models.review_point import ReviewPoint
+from src.db.models.user import User
 from src.db.session import async_session_maker
+from src.infrastructure.naver_works.bot import send_bot_message
 from src.workflows.pipeline import Paused, advance
 from src.workflows.write_loop import apply_selection, plan_from_payload, rehydrate_from_payload
 
@@ -35,6 +38,30 @@ logger = structlog.get_logger(__name__)
 
 # GC 방지를 위해 살아있는 백그라운드 태스크 참조를 유지한다.
 _TASKS: set[asyncio.Task[Any]] = set()
+
+
+async def _notify_safe(
+    owner_id: uuid.UUID, project_id: uuid.UUID, result_type: str, page: str
+) -> None:
+    """소유자에게 네이버웍스 봇 알림 — 실패는 로깅만, 파이프라인을 절대 막지 않는다.
+
+    result_type은 봇 템플릿 키(success=완료, partial=검토 대기, failed=실패).
+    """
+    if not settings.notify_enabled:
+        return
+    try:
+        async with async_session_maker() as session:
+            owner = await session.get(User, owner_id)
+        if owner is None or not owner.is_active:
+            return
+        await send_bot_message(
+            target_email=owner.email,
+            user_name=owner.name,
+            result_url=f"{settings.react_frontend_url}/projects/{project_id}/{page}",
+            result_type=result_type,
+        )
+    except Exception:
+        logger.warning("project.notify_failed", project_id=str(project_id), exc_info=True)
 
 
 def _state_from_project(project: Project) -> ProjectState:
@@ -113,12 +140,14 @@ async def _rehydrate_qa_selection(
 
 async def _execute(project_id: uuid.UUID) -> None:
     """척추를 현재 단계부터 게이트 또는 완료까지 한 구간 전진시키고 영속화한다."""
+    owner_id: uuid.UUID | None = None
     try:
         async with async_session_maker() as session:
             project = await session.get(Project, project_id)
             if project is None:
                 logger.warning("project.missing", project_id=str(project_id))
                 return
+            owner_id = project.owner_id
 
             state = _state_from_project(project)
             state = await _rehydrate_section_plan(session, project.id, state)
@@ -142,11 +171,16 @@ async def _execute(project_id: uuid.UUID) -> None:
                 logger.info(
                     "project.gate", project_id=str(project_id), gate=outcome.review.gate.value
                 )
+                # 검토 차례 알림 (partial=확인 필요 템플릿)
+                await _notify_safe(owner_id, project_id, "partial", page="progress")
             else:
                 await session.commit()
                 logger.info("project.completed", project_id=str(project_id))
+                await _notify_safe(owner_id, project_id, "success", page="export")
     except Exception:
         logger.exception("project.run_failed", project_id=str(project_id))
+        if owner_id is not None:
+            await _notify_safe(owner_id, project_id, "failed", page="progress")
 
 
 def _spawn(coro: Any) -> None:
