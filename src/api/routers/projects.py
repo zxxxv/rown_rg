@@ -4,20 +4,32 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
 from src.api.schemas.execution import DecideRequest, ProgressResponse, RunResponse
-from src.api.schemas.project import PresetRead, ProjectCreate, ProjectRead
+from src.api.schemas.project import ConfigUpdateRequest, PresetRead, ProjectCreate, ProjectRead
 from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from src.core.types import ProjectStage
 from src.db.models.project import Project
+from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from src.prompts import list_presets, load_preset
 from src.workflows.runner import get_pending_gate, resume_run, start_run
+
+# 단계 기반 근사 진행률 — 섹션 단위 세밀화는 추후 진행 이벤트로
+_STAGE_PERCENT: dict[str, int] = {
+    ProjectStage.CREATED.value: 0,
+    ProjectStage.RESEARCHING.value: 20,
+    ProjectStage.INDEXING.value: 40,
+    ProjectStage.WRITING.value: 60,
+    ProjectStage.REVIEWING.value: 85,
+    ProjectStage.COMPLETED.value: 100,
+    ProjectStage.ARCHIVED.value: 100,
+}
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -94,11 +106,26 @@ async def list_projects(
     current_user: Annotated[User, Depends(get_current_active_user)],
     limit: int = 50,
     offset: int = 0,
+    status: str | None = None,
+    q: str | None = None,
 ) -> list[Project]:
-    """내 프로젝트 목록(최신순). admin·super_admin은 전체를 본다."""
+    """내 프로젝트 목록(최신순). admin·super_admin은 전체를 본다.
+
+    status=단계 필터(ProjectStage 값), q=제목·주제 부분 검색.
+    """
+    if status is not None and status not in _STAGE_PERCENT:
+        raise ValidationError(
+            message=f"알 수 없는 status: {status} (가능: {', '.join(_STAGE_PERCENT)})",
+            code="INVALID_STATUS_FILTER",
+        )
     stmt = select(Project).order_by(Project.created_at.desc()).limit(limit).offset(offset)
     if current_user.role not in ("super_admin", "admin"):
         stmt = stmt.where(Project.owner_id == current_user.id)
+    if status is not None:
+        stmt = stmt.where(Project.status == status)
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.where(or_(Project.title.ilike(pattern), Project.topic.ilike(pattern)))
     return list((await session.execute(stmt)).scalars())
 
 
@@ -136,11 +163,41 @@ async def get_progress(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> ProgressResponse:
     project = await _get_authorized_project(project_id, session, current_user)
+    usage = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(TokenUsage.input_tokens + TokenUsage.output_tokens), 0),
+                func.coalesce(func.sum(TokenUsage.cost_usd), 0),
+            ).where(TokenUsage.project_id == project.id)
+        )
+    ).one()
     return ProgressResponse(
         project_id=str(project.id),
         status=ProjectStage(project.status),
         pending_gate=await get_pending_gate(session, project.id),
+        percent=_STAGE_PERCENT.get(project.status, 0),
+        tokens_used=int(usage[0]),
+        cost_usd=float(usage[1]),
     )
+
+
+@router.patch("/{project_id}/config", response_model=ProjectRead)
+async def update_project_config(
+    project_id: UUID,
+    data: ConfigUpdateRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> Project:
+    """진행 중 프로젝트의 옵션(config) 전체 교체.
+
+    다음 단계부터 반영된다(이미 지나간 단계는 재실행하지 않음). 제목·주제는
+    생성 후 변경 불가(프론트 edit 모드도 readonly).
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    project.config = data.config
+    await session.flush()
+    await session.refresh(project)
+    return project
 
 
 @router.get("/{project_id}/export")

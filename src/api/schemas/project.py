@@ -18,6 +18,12 @@ class ProjectBase(BaseModel):
     topic: str = Field(..., min_length=1, description="보고서 주제")
 
 
+class ConfigUpdateRequest(BaseModel):
+    """진행 중 옵션 변경 — config 전체 교체(프론트가 폼 전체 값을 보낸다)."""
+
+    config: dict[str, Any]
+
+
 class PresetRead(BaseModel):
     """생성 화면 프리셋 선택용 카탈로그 항목. 생성 시 preset에 id 또는 name을 넣는다."""
 
