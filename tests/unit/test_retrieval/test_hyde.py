@@ -62,6 +62,28 @@ class TestHyDEQueryGenerator:
         assert request.messages[0].role == "user"
         assert "RAG에서 HyDE는 무엇인가?" in request.messages[0].content
 
+    async def test_generate_caches_by_normalized_query(self):
+        llm_client = MagicMock()
+        llm_client.complete = AsyncMock(
+            return_value=CompletionResponse(
+                content="캐시된 가상 답변",
+                input_tokens=10,
+                output_tokens=20,
+                cached_input_tokens=0,
+                model="gemini-2.5-flash-lite",
+                stop_reason="STOP",
+            )
+        )
+
+        generator = HyDEQueryGenerator(llm_client)
+
+        first = await generator.generate("  RAG에서 HyDE는 무엇인가?  ")
+        second = await generator.generate("RAG에서 HyDE는 무엇인가?")
+
+        assert first == "캐시된 가상 답변"
+        assert second == "캐시된 가상 답변"
+        llm_client.complete.assert_awaited_once()
+
     async def test_empty_query_returns_empty_without_llm_call(self):
         llm_client = MagicMock()
         llm_client.complete = AsyncMock()

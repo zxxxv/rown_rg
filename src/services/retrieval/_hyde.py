@@ -42,12 +42,18 @@ class HyDEQueryGenerator:
         self._model = model or default_id("gemini")
         self._max_tokens = max_tokens
         self._temperature = temperature
+        self._cache: dict[str, str] = {}
 
     async def generate(self, query: str) -> str:
         query = query.strip()
 
         if not query:
             return ""
+
+        cached = self._cache.get(query)
+
+        if cached is not None:
+            return cached
 
         request = CompletionRequest(
             model=self._model,
@@ -63,6 +69,9 @@ class HyDEQueryGenerator:
         )
 
         response = await self._llm_client.complete(request)
+        hyde_query = response.content.strip()
+
+        self._cache[query] = hyde_query
 
         return response.content.strip()
 
