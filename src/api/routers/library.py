@@ -1,0 +1,295 @@
+"""자료 라이브러리 — 폴더 트리 + 파일 저장.
+
+프론트 계약(web/src/api/library.ts·types.ts LibraryNodeSchema)에 맞춘다:
+GET tree, POST folders, POST files(multipart), DELETE nodes/{id},
+GET files/{id}/download, PATCH nodes/{id}/visibility.
+
+권한 규칙:
+- 조회·다운로드: 로그인 사용자 전체. 단 파일의 visible_to_roles/visible_to_users가
+  비어있지 않으면 해당 역할/사용자와 관리자만 볼 수 있다(폴더는 항상 보임).
+- 폴더 생성·업로드: worker 이상.
+- 삭제: 관리자 또는 생성자 본인.
+- 권한(visible_to_roles) 변경: 관리자만.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from pathlib import Path
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Form, UploadFile, status
+from fastapi.responses import FileResponse
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from src.api.dependencies.auth import get_current_active_user
+from src.api.dependencies.db import get_async_session
+from src.api.dependencies.permissions import ADMINS, require_role
+from src.api.schemas.library_node import (
+    FolderCreateRequest,
+    LibraryFileMeta,
+    LibraryTreeFile,
+    LibraryTreeFolder,
+    LibraryTreeResponse,
+    VisibilityUpdateRequest,
+)
+from src.core.config import settings
+from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
+from src.core.types import Role
+from src.db.models.library_node import LibraryNode
+from src.db.models.project import Project
+from src.db.models.user import User
+
+router = APIRouter(prefix="/library", tags=["library"])
+
+WRITERS: tuple[Role, ...] = (Role.SUPER_ADMIN, Role.ADMIN, Role.WORKER)
+ALL_ROLES: list[str] = [r.value for r in Role]
+VALID_SOURCE_KINDS = {"gov", "academic", "media", "library", "upload", "web_search"}
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+
+def _is_admin(user: User) -> bool:
+    return user.role in (Role.SUPER_ADMIN.value, Role.ADMIN.value)
+
+
+def _can_view(node: LibraryNode, user: User) -> bool:
+    if _is_admin(user):
+        return True
+    if not node.visible_to_roles and not node.visible_to_users:
+        return True
+    return user.role in node.visible_to_roles or user.id in node.visible_to_users
+
+
+def _file_meta(node: LibraryNode, registered_by: str) -> LibraryFileMeta:
+    kind = node.metadata_.get("source_kind", "upload")
+    if kind not in VALID_SOURCE_KINDS:
+        kind = "upload"
+    return LibraryFileMeta(
+        size_bytes=node.file_size or 0,
+        registered_at=node.created_at,
+        registered_by=registered_by,
+        source_kind=kind,
+        page_count=node.metadata_.get("page_count"),
+        visible_to_roles=list(node.visible_to_roles) or ALL_ROLES,
+        project_id=node.metadata_.get("project_id"),
+    )
+
+
+def _creator_name(node: LibraryNode) -> str:
+    # creator는 selectinload로 로드된 경우에만 접근(lazy="raise" 회피)
+    creator = node.__dict__.get("creator")
+    return creator.name if creator is not None else "알 수 없음"
+
+
+async def _get_node(session: AsyncSession, node_id: UUID) -> LibraryNode:
+    node = await session.get(LibraryNode, node_id, options=[selectinload(LibraryNode.creator)])
+    if node is None:
+        raise NotFoundError(message="노드를 찾을 수 없습니다", code="NODE_NOT_FOUND")
+    return node
+
+
+async def _get_parent_folder(session: AsyncSession, parent_id: UUID | None) -> LibraryNode | None:
+    if parent_id is None:
+        return None
+    parent = await session.get(LibraryNode, parent_id)
+    if parent is None:
+        raise NotFoundError(message="상위 폴더를 찾을 수 없습니다", code="PARENT_NOT_FOUND")
+    if parent.type != "folder":
+        raise ValidationError(message="상위 노드가 폴더가 아닙니다", code="PARENT_NOT_FOLDER")
+    return parent
+
+
+@router.get("/tree", response_model=LibraryTreeResponse, response_model_exclude_none=True)
+async def get_tree(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> LibraryTreeResponse:
+    nodes = (
+        (
+            await session.execute(
+                select(LibraryNode)
+                .options(selectinload(LibraryNode.creator))
+                .order_by(LibraryNode.type.desc(), LibraryNode.name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    children_map: dict[UUID | None, list[LibraryNode]] = defaultdict(list)
+    for n in nodes:
+        children_map[n.parent_id].append(n)
+
+    def build(n: LibraryNode) -> LibraryTreeFolder | LibraryTreeFile | None:
+        if n.type == "file":
+            if not _can_view(n, current_user):
+                return None
+            return LibraryTreeFile(
+                id=str(n.id), name=n.name, file_meta=_file_meta(n, _creator_name(n))
+            )
+        children = [built for c in children_map[n.id] if (built := build(c)) is not None]
+        return LibraryTreeFolder(id=str(n.id), name=n.name, children=children)
+
+    tree = [built for n in children_map[None] if (built := build(n)) is not None]
+
+    # 프로젝트를 이름 폴더로 노출 — 가시성은 프로젝트 목록과 동일(관리자=전체, 일반=자기 것).
+    # 합성 폴더라 업로드 대상은 아니고 표시·탐색용이다(id는 비-UUID "proj-...").
+    proj_stmt = select(Project.id, Project.title).order_by(Project.created_at.desc())
+    if current_user.role not in (Role.SUPER_ADMIN.value, Role.ADMIN.value):
+        proj_stmt = proj_stmt.where(Project.owner_id == current_user.id)
+    projects = (await session.execute(proj_stmt)).all()
+    if projects:
+        project_group = LibraryTreeFolder(
+            id="projects-root",
+            name="프로젝트",
+            children=[
+                LibraryTreeFolder(id=f"proj-{pid}", name=title, children=[])
+                for pid, title in projects
+            ],
+        )
+        tree = [project_group, *tree]
+
+    return LibraryTreeResponse(tree=tree)
+
+
+@router.post(
+    "/folders",
+    response_model=LibraryTreeFolder,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_folder(
+    data: FolderCreateRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_role(*WRITERS))],
+) -> LibraryTreeFolder:
+    await _get_parent_folder(session, data.parent_id)
+    node = LibraryNode(
+        name=data.name,
+        type="folder",
+        parent_id=data.parent_id,
+        created_by=current_user.id,
+    )
+    session.add(node)
+    await session.flush()
+    await session.refresh(node)
+    return LibraryTreeFolder(id=str(node.id), name=node.name, children=[])
+
+
+@router.post(
+    "/files",
+    response_model=LibraryTreeFile,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_file(
+    file: UploadFile,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_role(*WRITERS))],
+    parent_id: Annotated[UUID | None, Form()] = None,
+) -> LibraryTreeFile:
+    await _get_parent_folder(session, parent_id)
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise ValidationError(
+            message=f"파일이 너무 큽니다(최대 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB)",
+            code="FILE_TOO_LARGE",
+        )
+    safe_name = Path(file.filename or "untitled").name
+
+    node = LibraryNode(
+        name=safe_name,
+        type="file",
+        parent_id=parent_id,
+        file_size=len(content),
+        mime_type=file.content_type,
+        metadata_={"source_kind": "upload"},
+        created_by=current_user.id,
+    )
+    session.add(node)
+    await session.flush()
+
+    library_dir = Path(settings.library_dir)
+    library_dir.mkdir(parents=True, exist_ok=True)
+    dest = library_dir / f"{node.id}_{safe_name}"
+    dest.write_bytes(content)
+    node.file_path = str(dest)
+    await session.flush()
+    await session.refresh(node)
+    return LibraryTreeFile(
+        id=str(node.id), name=node.name, file_meta=_file_meta(node, current_user.name)
+    )
+
+
+@router.get("/files/{node_id}/download")
+async def download_file(
+    node_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> FileResponse:
+    node = await _get_node(session, node_id)
+    if node.type != "file" or not _can_view(node, current_user):
+        raise NotFoundError(message="노드를 찾을 수 없습니다", code="NODE_NOT_FOUND")
+    if not node.file_path or not Path(node.file_path).is_file():
+        raise NotFoundError(
+            message="파일 본문이 없습니다(메타데이터만 등록된 자료)", code="FILE_BODY_MISSING"
+        )
+    return FileResponse(
+        node.file_path,
+        filename=node.name,
+        media_type=node.mime_type or "application/octet-stream",
+    )
+
+
+@router.delete("/nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_node(
+    node_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_role(*WRITERS))],
+) -> None:
+    """노드 삭제(폴더는 하위 전체 포함 — DB FK CASCADE). 관리자 또는 생성자만."""
+    node = await _get_node(session, node_id)
+    if not _is_admin(current_user) and node.created_by != current_user.id:
+        raise AuthorizationError(
+            message="관리자 또는 생성자만 삭제할 수 있습니다", code="FORBIDDEN"
+        )
+
+    # 삭제될 하위 파일 블롭 경로 수집(행 삭제는 CASCADE, 블롭은 직접 정리)
+    rows = (
+        await session.execute(select(LibraryNode.id, LibraryNode.parent_id, LibraryNode.file_path))
+    ).all()
+    children_ids: dict[UUID | None, list[UUID]] = defaultdict(list)
+    paths: dict[UUID, str | None] = {}
+    for rid, parent, fpath in rows:
+        children_ids[parent].append(rid)
+        paths[rid] = fpath
+    doomed: list[UUID] = [node_id]
+    stack = [node_id]
+    while stack:
+        for child in children_ids[stack.pop()]:
+            doomed.append(child)
+            stack.append(child)
+
+    await session.execute(delete(LibraryNode).where(LibraryNode.id == node_id))
+    for rid in doomed:
+        fpath = paths.get(rid)
+        if fpath:
+            Path(fpath).unlink(missing_ok=True)
+
+
+@router.patch("/nodes/{node_id}/visibility")
+async def update_visibility(
+    node_id: UUID,
+    data: VisibilityUpdateRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    _: Annotated[User, Depends(require_role(*ADMINS))],
+) -> dict[str, list[str]]:
+    invalid = [r for r in data.visible_to_roles if r not in ALL_ROLES]
+    if invalid:
+        raise ValidationError(message=f"알 수 없는 역할: {', '.join(invalid)}", code="INVALID_ROLE")
+    node = await _get_node(session, node_id)
+    node.visible_to_roles = data.visible_to_roles
+    await session.flush()
+    return {"visible_to_roles": list(node.visible_to_roles)}

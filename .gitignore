@@ -70,3 +70,7 @@ test_data/parsed/
 
 # PoC/실험 산출물
 scripts/_out_poc.hwpx
+
+# 런타임 산출물 — 자료 라이브러리 업로드 원본 / 완성 보고서(HWPX)
+/data/
+/exports/

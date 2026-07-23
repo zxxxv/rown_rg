@@ -100,6 +100,9 @@ class Settings(BaseSettings):
     reranker_max_length: int = 512
     reranker_enabled: bool = True
 
+    # 자료 라이브러리 — 업로드 파일 저장 위치
+    library_dir: str = "./data/library"
+
     # 산출물(HWPX) — 완료 보고서 파일 출력
     export_dir: str = "./exports"
     export_template_path: str = ""  # 한컴 마스터 템플릿(.hwpx). 비면 빈 문서 + 코드 서식
