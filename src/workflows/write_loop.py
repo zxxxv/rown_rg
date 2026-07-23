@@ -34,6 +34,7 @@ from src.services.qa.gate import (
     gate_candidates,
 )
 from src.services.retrieval.section import SectionRetriever
+from src.workflows.events import emit_step
 
 
 async def run_write_loop(
@@ -51,8 +52,11 @@ async def run_write_loop(
     volume_target이 있으면 정적 게이트의 길이 경계도 그것을 따른다.
     게이트 판정까지 마친 SectionCandidateSet들을 state.section_candidates에 넣어 돌려준다.
     """
+    pid = state.project_id
     candidate_sets: list[SectionCandidateSet] = []
     for section in state.section_plan:
+        label = f"본문 작성 · {section.chapter_number}.{section.section_number} {section.title}"
+        emit_step(pid, "writing", label, "started")
         ctx = build_writer_context(section)
         chunks = await retrieve(section)
         drafts = await generate_section_candidates(
@@ -74,6 +78,7 @@ async def run_write_loop(
                 max_chars=ctx.max_chars if ctx.max_chars is not None else DEFAULT_MAX_CHARS,
             )
         )
+        emit_step(pid, "writing", label, "completed")
     return state.with_section_candidates(candidate_sets)
 
 

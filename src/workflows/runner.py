@@ -19,18 +19,21 @@ import uuid
 from typing import Any
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core import app_settings
 from src.core.clock import now as clock_now
 from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import ProjectStage, ReviewGate
 from src.db.models.project import Project
+from src.db.models.project_source import ProjectSource
 from src.db.models.review_point import ReviewPoint
 from src.db.models.user import User
 from src.db.session import async_session_maker
 from src.infrastructure.naver_works.bot import send_bot_message
+from src.workflows.events import emit_checkpoint, emit_error, gate_level
 from src.workflows.pipeline import Paused, advance
 from src.workflows.write_loop import apply_selection, plan_from_payload, rehydrate_from_payload
 
@@ -47,7 +50,7 @@ async def _notify_safe(
 
     result_type은 봇 템플릿 키(success=완료, partial=검토 대기, failed=실패).
     """
-    if not settings.notify_enabled:
+    if not app_settings.get_bool("notify_enabled"):
         return
     try:
         async with async_session_maker() as session:
@@ -62,6 +65,39 @@ async def _notify_safe(
         )
     except Exception:
         logger.warning("project.notify_failed", project_id=str(project_id), exc_info=True)
+
+
+def _parse_uuid_list(raw: Any) -> list[uuid.UUID]:
+    """결정 payload의 UUID 문자열 목록을 안전하게 파싱(잘못된 값은 무시)."""
+    if not isinstance(raw, list):
+        return []
+    out: list[uuid.UUID] = []
+    for x in raw:
+        try:
+            out.append(uuid.UUID(str(x)))
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
+async def _apply_source_pool_exclusions(
+    session: AsyncSession, project_id: uuid.UUID, decision: dict[str, Any]
+) -> int:
+    """SOURCE_POOL 결정의 excluded_source_ids를 project_sources.is_included=false로 반영.
+
+    resume_run의 세션에서 gate resolve와 같은 커밋으로 처리한다 — 작성 단계 검색이
+    별도 세션에서 is_included를 읽으므로, advance(=write) 전에 커밋돼 있어야 제외가 실효된다.
+    반환값은 제외된 출처 수.
+    """
+    excluded = _parse_uuid_list(decision.get("excluded_source_ids"))
+    if not excluded:
+        return 0
+    await session.execute(
+        update(ProjectSource)
+        .where(ProjectSource.project_id == project_id, ProjectSource.id.in_(excluded))
+        .values(is_included=False)
+    )
+    return len(excluded)
 
 
 def _state_from_project(project: Project) -> ProjectState:
@@ -172,6 +208,12 @@ async def _execute(project_id: uuid.UUID) -> None:
                 logger.info(
                     "project.gate", project_id=str(project_id), gate=outcome.review.gate.value
                 )
+                # 실시간: 검토 게이트 도달을 WS로 즉시 알림(프론트가 결정 UI 노출)
+                emit_checkpoint(
+                    project_id,
+                    str(outcome.review.id),
+                    gate_level(outcome.review.gate.value),
+                )
                 # 검토 차례 알림 (partial=확인 필요 템플릿)
                 await _notify_safe(owner_id, project_id, "partial", page="progress")
             else:
@@ -180,6 +222,7 @@ async def _execute(project_id: uuid.UUID) -> None:
                 await _notify_safe(owner_id, project_id, "success", page="export")
     except Exception:
         logger.exception("project.run_failed", project_id=str(project_id))
+        emit_error(project_id, "run_failed", "실행 중 오류가 발생했습니다")
         if owner_id is not None:
             await _notify_safe(owner_id, project_id, "failed", page="progress")
 
@@ -227,5 +270,10 @@ async def resume_run(project_id: uuid.UUID, decision: dict[str, Any]) -> None:
         review.status = "resolved"
         review.decision = decision
         review.resolved_at = clock_now()
+        # 자료 풀 확정: 사람이 제외한 출처를 같은 커밋에서 is_included=false로 반영한다.
+        if review.gate == ReviewGate.SOURCE_POOL.value:
+            n_excluded = await _apply_source_pool_exclusions(session, project_id, decision)
+            if n_excluded:
+                logger.info("source_pool.pruned", project_id=str(project_id), excluded=n_excluded)
         await session.commit()
     _spawn(_execute(project_id))

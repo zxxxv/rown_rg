@@ -65,6 +65,10 @@ class ReviewGate(StrEnum):
 class SourceRef(BaseModel):
     """
     자료 풀의 한 항목
+
+    signal 필드(reliability~has_content)는 SOURCE_POOL 게이트에서 사람이 자료를
+    취사선택할 때 보여줄 판단 근거다. 웹 수집 시 채워지며, 업로드/라이브러리 등
+    신호가 없는 출처는 기본값으로 남는다(하위호환).
     """
 
     id: UUID
@@ -73,6 +77,12 @@ class SourceRef(BaseModel):
     url: str | None = None
     library_node_id: UUID | None = None
     upload_path: str | None = None
+    # 자료 확정 게이트용 신호
+    reliability: str | None = None  # high | medium | low
+    matched_sections: list[str] = Field(default_factory=list)  # 이 출처가 뒷받침하는 목차 섹션
+    page_age: str | None = None  # 콘텐츠 최신성(원문 게시 시점)
+    preview: str | None = None  # 본문 앞부분 미리보기
+    has_content: bool = True  # 본문 회수·색인 성공 여부(False면 검색에 안 잡힘)
 
 
 class SourceCandidate(BaseModel):

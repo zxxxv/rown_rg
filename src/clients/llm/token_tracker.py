@@ -5,10 +5,12 @@ from contextvars import ContextVar
 from decimal import Decimal
 
 import structlog
+from sqlalchemy import func, select
 
 from src.clients.llm.base import LLMMode
 from src.db.models.token_usage import TokenUsage
 from src.db.session import async_session_maker
+from src.workflows.events import emit_cost
 
 logger = structlog.get_logger(__name__)
 
@@ -69,6 +71,19 @@ async def record_usage(
         )
         session.add(usage)
         await session.commit()
+
+        if project_id is not None:
+            totals = (
+                await session.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(TokenUsage.input_tokens + TokenUsage.output_tokens), 0
+                        ),
+                        func.coalesce(func.sum(TokenUsage.cost_usd), 0),
+                    ).where(TokenUsage.project_id == project_id)
+                )
+            ).one()
+            emit_cost(project_id, int(totals[0]), float(totals[1]))
 
 
 async def record_usage_safe(
