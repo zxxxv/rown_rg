@@ -83,6 +83,7 @@ export const projectsHandlers = [
       status: "created",
       depth_mode: v.depth_mode,
       owner_id: DEMO_ADMIN_USER.id,
+      owner_name: DEMO_ADMIN_USER.name,
       created_at: nowIso,
       updated_at: nowIso,
       progress: 0,
@@ -90,6 +91,32 @@ export const projectsHandlers = [
     DEMO_PROJECTS.unshift(project);
     createProjectFolderForLibrary(project);
     return HttpResponse.json({ data: project }, { status: 201 });
+  }),
+
+  // DELETE /projects/{id} — 완료·보관 상태만 허용(그 외 422)
+  http.delete(url("projects/:id"), ({ params }) => {
+    const id = String(params.id);
+    const idx = DEMO_PROJECTS.findIndex((p) => p.id === id);
+    if (idx < 0) {
+      return HttpResponse.json(
+        { error: { code: "PROJECT_NOT_FOUND", message: "프로젝트를 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    const status = DEMO_PROJECTS[idx].status;
+    if (status !== "completed" && status !== "archived") {
+      return HttpResponse.json(
+        {
+          error: {
+            code: "PROJECT_NOT_DELETABLE",
+            message: `완료된 프로젝트만 삭제할 수 있습니다(현재: ${status})`,
+          },
+        },
+        { status: 422 },
+      );
+    }
+    DEMO_PROJECTS.splice(idx, 1);
+    return new HttpResponse(null, { status: 204 });
   }),
 
   // POST /projects/{id}/run — 백그라운드 실행 시작(202)

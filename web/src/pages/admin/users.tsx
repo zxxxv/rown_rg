@@ -1,12 +1,11 @@
-import { ChevronLeft, ChevronRight, KeyRound, Lock, LockOpen, Wallet } from "lucide-react";
-import { useState } from "react";
+import { ChevronLeft, ChevronRight, KeyRound, Lock, LockOpen, Search, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import type { UserRoleType } from "@/api/types";
 import {
   type AdminUser,
   useResetUserPassword,
-  useSetUserQuota,
   useUnlockUser,
   useUpdateUser,
   useUsersList,
@@ -43,6 +42,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAuth } from "@/hooks/useAuth";
+import { useDebounce } from "@/hooks/useDebounce";
+import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
 
@@ -85,7 +86,20 @@ function errMsg(err: unknown, fallback: string): string {
 export default function AdminUsersPage() {
   const { user, logout } = useAuth();
   const [offset, setOffset] = useState(0);
-  const usersQuery = useUsersList({ limit: PAGE_SIZE, offset });
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search, 300);
+
+  // 검색어가 바뀌면 첫 페이지로 되돌린다.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: offset은 리셋 대상이라 의존성 제외
+  useEffect(() => {
+    setOffset(0);
+  }, [debouncedSearch]);
+
+  const usersQuery = useUsersList({
+    limit: PAGE_SIZE,
+    offset,
+    ...(debouncedSearch.trim() ? { q: debouncedSearch.trim() } : {}),
+  });
 
   const myRole: UserRoleType = user?.role ?? "viewer";
 
@@ -95,11 +109,37 @@ export default function AdminUsersPage() {
       onLogout={() => void logout()}
     >
       <div className="flex flex-col gap-6">
-        <header>
-          <h1 className="text-3xl font-semibold text-fg">사용자 관리</h1>
-          <p className="text-sm text-fg-secondary">
-            역할 변경·활성 토글·잠금 해제·비밀번호 리셋·월 한도 조정을 처리합니다.
-          </p>
+        <header className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-semibold text-fg">사용자 관리</h1>
+            <p className="text-sm text-fg-secondary">
+              역할 변경·활성 토글·잠금 해제·비밀번호 리셋을 처리합니다.
+            </p>
+          </div>
+          <div className="relative w-64">
+            <Search
+              className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-tertiary"
+              aria-hidden
+            />
+            <Input
+              type="search"
+              placeholder="이름·이메일 검색"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              aria-label="사용자 검색"
+              className={cn("pl-8", search && "pr-8")}
+            />
+            {search ? (
+              <button
+                type="button"
+                aria-label="검색어 지우기"
+                onClick={() => setSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-fg-tertiary hover:text-fg"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            ) : null}
+          </div>
         </header>
 
         {usersQuery.isLoading ? (
@@ -159,7 +199,6 @@ function UsersTable({
   myId: string;
 }) {
   const [resetTarget, setResetTarget] = useState<AdminUser | null>(null);
-  const [quotaTarget, setQuotaTarget] = useState<AdminUser | null>(null);
 
   return (
     <>
@@ -183,7 +222,6 @@ function UsersTable({
                 myRole={myRole}
                 isSelf={row.id === myId}
                 onResetPassword={() => setResetTarget(row)}
-                onAdjustQuota={() => setQuotaTarget(row)}
               />
             ))}
           </TableBody>
@@ -191,7 +229,6 @@ function UsersTable({
       </div>
 
       <ResetPasswordDialog target={resetTarget} onClose={() => setResetTarget(null)} />
-      <QuotaDialog target={quotaTarget} onClose={() => setQuotaTarget(null)} />
     </>
   );
 }
@@ -201,13 +238,11 @@ function UserRow({
   myRole,
   isSelf,
   onResetPassword,
-  onAdjustQuota,
 }: {
   row: AdminUser;
   myRole: UserRoleType;
   isSelf: boolean;
   onResetPassword: () => void;
-  onAdjustQuota: () => void;
 }) {
   const updateUser = useUpdateUser();
   const unlock = useUnlockUser();
@@ -267,9 +302,12 @@ function UserRow({
         <Select
           value={row.role}
           onValueChange={(v) => changeRole(v as UserRoleType)}
-          disabled={!canManage || updateUser.isPending}
+          disabled={!canManage || isSelf || updateUser.isPending}
         >
-          <SelectTrigger className="h-8 w-32">
+          <SelectTrigger
+            className="h-8 w-32"
+            title={isSelf ? "자기 자신의 역할은 변경할 수 없습니다" : undefined}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -285,8 +323,9 @@ function UserRow({
         <Switch
           checked={row.is_active}
           onCheckedChange={toggleActive}
-          disabled={!canManage || updateUser.isPending}
+          disabled={!canManage || isSelf || updateUser.isPending}
           aria-label={`${row.name} 활성 여부`}
+          title={isSelf ? "자기 자신은 비활성화할 수 없습니다" : undefined}
         />
       </TableCell>
       <TableCell className="font-mono text-xs text-fg-tertiary">
@@ -323,16 +362,6 @@ function UserRow({
           >
             <KeyRound className="mr-1 h-3.5 w-3.5" aria-hidden />
             비번 리셋
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!canManage}
-            onClick={onAdjustQuota}
-            title="월 한도 조정"
-          >
-            <Wallet className="mr-1 h-3.5 w-3.5" aria-hidden />
-            한도 조정
           </Button>
         </div>
       </TableCell>
@@ -398,66 +427,6 @@ function ResetPasswordDialog({
           </Button>
           <Button onClick={submit} disabled={password.length === 0 || reset.isPending}>
             {reset.isPending ? "처리 중…" : "재설정"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function QuotaDialog({ target, onClose }: { target: AdminUser | null; onClose: () => void }) {
-  const setQuota = useSetUserQuota();
-  const [amount, setAmount] = useState("");
-
-  const close = () => {
-    setAmount("");
-    onClose();
-  };
-
-  const parsed = Number(amount);
-  const valid = amount.trim() !== "" && Number.isFinite(parsed) && parsed >= 0;
-
-  const submit = () => {
-    if (!target || !valid) return;
-    setQuota.mutate(
-      { userId: target.id, monthly_limit_usd: parsed },
-      {
-        onSuccess: (res) => {
-          toast.success(`${target.name}의 월 한도를 $${res.monthly_limit_usd}로 설정했습니다.`);
-          close();
-        },
-        onError: (err) =>
-          toast.error("한도 조정 실패", { description: errMsg(err, "처리 중 오류") }),
-      },
-    );
-  };
-
-  return (
-    <Dialog open={target !== null} onOpenChange={(open) => (!open ? close() : undefined)}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>월 한도 조정 — {target?.name}</DialogTitle>
-          <DialogDescription>이번 달부터 적용되는 개인 월 사용 한도(USD)입니다.</DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="admin-quota-amount">월 한도 (USD)</Label>
-          <Input
-            id="admin-quota-amount"
-            type="number"
-            min={0}
-            step={10}
-            inputMode="decimal"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            placeholder="예: 200"
-          />
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={close} disabled={setQuota.isPending}>
-            취소
-          </Button>
-          <Button onClick={submit} disabled={!valid || setQuota.isPending}>
-            {setQuota.isPending ? "처리 중…" : "저장"}
           </Button>
         </DialogFooter>
       </DialogContent>

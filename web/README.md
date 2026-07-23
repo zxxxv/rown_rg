@@ -14,9 +14,9 @@ pnpm dev
 # → http://localhost:5173
 ```
 
-시연용 로그인:
-- ID: `admin@loweninsight.kr`
-- PW: `demo1234`
+시연용 로그인 (이메일 또는 아이디 모두 가능):
+- ID: `admin_rown` (또는 `admin@loweninsight.kr`)
+- PW: `Admin_rown12!`
 
 발표 시연 모드: URL에 `?demo=1` 추가 → 가속 시나리오 + 시연용 데이터.
 

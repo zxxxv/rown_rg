@@ -56,7 +56,7 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
     enable_glossary: false,
     depth_mode: "full_report",
     output_formats: ["hwpx"],
-    notification_channels: ["email"],
+    notification_channels: [],
   },
   business_review: {
     preset: "business_review",
@@ -70,7 +70,7 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
     enable_glossary: false,
     depth_mode: "full_report",
     output_formats: ["hwpx"],
-    notification_channels: ["email"],
+    notification_channels: [],
   },
   policy_research: {
     preset: "policy_research",
@@ -83,8 +83,8 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
     enable_critic_agent: false,
     enable_glossary: true,
     depth_mode: "standard",
-    output_formats: ["hwpx", "markdown"],
-    notification_channels: ["email"],
+    output_formats: ["hwpx"],
+    notification_channels: [],
   },
   blank: {
     preset: "blank",
@@ -97,7 +97,7 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
     enable_critic_agent: false,
     enable_glossary: false,
     depth_mode: "outline_only",
-    output_formats: ["markdown"],
-    notification_channels: ["email"],
+    output_formats: ["hwpx"],
+    notification_channels: [],
   },
 };

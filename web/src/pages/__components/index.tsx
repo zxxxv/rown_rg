@@ -1,7 +1,6 @@
 import { FileText, FolderOpen, Inbox } from "lucide-react";
 import { toast } from "sonner";
 import { ConfidenceBadge } from "@/components/data-display/ConfidenceBadge";
-import { CostEstimate } from "@/components/data-display/CostEstimate";
 import { ReviewCheckpoint } from "@/components/data-display/ReviewCheckpoint";
 import { SourceCard } from "@/components/data-display/SourceCard";
 import { StatusDot } from "@/components/data-display/StatusDot";
@@ -63,10 +62,6 @@ export default function ComponentsGalleryPage() {
           >
             <p className="text-sm text-fg-secondary">검토 대상 내용이 여기에 표시됩니다.</p>
           </ReviewCheckpoint>
-        </Section>
-
-        <Section title="4. CostEstimate">
-          <CostEstimate estimatedHours={5.5} estimatedTokens={2_100_000} estimatedCostUsd={130} />
         </Section>
 
         <Section title="5. StatusDot">

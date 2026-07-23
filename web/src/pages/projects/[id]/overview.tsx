@@ -9,15 +9,16 @@ import {
   ScanLine,
   Settings2,
   SquarePen,
+  Trash2,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useProjectContradictions } from "@/api/contradictions";
-import { useProject, useUpdateProjectConfig } from "@/api/projects";
+import { useProgressSnapshot } from "@/api/progress";
+import { useDeleteProject, useProject, useUpdateProjectConfig } from "@/api/projects";
 import type { Project, ProjectStatus } from "@/api/types";
-import { CostEstimate } from "@/components/data-display/CostEstimate";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
@@ -31,7 +32,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { estimate } from "@/features/project-config/estimator";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
 import { presetLabel } from "@/features/project-config/presets";
 import type { ProjectFormValues } from "@/features/project-config/schema";
@@ -56,6 +64,18 @@ const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
   reviewing: "warning",
   completed: "success",
   archived: "tertiary",
+};
+
+// 단계 기반 근사 진행률 — 백엔드 _STAGE_PERCENT와 동일. ProjectRead에 progress가 없어
+// (실백엔드) 상태에서 유도한다. 완료·보관은 100%.
+const STATUS_PERCENT: Record<ProjectStatus, number> = {
+  created: 0,
+  researching: 20,
+  indexing: 40,
+  writing: 60,
+  reviewing: 85,
+  completed: 100,
+  archived: 100,
 };
 
 const NEXT_STEP_HINT: Record<ProjectStatus, string> = {
@@ -134,10 +154,29 @@ interface OverviewBodyProps {
 
 function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) {
   const navigate = useNavigate();
-  const estimateValue = useMemo(() => estimate(project.config), [project.config]);
-  const usedFraction = project.status === "created" ? 0 : ((project.progress ?? 0) / 100) * 0.95;
-  const tokensUsed = Math.round(estimateValue.estimatedTokens * usedFraction);
-  const costUsed = Math.round(estimateValue.estimatedCostUsd * usedFraction);
+  // 실측 사용량 — token_usage 테이블 합산(/projects/{id}/progress)
+  const usageQuery = useProgressSnapshot(project.id);
+  const tokensUsed = usageQuery.data?.tokens_used ?? 0;
+  const costUsed = usageQuery.data?.cost_usd ?? 0;
+  // 진행률: 개요 요약은 프로젝트 상태가 진실(완료=100%). /progress 스냅샷 percent는
+  // 실행 중 진행 페이지가 만든 시나리오 러너 상태를 반영해 완료 프로젝트에서도 낮게
+  // 나올 수 있으므로 여기선 쓰지 않는다(상세 실시간 진행은 진행 패널에서).
+  const progressPct = STATUS_PERCENT[project.status];
+
+  const deleteProject = useDeleteProject();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const canDelete = project.status === "completed" || project.status === "archived";
+  const onDelete = async () => {
+    try {
+      await deleteProject.mutateAsync(project.id);
+      toast.success("프로젝트가 삭제됐습니다.");
+      navigate("/projects", { replace: true });
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "삭제에 실패했습니다.";
+      toast.error("삭제 실패", { description: msg });
+      setConfirmDelete(false);
+    }
+  };
 
   const editDefaults: ProjectFormValues = {
     title: project.title,
@@ -163,7 +202,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               {project.updated_at ? (
                 <Meta label="최근 수정" value={project.updated_at.slice(0, 10)} />
               ) : null}
-              <Meta label="소유자" value={project.owner_id} />
+              <Meta label="소유자" value={project.owner_name ?? project.owner_id} />
             </dl>
           </div>
           <PrimaryAction project={project} onNavigate={navigate} />
@@ -180,12 +219,12 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
             <CardContent className="flex flex-col gap-3">
               <div className="flex items-center justify-between text-xs text-fg-tertiary">
                 <span>진행률</span>
-                <span className="font-mono text-fg">{project.progress ?? 0}%</span>
+                <span className="font-mono text-fg">{progressPct}%</span>
               </div>
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-tertiary">
                 <div
                   className="h-full bg-accent transition-[width]"
-                  style={{ width: `${project.progress ?? 0}%` }}
+                  style={{ width: `${progressPct}%` }}
                 />
               </div>
               <Button
@@ -206,7 +245,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               <AccordionTrigger className="px-4 py-3 hover:no-underline">
                 <span className="flex items-center gap-2 text-sm font-semibold text-fg">
                   <Settings2 className="h-4 w-4 text-fg-secondary" aria-hidden />
-                  프로젝트 옵션 변경
+                  프로젝트 옵션
                 </span>
               </AccordionTrigger>
               <AccordionContent className="px-4 pb-4">
@@ -224,21 +263,24 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
         <aside className="flex flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">예상 견적</CardTitle>
-              <CardDescription>현재 옵션 기준</CardDescription>
+              <CardTitle className="text-base">사용량</CardTitle>
+              <CardDescription>실제 측정값 기준</CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <CostEstimate
-                estimatedHours={estimateValue.estimatedHours}
-                estimatedTokens={estimateValue.estimatedTokens}
-                estimatedCostUsd={estimateValue.estimatedCostUsd}
-              />
-              <div className="flex justify-between border-t border-border pt-3 text-xs">
-                <span className="text-fg-tertiary">현재까지</span>
-                <span className="font-mono text-fg-secondary">
-                  {tokensUsed.toLocaleString()} 토큰 · ${costUsed}
-                </span>
-              </div>
+            <CardContent>
+              <dl className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs text-fg-tertiary">사용 토큰</dt>
+                  <dd className="font-mono text-base font-medium text-fg">
+                    {tokensUsed.toLocaleString()}
+                  </dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs text-fg-tertiary">사용 비용</dt>
+                  <dd className="font-mono text-base font-medium text-fg">
+                    ${costUsed.toFixed(2)}
+                  </dd>
+                </div>
+              </dl>
             </CardContent>
           </Card>
 
@@ -268,8 +310,48 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               </div>
             </CardContent>
           </Card>
+
+          {canDelete ? (
+            <Button
+              variant="outline"
+              className="w-full border-border text-fg-danger hover:bg-bg-secondary"
+              onClick={() => setConfirmDelete(true)}
+              disabled={deleteProject.isPending}
+            >
+              <Trash2 className="mr-1 h-4 w-4" aria-hidden />
+              프로젝트 삭제
+            </Button>
+          ) : null}
         </aside>
       </div>
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>프로젝트를 삭제할까요?</DialogTitle>
+            <DialogDescription>
+              "{project.title}" 프로젝트와 관련 데이터(자료·인덱스·검토 기록)가 영구 삭제됩니다.
+              토큰 사용량·비용 기록은 남습니다. 이 작업은 되돌릴 수 없습니다.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmDelete(false)}
+              disabled={deleteProject.isPending}
+            >
+              취소
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void onDelete()}
+              disabled={deleteProject.isPending}
+            >
+              {deleteProject.isPending ? "삭제 중…" : "삭제"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

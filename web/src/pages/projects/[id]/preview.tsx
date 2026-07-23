@@ -1,11 +1,18 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Eye, FileText, Pencil } from "lucide-react";
-import { useEffect } from "react";
+import { ArrowLeft, Eye, Pencil, Save, Sparkles, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useProject } from "@/api/projects";
-import { getSourceRef, sourceRefKeys, useProjectSections, useSectionContent } from "@/api/sections";
+import {
+  getSourceRef,
+  sourceRefKeys,
+  useProjectSections,
+  useRewriteSection,
+  useSaveSection,
+  useSectionContent,
+} from "@/api/sections";
 import type { ChapterNode, SectionNode, SectionStatus } from "@/api/types";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -13,7 +20,17 @@ import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Textarea } from "@/components/ui/textarea";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -88,7 +105,7 @@ export default function PreviewPage() {
           </Button>
           <div className="flex items-center justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-semibold text-fg">섹션 미리보기</h1>
+              <h1 className="text-3xl font-semibold text-fg">섹션 미리보기·편집</h1>
               {projectQuery.data ? (
                 <p className="mt-1 text-sm text-fg-secondary">{projectQuery.data.title}</p>
               ) : null}
@@ -117,6 +134,7 @@ export default function PreviewPage() {
             <main className="rounded border border-border bg-bg">
               {selectedId ? (
                 <SectionView
+                  key={selectedId}
                   projectId={projectId}
                   sectionId={selectedId}
                   contentQuery={contentQuery}
@@ -228,9 +246,15 @@ function SectionView({
   sectionId: string;
   contentQuery: ReturnType<typeof useSectionContent>;
 }) {
-  const navigate = useNavigate();
   const data = contentQuery.data;
   const error = contentQuery.error;
+
+  const save = useSaveSection(projectId, sectionId);
+  const rewrite = useRewriteSection(projectId, sectionId);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [aiOpen, setAiOpen] = useState(false);
+  const [instruction, setInstruction] = useState("");
 
   if (contentQuery.isLoading) {
     return (
@@ -261,15 +285,46 @@ function SectionView({
 
   if (!data) return null;
 
+  const startEdit = () => {
+    setDraft(data.content);
+    setEditing(true);
+  };
+
+  const onSave = async () => {
+    try {
+      await save.mutateAsync(draft);
+      toast.success("섹션이 저장됐습니다.");
+      setEditing(false);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "저장에 실패했습니다.";
+      toast.error("저장 실패", { description: msg });
+    }
+  };
+
+  const onRewrite = async () => {
+    try {
+      await rewrite.mutateAsync(instruction.trim());
+      toast.success("AI가 이 섹션을 다시 작성했습니다.");
+      setAiOpen(false);
+      setInstruction("");
+      setEditing(false);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "재작성에 실패했습니다.";
+      toast.error("재작성 실패", { description: msg });
+    }
+  };
+
+  const busy = save.isPending || rewrite.isPending;
+
   return (
     <article className="flex flex-col">
-      <header className="flex items-center justify-between gap-3 border-b border-border px-6 py-4">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
         <div className="flex items-center gap-2">
           <Badge variant="secondary" className="font-mono">
             Lv {data.level}
           </Badge>
           <h2 className="text-lg font-semibold text-fg">
-            <span className="font-mono text-fg-tertiary">{sectionId}</span> {data.title}
+            <span className="font-mono text-fg-tertiary">{sectionId.slice(0, 8)}</span> {data.title}
           </h2>
           {data.qa_status === "passed" ? (
             <Badge variant="default" className="bg-bg-success text-fg-success">
@@ -282,26 +337,81 @@ function SectionView({
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => toast("HWPX 미리보기는 곧 추가됩니다 (placeholder)")}
-          >
-            <FileText className="mr-1 h-4 w-4" />
-            HWPX 미리보기
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => navigate(`/projects/${projectId}/editor?section=${sectionId}`)}
-          >
-            <Pencil className="mr-1 h-4 w-4" />
-            편집 모드로
-          </Button>
+          {editing ? (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={busy}>
+                <X className="mr-1 h-4 w-4" />
+                취소
+              </Button>
+              <Button size="sm" onClick={() => void onSave()} disabled={busy}>
+                <Save className="mr-1 h-4 w-4" />
+                {save.isPending ? "저장 중…" : "저장"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setAiOpen(true)} disabled={busy}>
+                <Sparkles className="mr-1 h-4 w-4" />
+                AI 재작성
+              </Button>
+              <Button size="sm" onClick={startEdit} disabled={busy}>
+                <Pencil className="mr-1 h-4 w-4" />
+                직접 편집
+              </Button>
+            </>
+          )}
         </div>
       </header>
+
       <div className="px-6 py-4">
-        <MarkdownContent content={data.content} />
+        {rewrite.isPending ? (
+          <div className="mb-3 flex items-center gap-2 rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
+            <Sparkles className="h-4 w-4 animate-pulse" />
+            AI가 근거를 검색해 이 섹션을 다시 작성하고 있습니다…
+          </div>
+        ) : null}
+        {editing ? (
+          <Textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            className="min-h-[420px] font-mono text-sm"
+            aria-label="섹션 본문 편집"
+          />
+        ) : (
+          <MarkdownContent content={data.content} />
+        )}
       </div>
+
+      <Dialog open={aiOpen} onOpenChange={setAiOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>AI 재작성</DialogTitle>
+            <DialogDescription>
+              프로젝트 자료에서 근거를 다시 검색해 이 섹션을 새로 작성합니다. 원하는 방향을
+              적어주세요(비워두면 근거 기반으로 자연스럽게 다시 씁니다).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="ai-instruction">재작성 지시 (선택)</Label>
+            <Textarea
+              id="ai-instruction"
+              value={instruction}
+              onChange={(e) => setInstruction(e.target.value)}
+              placeholder="예: 더 간결하게, 정책 시사점을 강조해서"
+              className="min-h-[100px]"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAiOpen(false)} disabled={rewrite.isPending}>
+              취소
+            </Button>
+            <Button onClick={() => void onRewrite()} disabled={rewrite.isPending}>
+              <Sparkles className="mr-1 h-4 w-4" />
+              {rewrite.isPending ? "작성 중…" : "재작성"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </article>
   );
 }

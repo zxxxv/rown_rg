@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/api/client";
 import {
   type SectionContentResponse,
@@ -50,6 +50,60 @@ export function useSectionContent(projectId: string, sectionId: string | null) {
     },
     enabled: Boolean(projectId && sectionId),
     retry: false,
+  });
+}
+
+// ─── 부분 편집: 수동 저장(PATCH) · AI 재작성(POST) ──────────────────────────
+
+async function invalidateSection(
+  qc: ReturnType<typeof useQueryClient>,
+  projectId: string,
+  sectionId: string,
+) {
+  await Promise.all([
+    qc.invalidateQueries({ queryKey: sectionKeys.content(projectId, sectionId) }),
+    qc.invalidateQueries({ queryKey: sectionKeys.tree(projectId) }),
+  ]);
+}
+
+export async function saveSectionContent(
+  projectId: string,
+  sectionId: string,
+  content: string,
+): Promise<SectionContentResponse> {
+  const data = await apiClient.patch<unknown>(`projects/${projectId}/sections/${sectionId}`, {
+    json: { content },
+  });
+  return SectionContentResponseSchema.parse(data);
+}
+
+export function useSaveSection(projectId: string, sectionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...sectionKeys.content(projectId, sectionId), "save"],
+    mutationFn: (content: string) => saveSectionContent(projectId, sectionId, content),
+    onSuccess: () => invalidateSection(qc, projectId, sectionId),
+  });
+}
+
+export async function rewriteSection(
+  projectId: string,
+  sectionId: string,
+  instruction: string,
+): Promise<SectionContentResponse> {
+  const data = await apiClient.post<unknown>(
+    `projects/${projectId}/sections/${sectionId}/rewrite`,
+    { json: { instruction } },
+  );
+  return SectionContentResponseSchema.parse(data);
+}
+
+export function useRewriteSection(projectId: string, sectionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...sectionKeys.content(projectId, sectionId), "rewrite"],
+    mutationFn: (instruction: string) => rewriteSection(projectId, sectionId, instruction),
+    onSuccess: () => invalidateSection(qc, projectId, sectionId),
   });
 }
 

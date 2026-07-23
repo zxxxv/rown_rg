@@ -77,9 +77,7 @@ export function QAStatusList({
               <StatusDot kind={s.kind} label={s.label} />
             </div>
 
-            {isDone ? (
-              <p className="mt-1.5 text-xs text-fg-secondary">{QA_RESULT[step]}</p>
-            ) : null}
+            {isDone ? <p className="mt-1.5 text-xs text-fg-secondary">{QA_RESULT[step]}</p> : null}
 
             {streamCfg && (streamText || isActive) ? (
               <div className="mt-2">

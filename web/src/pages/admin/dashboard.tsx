@@ -161,7 +161,25 @@ function DashboardBody({ data }: { data: AdminDashboardData }) {
             평균 ${Math.round(data.kpis.total_cost_usd / data.daily_costs.length)}/일
           </span>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-2">
+          <div className="flex items-center gap-4 text-xs text-fg-tertiary">
+            <span className="flex items-center gap-1.5">
+              <span
+                aria-hidden
+                className="inline-block w-5 shrink-0 border-t-2 border-solid"
+                style={{ borderColor: "var(--color-accent)" }}
+              />
+              비용 (USD, 실선)
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span
+                aria-hidden
+                className="inline-block w-5 shrink-0 border-t-2 border-dashed"
+                style={{ borderColor: "var(--color-text-warning)" }}
+              />
+              활성 사용자 수 (점선)
+            </span>
+          </div>
           <div className="h-80 w-full">
             <DailyCostChart points={data.daily_costs} />
           </div>

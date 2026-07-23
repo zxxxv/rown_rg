@@ -6,18 +6,34 @@ import {
   FolderOpen,
   Settings,
   Shield,
+  Trash2,
 } from "lucide-react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { ApiError } from "@/api/client";
+import { libraryFileDownloadUrl, useDeleteNode, useSetNodeVisibility } from "@/api/library";
 import { useProject } from "@/api/projects";
-import type { LibraryNode, SourceKind } from "@/api/types";
+import type { LibraryNode, SourceKind, UserRoleType } from "@/api/types";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 
 interface LibraryDetailProps {
   node: LibraryNode | null;
   path: string[];
+  /** 상단 파일 업로드 input을 여는 콜백(빈 폴더 안내 버튼용) */
+  onRequestUpload?: () => void;
 }
 
 const KIND_LABEL: Record<SourceKind, string> = {
@@ -52,7 +68,7 @@ function countDescendants(node: LibraryNode): { folders: number; files: number; 
   return { folders, files, bytes };
 }
 
-export function LibraryDetail({ node, path }: LibraryDetailProps) {
+export function LibraryDetail({ node, path, onRequestUpload }: LibraryDetailProps) {
   if (!node) {
     return (
       <EmptyState
@@ -69,7 +85,11 @@ export function LibraryDetail({ node, path }: LibraryDetailProps) {
         <h2 className="text-xl font-semibold text-fg">{node.name}</h2>
       </header>
 
-      {node.type === "folder" ? <FolderBody node={node} /> : <FileBody node={node} />}
+      {node.type === "folder" ? (
+        <FolderBody node={node} onRequestUpload={onRequestUpload} />
+      ) : (
+        <FileBody node={node} />
+      )}
     </article>
   );
 }
@@ -81,7 +101,13 @@ function Breadcrumb({ path }: { path: string[] }) {
   return <p className="font-mono text-xs text-fg-tertiary">/ {path.join(" / ")}</p>;
 }
 
-function FolderBody({ node }: { node: Extract<LibraryNode, { type: "folder" }> }) {
+function FolderBody({
+  node,
+  onRequestUpload,
+}: {
+  node: Extract<LibraryNode, { type: "folder" }>;
+  onRequestUpload?: () => void;
+}) {
   const stats = countDescendants(node);
   const files = node.children.filter((c) => c.type === "file");
   const subfolders = node.children.filter((c) => c.type === "folder");
@@ -105,6 +131,7 @@ function FolderBody({ node }: { node: Extract<LibraryNode, { type: "folder" }> }
           <FilePlus2 className="mr-1 h-4 w-4" />
           현재 프로젝트에 추가
         </Button>
+        <DeleteNodeButton node={node} />
       </div>
 
       {subfolders.length > 0 ? (
@@ -139,9 +166,11 @@ function FolderBody({ node }: { node: Extract<LibraryNode, { type: "folder" }> }
           title="비어있는 폴더"
           description="파일을 업로드하거나 폴더를 추가하세요."
           action={
-            <Button variant="outline" onClick={() => toast("파일 업로드 — 구현 예정")}>
-              파일 업로드
-            </Button>
+            onRequestUpload ? (
+              <Button variant="outline" onClick={onRequestUpload}>
+                파일 업로드
+              </Button>
+            ) : undefined
           }
         />
       )}
@@ -235,14 +264,12 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
           <FilePlus2 className="mr-1 h-4 w-4" />
           현재 프로젝트에 추가
         </Button>
-        <Button variant="outline" onClick={() => toast(`다운로드 — 구현 예정 (${node.name})`)}>
+        <Button variant="outline" onClick={() => downloadFile(node.id, node.name)}>
           <Download className="mr-1 h-4 w-4" />
           다운로드
         </Button>
-        <Button variant="ghost" onClick={() => toast("권한 설정 — 구현 예정")}>
-          <Settings className="mr-1 h-4 w-4" />
-          권한 설정
-        </Button>
+        <VisibilityDialogButton node={node} />
+        <DeleteNodeButton node={node} />
       </footer>
 
       <p className="flex items-center gap-1 text-xs text-fg-tertiary">
@@ -250,6 +277,149 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
         파일 ID: <span className="font-mono">{node.id}</span>
       </p>
     </div>
+  );
+}
+
+function downloadFile(nodeId: string, filename: string) {
+  const a = document.createElement("a");
+  a.href = libraryFileDownloadUrl(nodeId);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function DeleteNodeButton({ node }: { node: LibraryNode }) {
+  const deleteNode = useDeleteNode();
+  const [open, setOpen] = useState(false);
+  const isFolder = node.type === "folder";
+
+  const onDelete = async () => {
+    try {
+      await deleteNode.mutateAsync(node.id);
+      toast.success(`"${node.name}" 삭제 완료`);
+      setOpen(false);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "삭제에 실패했습니다.";
+      toast.error("삭제 실패", { description: msg });
+    }
+  };
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        className="text-fg-danger"
+        onClick={() => setOpen(true)}
+        disabled={deleteNode.isPending}
+      >
+        <Trash2 className="mr-1 h-4 w-4" />
+        삭제
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{isFolder ? "폴더를 삭제할까요?" : "파일을 삭제할까요?"}</DialogTitle>
+            <DialogDescription>
+              "{node.name}"{isFolder ? "와 하위 폴더·파일 전체가" : "이(가)"} 영구 삭제됩니다. 이
+              작업은 되돌릴 수 없습니다.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>
+              취소
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void onDelete()}
+              disabled={deleteNode.isPending}
+            >
+              {deleteNode.isPending ? "삭제 중…" : "삭제"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+const ROLE_OPTIONS: { value: UserRoleType; label: string }[] = [
+  { value: "viewer", label: "뷰어" },
+  { value: "worker", label: "작성자" },
+  { value: "admin", label: "관리자" },
+  { value: "super_admin", label: "최고관리자" },
+];
+
+function VisibilityDialogButton({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
+  const setVisibility = useSetNodeVisibility();
+  const [open, setOpen] = useState(false);
+  const [roles, setRoles] = useState<string[]>(node.file_meta.visible_to_roles);
+
+  const openDialog = () => {
+    setRoles(node.file_meta.visible_to_roles);
+    setOpen(true);
+  };
+
+  const toggle = (role: string) => {
+    setRoles((prev) => (prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role]));
+  };
+
+  const onSave = async () => {
+    try {
+      await setVisibility.mutateAsync({ nodeId: node.id, visible_to_roles: roles });
+      toast.success("접근 권한이 저장됐습니다.");
+      setOpen(false);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "권한 저장에 실패했습니다.";
+      toast.error("권한 저장 실패", { description: msg });
+    }
+  };
+
+  return (
+    <>
+      <Button variant="ghost" onClick={openDialog}>
+        <Settings className="mr-1 h-4 w-4" />
+        권한 설정
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>접근 권한 설정</DialogTitle>
+            <DialogDescription>
+              이 파일을 열람할 수 있는 역할을 선택하세요. 관리자는 항상 볼 수 있으며, 변경은
+              관리자만 할 수 있습니다.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            {ROLE_OPTIONS.map((opt) => (
+              <label
+                key={opt.value}
+                htmlFor={`vis-${opt.value}`}
+                className="flex cursor-pointer items-center gap-2 rounded border border-border p-2.5"
+              >
+                <Checkbox
+                  id={`vis-${opt.value}`}
+                  checked={roles.includes(opt.value)}
+                  onCheckedChange={() => toggle(opt.value)}
+                />
+                <Label htmlFor={`vis-${opt.value}`} className="cursor-pointer text-sm">
+                  {opt.label}{" "}
+                  <span className="font-mono text-xs text-fg-tertiary">{opt.value}</span>
+                </Label>
+              </label>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>
+              취소
+            </Button>
+            <Button onClick={() => void onSave()} disabled={setVisibility.isPending}>
+              {setVisibility.isPending ? "저장 중…" : "저장"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

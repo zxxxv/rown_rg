@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PasswordInput } from "@/components/ui/password-input";
 import { useAuth } from "@/hooks/useAuth";
 
 interface LocationFromState {
@@ -30,7 +31,7 @@ export default function LoginPage() {
     clearErrors,
   } = useForm<LoginInput>({
     resolver: zodResolver(LoginInputSchema),
-    defaultValues: { id: "", password: "" },
+    defaultValues: { login_id: "", password: "" },
     mode: "onSubmit",
   });
 
@@ -94,7 +95,7 @@ export default function LoginPage() {
           >
             <LockKeyhole className="h-6 w-6" />
           </div>
-          <CardTitle className="text-xl">AI 보고서 생성 시스템</CardTitle>
+          <CardTitle className="text-xl">로운 리포트</CardTitle>
           <CardDescription>로운인사이트 계정으로 로그인하세요.</CardDescription>
         </CardHeader>
 
@@ -124,25 +125,24 @@ export default function LoginPage() {
 
           <div className="flex items-center gap-3">
             <span className="h-px flex-1 bg-border" />
-            <span className="text-xs text-fg-tertiary">또는 이메일로 로그인</span>
+            <span className="text-xs text-fg-tertiary">또는 계정으로 로그인</span>
             <span className="h-px flex-1 bg-border" />
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="login-id">이메일</Label>
+            <Label htmlFor="login-id">이메일 또는 아이디</Label>
             <Controller
-              name="id"
+              name="login_id"
               control={control}
               render={({ field }) => (
                 <Input
                   id="login-id"
-                  type="email"
-                  inputMode="email"
-                  autoComplete="email"
-                  placeholder="name@loweninsight.kr"
+                  type="text"
+                  autoComplete="username"
+                  placeholder="name@naver.com 또는 아이디"
                   disabled={busy || isLocked}
-                  aria-invalid={errors.id ? "true" : undefined}
-                  aria-describedby={errors.id ? "login-id-error" : undefined}
+                  aria-invalid={errors.login_id ? "true" : undefined}
+                  aria-describedby={errors.login_id ? "login-id-error" : undefined}
                   onKeyDown={onEnter}
                   {...field}
                   onChange={(e) => {
@@ -152,9 +152,9 @@ export default function LoginPage() {
                 />
               )}
             />
-            {errors.id ? (
+            {errors.login_id ? (
               <p id="login-id-error" className="text-xs text-fg-danger">
-                {errors.id.message}
+                {errors.login_id.message}
               </p>
             ) : null}
           </div>
@@ -165,9 +165,8 @@ export default function LoginPage() {
               name="password"
               control={control}
               render={({ field }) => (
-                <Input
+                <PasswordInput
                   id="login-password"
-                  type="password"
                   autoComplete="current-password"
                   disabled={busy || isLocked}
                   aria-invalid={errors.password ? "true" : undefined}
@@ -195,12 +194,8 @@ export default function LoginPage() {
             onClick={() => void submit()}
             disabled={busy || isLocked}
           >
-            {isSubmitting ? "로그인 중…" : "이메일로 로그인"}
+            {isSubmitting ? "로그인 중…" : "로그인"}
           </Button>
-
-          <p className="text-center text-xs text-fg-tertiary">
-            비밀번호는 90일마다 변경해야 합니다. 잊으셨다면 관리자에게 문의하세요.
-          </p>
         </CardContent>
       </Card>
     </main>

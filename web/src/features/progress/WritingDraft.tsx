@@ -51,7 +51,9 @@ export function WritingDraft({ title, text, className }: WritingDraftProps) {
         className="max-h-80 min-h-40 overflow-y-auto whitespace-pre-wrap break-words bg-bg p-4 text-sm leading-relaxed text-fg"
         aria-live="polite"
       >
-        {text || <span className="text-fg-tertiary">초안이 생성되면 여기에 본문이 표시됩니다.</span>}
+        {text || (
+          <span className="text-fg-tertiary">초안이 생성되면 여기에 본문이 표시됩니다.</span>
+        )}
         {text ? (
           <span
             aria-hidden

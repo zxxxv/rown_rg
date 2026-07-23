@@ -28,6 +28,7 @@ export const AdminUserListSchema = z.array(AdminUserSchema);
 export interface UsersListParams {
   limit?: number;
   offset?: number;
+  q?: string;
 }
 
 export const userKeys = {
@@ -41,6 +42,7 @@ export async function getUsers(params: UsersListParams = {}): Promise<AdminUser[
   const searchParams: Record<string, string> = {};
   if (params.limit !== undefined) searchParams.limit = String(params.limit);
   if (params.offset !== undefined) searchParams.offset = String(params.offset);
+  if (params.q) searchParams.q = params.q;
   const data = await apiClient.get<unknown>("users", { searchParams });
   return AdminUserListSchema.parse(data);
 }

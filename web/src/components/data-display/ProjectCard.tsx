@@ -25,6 +25,18 @@ const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
   archived: "tertiary",
 };
 
+// 단계 기반 근사 진행률 — 백엔드 _STAGE_PERCENT와 동일. ProjectRead에 progress가 없어
+// (실백엔드) 상태에서 유도한다. 완료·보관은 100%.
+const STATUS_PERCENT: Record<ProjectStatus, number> = {
+  created: 0,
+  researching: 20,
+  indexing: 40,
+  writing: 60,
+  reviewing: 85,
+  completed: 100,
+  archived: 100,
+};
+
 export interface ProjectCardProps {
   project: Project;
   onClick?: () => void;
@@ -33,7 +45,8 @@ export interface ProjectCardProps {
 
 export function ProjectCard({ project, onClick, className }: ProjectCardProps) {
   const interactive = Boolean(onClick);
-  const progress = Math.max(0, Math.min(100, project.progress ?? 0));
+  // 목록 카드는 프로젝트 상태가 진실(완료=100%). project.progress는 실백엔드엔 없음.
+  const progress = Math.max(0, Math.min(100, project.progress ?? STATUS_PERCENT[project.status]));
 
   return (
     <article

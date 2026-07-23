@@ -61,6 +61,9 @@ export default function ProjectsPage() {
   const status = parseStatus(params.get("status"));
   const sort = parseSort(params.get("sort"));
   const qRaw = params.get("q") ?? "";
+  // 관리자만 전체 프로젝트 조회 가능(scope=all). 일반 사용자는 항상 자기 것.
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const scope: "mine" | "all" = isAdmin && params.get("scope") === "all" ? "all" : "mine";
 
   const [searchInput, setSearchInput] = useState(qRaw);
   useEffect(() => {
@@ -88,8 +91,9 @@ export default function ProjectsPage() {
     () => ({
       ...(status !== "all" ? { status } : {}),
       ...(debouncedSearch.trim() ? { q: debouncedSearch.trim() } : {}),
+      ...(scope === "all" ? { scope: "all" as const } : {}),
     }),
-    [status, debouncedSearch],
+    [status, debouncedSearch, scope],
   );
   const { data, isLoading, isError, refetch, hasNextPage, fetchNextPage, isFetchingNextPage } =
     useProjectListInfinite(filters);
@@ -130,15 +134,30 @@ export default function ProjectsPage() {
       <div className="flex flex-col gap-6">
         <header className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-semibold text-fg">내 프로젝트</h1>
+            <h1 className="text-3xl font-semibold text-fg">
+              {scope === "all" ? "전체 프로젝트" : "내 프로젝트"}
+            </h1>
             <p className="mt-1 text-sm text-fg-secondary">
               {items.length}건{hasNextPage ? "+" : ""}
               {hasActiveFilter ? " (필터 적용 중)" : ""}
             </p>
           </div>
-          <Button onClick={() => navigate("/projects/new")}>
-            <FilePlus2 className="mr-1 h-4 w-4" />새 프로젝트
-          </Button>
+          <div className="flex items-center gap-2">
+            {isAdmin ? (
+              <Tabs
+                value={scope}
+                onValueChange={(v) => updateParam("scope", v === "all" ? "all" : null)}
+              >
+                <TabsList>
+                  <TabsTrigger value="mine">내 프로젝트</TabsTrigger>
+                  <TabsTrigger value="all">전체 프로젝트</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            ) : null}
+            <Button onClick={() => navigate("/projects/new")}>
+              <FilePlus2 className="mr-1 h-4 w-4" />새 프로젝트
+            </Button>
+          </div>
         </header>
 
         <div className="flex flex-col gap-3 rounded border border-border bg-bg p-4 lg:flex-row lg:items-center lg:justify-between">
@@ -160,7 +179,7 @@ export default function ProjectsPage() {
               />
               <Input
                 type="search"
-                placeholder="제목·주제 검색"
+                placeholder={scope === "all" ? "제목·주제·소유자명 검색" : "제목·주제 검색"}
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 aria-label="프로젝트 검색"

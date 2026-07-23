@@ -1,14 +1,24 @@
 import { FolderPlus, Search, Upload, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { useLibraryTree } from "@/api/library";
+import { ApiError } from "@/api/client";
+import { useCreateFolder, useLibraryTree, useUploadFile } from "@/api/library";
 import type { LibraryNode } from "@/api/types";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { LibraryDetail } from "@/features/library/LibraryDetail";
 import { LibraryTree } from "@/features/library/LibraryTree";
@@ -66,6 +76,44 @@ export default function LibraryPage() {
     [tree, selectedId],
   );
 
+  // 생성·업로드 대상 폴더 — 폴더를 선택 중이면 그 안에, 아니면 최상위에
+  const targetFolderId = lookup.node?.type === "folder" ? lookup.node.id : null;
+  const targetFolderName = lookup.node?.type === "folder" ? lookup.node.name : "최상위";
+
+  const createFolder = useCreateFolder();
+  const uploadFile = useUploadFile();
+  const [folderDialogOpen, setFolderDialogOpen] = useState(false);
+  const [folderName, setFolderName] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const onCreateFolder = async () => {
+    const name = folderName.trim();
+    if (!name) return;
+    try {
+      await createFolder.mutateAsync({ name, parent_id: targetFolderId });
+      toast.success(`폴더 "${name}"이(가) 추가됐습니다.`);
+      setFolderDialogOpen(false);
+      setFolderName("");
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "폴더 생성에 실패했습니다.";
+      toast.error("폴더 생성 실패", { description: msg });
+    }
+  };
+
+  const onPickFile = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file) return;
+    try {
+      await uploadFile.mutateAsync({ file, parent_id: targetFolderId });
+      toast.success(`"${file.name}" 업로드 완료 (${targetFolderName})`);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "업로드에 실패했습니다.";
+      toast.error("업로드 실패", { description: msg });
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
   return (
     <AppShell
       user={user ? { name: user.name, role: user.role } : null}
@@ -82,19 +130,31 @@ export default function LibraryPage() {
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => toast("폴더 추가 — 구현 예정")}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setFolderDialogOpen(true)}
+                disabled={createFolder.isPending}
+              >
                 <FolderPlus className="mr-1 h-4 w-4" />
                 폴더 추가
               </Button>
-              <Button size="sm" onClick={() => toast("파일 업로드 — 구현 예정")}>
+              <Button
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadFile.isPending}
+              >
                 <Upload className="mr-1 h-4 w-4" />
-                파일 업로드
+                {uploadFile.isPending ? "업로드 중…" : "파일 업로드"}
               </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                aria-label="파일 선택"
+                onChange={(e) => void onPickFile(e.target.files)}
+              />
             </div>
-          </div>
-          <div className="rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
-            현재는 모킹 단계입니다. 실 백엔드 연동·고급 트리(react-arborist) 도입은 추후 구현 예정 —
-            업로드·폴더 추가·권한 설정은 지금은 안내 토스트로만 동작합니다.
           </div>
         </header>
 
@@ -147,11 +207,50 @@ export default function LibraryPage() {
             </ScrollArea>
 
             <main className="min-h-[400px] rounded border border-border bg-bg p-5">
-              <LibraryDetail node={lookup.node} path={lookup.path} />
+              <LibraryDetail
+                node={lookup.node}
+                path={lookup.path}
+                onRequestUpload={() => fileInputRef.current?.click()}
+              />
             </main>
           </div>
         )}
       </div>
+
+      <Dialog open={folderDialogOpen} onOpenChange={setFolderDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>폴더 추가</DialogTitle>
+            <DialogDescription>위치: {targetFolderName}</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="new-folder-name">폴더 이름</Label>
+            <Input
+              id="new-folder-name"
+              value={folderName}
+              onChange={(e) => setFolderName(e.target.value)}
+              placeholder="예: 공용 분석 양식"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void onCreateFolder();
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFolderDialogOpen(false)}>
+              취소
+            </Button>
+            <Button
+              onClick={() => void onCreateFolder()}
+              disabled={createFolder.isPending || !folderName.trim()}
+            >
+              {createFolder.isPending ? "추가 중…" : "추가"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }

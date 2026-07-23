@@ -6,6 +6,8 @@ export type UserRoleType = z.infer<typeof UserRoleSchema>;
 export const UserSchema = z.object({
   id: z.string(),
   email: z.string().email(),
+  // 이메일 대신 로그인에 쓸 수 있는 아이디(없는 계정도 있음)
+  username: z.string().nullish(),
   name: z.string(),
   role: UserRoleSchema,
   // 프로필(마이페이지)용 — /auth/me 만 채워줌. 로그인 응답 등에선 생략될 수 있어 optional.
@@ -112,7 +114,7 @@ export const DEFAULT_PROJECT_CONFIG: ProjectConfig = {
   enable_glossary: false,
   depth_mode: "full_report",
   output_formats: ["hwpx"],
-  notification_channels: ["email"],
+  notification_channels: [],
 };
 
 // 백엔드 ProjectRead(schemas/project.py)와 1:1 — progress만 프론트 전용 초과 필드(optional).
@@ -125,6 +127,8 @@ export const ProjectSchema = z.object({
   status: ProjectStatusSchema,
   depth_mode: DepthModeSchema,
   owner_id: z.string(),
+  // 표시용 소유자 이름(owner eager-load 시에만 채워짐) — 없으면 owner_id로 폴백
+  owner_name: z.string().nullish(),
   created_at: z.string(),
   updated_at: z.string(),
   progress: z.number().min(0).max(100).optional(),
@@ -287,7 +291,7 @@ export const LibraryTreeResponseSchema = z.object({
 export type LibraryTreeResponse = z.infer<typeof LibraryTreeResponseSchema>;
 
 export const LoginInputSchema = z.object({
-  id: z.string().min(1, "사번 또는 이메일을 입력하세요"),
+  login_id: z.string().min(1, "이메일 또는 아이디를 입력하세요"),
   password: z.string().min(8, "비밀번호는 8자 이상이어야 합니다"),
 });
 export type LoginInput = z.infer<typeof LoginInputSchema>;

@@ -8,14 +8,14 @@ import { useAuth } from "@/hooks/useAuth";
 
 export function AuthDemo() {
   const { user, isLoading, login, logout } = useAuth();
-  const [id, setId] = useState("admin@loweninsight.kr");
-  const [password, setPassword] = useState("demo1234");
+  const [loginId, setLoginId] = useState("admin_rown");
+  const [password, setPassword] = useState("Admin_rown12!");
   const [busy, setBusy] = useState(false);
 
   const onLogin = async () => {
     setBusy(true);
     try {
-      const u = await login({ id, password });
+      const u = await login({ login_id: loginId, password });
       toast.success(`로그인 성공 — ${u.name}`);
     } catch (err) {
       if (err instanceof ApiError) {
@@ -45,11 +45,11 @@ export function AuthDemo() {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-1">
-          <Label htmlFor="auth-demo-id">사번/이메일</Label>
+          <Label htmlFor="auth-demo-id">이메일 또는 아이디</Label>
           <Input
             id="auth-demo-id"
-            value={id}
-            onChange={(e) => setId(e.target.value)}
+            value={loginId}
+            onChange={(e) => setLoginId(e.target.value)}
             autoComplete="username"
           />
         </div>
@@ -91,7 +91,7 @@ export function AuthDemo() {
       </div>
 
       <p className="text-xs text-fg-tertiary">
-        MSW mock 자격증명: <span className="font-mono">admin@loweninsight.kr / demo1234</span>
+        MSW mock 자격증명: <span className="font-mono">admin_rown / Admin_rown12!</span>
       </p>
     </div>
   );

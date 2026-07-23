@@ -7,6 +7,7 @@ import {
   KeyRound,
   Library,
   Loader2,
+  Settings2,
   ShieldCheck,
   SquareStack,
   Users,
@@ -42,6 +43,7 @@ const ADMIN_NAV: NavItem[] = [
     phaseBadge: "준비 중",
   },
   { to: "/admin/ip", label: "IP 관리", icon: Globe, minRole: "super_admin" },
+  { to: "/admin/settings", label: "시스템 설정", icon: Settings2, minRole: "super_admin" },
   {
     to: "/admin/hwpx-style",
     label: "HWPX 양식",
@@ -89,7 +91,7 @@ export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
           collapsed ? "justify-center" : "justify-between",
         )}
       >
-        {!collapsed && <span className="text-sm font-semibold text-fg">로운인사이트</span>}
+        {!collapsed && <span className="text-sm font-semibold text-fg">로운 리포트</span>}
         <button
           type="button"
           onClick={onToggleCollapsed}

@@ -49,6 +49,31 @@ function errMsg(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
 }
 
+const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const IPV6_RE =
+  /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(:[0-9a-fA-F]{1,4}){1,6}|:((:[0-9a-fA-F]{1,4}){1,7}|:))$/;
+
+function isIpv4(s: string): boolean {
+  const m = IPV4_RE.exec(s);
+  return m ? m.slice(1).every((o) => Number(o) <= 255) : false;
+}
+
+/** IPv4/IPv6 단일 IP 또는 CIDR 검증. 백엔드 ipaddress.ip_network(strict=False)와 정합. */
+function isValidIpOrCidr(value: string): boolean {
+  const parts = value.trim().split("/");
+  if (parts.length > 2) return false;
+  const [addr, prefix] = parts;
+  const v4 = isIpv4(addr);
+  const v6 = !v4 && IPV6_RE.test(addr);
+  if (!v4 && !v6) return false;
+  if (prefix !== undefined) {
+    if (!/^\d+$/.test(prefix)) return false;
+    const p = Number(prefix);
+    return v4 ? p >= 0 && p <= 32 : p >= 0 && p <= 128;
+  }
+  return true;
+}
+
 function isExpired(entry: IpWhitelistEntry): boolean {
   return Boolean(entry.expires_at && new Date(entry.expires_at).getTime() <= Date.now());
 }
@@ -107,9 +132,11 @@ function AddEntryCard() {
   const [description, setDescription] = useState("");
   const [expiresAt, setExpiresAt] = useState(""); // datetime-local 값
 
+  const trimmed = ipCidr.trim();
+  const cidrInvalid = trimmed !== "" && !isValidIpOrCidr(trimmed);
+
   const submit = () => {
-    const trimmed = ipCidr.trim();
-    if (!trimmed) return;
+    if (!trimmed || cidrInvalid) return;
     create.mutate(
       {
         ip_cidr: trimmed,
@@ -139,7 +166,7 @@ function AddEntryCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-wrap items-end gap-3">
-        <div className="flex min-w-52 flex-1 flex-col gap-1.5">
+        <div className="flex w-44 flex-col gap-1.5">
           <Label htmlFor="ip-cidr">IP / CIDR</Label>
           <Input
             id="ip-cidr"
@@ -147,9 +174,16 @@ function AddEntryCard() {
             onChange={(e) => setIpCidr(e.target.value)}
             placeholder="10.0.0.0/24"
             className="font-mono"
+            aria-invalid={cidrInvalid ? "true" : undefined}
+            aria-describedby={cidrInvalid ? "ip-cidr-error" : undefined}
           />
+          {cidrInvalid ? (
+            <p id="ip-cidr-error" className="text-xs text-fg-danger">
+              잘못된 IP/CIDR 형식입니다 (예: 1.2.3.4, 10.0.0.0/24)
+            </p>
+          ) : null}
         </div>
-        <div className="flex min-w-52 flex-1 flex-col gap-1.5">
+        <div className="flex w-52 flex-col gap-1.5">
           <Label htmlFor="ip-description">설명</Label>
           <Input
             id="ip-description"
@@ -159,7 +193,7 @@ function AddEntryCard() {
             maxLength={255}
           />
         </div>
-        <div className="flex min-w-52 flex-col gap-1.5">
+        <div className="flex w-52 flex-col gap-1.5">
           <Label htmlFor="ip-expires">만료 시각 (선택)</Label>
           <Input
             id="ip-expires"
@@ -168,7 +202,7 @@ function AddEntryCard() {
             onChange={(e) => setExpiresAt(e.target.value)}
           />
         </div>
-        <Button onClick={submit} disabled={!ipCidr.trim() || create.isPending}>
+        <Button onClick={submit} disabled={!trimmed || cidrInvalid || create.isPending}>
           <Plus className="mr-1 h-4 w-4" aria-hidden />
           {create.isPending ? "등록 중…" : "추가"}
         </Button>

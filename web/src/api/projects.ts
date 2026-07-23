@@ -12,10 +12,12 @@ import type { ProjectFormValues } from "@/features/project-config/schema";
 /** 목록 페이지 크기 — 배열 길이 < limit 이면 다음 페이지 없음으로 판단한다. */
 export const PROJECT_PAGE_SIZE = 20;
 
-/** 서버 필터 — status는 ProjectStage 값(오값 422), q는 제목·주제 부분검색. */
+/** 서버 필터 — status는 ProjectStage 값(오값 422), q는 제목·주제·소유자명 부분검색.
+ *  scope=all은 admin·super_admin만 전체를 본다(일반 사용자는 무시하고 자기 것). */
 export interface ProjectListFilters {
   status?: ProjectStatus;
   q?: string;
+  scope?: "mine" | "all";
 }
 
 export interface ProjectListParams extends ProjectListFilters {
@@ -38,6 +40,7 @@ export async function getProjectList(params: ProjectListParams = {}): Promise<Pr
   if (params.offset !== undefined) searchParams.offset = String(params.offset);
   if (params.status) searchParams.status = params.status;
   if (params.q) searchParams.q = params.q;
+  if (params.scope) searchParams.scope = params.scope;
 
   const data = await apiClient.get<unknown>("projects", { searchParams });
   return ProjectListSchema.parse(data);
@@ -120,6 +123,22 @@ export function useRunProject() {
     mutationFn: runProject,
     onSuccess: (_res, id) => {
       void qc.invalidateQueries({ queryKey: projectKeys.detail(id) });
+      void qc.invalidateQueries({ queryKey: projectKeys.all });
+    },
+  });
+}
+
+/** DELETE /projects/{id} — 완료·보관 상태만 허용(그 외 422). 사용량 기록은 보존된다. */
+export async function deleteProject(id: string): Promise<void> {
+  await apiClient.delete<void>(`projects/${id}`);
+}
+
+export function useDeleteProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...projectKeys.all, "delete"],
+    mutationFn: deleteProject,
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: projectKeys.all });
     },
   });

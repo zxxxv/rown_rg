@@ -13,7 +13,7 @@ function url(path: string): string {
 }
 
 interface LoginBody {
-  id: string;
+  login_id: string;
   password: string;
 }
 
@@ -32,7 +32,9 @@ export const authHandlers = [
     }
 
     const body = (await request.json()) as LoginBody;
-    if (body.id === DEMO_CREDENTIALS.id && body.password === DEMO_CREDENTIALS.password) {
+    const idMatches =
+      body.login_id === DEMO_CREDENTIALS.username || body.login_id === DEMO_CREDENTIALS.email;
+    if (idMatches && body.password === DEMO_CREDENTIALS.password) {
       isLoggedIn = true;
       failureCount = 0;
       return HttpResponse.json({ data: { user: DEMO_ADMIN_USER } }, { status: 200 });

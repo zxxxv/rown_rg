@@ -4,6 +4,7 @@ import type { User } from "@/api/types";
 export const DEMO_ADMIN_USER: User = {
   id: "u_admin_001",
   email: "admin@loweninsight.kr",
+  username: "admin_rown",
   name: "관리자",
   role: "super_admin",
   is_active: true,
@@ -14,6 +15,7 @@ export const DEMO_ADMIN_USER: User = {
 };
 
 export const DEMO_CREDENTIALS = {
-  id: "admin@loweninsight.kr",
-  password: "demo1234",
+  username: "admin_rown",
+  email: "admin@loweninsight.kr",
+  password: "Admin_rown12!",
 } as const;
