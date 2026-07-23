@@ -10,11 +10,16 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+import structlog
+
 from src.core.types import RetrievedChunk, SectionPlan
 from src.services.retrieval.base import SearchClient, SearchHit, Track
 
 if TYPE_CHECKING:
     from src.clients.reranker_client import RerankerClient
+    from src.services.retrieval._raptor import SummaryFetcher
+
+logger = structlog.get_logger(__name__)
 
 # 섹션 하나 → 근거 청크. write 루프가 의존하는 유일한 검색 인터페이스.
 SectionRetriever = Callable[[SectionPlan], Awaitable[list[RetrievedChunk]]]
@@ -48,12 +53,17 @@ async def retrieve_for_section(
     top_k: int = DEFAULT_TOP_K,
     reranker: RerankerClient | None = None,
     fetch_k: int = DEFAULT_FETCH_K,
+    summary_fetcher: SummaryFetcher | None = None,
 ) -> list[RetrievedChunk]:
     """한 섹션의 근거 청크를 검색해 RetrievedChunk 리스트로 반환.
 
     reranker가 주어지면 넓게(fetch_k) 검색한 뒤 cross-encoder로 재채점해 top_k로
     줄인다. 재채점 질의는 항상 원 쿼리다 — HyDE 확장은 semantic 백엔드 내부에만
     적용되므로 여기서는 보이지 않는다.
+
+    summary_fetcher(RAPTOR)가 있으면 요약 노드(is_summary=True)를 뒤에 덧붙인다 —
+    리랭킹 대상이 아니며, 후보 생성에서 인용 불가 배경 맥락으로만 쓰인다.
+    실패는 삼킨다(맥락 부재가 검색 실패가 되어선 안 된다).
     """
     query = _section_query(section)
     if reranker is None:
@@ -64,7 +74,13 @@ async def retrieve_for_section(
 
         wide = await client.search(query, project_id, track, max(fetch_k, top_k))
         hits = await rerank_hits(reranker, query, wide, top_k=top_k)
-    return [hit_to_chunk(h) for h in hits]
+    chunks = [hit_to_chunk(h) for h in hits]
+    if summary_fetcher is not None:
+        try:
+            chunks.extend(await summary_fetcher(query))
+        except Exception:
+            logger.warning("retrieval.summary_fetch_failed", project_id=str(project_id))
+    return chunks
 
 
 def make_section_retriever(
@@ -75,6 +91,7 @@ def make_section_retriever(
     top_k: int = DEFAULT_TOP_K,
     reranker: RerankerClient | None = None,
     fetch_k: int = DEFAULT_FETCH_K,
+    summary_fetcher: SummaryFetcher | None = None,
 ) -> SectionRetriever:
     """프로젝트·검색기에 바인딩된 SectionRetriever를 만든다 (write 루프 주입용)."""
 
@@ -87,6 +104,7 @@ def make_section_retriever(
             top_k=top_k,
             reranker=reranker,
             fetch_k=fetch_k,
+            summary_fetcher=summary_fetcher,
         )
 
     return _retrieve

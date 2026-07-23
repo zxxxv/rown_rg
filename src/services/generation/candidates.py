@@ -30,6 +30,13 @@ _CITE_RE = re.compile(r"\[(\d+)\]")
 def _build_prompt(
     section: SectionPlan, chunks: Sequence[RetrievedChunk], guidance: str = ""
 ) -> str:
+    """후보 생성 유저 프롬프트 — [번호] 인용 풀은 leaf 청크만.
+
+    RAPTOR 요약(is_summary=True)은 번호 없는 '배경 맥락' 블록으로 분리한다 —
+    모델이 흐름 파악에는 쓰되 인용하지 못하게(참고문헌 무결성).
+    """
+    citable = [c for c in chunks if not c.is_summary]
+    summaries = [c for c in chunks if c.is_summary]
     lines = [
         f"작성할 섹션: {section.chapter_number}.{section.section_number} {section.title}",
         "",
@@ -37,8 +44,12 @@ def _build_prompt(
     if guidance:
         # 플래너 산출물(작성 방향·핵심 포인트) — 프리셋 경로에서만 채워진다.
         lines.extend([guidance, ""])
+    if summaries:
+        lines.append("배경 맥락 (전체 자료의 요약 — 참고만 하고 절대 인용하지 말 것):")
+        lines.extend(f"- {s.content}" for s in summaries)
+        lines.append("")
     lines.append("근거 자료:")
-    for i, ch in enumerate(chunks, start=1):
+    for i, ch in enumerate(citable, start=1):
         lines.append(f"[{i}] {ch.content}")
     lines.extend(
         [
@@ -119,6 +130,8 @@ async def generate_section_candidates(
     client = client or get_llm_client()
     ctx = context or build_writer_context(section)
     prompt = _build_prompt(section, chunks, guidance=ctx.guidance)
+    # [n] 마커는 인용 가능 풀(leaf)의 인덱스다 — 프롬프트 번호 매김과 동일한 리스트.
+    citable = [c for c in chunks if not c.is_summary]
     resolved_max_tokens = max_tokens if max_tokens is not None else ctx.max_tokens
     temps = [min(base_temperature + i * TEMPERATURE_STEP, TEMPERATURE_CEILING) for i in range(n)]
     with token_context(
@@ -131,7 +144,7 @@ async def generate_section_candidates(
                 _one_candidate(
                     client,
                     section,
-                    chunks,
+                    citable,
                     prompt,
                     system=ctx.system,
                     model=model,

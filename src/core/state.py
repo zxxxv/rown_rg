@@ -29,6 +29,7 @@ class ProjectState(BaseModel):
     # 입력
     topic: str
     preset: str | None = None
+    depth_mode: str = "full_report"  # 작성 깊이 — RAPTOR 트리 깊이 등 품질 노브의 입력
     options: dict = Field(default_factory=dict)
 
     # 단계별 출력
@@ -164,6 +165,7 @@ class ProjectState(BaseModel):
             updated_at=project_row["updated_at"],
             topic=project_row["topic"],
             preset=project_row["preset"],
+            depth_mode=project_row.get("depth_mode") or "full_report",
             options=project_row.get("config", {}),
             current_stage=ProjectStage(project_row["status"]),
             sources=sources or [],

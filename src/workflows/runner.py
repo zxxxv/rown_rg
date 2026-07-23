@@ -73,6 +73,7 @@ def _state_from_project(project: Project) -> ProjectState:
             "updated_at": project.updated_at,
             "topic": project.topic,
             "preset": project.preset,
+            "depth_mode": project.depth_mode,
             "status": project.status,
             "config": project.config,
         }

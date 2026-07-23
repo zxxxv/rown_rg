@@ -96,6 +96,9 @@ class RetrievedChunk(BaseModel):
     source_id: UUID
     content: str
     score: float
+    # RAPTOR 요약 노드 여부 — True면 프롬프트에서 '배경 맥락'으로만 쓰이고
+    # [번호] 인용 풀에서 제외된다(인용 무결성은 leaf 청크 계약 유지).
+    is_summary: bool = False
 
 
 class RetrievalResult(BaseModel):

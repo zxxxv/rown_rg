@@ -108,6 +108,12 @@ class Settings(BaseSettings):
     hyde_enabled: bool = False
     hyde_model: str = "gemini-2.5-flash"
 
+    # RAPTOR 요약 트리 — 인덱싱 후 의미 클러스터링 요약을 쌓아 검색 맥락으로 제공.
+    # 트리 깊이는 depth_mode가 결정(indexing/raptor.DEPTH_LEVELS). 빌드 실패는 비치명.
+    raptor_enabled: bool = True
+    raptor_model: str = "gemini-2.5-flash"  # 요약 전용 — 종료 시 lite/후속 flash로 .env 교체
+    raptor_top_k: int = 3  # 섹션 검색에 곁들일 배경 맥락 요약 수
+
     @property
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION

@@ -86,6 +86,37 @@ class TestBuildPrompt:
         assert str(chunks[0].chunk_id) not in prompt
 
 
+# ---------- RAPTOR 요약 분리 (배경 맥락 — 인용 불가) ----------
+
+
+def _summary(content: str) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=uuid4(), source_id=uuid4(), content=content, score=0.5, is_summary=True
+    )
+
+
+class TestSummaryContextSplit:
+    def test_summaries_unnumbered_in_context_block(self):
+        chunks = [_summary("전체 요약입니다"), *_chunks(2)]
+        prompt = _build_prompt(_section(), chunks)
+        assert "배경 맥락" in prompt
+        assert "- 전체 요약입니다" in prompt
+        # 번호 매김은 leaf부터 1번 — 요약이 번호를 차지하지 않는다.
+        assert "[1] 근거0" in prompt
+        assert "[2] 근거1" in prompt
+
+    def test_no_context_block_without_summaries(self):
+        assert "배경 맥락" not in _build_prompt(_section(), _chunks(1))
+
+    async def test_cited_ids_map_to_leaf_pool_only(self):
+        summary = _summary("요약")
+        leafs = _chunks(1)
+        stub = _StubClient(["본문 [1]"])
+        drafts = await generate_section_candidates(_section(), [summary, *leafs], n=1, client=stub)
+        # [1]은 인용 가능 풀(leaf)의 첫 항목 — 요약 노드가 아니다.
+        assert drafts[0].cited_chunk_ids == [leafs[0].chunk_id]
+
+
 # ---------- generate_section_candidates ----------
 
 
