@@ -1,5 +1,5 @@
 import { useCallback, useReducer } from "react";
-import type { ProgressSnapshot } from "@/api/progress";
+import type { PendingGate, ProgressSnapshot } from "@/api/progress";
 import type { PhaseName, ProgressMessage, StreamChannel } from "@/api/ws-messages";
 
 const STREAM_MAX_CHARS = 500;
@@ -29,6 +29,8 @@ export interface ProgressUiState {
   writing_section: string | null;
   checkpoint_id: string | null;
   checkpoint_level: 1 | 2 | null;
+  /** 게이트 종류·payload — 스냅샷(REST)에서만 채워진다 (WS checkpoint 메시지엔 없음) */
+  pending_gate: PendingGate | null;
   error: { code: string; message: string } | null;
   finished: boolean;
 }
@@ -61,6 +63,7 @@ export function initialProgressState(): ProgressUiState {
     writing_section: null,
     checkpoint_id: null,
     checkpoint_level: null,
+    pending_gate: null,
     error: null,
     finished: false,
   };
@@ -92,10 +95,11 @@ function reducer(state: ProgressUiState, action: Action): ProgressUiState {
       percent: s.percent,
       eta_seconds: s.eta_seconds ?? state.eta_seconds,
       checkpoint_id: s.pending_checkpoint_id,
+      pending_gate: s.pending_gate,
     };
   }
   if (action.type === "clear_checkpoint") {
-    return { ...state, checkpoint_id: null, checkpoint_level: null };
+    return { ...state, checkpoint_id: null, checkpoint_level: null, pending_gate: null };
   }
   if (action.type === "clear_error") {
     return { ...state, error: null };

@@ -2,7 +2,11 @@ import { ArrowLeft, FileText, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { type CheckpointDecision, useDecideCheckpoint } from "@/api/checkpoints";
+import {
+  type CheckpointDecision,
+  parseQaSelectPayload,
+  useDecideCheckpoint,
+} from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
 import { ADOPTED_SOURCES, LEVEL1_SUMMARY, OUTLINE } from "@/api/mock/fixtures/scenarios/_content";
 import { useProgressSnapshot } from "@/api/progress";
@@ -20,6 +24,7 @@ import { CostTracker } from "@/features/progress/CostTracker";
 import { EtaIndicator } from "@/features/progress/EtaIndicator";
 import { PhaseTracker } from "@/features/progress/PhaseTracker";
 import { QAStatusList } from "@/features/progress/QAStatusList";
+import { QaSelectGate } from "@/features/progress/QaSelectGate";
 import { StepStream } from "@/features/progress/StepStream";
 import { useProgressState } from "@/features/progress/useProgressState";
 import { WritingDraft } from "@/features/progress/WritingDraft";
@@ -103,6 +108,21 @@ export default function ProgressPage() {
     prevStatusRef.current = wsStatus;
   }, [wsStatus, attempts, snapshotQuery]);
 
+  // WS checkpoint 메시지에는 payload가 없다 — 게이트가 뜨면 스냅샷을 다시 당겨
+  // pending_gate(종류·payload)를 채운다. qa_select면 전용 선택 UI로 분기.
+  const { refetch: refetchSnapshot } = snapshotQuery;
+  useEffect(() => {
+    if (state.checkpoint_id && !state.pending_gate) void refetchSnapshot();
+  }, [state.checkpoint_id, state.pending_gate, refetchSnapshot]);
+
+  const qaPayload = useMemo(
+    () =>
+      state.pending_gate?.gate === "qa_select"
+        ? parseQaSelectPayload(state.pending_gate.payload)
+        : null,
+    [state.pending_gate],
+  );
+
   const decide = useDecideCheckpoint();
   const onDecide = (decision: CheckpointDecision) => {
     if (!state.checkpoint_id) return;
@@ -155,7 +175,16 @@ export default function ProgressPage() {
           </div>
         </header>
 
-        {state.checkpoint_id ? (
+        {state.checkpoint_id && qaPayload ? (
+          <QaSelectGate
+            projectId={projectId}
+            payload={qaPayload}
+            onResumed={() => {
+              clearCheckpoint();
+              void refetchSnapshot();
+            }}
+          />
+        ) : state.checkpoint_id ? (
           <ReviewCheckpoint
             number={(state.checkpoint_level ?? 1) as 1 | 2}
             title={state.checkpoint_level === 2 ? "구조 검토 — Level 2 완료" : "자료 검토 요약"}
