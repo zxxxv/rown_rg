@@ -3,7 +3,7 @@ from urllib.parse import quote
 
 import httpx
 
-from src.core.config import settings
+from src.core import app_settings
 from src.infrastructure.naver_works.auth import get_valid_token
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ async def send_bot_message(
 ) -> None:
     token = await get_valid_token()
     user_id = quote(target_email, safe="@")
-    url = f"{_NW_API_BASE}/bots/{settings.nw_bot_id}/users/{user_id}/messages"
+    url = f"{_NW_API_BASE}/bots/{app_settings.get_str('nw_bot_id')}/users/{user_id}/messages"
 
     message_body = _BOT_MESSAGES.get(result_type, _BOT_MESSAGES["success"])
 

@@ -26,8 +26,8 @@ from src.api.schemas.admin import (
     UserLimitRead,
     UserUsageRow,
 )
+from src.core import app_settings
 from src.core.clock import now
-from src.core.config import settings
 from src.core.exceptions import NotFoundError, ValidationError
 from src.core.limit import default_limit_for
 from src.core.types import Role
@@ -88,7 +88,7 @@ async def get_admin_dashboard(
 
     kpis = AdminKPI(
         total_cost_usd=float(total_cost),
-        cost_limit_usd=float(settings.org_monthly_cost_limit_usd),
+        cost_limit_usd=float(app_settings.get_decimal("org_monthly_cost_limit_usd")),
         active_users=active_users,
         active_projects=active_projects,
         completed_reports=completed_reports,

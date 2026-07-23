@@ -20,6 +20,7 @@ import structlog
 from sqlalchemy import func, select
 
 from src.clients.llm import token_tracker
+from src.core import app_settings
 from src.core.clock import now
 from src.core.config import settings
 from src.core.exceptions import QuotaExceededError
@@ -111,7 +112,7 @@ async def enforce() -> None:
     org_cost, user_cost, user_limit = await _fetch_usage(user_id)
     check_limits(
         org_cost=org_cost,
-        org_limit=settings.org_monthly_cost_limit_usd,
+        org_limit=app_settings.get_decimal("org_monthly_cost_limit_usd"),
         user_cost=user_cost,
         user_limit=user_limit,
     )

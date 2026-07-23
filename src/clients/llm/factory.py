@@ -5,6 +5,7 @@ from src.clients.llm.adapters import AnthropicAdapter, GeminiAdapter, OpenAIAdap
 from src.clients.llm.base import LLMClient, LLMMode
 from src.clients.llm.cassette import CassetteManager
 from src.clients.llm.router import LLMRouter
+from src.core import app_settings
 from src.core.config import Environment, settings
 
 DEFAULT_CASSETTE_DIR = Path("cassettes")
@@ -40,21 +41,23 @@ def create_llm_client(
     cassettes = CassetteManager(cassette_dir or DEFAULT_CASSETTE_DIR)
 
     # provider별 어댑터 빌더 - 모델 ID로 LLMRouter가 골라 lazy 생성
+    # API 키는 유효 설정(DB 오버라이드 → env)에서 읽는다. 어댑터는 lazy 생성이라
+    # 빌더 실행 시점의 최신 키를 쓴다(설정 저장 후 reset_llm_client로 싱글턴 재생성).
     builders: dict[str, Callable[[], LLMClient]] = {
         "anthropic": lambda: AnthropicAdapter(
-            api_key=settings.anthropic_api_key,
+            api_key=app_settings.get_str("anthropic_api_key"),
             mode=resolved_mode,
             cassette_manager=cassettes,
             allow_replay_fallback=fallback,
         ),
         "gemini": lambda: GeminiAdapter(
-            api_key=settings.gemini_api_key,
+            api_key=app_settings.get_str("gemini_api_key"),
             mode=resolved_mode,
             cassette_manager=cassettes,
             allow_replay_fallback=fallback,
         ),
         "openai": lambda: OpenAIAdapter(
-            api_key=settings.openai_api_key,
+            api_key=app_settings.get_str("openai_api_key"),
             mode=resolved_mode,
             cassette_manager=cassettes,
             allow_replay_fallback=fallback,

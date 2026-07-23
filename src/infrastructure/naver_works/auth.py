@@ -5,6 +5,7 @@ import time
 import httpx
 import jwt
 
+from src.core import app_settings
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -21,14 +22,16 @@ _lock = asyncio.Lock()
 def _build_jwt_assertion() -> str:
     now = int(time.time())
     payload = {
-        "iss": settings.nw_client_id,
-        "sub": settings.nw_service_account,
+        "iss": app_settings.get_str("nw_client_id"),
+        "sub": app_settings.get_str("nw_service_account"),
         "iat": now,
         "exp": now + settings.nw_token_expire_sec,
     }
+    # env는 개행을 \n 이스케이프로 저장 → 실개행 복원(DB의 실개행 PEM은 그대로 통과).
+    private_key_pem = app_settings.get_str("nw_private_key").replace("\\n", "\n")
     return jwt.encode(
         payload,
-        settings.nw_private_key_pem,
+        private_key_pem,
         algorithm="RS256",
     )
 
@@ -42,8 +45,8 @@ async def _issue_access_token() -> str:
             data={
                 "assertion": assertion,
                 "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-                "client_id": settings.nw_client_id,
-                "client_secret": settings.nw_client_secret,
+                "client_id": app_settings.get_str("nw_client_id"),
+                "client_secret": app_settings.get_str("nw_client_secret"),
                 "scope": "bot bot.message",
             },
         )

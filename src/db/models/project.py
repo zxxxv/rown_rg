@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from src.db.models.consistency_graph_node import ConsistencyGraphNode
     from src.db.models.project_source import ProjectSource
     from src.db.models.raptor_node import RaptorNode
+    from src.db.models.section import Section
     from src.db.models.token_usage import TokenUsage
     from src.db.models.user import User
 
@@ -55,6 +56,16 @@ class Project(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
+    @property
+    def owner_name(self) -> str | None:
+        """소유자 이름(응답 표시용) — owner가 eager-load된 경우에만 값이 있다.
+
+        lazy="raise" 관계라 미로드 접근은 예외이므로, 로드 여부를 __dict__로 확인한다.
+        """
+        if "owner" not in self.__dict__:
+            return None
+        return self.owner.name
+
     # Relationships
     owner: Mapped[User] = relationship(back_populates="projects", lazy="raise")
     sources: Mapped[list[ProjectSource]] = relationship(back_populates="project", lazy="raise")
@@ -64,6 +75,7 @@ class Project(Base):
         back_populates="project", lazy="raise"
     )
     token_usages: Mapped[list[TokenUsage]] = relationship(back_populates="project", lazy="raise")
+    sections: Mapped[list[Section]] = relationship(back_populates="project", lazy="raise")
 
     __table_args__ = (
         CheckConstraint(
