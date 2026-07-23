@@ -80,3 +80,57 @@ class TestPlanSections:
         text = json.dumps({"sections": sections}, ensure_ascii=False)
         plan = await plan_sections("주제", "blank", client=_StubClient(text))
         assert len(plan) == MAX_SECTIONS
+
+
+# 산업동향보고서 프리셋 골격: ch01=[시장분석, 시장분석], ch02=[STEEP분석], ...
+_PRESET_MANIFEST = json.dumps(
+    {
+        "sections": [
+            {
+                "chapter": 1,
+                "section": 1,
+                "title": "수소전기차 산업 정의",
+                "direction": "산업 범위와 분류 체계",
+                "key_points": ["산업 분류", "범위"],
+            },
+            {"chapter": 1, "section": 2, "title": "수소전기차 밸류체인"},
+            {"chapter": 1, "section": 3, "title": "추가 개요 섹션"},
+            {"chapter": 2, "section": 1, "title": "수소경제 거시환경"},
+            {"chapter": 9, "section": 1, "title": "프리셋 범위 밖 챕터"},
+        ]
+    },
+    ensure_ascii=False,
+)
+
+
+class TestPlanSectionsWithPreset:
+    async def test_uses_toc_system_prompt_and_preset_skeleton(self):
+        client = _StubClient(_PRESET_MANIFEST)
+        await plan_sections("수소전기차", "산업동향보고서", client=client)
+        request = client.requests[0]
+        assert "전문 보고서 기획자" in (request.system or "")  # toc_system 역할 프롬프트
+        assert "산업동향보고서" in request.messages[0].content  # 프리셋 골격 주입
+
+    async def test_assigns_analysts_by_chapter_position(self):
+        plan = await plan_sections(
+            "수소전기차", "산업동향보고서", client=_StubClient(_PRESET_MANIFEST)
+        )
+        assert plan[0].analysts == ["시장분석"]  # ch01 1번째 섹션
+        assert plan[1].analysts == ["시장분석"]  # ch01 2번째 섹션
+        assert plan[2].analysts == ["시장분석"]  # ch01 초과분 → 마지막 섹션에 클램프
+        assert plan[3].analysts == ["STEEP분석"]  # ch02 1번째 섹션
+        assert plan[4].analysts == []  # 프리셋 범위 밖 챕터는 배정 없음
+
+    async def test_parses_direction_and_key_points(self):
+        plan = await plan_sections(
+            "수소전기차", "산업동향보고서", client=_StubClient(_PRESET_MANIFEST)
+        )
+        assert plan[0].direction == "산업 범위와 분류 체계"
+        assert plan[0].key_points == ["산업 분류", "범위"]
+        assert plan[1].direction == ""  # 누락 시 기본값
+
+    async def test_free_report_type_keeps_generic_path(self):
+        client = _StubClient(_FENCED)
+        plan = await plan_sections("인구 고령화 대응", "blank", client=client)
+        assert "목차 설계자" in (client.requests[0].system or "")  # 기존 자유 목차 프롬프트
+        assert all(p.analysts == [] for p in plan)

@@ -113,12 +113,18 @@ class RetrievalResult(BaseModel):
 class SectionPlan(BaseModel):
     """
     작성할 섹션 1개의 계획
+
+    direction·key_points·analysts는 프리셋 기반 설계(planner) 시 채워진다.
+    analysts는 src.prompts 분석 에이전트 이름(AnalystSpec.name) 참조.
     """
 
     section_id: UUID = Field(default_factory=uuid4)
     chapter_number: int
     section_number: int
     title: str
+    direction: str = ""
+    key_points: list[str] = Field(default_factory=list)
+    analysts: list[str] = Field(default_factory=list)
 
 
 class SectionDraft(BaseModel):
