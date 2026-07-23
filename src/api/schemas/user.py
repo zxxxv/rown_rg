@@ -19,6 +19,9 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str = Field(..., description="비밀번호")
+    username: str | None = Field(
+        None, min_length=3, max_length=50, description="로그인 아이디(선택)"
+    )
 
 
 class UserUpdate(BaseModel):
@@ -34,6 +37,8 @@ class UserRead(UserBase):
     # EmailStr 검증에 걸리면 목록 전체가 500이 된다. 입력 검증은 UserCreate(EmailStr) 몫.
     email: str
     id: UUID
+    # 이메일 대신 로그인에 쓸 수 있는 아이디(없으면 이메일로만 로그인)
+    username: str | None
     is_active: bool
     # SSO 전용 계정은 비밀번호가 없다 → 프론트에서 비밀번호 변경 UI 노출 여부 판단에 사용
     has_password: bool

@@ -4,7 +4,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.auth import get_current_active_user
@@ -23,7 +23,7 @@ from src.api.schemas.token_usage import (
 )
 from src.api.schemas.user import UserRead, UserUpdate
 from src.core.clock import now
-from src.core.exceptions import AuthorizationError, NotFoundError
+from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from src.core.types import Role
 from src.db.models.limit_request import LimitRequest
 from src.db.models.token_usage import TokenUsage
@@ -141,8 +141,14 @@ async def list_users(
     _: Annotated[User, Depends(require_role(*ADMINS))],
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
+    q: str | None = None,
 ) -> list[User]:
-    stmt = select(User).order_by(User.created_at.desc()).limit(limit).offset(offset)
+    """사용자 목록(최신순). q=이름·이메일 부분 검색."""
+    stmt = select(User).order_by(User.created_at.desc())
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.where(or_(User.name.ilike(pattern), User.email.ilike(pattern)))
+    stmt = stmt.limit(limit).offset(offset)
     return list((await session.execute(stmt)).scalars().all())
 
 
@@ -170,13 +176,37 @@ async def update_user(
     user = await session.get(User, user_id)
     if user is None:
         raise NotFoundError(message="사용자를 찾을 수 없습니다", code="USER_NOT_FOUND")
+    # 자기 강등·자기 비활성화 차단 — 관리자가 스스로 권한을 잃고 잠기는 사고 방지.
+    if user.id == current_user.id:
+        if data.role is not None and data.role != user.role:
+            raise ValidationError(
+                message="자기 자신의 역할은 변경할 수 없습니다", code="CANNOT_CHANGE_OWN_ROLE"
+            )
+        if data.is_active is False:
+            raise ValidationError(
+                message="자기 자신을 비활성화할 수 없습니다", code="CANNOT_DEACTIVATE_SELF"
+            )
     # 상위 역할 유저는 건드릴 수 없다(admin이 super_admin 비활성화·수정 차단).
     assert_can_manage_user(current_user, user)
     if data.role is not None:
         assert_can_assign_role(current_user, data.role)
+        # 최고관리자는 한 명만 — 이미 다른 super_admin이 있으면 승격 거부.
+        if data.role == Role.SUPER_ADMIN and user.role != Role.SUPER_ADMIN.value:
+            existing = (
+                await session.execute(
+                    select(User.id)
+                    .where(User.role == Role.SUPER_ADMIN.value, User.id != user_id)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                raise ValidationError(
+                    message="최고관리자는 한 명만 존재할 수 있습니다", code="SUPER_ADMIN_EXISTS"
+                )
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(user, key, value)
     await session.flush()
+    await session.refresh(user)
     return user
 
 

@@ -31,6 +31,8 @@ class User(Base):
         server_default=func.gen_random_uuid(),
     )
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    # 로그인용 아이디(선택) — 이메일 대신 username으로도 로그인 가능
+    username: Mapped[str | None] = mapped_column(String(50), unique=True)
     # SSO 전용 계정은 비밀번호가 없다 → nullable
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)

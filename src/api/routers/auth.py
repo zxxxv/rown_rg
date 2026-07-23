@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,9 +71,21 @@ async def register(
 ) -> User:
     # 계층 기반: 호출자는 자기보다 낮은 역할만 부여할 수 있다(권한 상승 차단).
     assert_can_assign_role(current_user, data.role)
+    # 최고관리자는 한 명만 — 이미 있으면 super_admin 생성 거부(부트스트랩 CLI와 동일 규칙).
+    if data.role == Role.SUPER_ADMIN:
+        existing = (
+            await session.execute(
+                select(User.id).where(User.role == Role.SUPER_ADMIN.value).limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise ValidationError(
+                message="최고관리자는 한 명만 존재할 수 있습니다", code="SUPER_ADMIN_EXISTS"
+            )
     password_handler.validate_password_policy(data.password)
     user = User(
         email=data.email,
+        username=data.username,
         name=data.name,
         role=data.role,
         password_hash=password_handler.hash_password(data.password),
@@ -84,7 +96,9 @@ async def register(
         await session.flush()
     except IntegrityError as e:
         await session.rollback()
-        raise ValidationError(message="이미 사용 중인 이메일입니다", code="EMAIL_DUPLICATE") from e
+        raise ValidationError(
+            message="이미 사용 중인 이메일 또는 아이디입니다", code="EMAIL_DUPLICATE"
+        ) from e
     await session.refresh(user)
     return user
 
@@ -95,11 +109,11 @@ async def login(
     data: LoginRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
 ) -> TokenPair:
-    stmt = select(User).where(User.email == data.email)
+    stmt = select(User).where(or_(User.email == data.login_id, User.username == data.login_id))
     user = (await session.execute(stmt)).scalar_one_or_none()
     if user is None:
         raise AuthenticationError(
-            message="이메일 또는 비밀번호가 올바르지 않습니다",
+            message="아이디 또는 비밀번호가 올바르지 않습니다",
             code="INVALID_CREDENTIALS",
         )
 
@@ -124,7 +138,7 @@ async def login(
         # 거부 직전 영속화: 실패 카운트는 롤백되면 잠금이 동작하지 않으므로 먼저 확정한다.
         await persist_before_reject(session)
         raise AuthenticationError(
-            message="이메일 또는 비밀번호가 올바르지 않습니다",
+            message="아이디 또는 비밀번호가 올바르지 않습니다",
             code="INVALID_CREDENTIALS",
         )
 
