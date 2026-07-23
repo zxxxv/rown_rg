@@ -1,4 +1,13 @@
-import { ChevronDown, ChevronUp, Plus, RotateCcw, Sparkles, Trash2, Wrench } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Plus,
+  RotateCcw,
+  Sparkles,
+  Trash2,
+  Wrench,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 import { useAnalysts } from "@/api/analysts";
@@ -87,6 +96,17 @@ export function OutlineDesigner() {
 
   const [mode, setMode] = useState<Mode>("auto");
   const [chapters, setChapters] = useState<DraftChapter[]>([]);
+  // 펼쳐진 장 id 집합 — 프리셋 로드 시 전부 접힘(35섹션 프리셋 스크롤 방지),
+  // 새로 추가한 장만 자동으로 펼친다.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  const toggleChapter = (id: string) =>
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   // 폼과 동기화 — 유효한 절이 하나도 없으면 outline을 보내지 않는다(AI 설계로 폴백).
   const sync = useCallback(
@@ -101,8 +121,13 @@ export function OutlineDesigner() {
   );
 
   // 마운트: 기존 config.outline(수정 모드·재방문)이 있으면 그대로 편집기로 복원.
+  // 이후 흐름은 기본 auto(AI 설계) — 프리셋을 골라도 "직접 설계하기"를 눌러야
+  // 골격이 펼쳐진다(처음 화면을 짧게 유지).
   const mountedRef = useRef(false);
   const prevPresetRef = useRef<string | null | undefined>(undefined);
+  // 상세 로딩 전에 "직접 설계"를 누르거나 편집 중 프리셋을 바꾼 경우 —
+  // 해당 프리셋 상세가 도착하면 골격을 로드하도록 예약한다.
+  const pendingSkeletonRef = useRef<string | null>(null);
   useEffect(() => {
     if (!mountedRef.current) {
       mountedRef.current = true;
@@ -120,26 +145,24 @@ export function OutlineDesigner() {
       }
       return;
     }
-    // 프리셋 카드가 바뀌면 편집기를 그 골격으로 리셋한다 (자유 주제 → AI 설계).
     if (prevPresetRef.current !== (preset ?? null)) {
       prevPresetRef.current = preset ?? null;
-      if (!preset) sync([], "auto");
+      if (mode === "manual") {
+        // 편집 중 유형 변경: 새 프리셋 골격으로 리셋(도착 시), 자유 주제면 AI 설계로.
+        if (preset) pendingSkeletonRef.current = preset;
+        else sync([], "auto");
+      }
     }
-  }, [preset, getValues, sync]);
+  }, [preset, getValues, sync, mode]);
 
-  // 프리셋 상세가 도착하면(선택 직후·전환) 골격을 편집기에 채운다.
-  const loadedPresetRef = useRef<string | null>(null);
+  // 예약된 골격 로드 — 프리셋 상세가 도착하는 시점에 편집기를 채운다.
   useEffect(() => {
     if (!preset || !detailQuery.data) return;
-    if (loadedPresetRef.current === preset && chapters.length > 0) return;
-    // 마운트 복원(기존 outline)을 덮지 않는다 — 같은 프리셋이면 유지.
-    if (mode === "manual" && chapters.length > 0 && loadedPresetRef.current === null) {
-      loadedPresetRef.current = preset;
-      return;
-    }
-    loadedPresetRef.current = preset;
+    if (pendingSkeletonRef.current !== preset) return;
+    pendingSkeletonRef.current = null;
     sync(fromPreset(detailQuery.data), "manual");
-  }, [preset, detailQuery.data, chapters.length, mode, sync]);
+    setExpandedIds(new Set());
+  }, [preset, detailQuery.data, sync]);
 
   const totalSections = chapters.reduce(
     (n, ch) => n + ch.sections.filter((s) => s.title.trim()).length,
@@ -153,8 +176,8 @@ export function OutlineDesigner() {
           <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
           <p className="text-sm text-fg-secondary">
             {preset
-              ? "실행 시 AI가 프리셋 골격을 주제에 맞게 다듬어 목차를 설계합니다."
-              : "실행 시 AI가 주제에 맞는 목차를 새로 설계합니다."}
+              ? "AI가 이 유형의 표준 골격을 주제에 맞게 다듬어 목차를 설계합니다. 그대로 시작해도 됩니다."
+              : "AI가 주제에 맞는 목차를 새로 설계합니다. 그대로 시작해도 됩니다."}
           </p>
         </div>
         <div>
@@ -163,12 +186,22 @@ export function OutlineDesigner() {
             variant="secondary"
             size="sm"
             onClick={() => {
-              if (preset && detailQuery.data) sync(fromPreset(detailQuery.data), "manual");
-              else sync([{ _id: draftId(), title: "", sections: [emptySection()] }], "manual");
+              if (!preset) {
+                const blank = { _id: draftId(), title: "", sections: [emptySection()] };
+                sync([blank], "manual");
+                setExpandedIds(new Set([blank._id]));
+              } else if (detailQuery.data) {
+                sync(fromPreset(detailQuery.data), "manual");
+                setExpandedIds(new Set());
+              } else {
+                // 상세 로딩 전 — 도착 시 골격 로드 예약 (그동안 스켈레톤 표시)
+                pendingSkeletonRef.current = preset;
+                sync([], "manual");
+              }
             }}
           >
             <Wrench className="mr-1 h-3.5 w-3.5" aria-hidden />
-            목차 직접 설계하기
+            목차 직접 설계·에이전트 배정
           </Button>
         </div>
       </div>
@@ -187,13 +220,36 @@ export function OutlineDesigner() {
           않음) · 유효한 절 {totalSections}개
         </p>
         <div className="flex gap-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              setExpandedIds(
+                expandedIds.size === chapters.length
+                  ? new Set()
+                  : new Set(chapters.map((c) => c._id)),
+              )
+            }
+          >
+            {expandedIds.size === chapters.length ? (
+              <ChevronUp className="mr-1 h-3.5 w-3.5" aria-hidden />
+            ) : (
+              <ChevronDown className="mr-1 h-3.5 w-3.5" aria-hidden />
+            )}
+            {expandedIds.size === chapters.length ? "모두 접기" : "모두 펼치기"}
+          </Button>
           {preset ? (
             <Button
               type="button"
               variant="ghost"
               size="sm"
               disabled={!detailQuery.data}
-              onClick={() => detailQuery.data && sync(fromPreset(detailQuery.data), "manual")}
+              onClick={() => {
+                if (!detailQuery.data) return;
+                sync(fromPreset(detailQuery.data), "manual");
+                setExpandedIds(new Set());
+              }}
             >
               <RotateCcw className="mr-1 h-3.5 w-3.5" aria-hidden />
               프리셋 골격으로 리셋
@@ -212,6 +268,8 @@ export function OutlineDesigner() {
           chapter={chapter}
           index={ci}
           count={chapters.length}
+          expanded={expandedIds.has(chapter._id)}
+          onToggle={() => toggleChapter(chapter._id)}
           onChange={(next) =>
             sync(
               chapters.map((c, i) => (i === ci ? next : c)),
@@ -233,9 +291,11 @@ export function OutlineDesigner() {
         variant="secondary"
         size="sm"
         className="w-fit"
-        onClick={() =>
-          sync([...chapters, { _id: draftId(), title: "", sections: [emptySection()] }], "manual")
-        }
+        onClick={() => {
+          const added = { _id: draftId(), title: "", sections: [emptySection()] };
+          sync([...chapters, added], "manual");
+          setExpandedIds((prev) => new Set(prev).add(added._id));
+        }}
       >
         <Plus className="mr-1 h-3.5 w-3.5" aria-hidden />장 추가
       </Button>
@@ -247,6 +307,8 @@ function ChapterEditor({
   chapter,
   index,
   count,
+  expanded,
+  onToggle,
   onChange,
   onMove,
   onRemove,
@@ -254,13 +316,31 @@ function ChapterEditor({
   chapter: DraftChapter;
   index: number;
   count: number;
+  expanded: boolean;
+  onToggle: () => void;
   onChange: (next: DraftChapter) => void;
   onMove: (delta: -1 | 1) => void;
   onRemove: () => void;
 }) {
+  const sectionCount = chapter.sections.filter((s) => s.title.trim()).length;
   return (
     <section className="flex flex-col gap-3 rounded border border-border bg-bg p-4">
       <header className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 shrink-0 p-0"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-label={`${index + 1}장 ${expanded ? "접기" : "펼치기"}`}
+        >
+          {expanded ? (
+            <ChevronDown className="h-4 w-4" aria-hidden />
+          ) : (
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          )}
+        </Button>
         <span className="shrink-0 rounded-sm bg-bg-secondary px-2 py-1 font-mono text-xs text-fg-secondary">
           {index + 1}장
         </span>
@@ -270,6 +350,9 @@ function ChapterEditor({
           onChange={(e) => onChange({ ...chapter, title: e.target.value })}
           className="h-8"
         />
+        {!expanded ? (
+          <span className="shrink-0 text-xs text-fg-tertiary">{sectionCount}절</span>
+        ) : null}
         <RowControls
           canUp={index > 0}
           canDown={index < count - 1}
@@ -279,38 +362,42 @@ function ChapterEditor({
         />
       </header>
 
-      <div className="flex flex-col gap-3 border-l-2 border-border pl-3">
-        {chapter.sections.map((section, si) => (
-          <SectionEditor
-            key={section._id}
-            section={section}
-            chapterIndex={index}
-            index={si}
-            count={chapter.sections.length}
-            onChange={(next) =>
-              onChange({
-                ...chapter,
-                sections: chapter.sections.map((s, i) => (i === si ? next : s)),
-              })
+      {!expanded ? null : (
+        <div className="flex flex-col gap-3 border-l-2 border-border pl-3">
+          {chapter.sections.map((section, si) => (
+            <SectionEditor
+              key={section._id}
+              section={section}
+              chapterIndex={index}
+              index={si}
+              count={chapter.sections.length}
+              onChange={(next) =>
+                onChange({
+                  ...chapter,
+                  sections: chapter.sections.map((s, i) => (i === si ? next : s)),
+                })
+              }
+              onMove={(delta) =>
+                onChange({ ...chapter, sections: move(chapter.sections, si, delta) })
+              }
+              onRemove={() =>
+                onChange({ ...chapter, sections: chapter.sections.filter((_, i) => i !== si) })
+              }
+            />
+          ))}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-fit text-fg-secondary"
+            onClick={() =>
+              onChange({ ...chapter, sections: [...chapter.sections, emptySection()] })
             }
-            onMove={(delta) =>
-              onChange({ ...chapter, sections: move(chapter.sections, si, delta) })
-            }
-            onRemove={() =>
-              onChange({ ...chapter, sections: chapter.sections.filter((_, i) => i !== si) })
-            }
-          />
-        ))}
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="w-fit text-fg-secondary"
-          onClick={() => onChange({ ...chapter, sections: [...chapter.sections, emptySection()] })}
-        >
-          <Plus className="mr-1 h-3.5 w-3.5" aria-hidden />절 추가
-        </Button>
-      </div>
+          >
+            <Plus className="mr-1 h-3.5 w-3.5" aria-hidden />절 추가
+          </Button>
+        </div>
+      )}
     </section>
   );
 }

@@ -10,7 +10,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { mergeKeepDirty } from "./_merge";
-import { AnalyzerPicker } from "./AnalyzerPicker";
 import { DepthSelector } from "./DepthSelector";
 import { DifferentiatorToggle } from "./DifferentiatorToggle";
 import { OutlineDesigner } from "./OutlineDesigner";
@@ -120,21 +119,36 @@ export function ProjectConfigForm({
           <Section number={3} title="목차 설계">
             <OutlineDesigner />
           </Section>
-          <Section number={4} title="자료 선택">
-            <SourceTypeCheckboxes />
-          </Section>
-          <Section number={5} title="분석 도구">
-            <AnalyzerPicker />
-          </Section>
-          <Section number={6} title="기능">
-            <DifferentiatorToggle />
-          </Section>
-          <Section number={7} title="작성 깊이" badge={isEdit ? "수정 불가" : undefined}>
+          <Section number={4} title="작성 깊이" badge={isEdit ? "수정 불가" : undefined}>
             <DepthSelector disabled={isEdit} />
           </Section>
-          <Section number={8} title="알림">
-            <OutputAndNotification />
-          </Section>
+
+          {/* 필수 결정은 위 4개로 끝 — 나머지는 기본값으로 충분해 접어둔다. */}
+          <details className="group rounded border border-border bg-bg">
+            <summary className="flex cursor-pointer select-none items-center gap-2 p-4">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-bg-tertiary font-mono text-xs text-fg-secondary">
+                +
+              </span>
+              <span className="text-base font-semibold text-fg">고급 옵션</span>
+              <span className="text-xs text-fg-tertiary">
+                자료 선택 · 기능 · 알림 — 기본값으로 충분합니다
+              </span>
+            </summary>
+            <div className="flex flex-col gap-6 border-t border-border p-4">
+              <div className="flex flex-col gap-3">
+                <h3 className="text-sm font-semibold text-fg">자료 선택</h3>
+                <SourceTypeCheckboxes />
+              </div>
+              <div className="flex flex-col gap-3">
+                <h3 className="text-sm font-semibold text-fg">기능</h3>
+                <DifferentiatorToggle />
+              </div>
+              <div className="flex flex-col gap-3">
+                <h3 className="text-sm font-semibold text-fg">알림</h3>
+                <OutputAndNotification />
+              </div>
+            </div>
+          </details>
         </div>
 
         <aside className="flex flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
@@ -149,10 +163,9 @@ export function ProjectConfigForm({
                   : "AI 설계"}
               </Badge>
               <Badge variant="secondary">깊이 · {DEPTH_LABEL[watchedConfig.depth_mode]}</Badge>
-              <Badge variant="secondary">
-                분석 도구 {watchedConfig.enabled_analyzers.length}개
-              </Badge>
-              <Badge variant="secondary">기능 {activeDiffCount}개</Badge>
+              {activeDiffCount > 0 ? (
+                <Badge variant="secondary">기능 {activeDiffCount}개</Badge>
+              ) : null}
             </div>
           </div>
           <div className="flex flex-col gap-2">
