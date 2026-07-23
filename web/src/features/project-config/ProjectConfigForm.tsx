@@ -1,9 +1,8 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { FormProvider, useForm, useFormContext } from "react-hook-form";
 import { toast } from "sonner";
-import { CostEstimate } from "@/components/data-display/CostEstimate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +13,6 @@ import { mergeKeepDirty } from "./_merge";
 import { AnalyzerPicker } from "./AnalyzerPicker";
 import { DepthSelector } from "./DepthSelector";
 import { DifferentiatorToggle } from "./DifferentiatorToggle";
-import { estimate } from "./estimator";
 import { OutputAndNotification } from "./OutputAndNotification";
 import { PresetSelect } from "./PresetSelect";
 import { defaultsForPreset, presetLabel } from "./presets";
@@ -79,7 +77,6 @@ export function ProjectConfigForm({
   };
 
   const watchedConfig = watch("config");
-  const cost = useMemo(() => estimate(watchedConfig), [watchedConfig]);
 
   // Critic Agent ON → 일관성 그래프 자동 ON (의존성 검증)
   const autoToggleNotified = useRef(false);
@@ -125,19 +122,18 @@ export function ProjectConfigForm({
           <Section number={4} title="분석 도구">
             <AnalyzerPicker />
           </Section>
-          <Section number={5} title="차별화 기능">
+          <Section number={5} title="기능">
             <DifferentiatorToggle />
           </Section>
           <Section number={6} title="작성 깊이" badge={isEdit ? "수정 불가" : undefined}>
             <DepthSelector disabled={isEdit} />
           </Section>
-          <Section number={7} title="출력·알림">
+          <Section number={7} title="알림">
             <OutputAndNotification />
           </Section>
         </div>
 
         <aside className="flex flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
-          <CostEstimate {...cost} />
           <div className="flex flex-col gap-2 rounded border border-border bg-bg p-4">
             <p className="text-xs font-medium text-fg-secondary">선택 옵션 요약</p>
             <div className="flex flex-wrap gap-1.5">
@@ -146,8 +142,7 @@ export function ProjectConfigForm({
               <Badge variant="secondary">
                 분석 도구 {watchedConfig.enabled_analyzers.length}개
               </Badge>
-              <Badge variant="secondary">차별화 {activeDiffCount}개</Badge>
-              <Badge variant="secondary">출력 {watchedConfig.output_formats.length}개</Badge>
+              <Badge variant="secondary">기능 {activeDiffCount}개</Badge>
             </div>
           </div>
           <div className="flex flex-col gap-2">

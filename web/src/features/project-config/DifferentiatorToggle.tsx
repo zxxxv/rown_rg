@@ -18,7 +18,8 @@ interface DiffOption {
   title: string;
   description: string;
   cost?: string;
-  recommended?: boolean;
+  /** 백엔드 미구현 — 켜도 아직 파이프라인에 반영되지 않는 기능 */
+  upcoming?: boolean;
 }
 
 const OPTIONS: DiffOption[] = [
@@ -28,20 +29,21 @@ const OPTIONS: DiffOption[] = [
     title: "자료 모순 사전 검증",
     description: "작성 전 자료 간 모순을 발견해 사용자 결정으로 해소.",
     cost: "+5분",
-    recommended: true,
+    upcoming: true,
   },
   {
     name: "config.enable_consistency_graph",
     id: "diff-consist",
     title: "일관성 그래프",
     description: "섹션 간 주장·수치의 일관성을 그래프로 시각화.",
-    recommended: true,
+    upcoming: true,
   },
   {
     name: "config.enable_dual_track_search",
     id: "diff-dual",
     title: "듀얼 트랙 검색",
     description: "회사 양식·관행을 반영한 이중 트랙 검색.",
+    upcoming: true,
   },
   {
     name: "config.enable_source_tagging",
@@ -86,9 +88,9 @@ export function DifferentiatorToggle() {
                   <Label htmlFor={opt.id} className="cursor-pointer text-sm font-medium text-fg">
                     {opt.title}
                   </Label>
-                  {opt.recommended ? (
+                  {opt.upcoming ? (
                     <span className="rounded-sm border border-border bg-bg-secondary px-1.5 py-0.5 text-[10px] text-fg-tertiary">
-                      권장
+                      준비중
                     </span>
                   ) : null}
                   {opt.cost ? (

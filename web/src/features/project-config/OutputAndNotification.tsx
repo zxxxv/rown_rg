@@ -4,21 +4,16 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import type { ProjectFormValues } from "./schema";
 
-type OutputFormat = "hwpx" | "markdown";
 type Channel = "email" | "naver_works";
 
-const OUTPUT_LABEL: Record<OutputFormat, string> = {
-  hwpx: "HWPX (회사 표준)",
-  markdown: "Markdown (기술 검토용)",
-};
-
-const CHANNEL_LABEL: Record<Channel, string> = {
-  email: "이메일",
+// 출력 형식 선택은 UI에서 제거됨 — 산출물은 항상 HWPX(회사 표준)로 렌더되고
+// 다운로드는 출력 페이지에서 받는다. config.output_formats는 스키마 기본값
+// ["hwpx"]로 유지(기존 프로젝트 호환). email 알림도 UI에서 제거됨(타입만 유지).
+const CHANNEL_LABEL: Partial<Record<Channel, string>> = {
   naver_works: "네이버 웍스",
 };
 
-const OUTPUT_ORDER: OutputFormat[] = ["hwpx", "markdown"];
-const CHANNEL_ORDER: Channel[] = ["email", "naver_works"];
+const CHANNEL_ORDER: Channel[] = ["naver_works"];
 
 function ToggleRow({
   id,
@@ -60,36 +55,6 @@ export function OutputAndNotification() {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div className="flex flex-col gap-2">
-        <p className="text-xs font-medium text-fg-secondary">출력 형식</p>
-        <Controller
-          name="config.output_formats"
-          control={control}
-          render={({ field }) => {
-            const selected = new Set(field.value);
-            const toggle = (k: OutputFormat) => {
-              const next = new Set(selected);
-              if (next.has(k)) next.delete(k);
-              else next.add(k);
-              field.onChange(OUTPUT_ORDER.filter((x) => next.has(x)));
-            };
-            return (
-              <div className="flex flex-col gap-2">
-                {OUTPUT_ORDER.map((k) => (
-                  <ToggleRow
-                    key={k}
-                    id={`output-${k}`}
-                    label={OUTPUT_LABEL[k]}
-                    checked={selected.has(k)}
-                    onToggle={() => toggle(k)}
-                  />
-                ))}
-              </div>
-            );
-          }}
-        />
-      </div>
-
-      <div className="flex flex-col gap-2">
         <p className="text-xs font-medium text-fg-secondary">알림 채널</p>
         <Controller
           name="config.notification_channels"
@@ -108,7 +73,7 @@ export function OutputAndNotification() {
                   <ToggleRow
                     key={k}
                     id={`channel-${k}`}
-                    label={CHANNEL_LABEL[k]}
+                    label={CHANNEL_LABEL[k] ?? k}
                     checked={selected.has(k)}
                     onToggle={() => toggle(k)}
                     badge={k === "naver_works" ? "준비 중" : undefined}
