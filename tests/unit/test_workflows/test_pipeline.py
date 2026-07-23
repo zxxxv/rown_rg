@@ -167,6 +167,26 @@ class TestResearchPausesAtSourcePool:
         assert len(outcome.state.sources) == 2
         assert len(outcome.state.indexed_source_ids) == 1
 
+    async def test_gate_payload_carries_source_signals(self, fake_research: _FakeResearchService):
+        """자료 확정 게이트 payload에 사람이 취사선택할 신호가 실려 나온다."""
+        outcome = await advance(ProjectState(user_id=uuid4(), topic="인구 고령화 대응"))
+        assert isinstance(outcome, Paused)
+        by_url = {s["url"]: s for s in outcome.review.payload["sources"]}
+
+        # 본문 있는 고신뢰 출처: 신뢰도·매칭섹션·미리보기·색인여부가 모두 전달됨
+        a = by_url["https://example.org/a"]
+        assert a["reliability"] == "high"
+        assert a["matched_sections"] == ["고령화 추이"]
+        assert a["has_content"] is True
+        assert a["preview"] and "17.1%" in a["preview"]
+
+        # 본문 없는 출처: 검색에 안 잡힘(has_content=False), 미리보기 없음
+        b = by_url["https://example.org/b"]
+        assert b["has_content"] is False
+        assert b["preview"] is None
+        assert b["reliability"] is None
+        assert b["matched_sections"] == []
+
 
 class TestFullPipelineChain:
     async def test_created_to_completed(

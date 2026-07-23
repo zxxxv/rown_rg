@@ -42,6 +42,10 @@ _SEARCH_SQL = text(
     WHERE project_id = :project_id
       AND track = :track
       AND content &@~ :query
+      AND source_id NOT IN (
+          SELECT id FROM project_sources
+          WHERE project_id = :project_id AND is_included = false
+      )
     ORDER BY score DESC
     LIMIT :top_k
     """

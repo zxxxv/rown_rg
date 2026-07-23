@@ -170,6 +170,64 @@ class TestKeywordSearchPositive:
         assert len(hits) <= 1
 
 
+class TestKeywordSearchIsIncludedFilter:
+    """자료 확정 게이트에서 제외된 출처(is_included=false)의 청크는 검색에서 빠진다."""
+
+    async def _add_source(
+        self, test_session_maker, project: Project, *, title: str, is_included: bool
+    ) -> ProjectSource:
+        async with test_session_maker() as s:
+            node = LibraryNode(name=f"{title}.hwpx", type="file", file_path=f"/lib/{title}.hwpx")
+            s.add(node)
+            await s.flush()
+            src = ProjectSource(
+                project_id=project.id,
+                library_node_id=node.id,
+                source_type="library",
+                title=title,
+                is_included=is_included,
+            )
+            s.add(src)
+            await s.commit()
+            await s.refresh(src)
+            return src
+
+    async def test_excluded_filtered_included_returned(
+        self, test_session: AsyncSession, test_session_maker
+    ):
+        data = await _seed_corpus(test_session, test_session_maker)
+        project_a = data["project_a"]
+        excluded = await self._add_source(
+            test_session_maker, project_a, title="excluded", is_included=False
+        )
+        included = await self._add_source(
+            test_session_maker, project_a, title="included", is_included=True
+        )
+        async with test_session_maker() as s:
+            await _insert_chunk(
+                s,
+                project_id=project_a.id,
+                source_id=excluded.id,
+                content="제외 출처 고유어 ZZEXCLUDE 청크.",
+                chunk_index=0,
+            )
+        async with test_session_maker() as s:
+            await _insert_chunk(
+                s,
+                project_id=project_a.id,
+                source_id=included.id,
+                content="포함 출처 고유어 YYINCLUDE 청크.",
+                chunk_index=0,
+            )
+
+        client = KeywordSearchClient(test_session_maker)
+        # 제외 출처의 고유어는 회수되지 않는다.
+        assert await client.search("ZZEXCLUDE", project_a.id) == []
+        # 포함 출처의 고유어는 정상 회수된다(대조군).
+        incl_hits = await client.search("YYINCLUDE", project_a.id)
+        assert any("YYINCLUDE" in h.content for h in incl_hits)
+
+
 class TestKeywordSearchNegative:
     async def test_empty_query_returns_empty(self, test_session: AsyncSession, test_session_maker):
         data = await _seed_corpus(test_session, test_session_maker)

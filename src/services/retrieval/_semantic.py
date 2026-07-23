@@ -46,6 +46,10 @@ _SEARCH_SQL = text(
     FROM chunks
     WHERE project_id = :project_id
       AND track = :track
+      AND source_id NOT IN (
+          SELECT id FROM project_sources
+          WHERE project_id = :project_id AND is_included = false
+      )
     ORDER BY embedding <=> CAST(:query_vec AS vector)
     LIMIT :top_k
     """
