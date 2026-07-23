@@ -19,7 +19,7 @@ from src.clients.llm.factory import create_llm_client
 from src.clients.llm.token_tracker import token_context
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
-from tests.conftest import FIXTURE_PASSWORD
+from tests.conftest import FIXTURE_PASSWORD, _make_user
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -115,7 +115,7 @@ class TestAuthentication:
     async def test_login_success(self, test_client: AsyncClient, super_admin_user: User) -> None:
         response = await test_client.post(
             "/api/v1/auth/login",
-            json={"email": super_admin_user.email, "password": FIXTURE_PASSWORD},
+            json={"login_id": super_admin_user.email, "password": FIXTURE_PASSWORD},
         )
         assert response.status_code == 200
         body = response.json()
@@ -123,12 +123,25 @@ class TestAuthentication:
         assert body["refresh_token"]
         assert body["user"]["role"] == "super_admin"
 
+    async def test_login_with_username(
+        self, test_client: AsyncClient, test_session: AsyncSession
+    ) -> None:
+        await _make_user(
+            test_session, "rown_worker@test.com", "worker", "Rown Worker", username="rown_worker"
+        )
+        response = await test_client.post(
+            "/api/v1/auth/login",
+            json={"login_id": "rown_worker", "password": FIXTURE_PASSWORD},
+        )
+        assert response.status_code == 200
+        assert response.json()["user"]["username"] == "rown_worker"
+
     async def test_login_wrong_password(
         self, test_client: AsyncClient, super_admin_user: User
     ) -> None:
         response = await test_client.post(
             "/api/v1/auth/login",
-            json={"email": super_admin_user.email, "password": "WrongPass123!@"},
+            json={"login_id": super_admin_user.email, "password": "WrongPass123!@"},
         )
         assert response.status_code == 401
         assert response.json()["error"]["code"] == "INVALID_CREDENTIALS"
@@ -137,14 +150,14 @@ class TestAuthentication:
         for _ in range(5):
             r = await test_client.post(
                 "/api/v1/auth/login",
-                json={"email": worker_user.email, "password": "WrongPass123!@"},
+                json={"login_id": worker_user.email, "password": "WrongPass123!@"},
             )
             assert r.status_code == 401
             assert r.json()["error"]["code"] == "INVALID_CREDENTIALS"
 
         locked = await test_client.post(
             "/api/v1/auth/login",
-            json={"email": worker_user.email, "password": "WrongPass123!@"},
+            json={"login_id": worker_user.email, "password": "WrongPass123!@"},
         )
         assert locked.status_code == 401
         assert locked.json()["error"]["code"] == "ACCOUNT_LOCKED"
@@ -181,7 +194,7 @@ class TestAuthentication:
     ) -> None:
         login = await test_client.post(
             "/api/v1/auth/login",
-            json={"email": super_admin_user.email, "password": FIXTURE_PASSWORD},
+            json={"login_id": super_admin_user.email, "password": FIXTURE_PASSWORD},
         )
         refresh = login.json()["refresh_token"]
         r = await test_client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})

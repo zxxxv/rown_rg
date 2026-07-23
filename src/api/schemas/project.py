@@ -34,6 +34,60 @@ class PresetRead(BaseModel):
     n_sections: int
 
 
+class PresetSectionRead(BaseModel):
+    """프리셋 목차의 절 1개 — 생성 화면 목차 편집기의 초기값."""
+
+    title: str
+    direction: str = ""
+    key_points: list[str] = Field(default_factory=list)
+    agents: list[str] = Field(default_factory=list)
+
+
+class PresetChapterRead(BaseModel):
+    title: str
+    sections: list[PresetSectionRead]
+
+
+class PresetDetailRead(BaseModel):
+    """프리셋 전체 골격 — 사용자가 클릭해 들어가 목차·에이전트를 편집하는 출발점."""
+
+    id: str
+    name: str
+    desc: str
+    domain_context: str = ""
+    chapters: list[PresetChapterRead]
+
+
+class AnalystRead(BaseModel):
+    """분석 에이전트 카탈로그 항목 — 섹션별 배정 UI용 (프롬프트 본문은 노출 안 함)."""
+
+    id: str
+    name: str
+    cat: str
+    desc: str
+    pages: str | None = None  # volume_target 분량 안내 (예: "10~15")
+
+
+class OutlineSectionIn(BaseModel):
+    """사용자 확정 목차의 절 1개 (config.outline). analysts는 카탈로그 이름 참조."""
+
+    title: str = Field(..., min_length=1, max_length=255)
+    direction: str = ""
+    key_points: list[str] = Field(default_factory=list)
+    analysts: list[str] = Field(default_factory=list)
+
+
+class OutlineChapterIn(BaseModel):
+    title: str = Field("", max_length=255)
+    sections: list[OutlineSectionIn] = Field(default_factory=list)
+
+
+class OutlineIn(BaseModel):
+    """생성 화면에서 확정한 목차 — 있으면 planner LLM을 생략하고 그대로 실행된다."""
+
+    chapters: list[OutlineChapterIn]
+
+
 class ProjectCreate(ProjectBase):
     preset: str | None = Field(
         None,
@@ -62,5 +116,7 @@ class ProjectRead(ProjectBase):
     status: ProjectStatus
     depth_mode: DepthMode
     owner_id: UUID
+    # 표시용 소유자 이름 — 라우터가 owner를 eager-load한 경우에만 채워진다
+    owner_name: str | None = None
     created_at: datetime
     updated_at: datetime

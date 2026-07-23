@@ -95,6 +95,7 @@ async def test_session(
     monkeypatch.setattr("src.db.session.async_session_maker", test_session_maker)
     monkeypatch.setattr("src.api.middleware.ip_whitelist.async_session_maker", test_session_maker)
     monkeypatch.setattr("src.clients.llm.token_tracker.async_session_maker", test_session_maker)
+    monkeypatch.setattr("src.api.routers.ws.async_session_maker", test_session_maker)
 
     try:
         async with test_session_maker() as session:
@@ -117,9 +118,12 @@ async def test_client(test_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 FIXTURE_PASSWORD = "TestPassword123!@"
 
 
-async def _make_user(session: AsyncSession, email: str, role: str, name: str) -> User:
+async def _make_user(
+    session: AsyncSession, email: str, role: str, name: str, username: str | None = None
+) -> User:
     user = User(
         email=email,
+        username=username,
         name=name,
         role=role,
         password_hash=hash_password(FIXTURE_PASSWORD),
@@ -154,7 +158,7 @@ async def viewer_user(test_session: AsyncSession) -> User:
 async def _login(test_client: AsyncClient, email: str) -> str:
     resp = await test_client.post(
         "/api/v1/auth/login",
-        json={"email": email, "password": FIXTURE_PASSWORD},
+        json={"login_id": email, "password": FIXTURE_PASSWORD},
     )
     assert resp.status_code == 200, resp.text
     return str(resp.json()["access_token"])

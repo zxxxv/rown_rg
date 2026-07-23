@@ -4,20 +4,43 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse
-from sqlalchemy import func, or_, select
+from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
 from src.api.schemas.execution import DecideRequest, ProgressResponse, RunResponse
-from src.api.schemas.project import ConfigUpdateRequest, PresetRead, ProjectCreate, ProjectRead
+from src.api.schemas.project import (
+    AnalystRead,
+    ConfigUpdateRequest,
+    OutlineIn,
+    PresetChapterRead,
+    PresetDetailRead,
+    PresetRead,
+    PresetSectionRead,
+    ProjectCreate,
+    ProjectRead,
+)
+from src.api.schemas.section import (
+    ChapterNode,
+    SectionContentResponse,
+    SectionContentUpdate,
+    SectionNode,
+    SectionRewriteRequest,
+    SectionTreeResponse,
+)
 from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
-from src.core.types import ProjectStage
+from src.core.state import ProjectState
+from src.core.types import ProjectStage, SectionDraft, SectionPlan
 from src.db.models.project import Project
+from src.db.models.section import Section
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
-from src.prompts import list_presets, load_preset
+from src.prompts import list_analysts, list_presets, load_preset
+from src.services.generation.planner import MAX_SECTIONS
 from src.workflows.runner import get_pending_gate, resume_run, start_run
 
 # 단계 기반 근사 진행률 — 섹션 단위 세밀화는 추후 진행 이벤트로
@@ -35,6 +58,45 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 # 생성 화면 프리셋 드롭다운용 — 카탈로그(src.prompts)가 단일 진실.
 presets_router = APIRouter(prefix="/presets", tags=["presets"])
+
+# 섹션별 담당 에이전트 배정 UI용 — 역시 파일 카탈로그가 단일 진실.
+analysts_router = APIRouter(prefix="/analysts", tags=["analysts"])
+
+
+def _validate_outline_config(config: dict) -> None:
+    """config.outline이 있으면 형태·섹션 수·에이전트 이름을 검증한다.
+
+    outline은 planner LLM을 우회해 그대로 실행되므로 생성/수정 시점에 막는 게
+    마지막 방어선이다. UI는 카탈로그에서만 고르지만 API 직접 호출을 대비한다.
+    """
+    outline = config.get("outline")
+    if outline is None:
+        return
+    try:
+        parsed = OutlineIn.model_validate(outline)
+    except PydanticValidationError as e:
+        raise ValidationError(
+            message=f"outline 형식이 올바르지 않습니다: {e.errors()[0].get('msg', '')}",
+            code="INVALID_OUTLINE",
+        ) from None
+    sections = [s for ch in parsed.chapters for s in ch.sections]
+    if not sections:
+        raise ValidationError(message="outline에 섹션이 없습니다", code="INVALID_OUTLINE")
+    if len(sections) > MAX_SECTIONS:
+        raise ValidationError(
+            message=f"섹션이 너무 많습니다: {len(sections)}개 (최대 {MAX_SECTIONS})",
+            code="OUTLINE_TOO_LARGE",
+        )
+    known: set[str] = set()
+    for a in list_analysts():
+        known.add(a.id)
+        known.add(a.name)
+    unknown = sorted({name for s in sections for name in s.analysts} - known)
+    if unknown:
+        raise ValidationError(
+            message=f"알 수 없는 분석 에이전트: {', '.join(unknown)}",
+            code="UNKNOWN_ANALYST",
+        )
 
 
 @presets_router.get("", response_model=list[PresetRead])
@@ -54,13 +116,66 @@ async def get_presets(
     ]
 
 
+@presets_router.get("/{preset_key}", response_model=PresetDetailRead)
+async def get_preset_detail(
+    preset_key: str,
+    _: Annotated[User, Depends(get_current_active_user)],
+) -> PresetDetailRead:
+    """프리셋 전체 골격(챕터·섹션·방향·핵심포인트·담당 에이전트).
+
+    생성 화면에서 프리셋을 클릭해 들어가면 이 골격이 목차 편집기의 초기값이 된다.
+    """
+    try:
+        p = load_preset(preset_key)
+    except KeyError:
+        raise NotFoundError(message="프리셋을 찾을 수 없습니다", code="PRESET_NOT_FOUND") from None
+    return PresetDetailRead(
+        id=p.id,
+        name=p.name,
+        desc=p.desc,
+        domain_context=p.domain_context,
+        chapters=[
+            PresetChapterRead(
+                title=ch.title,
+                sections=[
+                    PresetSectionRead(
+                        title=s.title,
+                        direction=s.direction,
+                        key_points=list(s.key_points),
+                        agents=list(s.agents),
+                    )
+                    for s in ch.sections
+                ],
+            )
+            for ch in p.chapters
+        ],
+    )
+
+
+@analysts_router.get("", response_model=list[AnalystRead])
+async def get_analysts(
+    _: Annotated[User, Depends(get_current_active_user)],
+) -> list[AnalystRead]:
+    """분석 에이전트 카탈로그(전 종) — 섹션별 담당 배정 UI의 선택지."""
+    return [
+        AnalystRead(
+            id=a.id,
+            name=a.name,
+            cat=a.cat,
+            desc=a.desc,
+            pages=a.volume_target.pages if a.volume_target else None,
+        )
+        for a in list_analysts()
+    ]
+
+
 async def _get_authorized_project(
     project_id: UUID,
     session: AsyncSession,
     current_user: User,
 ) -> Project:
     """프로젝트 로드 + 소유자/관리자 권한 확인."""
-    project = await session.get(Project, project_id)
+    project = await session.get(Project, project_id, options=[selectinload(Project.owner)])
     if project is None:
         raise NotFoundError(message="프로젝트를 찾을 수 없습니다", code="PROJECT_NOT_FOUND")
     if project.owner_id != current_user.id and current_user.role not in ("super_admin", "admin"):
@@ -85,6 +200,8 @@ async def create_project(
                 message=f"알 수 없는 프리셋입니다: {data.preset} (가능: {available})",
                 code="UNKNOWN_PRESET",
             ) from None
+    # 사용자 확정 목차가 실려 있으면 여기서 검증해 확정한다 (실행 시점 실패 방지).
+    _validate_outline_config(data.config)
     project = Project(
         title=data.title,
         topic=data.topic,
@@ -96,7 +213,7 @@ async def create_project(
     )
     session.add(project)
     await session.flush()
-    await session.refresh(project)
+    await session.refresh(project, ["owner"])
     return project
 
 
@@ -108,24 +225,39 @@ async def list_projects(
     offset: int = 0,
     status: str | None = None,
     q: str | None = None,
+    scope: str = "mine",
 ) -> list[Project]:
-    """내 프로젝트 목록(최신순). admin·super_admin은 전체를 본다.
+    """프로젝트 목록(최신순).
 
-    status=단계 필터(ProjectStage 값), q=제목·주제 부분 검색.
+    scope=mine(기본)은 내 것만, scope=all은 전체 — 단 all은 admin·super_admin만 허용
+    (일반 사용자는 scope와 무관하게 항상 자기 것). status=단계 필터, q=제목·주제·소유자명 검색.
     """
     if status is not None and status not in _STAGE_PERCENT:
         raise ValidationError(
             message=f"알 수 없는 status: {status} (가능: {', '.join(_STAGE_PERCENT)})",
             code="INVALID_STATUS_FILTER",
         )
-    stmt = select(Project).order_by(Project.created_at.desc()).limit(limit).offset(offset)
-    if current_user.role not in ("super_admin", "admin"):
+    if scope not in ("mine", "all"):
+        raise ValidationError(message="scope는 mine 또는 all 이어야 합니다", code="INVALID_SCOPE")
+    is_admin = current_user.role in ("super_admin", "admin")
+
+    stmt = select(Project).options(selectinload(Project.owner))
+    # 가시성: 일반 사용자는 항상 자기 것. 관리자는 scope=all일 때만 전체.
+    if not (is_admin and scope == "all"):
         stmt = stmt.where(Project.owner_id == current_user.id)
     if status is not None:
         stmt = stmt.where(Project.status == status)
     if q:
         pattern = f"%{q}%"
-        stmt = stmt.where(or_(Project.title.ilike(pattern), Project.topic.ilike(pattern)))
+        # 제목·주제·소유자명 검색(소유자명은 owner join으로).
+        stmt = stmt.join(User, Project.owner_id == User.id).where(
+            or_(
+                Project.title.ilike(pattern),
+                Project.topic.ilike(pattern),
+                User.name.ilike(pattern),
+            )
+        )
+    stmt = stmt.order_by(Project.created_at.desc()).limit(limit).offset(offset)
     return list((await session.execute(stmt)).scalars())
 
 
@@ -194,10 +326,33 @@ async def update_project_config(
     생성 후 변경 불가(프론트 edit 모드도 readonly).
     """
     project = await _get_authorized_project(project_id, session, current_user)
+    _validate_outline_config(data.config)
     project.config = data.config
     await session.flush()
     await session.refresh(project)
     return project
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_project(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> None:
+    """완료(completed·archived)된 프로젝트 영구 삭제.
+
+    하위 데이터(sources·chunks·raptor·consistency·review_points)는 DB FK CASCADE로
+    함께 삭제되고, token_usage는 SET NULL이라 사용량·비용 기록은 남는다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    if project.status not in (ProjectStage.COMPLETED.value, ProjectStage.ARCHIVED.value):
+        raise ValidationError(
+            message=f"완료된 프로젝트만 삭제할 수 있습니다(현재: {project.status})",
+            code="PROJECT_NOT_DELETABLE",
+        )
+    # ORM 관계는 lazy="raise"라 session.delete()의 관계 로딩을 피하고
+    # DB FK CASCADE에 맡기는 Core DELETE를 쓴다.
+    await session.execute(delete(Project).where(Project.id == project.id))
 
 
 @router.get("/{project_id}/export")
@@ -238,3 +393,174 @@ async def decide_gate(
     # 결정값으로 척추 재개 — 백그라운드. 게이트 다음 단계부터 이어서 진행된다.
     await resume_run(project.id, data.decision)
     return RunResponse(project_id=str(project.id), status=ProjectStage.RESEARCHING)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 섹션 조회·편집 — sections 테이블(assemble 시 영구 저장)이 원천.
+# 프론트 미리보기/편집 화면 계약(web/src/api/sections.ts·types.ts)과 1:1.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _reduce_chapter_status(statuses: list[str]) -> str:
+    """섹션 상태들 → 챕터 상태. 전부 완료면 completed, 하나라도 진행/완료면 writing,
+    전부 실패면 failed, 그 외 pending."""
+    if not statuses:
+        return "pending"
+    if all(s == "completed" for s in statuses):
+        return "completed"
+    if any(s in ("completed", "writing") for s in statuses):
+        return "writing"
+    if all(s == "failed" for s in statuses):
+        return "failed"
+    return "pending"
+
+
+async def _load_sections(session: AsyncSession, project_id: UUID) -> list[Section]:
+    stmt = (
+        select(Section)
+        .where(Section.project_id == project_id)
+        .order_by(Section.chapter_number, Section.section_number)
+    )
+    return list((await session.execute(stmt)).scalars())
+
+
+@router.get("/{project_id}/sections", response_model=SectionTreeResponse)
+async def get_sections(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SectionTreeResponse:
+    """섹션 트리(장 → 절). 장 노드는 절들을 묶어 합성하고 상태는 하위에서 유도한다."""
+    project = await _get_authorized_project(project_id, session, current_user)
+    rows = await _load_sections(session, project.id)
+
+    chapters: dict[int, ChapterNode] = {}
+    chapter_statuses: dict[int, list[str]] = {}
+    for row in rows:
+        ch_id = f"ch-{row.chapter_number}"
+        if row.chapter_number not in chapters:
+            chapters[row.chapter_number] = ChapterNode(
+                id=ch_id, title=row.chapter_title, level=1, status="pending", children=[]
+            )
+            chapter_statuses[row.chapter_number] = []
+        chapters[row.chapter_number].children.append(
+            SectionNode(
+                id=str(row.id),
+                title=row.title,
+                level=row.level,
+                status=row.status,
+                parent_id=ch_id,
+            )
+        )
+        chapter_statuses[row.chapter_number].append(row.status)
+
+    tree = [chapters[n] for n in sorted(chapters)]
+    for n, node in zip(sorted(chapters), tree, strict=True):
+        node.status = _reduce_chapter_status(chapter_statuses[n])
+    return SectionTreeResponse(tree=tree)
+
+
+async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID) -> Section:
+    row = await session.get(Section, section_id)
+    if row is None or row.project_id != project_id:
+        raise NotFoundError(message="섹션을 찾을 수 없습니다", code="SECTION_NOT_FOUND")
+    return row
+
+
+def _section_content(row: Section) -> SectionContentResponse:
+    return SectionContentResponse(
+        id=str(row.id),
+        title=row.title,
+        content=row.content,
+        source_ids=[str(s) for s in row.source_ids],
+        qa_status=row.qa_status,
+        level=row.level,
+    )
+
+
+@router.get("/{project_id}/sections/{section_id}", response_model=SectionContentResponse)
+async def get_section_content(
+    project_id: UUID,
+    section_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SectionContentResponse:
+    project = await _get_authorized_project(project_id, session, current_user)
+    return _section_content(await _get_section(session, project.id, section_id))
+
+
+@router.patch("/{project_id}/sections/{section_id}", response_model=SectionContentResponse)
+async def update_section_content(
+    project_id: UUID,
+    section_id: UUID,
+    data: SectionContentUpdate,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SectionContentResponse:
+    """수동 편집 저장 — 본문 교체. 상태를 completed로 확정한다."""
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_section(session, project.id, section_id)
+    row.content = data.content
+    row.status = "completed"
+    await session.flush()
+    await session.refresh(row)
+    return _section_content(row)
+
+
+async def _default_section_rewriter(
+    project: Project, plan: SectionPlan, instruction: str
+) -> SectionDraft:
+    """실검색+실LLM으로 한 섹션 재작성. write 파이프라인의 검색기·생성기를 재사용한다."""
+    from src.services.sections.edit import regenerate_section
+    from src.workflows.stages import _default_retriever_factory
+
+    state = ProjectState(
+        project_id=project.id,
+        user_id=project.owner_id,
+        topic=project.topic,
+        preset=project.preset,
+        options=project.config,
+    )
+    retrieve = _default_retriever_factory(state)
+    return await regenerate_section(
+        section=plan,
+        retrieve=retrieve,
+        instruction=instruction,
+        user_id=project.owner_id,
+        project_id=project.id,
+    )
+
+
+# 주입 지점 — 테스트는 이 전역을 fake로 교체한다(실검색·실LLM 회피).
+_section_rewriter = _default_section_rewriter
+
+
+@router.post("/{project_id}/sections/{section_id}/rewrite", response_model=SectionContentResponse)
+async def rewrite_section(
+    project_id: UUID,
+    section_id: UUID,
+    data: SectionRewriteRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SectionContentResponse:
+    """AI 재작성 — 프로젝트 인덱스에서 근거를 검색해 이 섹션만 다시 쓴다.
+
+    instruction으로 방향을 지시할 수 있다(빈 값이면 근거 기반 단순 재작성).
+    결과는 sections 테이블에 저장되고 갱신된 본문을 반환한다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_section(session, project.id, section_id)
+    plan = SectionPlan(
+        section_id=row.id,
+        chapter_number=row.chapter_number,
+        section_number=row.section_number,
+        title=row.title,
+    )
+    draft = await _section_rewriter(project, plan, data.instruction)
+    row.content = draft.content
+    row.source_ids = list(draft.cited_chunk_ids)
+    row.status = "completed"
+    row.qa_status = "passed"
+    await session.flush()
+    await session.refresh(row)
+    return _section_content(row)
