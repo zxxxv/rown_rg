@@ -52,9 +52,35 @@ export const AnalyzerSchema = z.enum([
 ]);
 export type Analyzer = z.infer<typeof AnalyzerSchema>;
 
+// 사용자 확정 목차(config.outline) — 있으면 백엔드 planner가 LLM 없이 그대로 실행한다.
+// 장·절 번호는 배열 위치에서 파생되므로 클라이언트는 번호를 보내지 않는다.
+// 주의: .default()를 쓰면 zod input/output 타입이 갈라져 zodResolver와 어긋난다 —
+// 전 필드 필수(서버는 항상 전 필드 직렬화, 편집기도 항상 채움).
+export const OutlineSectionSchema = z.object({
+  title: z.string(),
+  direction: z.string(),
+  key_points: z.array(z.string()),
+  // 분석 에이전트 name 참조 — 첫 번째가 대표(페르소나·분량 기준)
+  analysts: z.array(z.string()),
+});
+export type OutlineSection = z.infer<typeof OutlineSectionSchema>;
+
+export const OutlineChapterSchema = z.object({
+  title: z.string(),
+  sections: z.array(OutlineSectionSchema),
+});
+export type OutlineChapter = z.infer<typeof OutlineChapterSchema>;
+
+export const OutlineSchema = z.object({
+  chapters: z.array(OutlineChapterSchema),
+});
+export type Outline = z.infer<typeof OutlineSchema>;
+
 export const ProjectConfigSchema = z.object({
   // 백엔드 계약: 프리셋은 카탈로그 id/name 문자열 또는 null(자유 주제)
   preset: z.string().nullable(),
+  // 생성 화면에서 직접 확정한 목차 — 없으면(AI 자동 설계) 필드 자체를 생략한다.
+  outline: OutlineSchema.optional(),
   sources: z.object({
     use_library: z.boolean(),
     use_upload: z.boolean(),

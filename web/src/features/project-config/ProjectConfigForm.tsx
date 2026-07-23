@@ -13,6 +13,7 @@ import { mergeKeepDirty } from "./_merge";
 import { AnalyzerPicker } from "./AnalyzerPicker";
 import { DepthSelector } from "./DepthSelector";
 import { DifferentiatorToggle } from "./DifferentiatorToggle";
+import { OutlineDesigner } from "./OutlineDesigner";
 import { OutputAndNotification } from "./OutputAndNotification";
 import { PresetSelect } from "./PresetSelect";
 import { defaultsForPreset, presetLabel } from "./presets";
@@ -116,19 +117,22 @@ export function ProjectConfigForm({
           <Section number={2} title="보고서 유형">
             <PresetSelect onPresetChange={onPresetChange} disabled={isEdit} />
           </Section>
-          <Section number={3} title="자료 선택">
+          <Section number={3} title="목차 설계">
+            <OutlineDesigner />
+          </Section>
+          <Section number={4} title="자료 선택">
             <SourceTypeCheckboxes />
           </Section>
-          <Section number={4} title="분석 도구">
+          <Section number={5} title="분석 도구">
             <AnalyzerPicker />
           </Section>
-          <Section number={5} title="기능">
+          <Section number={6} title="기능">
             <DifferentiatorToggle />
           </Section>
-          <Section number={6} title="작성 깊이" badge={isEdit ? "수정 불가" : undefined}>
+          <Section number={7} title="작성 깊이" badge={isEdit ? "수정 불가" : undefined}>
             <DepthSelector disabled={isEdit} />
           </Section>
-          <Section number={7} title="알림">
+          <Section number={8} title="알림">
             <OutputAndNotification />
           </Section>
         </div>
@@ -138,6 +142,12 @@ export function ProjectConfigForm({
             <p className="text-xs font-medium text-fg-secondary">선택 옵션 요약</p>
             <div className="flex flex-wrap gap-1.5">
               <Badge variant="secondary">프리셋 · {presetLabel(watchedConfig.preset)}</Badge>
+              <Badge variant="secondary">
+                목차 ·{" "}
+                {watchedConfig.outline
+                  ? `${watchedConfig.outline.chapters.reduce((n, c) => n + c.sections.length, 0)}절 직접 확정`
+                  : "AI 설계"}
+              </Badge>
               <Badge variant="secondary">깊이 · {DEPTH_LABEL[watchedConfig.depth_mode]}</Badge>
               <Badge variant="secondary">
                 분석 도구 {watchedConfig.enabled_analyzers.length}개
