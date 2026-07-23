@@ -30,6 +30,8 @@ LINE_SPACING_PERCENT = 160
 MARGIN_MM: dict[str, float] = {"top": 20.0, "bottom": 20.0, "left": 30.0, "right": 20.0}
 HEADER_TEXT = "주식회사 로운인사이트"
 MAX_HEADING_LEVEL = 3
+# 개조식 한 수준당 왼쪽 들여쓰기(mm). Paragraph.indent 0=□, 1=ㅇ, 2=-, 3=* 순으로 누적된다.
+OUTLINE_INDENT_MM = 5.0
 
 
 @dataclass(frozen=True)
@@ -42,9 +44,10 @@ class Heading:
 
 @dataclass(frozen=True)
 class Paragraph:
-    """본문 문단 블록."""
+    """본문 문단 블록. indent=개조식 들여쓰기 수준(0=□ 대주제, 1=ㅇ, 2=-, 3=*)."""
 
     text: str
+    indent: int = 0
 
 
 @dataclass(frozen=True)
@@ -83,7 +86,7 @@ def build_report(
         if isinstance(block, Heading):
             _add_heading(doc, block)
         elif isinstance(block, Paragraph):
-            _add_body(doc, block.text)
+            _add_body(doc, block.text, block.indent)
         else:
             _add_table(doc, block)
 
@@ -121,12 +124,19 @@ def _add_heading(doc: HwpxDocument, heading: Heading) -> None:
     )
 
 
-def _add_body(doc: HwpxDocument, text: str) -> None:
+def _add_body(doc: HwpxDocument, text: str, indent: int = 0) -> None:
     char_id = doc.ensure_run_style(font=BODY_FONT, size=BODY_SIZE_PT)
     # inherit_style=False: 앞 제목의 개요(OUTLINE) paraPr 상속을 차단 → 본문이 목차에 안 잡힘.
     para = doc.add_paragraph(text, char_pr_id_ref=char_id, inherit_style=False)
     idx = doc.paragraphs.index(para)
-    doc.set_paragraph_format(paragraph_index=idx, line_spacing_percent=LINE_SPACING_PERCENT)
+    fmt: dict[str, float | int] = {
+        "paragraph_index": idx,
+        "line_spacing_percent": LINE_SPACING_PERCENT,
+    }
+    # 개조식 수준만큼 왼쪽 여백을 줘 계층 들여쓰기를 표현한다(0수준=여백 없음).
+    if indent > 0:
+        fmt["indent_left_mm"] = indent * OUTLINE_INDENT_MM
+    doc.set_paragraph_format(**fmt)
 
 
 def _add_table(doc: HwpxDocument, table: Table) -> None:
