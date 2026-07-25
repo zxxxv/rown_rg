@@ -9,6 +9,8 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.clock import now
+from src.core.types import ProjectStage
+from src.db.models.project import Project
 from src.db.models.quota_setting import QuotaSettings
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
@@ -56,6 +58,29 @@ async def _add_usage(
         usage.created_at = created_at
     session.add(usage)
     await session.commit()
+
+
+async def _add_project(
+    session: AsyncSession,
+    owner: User,
+    status: str,
+    completed_at: datetime | None = None,
+) -> Project:
+    project = Project(
+        title="테스트 리포트",
+        topic="대시보드 completed_reports 검증",
+        owner_id=owner.id,
+        status=status,
+    )
+    session.add(project)
+    await session.commit()
+    if completed_at is not None:
+        # 상태 전이 시점의 자동 기록(now) 대신 테스트가 원하는 경계값으로 덮어쓴다.
+        # status는 건드리지 않으므로 completed_at 동기화 훅은 재실행되지 않는다.
+        project.completed_at = completed_at
+        await session.commit()
+    await session.refresh(project)
+    return project
 
 
 def _this_month_start(today: datetime) -> datetime:
@@ -181,6 +206,62 @@ class TestAdminDashboardPeriod:
         )
 
         assert response.status_code == 422
+
+
+class TestAdminDashboardCompletedReports:
+    async def test_completed_reports_counts_by_completed_at_not_updated_at(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        admin_user: User,
+        admin_token: str,
+    ) -> None:
+        today = now()
+        this_month_start = _this_month_start(today)
+
+        # completed_at이 이번 달 범위 안 -> 집계에 포함
+        in_range = await _add_project(
+            test_session, admin_user, ProjectStage.COMPLETED.value, completed_at=today
+        )
+        # completed_at은 지난달이지만 updated_at(생성 시각)은 이번 달 -> updated_at 기준이었다면
+        # 잘못 포함됐을 케이스. completed_at 기준으로는 제외되어야 한다.
+        out_of_range = await _add_project(
+            test_session,
+            admin_user,
+            ProjectStage.COMPLETED.value,
+            completed_at=this_month_start - timedelta(seconds=1),
+        )
+        # completed 상태가 아니면 completed_at이 없으므로 집계에서 제외
+        await _add_project(test_session, admin_user, ProjectStage.WRITING.value)
+        assert in_range.completed_at is not None
+        assert out_of_range.completed_at is not None
+
+        response = await test_client.get("/api/v1/admin/dashboard", headers=_auth(admin_token))
+
+        assert response.status_code == 200
+        assert response.json()["kpis"]["completed_reports"] == 1
+
+    async def test_reverting_completed_status_removes_it_from_count(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        admin_user: User,
+        admin_token: str,
+    ) -> None:
+        today = now()
+        project = await _add_project(
+            test_session, admin_user, ProjectStage.COMPLETED.value, completed_at=today
+        )
+
+        project.status = ProjectStage.WRITING.value
+        await test_session.commit()
+        await test_session.refresh(project)
+        assert project.completed_at is None
+
+        response = await test_client.get("/api/v1/admin/dashboard", headers=_auth(admin_token))
+
+        assert response.status_code == 200
+        assert response.json()["kpis"]["completed_reports"] == 0
 
 
 class TestAdminDashboardQuotaSettingsOverride:

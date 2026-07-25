@@ -110,9 +110,8 @@ async def get_admin_dashboard(
             select(func.count())
             .select_from(Project)
             .where(
-                Project.status == "completed",
-                Project.updated_at >= range_start,
-                Project.updated_at < range_end,
+                Project.completed_at >= range_start,
+                Project.completed_at < range_end,
             )
         )
     ).scalar_one()
