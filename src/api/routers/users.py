@@ -1,10 +1,10 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.auth import get_current_active_user
@@ -22,7 +22,7 @@ from src.api.schemas.token_usage import (
     TokenUsageByModel,
     TokenUsageDailyPoint,
 )
-from src.api.schemas.user import UserRead, UserUpdate
+from src.api.schemas.user import UserListResponse, UserRead, UserUpdate
 from src.core.clock import now
 from src.core.exceptions import AuthorizationError, NotFoundError
 from src.core.types import Role
@@ -31,6 +31,13 @@ from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+_SORTABLE_COLUMNS: dict[str, ColumnElement] = {
+    "created_at": User.created_at,
+    "email": User.email,
+    "name": User.name,
+    "role": User.role,
+}
 
 
 @router.get("/me/token-usage", response_model=MyTokenUsageResponse)
@@ -184,15 +191,44 @@ async def list_my_quota_requests(
     return Page[LimitRequestRead](total=total, page=page, page_size=page_size, items=items)
 
 
-@router.get("", response_model=list[UserRead])
+@router.get("", response_model=UserListResponse)
 async def list_users(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     _: Annotated[User, Depends(require_role(*ADMINS))],
+    q: Annotated[str | None, Query()] = None,
+    role: Annotated[Role | None, Query()] = None,
+    is_active: Annotated[bool | None, Query()] = None,
+    sort_by: Annotated[Literal["created_at", "email", "name", "role"], Query()] = "created_at",
+    order: Annotated[Literal["asc", "desc"], Query()] = "desc",
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
-) -> list[User]:
-    stmt = select(User).order_by(User.created_at.desc()).limit(limit).offset(offset)
-    return list((await session.execute(stmt)).scalars().all())
+) -> UserListResponse:
+    """사용자 목록을 검색/필터/정렬 조건과 함께 페이지네이션하여 반환한다."""
+    filters: list[ColumnElement[bool]] = []
+    if q is not None:
+        filters.append(or_(User.email.ilike(f"%{q}%"), User.name.ilike(f"%{q}%")))
+    if role is not None:
+        filters.append(User.role == role)
+    if is_active is not None:
+        filters.append(User.is_active == is_active)
+
+    total = (
+        await session.execute(select(func.count()).select_from(User).where(*filters))
+    ).scalar_one()
+
+    sort_col = _SORTABLE_COLUMNS[sort_by]
+    order_col = sort_col.asc() if order == "asc" else sort_col.desc()
+
+    rows = (
+        (
+            await session.execute(
+                select(User).where(*filters).order_by(order_col).limit(limit).offset(offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return UserListResponse(items=list(rows), total=total)
 
 
 @router.get("/{user_id}", response_model=UserRead)
