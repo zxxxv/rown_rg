@@ -76,9 +76,14 @@ export default function LibraryPage() {
     [tree, selectedId],
   );
 
-  // 생성·업로드 대상 폴더 — 폴더를 선택 중이면 그 안에, 아니면 최상위에
-  const targetFolderId = lookup.node?.type === "folder" ? lookup.node.id : null;
-  const targetFolderName = lookup.node?.type === "folder" ? lookup.node.name : "최상위";
+  // 쓰기 대상 — 선택한 폴더의 writable(개인/회사·부모)을 따른다. 가상 컨테이너
+  // (프로젝트·완성본 등)나 파일을 고르면 writable이 없어 업로드/폴더생성이 막힌다.
+  const selectedFolder = lookup.node?.type === "folder" ? lookup.node : null;
+  const writable = selectedFolder?.writable ?? null;
+  const canWrite = Boolean(writable);
+  const targetName = selectedFolder?.name ?? "";
+  const targetParentId = writable?.parent_id ?? null;
+  const targetIsPersonal = writable?.scope === "personal";
 
   const createFolder = useCreateFolder();
   const uploadFile = useUploadFile();
@@ -88,9 +93,13 @@ export default function LibraryPage() {
 
   const onCreateFolder = async () => {
     const name = folderName.trim();
-    if (!name) return;
+    if (!name || !writable) return;
     try {
-      await createFolder.mutateAsync({ name, parent_id: targetFolderId });
+      await createFolder.mutateAsync({
+        name,
+        parent_id: targetParentId,
+        is_personal: targetIsPersonal,
+      });
       toast.success(`폴더 "${name}"이(가) 추가됐습니다.`);
       setFolderDialogOpen(false);
       setFolderName("");
@@ -102,10 +111,14 @@ export default function LibraryPage() {
 
   const onPickFile = async (files: FileList | null) => {
     const file = files?.[0];
-    if (!file) return;
+    if (!file || !writable) return;
     try {
-      await uploadFile.mutateAsync({ file, parent_id: targetFolderId });
-      toast.success(`"${file.name}" 업로드 완료 (${targetFolderName})`);
+      await uploadFile.mutateAsync({
+        file,
+        parent_id: targetParentId,
+        is_personal: targetIsPersonal,
+      });
+      toast.success(`"${file.name}" 업로드 완료 (${targetName})`);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "업로드에 실패했습니다.";
       toast.error("업로드 실패", { description: msg });
@@ -126,7 +139,16 @@ export default function LibraryPage() {
             <div>
               <h1 className="text-3xl font-semibold text-fg">자료 라이브러리</h1>
               <p className="text-sm text-fg-secondary">
-                프로젝트별 자료와 공용 자료(클라이언트·공통·분석 양식)를 한 곳에서 관리합니다.
+                내 프로젝트·개인 자료와 회사 공유 자료를 한 곳에서 관리합니다.{" "}
+                {canWrite ? (
+                  <span className="text-fg-tertiary">
+                    업로드 위치: <span className="font-medium text-fg-secondary">{targetName}</span>
+                  </span>
+                ) : (
+                  <span className="text-fg-tertiary">
+                    업로드하려면 ‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요.
+                  </span>
+                )}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -134,7 +156,8 @@ export default function LibraryPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => setFolderDialogOpen(true)}
-                disabled={createFolder.isPending}
+                disabled={createFolder.isPending || !canWrite}
+                title={canWrite ? undefined : "‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요"}
               >
                 <FolderPlus className="mr-1 h-4 w-4" />
                 폴더 추가
@@ -142,7 +165,8 @@ export default function LibraryPage() {
               <Button
                 size="sm"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={uploadFile.isPending}
+                disabled={uploadFile.isPending || !canWrite}
+                title={canWrite ? undefined : "‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요"}
               >
                 <Upload className="mr-1 h-4 w-4" />
                 {uploadFile.isPending ? "업로드 중…" : "파일 업로드"}
@@ -221,7 +245,10 @@ export default function LibraryPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>폴더 추가</DialogTitle>
-            <DialogDescription>위치: {targetFolderName}</DialogDescription>
+            <DialogDescription>
+              위치: {targetName || "—"}
+              {targetIsPersonal ? " (개인)" : canWrite ? " (회사 공유)" : ""}
+            </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="new-folder-name">폴더 이름</Label>

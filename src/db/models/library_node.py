@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -46,6 +47,11 @@ class LibraryNode(Base):
     )
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    # 개인(나만) vs 회사 공유(조직 전체) 구분 — get_tree가 개인 루트/회사 공유로 가른다.
+    # 개인 노드는 created_by 본인만 조회(관리자도 타인 것은 못 봄, _can_view 참조).
+    is_personal: Mapped[bool] = mapped_column(
+        Boolean, server_default="false", nullable=False, index=True
     )
     visible_to_users: Mapped[list[uuid.UUID]] = mapped_column(
         ARRAY(UUID(as_uuid=True)), server_default="{}", nullable=False

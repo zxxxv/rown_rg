@@ -23,6 +23,8 @@ export function useLibraryTree() {
 interface CreateFolderInput {
   parent_id: string | null;
   name: string;
+  /** 최상위 생성 시 개인(내 자료)=true / 회사 공유=false. 상위 폴더가 있으면 무시(상속). */
+  is_personal?: boolean;
 }
 
 export function useCreateFolder() {
@@ -30,7 +32,13 @@ export function useCreateFolder() {
   return useMutation({
     mutationKey: [...libraryKeys.all, "create-folder"],
     mutationFn: async (input: CreateFolderInput) => {
-      return apiClient.post<unknown>("library/folders", { json: input });
+      return apiClient.post<unknown>("library/folders", {
+        json: {
+          parent_id: input.parent_id,
+          name: input.name,
+          is_personal: input.is_personal ?? false,
+        },
+      });
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: libraryKeys.all });
@@ -41,6 +49,8 @@ export function useCreateFolder() {
 interface UploadFileInput {
   parent_id: string | null;
   file: File;
+  /** 최상위 업로드 시 개인(내 자료)=true / 회사 공유=false. 상위 폴더가 있으면 무시(상속). */
+  is_personal?: boolean;
 }
 
 export function useUploadFile() {
@@ -51,6 +61,7 @@ export function useUploadFile() {
       const fd = new FormData();
       fd.append("file", input.file);
       if (input.parent_id) fd.append("parent_id", input.parent_id);
+      fd.append("is_personal", input.is_personal ? "true" : "false");
       return apiClient.post<unknown>("library/files", { body: fd });
     },
     onSuccess: () => {
@@ -98,4 +109,11 @@ export function useSetNodeVisibility() {
 export function libraryFileDownloadUrl(nodeId: string): string {
   const base = env.VITE_API_BASE_URL.replace(/\/$/, "");
   return `${base}/library/files/${nodeId}/download`;
+}
+
+/** 가상 파일의 download_url 해석 — 절대 URL(웹 출처)은 그대로, 상대경로는 API base 접두. */
+export function resolveDownloadUrl(url: string): string {
+  if (/^https?:\/\//.test(url)) return url;
+  const base = env.VITE_API_BASE_URL.replace(/\/$/, "");
+  return `${base}/${url.replace(/^\//, "")}`;
 }

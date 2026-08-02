@@ -1,4 +1,5 @@
 import { DEMO_PROJECTS } from "@/api/mock/fixtures/projects";
+import { DEMO_ADMIN_USER } from "@/api/mock/fixtures/users";
 import type { LibraryFileMeta, LibraryNode, Project, SourceKind, UserRoleType } from "@/api/types";
 
 interface FileSpec {
@@ -39,30 +40,39 @@ function folder(name: string, children: LibraryNode[]): LibraryNode {
   return { id: nextId("dir"), name, type: "folder", children };
 }
 
+/** 가상 파일로 표시(프로젝트 소스는 읽기전용 — 삭제/권한변경 불가). */
+function asVirtualFile(n: LibraryNode): LibraryNode {
+  return n.type === "file" ? { ...n, virtual: true } : n;
+}
+
 function projectFolder(project: Project, children: LibraryNode[] = []): LibraryNode {
   const base = `pf_${project.id}`;
   return {
     id: base,
     name: project.title,
     type: "folder",
+    virtual: true,
     children: [
       {
         id: `${base}_ai`,
         name: "AI 수집 자료",
         type: "folder",
-        children: children.filter(isAiKind),
+        virtual: true,
+        children: children.filter(isAiKind).map(asVirtualFile),
       },
       {
         id: `${base}_up`,
         name: "사용자 업로드",
         type: "folder",
-        children: children.filter(isUploadKind),
+        virtual: true,
+        children: children.filter(isUploadKind).map(asVirtualFile),
       },
       {
         id: `${base}_lib`,
         name: "라이브러리 참조",
         type: "folder",
-        children: children.filter(isLibraryKind),
+        virtual: true,
+        children: children.filter(isLibraryKind).map(asVirtualFile),
       },
     ],
   };
@@ -400,31 +410,61 @@ function sampleFilesForProject(p: Project): LibraryNode[] {
   return items;
 }
 
+/** 실 폴더에 writable(업로드·폴더생성 대상) 컨텍스트를 재귀로 부여. */
+function withWritable(nodes: LibraryNode[], scope: "personal" | "company"): LibraryNode[] {
+  return nodes.map((n) =>
+    n.type === "folder"
+      ? { ...n, writable: { parent_id: n.id, scope }, children: withWritable(n.children, scope) }
+      : n,
+  );
+}
+
+// 백엔드 get_tree와 동일한 2탑레벨: 개인 루트(나만) + 회사 공유(조직 전체).
 export const LIBRARY_TREE: LibraryNode[] = [
   {
-    id: "group_proj",
-    name: "[프로젝트]",
+    id: "me",
+    name: DEMO_ADMIN_USER.name,
     type: "folder",
-    children: DEMO_PROJECTS.map((p) => projectFolder(p, sampleFilesForProject(p))),
+    virtual: true,
+    children: [
+      {
+        id: "me-projects",
+        name: "프로젝트",
+        type: "folder",
+        virtual: true,
+        children: DEMO_PROJECTS.map((p) => projectFolder(p, sampleFilesForProject(p))),
+      },
+      { id: "me-prompts", name: "프롬프트", type: "folder", virtual: true, children: [] },
+      {
+        id: "me-files",
+        name: "내 자료",
+        type: "folder",
+        virtual: true,
+        writable: { parent_id: null, scope: "personal" },
+        children: [],
+      },
+    ],
   },
   {
-    id: "group_shared",
-    name: "[공용]",
+    id: "company",
+    name: "회사 공유",
     type: "folder",
-    children: SHARED_CHILDREN,
+    virtual: true,
+    writable: { parent_id: null, scope: "company" },
+    children: withWritable(SHARED_CHILDREN, "company"),
   },
 ];
 
 export function createProjectFolderForLibrary(project: Project): void {
-  const group = LIBRARY_TREE.find((n) => n.id === "group_proj");
-  if (!group || group.type !== "folder") return;
+  const group = findFolderById(LIBRARY_TREE, "me-projects");
+  if (!group) return;
   if (group.children.some((n) => n.id === `pf_${project.id}`)) return;
   group.children.unshift(projectFolder(project));
 }
 
 export function getLibraryFilesForProject(projectId: string): LibraryNode[] {
-  const group = LIBRARY_TREE.find((n) => n.id === "group_proj");
-  if (!group || group.type !== "folder") return [];
+  const group = findFolderById(LIBRARY_TREE, "me-projects");
+  if (!group) return [];
   const pf = group.children.find((n) => n.id === `pf_${projectId}`);
   if (!pf || pf.type !== "folder") return [];
   const result: LibraryNode[] = [];
@@ -432,4 +472,17 @@ export function getLibraryFilesForProject(projectId: string): LibraryNode[] {
     if (sub.type === "folder") result.push(...sub.children);
   }
   return result;
+}
+
+function findFolderById(
+  nodes: LibraryNode[],
+  id: string,
+): Extract<LibraryNode, { type: "folder" }> | null {
+  for (const n of nodes) {
+    if (n.type !== "folder") continue;
+    if (n.id === id) return n;
+    const sub = findFolderById(n.children, id);
+    if (sub) return sub;
+  }
+  return null;
 }

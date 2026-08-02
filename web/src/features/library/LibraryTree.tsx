@@ -40,7 +40,7 @@ export interface LibraryTreeProps {
 
 export function LibraryTree({ tree, selectedId, onSelect, search }: LibraryTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(
-    () => new Set(["group_proj", "group_shared"]),
+    () => new Set(["me", "company", "me-projects"]),
   );
   const q = search.trim().toLowerCase();
 

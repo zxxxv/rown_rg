@@ -49,6 +49,17 @@ class LibraryFileMeta(BaseModel):
     project_id: str | None = None
 
 
+class WritableTarget(BaseModel):
+    """이 폴더가 업로드·폴더생성 대상이 될 때 새 노드에 적용할 컨텍스트.
+
+    parent_id=None은 최상위(개인/회사 공유 루트 바로 아래). scope는 개인/회사 구분.
+    writable이 None인 폴더는 쓰기 불가(가상 컨테이너: 프로젝트/프롬프트 등).
+    """
+
+    parent_id: str | None = None
+    scope: Literal["personal", "company"]
+
+
 class LibraryTreeFile(BaseModel):
     # 프론트 계약(LibraryNodeSchema)은 id를 string으로 본다. 실노드는 UUID를 str로,
     # 합성 노드(프로젝트 폴더 등)는 "proj-..." 같은 비-UUID 문자열을 쓴다.
@@ -56,6 +67,10 @@ class LibraryTreeFile(BaseModel):
     name: str
     type: Literal["file"] = "file"
     file_meta: LibraryFileMeta
+    # 가상 파일(프로젝트 소스·완성본)은 삭제/권한변경 대상이 아니다.
+    virtual: bool = False
+    # 가상 파일의 다운로드 경로(API base 기준 상대경로 또는 절대 URL). 실파일은 None.
+    download_url: str | None = None
 
 
 class LibraryTreeFolder(BaseModel):
@@ -63,6 +78,10 @@ class LibraryTreeFolder(BaseModel):
     name: str
     type: Literal["folder"] = "folder"
     children: list[LibraryTreeFolder | LibraryTreeFile] = Field(default_factory=list)
+    # 가상 컨테이너(개인 루트·프로젝트·프롬프트 등)는 이름변경/삭제 대상이 아니다.
+    virtual: bool = False
+    # 업로드·폴더생성 대상이면 컨텍스트, 아니면 None(쓰기 불가).
+    writable: WritableTarget | None = None
 
 
 class LibraryTreeResponse(BaseModel):
@@ -77,6 +96,8 @@ LibraryTreeResponse.model_rebuild()
 class FolderCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     parent_id: UUID | None = None
+    # 최상위 생성 시에만 의미(개인=True/회사 공유=False). 상위 폴더가 있으면 상위에서 상속.
+    is_personal: bool = False
 
 
 class VisibilityUpdateRequest(BaseModel):

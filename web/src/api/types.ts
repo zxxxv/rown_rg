@@ -264,9 +264,33 @@ export const LibraryFileMetaSchema = z.object({
 });
 export type LibraryFileMeta = z.infer<typeof LibraryFileMetaSchema>;
 
+// 업로드·폴더생성 대상 컨텍스트. parent_id=null은 최상위(개인/회사 공유 루트 바로 아래).
+// writable이 없으면 쓰기 불가(가상 컨테이너: 프로젝트/프롬프트 등).
+export const WritableTargetSchema = z.object({
+  parent_id: z.string().nullish(),
+  scope: z.enum(["personal", "company"]),
+});
+export type WritableTarget = z.infer<typeof WritableTargetSchema>;
+
+// virtual: 합성 노드(개인 루트·프로젝트·완성본·소스 등) — 삭제/권한변경 불가.
+// download_url: 가상 파일의 다운로드 경로(API base 상대경로 또는 절대 URL). 실파일은 없음.
 export type LibraryNode =
-  | { id: string; name: string; type: "folder"; children: LibraryNode[] }
-  | { id: string; name: string; type: "file"; file_meta: LibraryFileMeta };
+  | {
+      id: string;
+      name: string;
+      type: "folder";
+      children: LibraryNode[];
+      virtual?: boolean;
+      writable?: WritableTarget | null;
+    }
+  | {
+      id: string;
+      name: string;
+      type: "file";
+      file_meta: LibraryFileMeta;
+      virtual?: boolean;
+      download_url?: string | null;
+    };
 
 export const LibraryNodeSchema: z.ZodType<LibraryNode> = z.lazy(() =>
   z.union([
@@ -275,12 +299,16 @@ export const LibraryNodeSchema: z.ZodType<LibraryNode> = z.lazy(() =>
       name: z.string(),
       type: z.literal("folder"),
       children: z.array(LibraryNodeSchema),
+      virtual: z.boolean().optional(),
+      writable: WritableTargetSchema.nullish(),
     }),
     z.object({
       id: z.string(),
       name: z.string(),
       type: z.literal("file"),
       file_meta: LibraryFileMetaSchema,
+      virtual: z.boolean().optional(),
+      download_url: z.string().nullish(),
     }),
   ]),
 );

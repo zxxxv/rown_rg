@@ -42,28 +42,44 @@ function findFile(tree: LibraryNode[], id: string): Extract<LibraryNode, { type:
   return null;
 }
 
+/** 쓰기 대상 폴더 결정 — 상위 폴더가 있으면 그 폴더, 없으면 개인(me-files)/회사(company) 루트. */
+function pickContainer(
+  parentId: string | null | undefined,
+  isPersonal: boolean | undefined,
+): Extract<LibraryNode, { type: "folder" }> | null {
+  if (parentId) return findFolder(LIBRARY_TREE, parentId);
+  return findFolder(LIBRARY_TREE, isPersonal ? "me-files" : "company");
+}
+
 export const libraryHandlers = [
   http.get(url("library/tree"), () => {
     return HttpResponse.json({ data: { tree: LIBRARY_TREE } }, { status: 200 });
   }),
 
   http.post(url("library/folders"), async ({ request }) => {
-    const body = (await request.json()) as { name?: string; parent_id?: string | null };
+    const body = (await request.json()) as {
+      name?: string;
+      parent_id?: string | null;
+      is_personal?: boolean;
+    };
     if (!body.name?.trim()) {
       return HttpResponse.json(
         { error: { code: "VALIDATION_ERROR", message: "폴더 이름을 입력하세요." } },
         { status: 422 },
       );
     }
+    const id = `dir_${crypto.randomUUID().slice(0, 8)}`;
+    const scope = body.is_personal ? "personal" : "company";
     const folder: LibraryNode = {
-      id: `dir_${crypto.randomUUID().slice(0, 8)}`,
+      id,
       name: body.name.trim(),
       type: "folder",
       children: [],
+      writable: { parent_id: id, scope },
     };
-    const parent = body.parent_id ? findFolder(LIBRARY_TREE, body.parent_id) : null;
-    if (parent) parent.children.push(folder);
-    else LIBRARY_TREE.push(folder);
+    // 최상위(parent 없음)는 개인/회사 컨테이너로 라우팅, 아니면 해당 폴더 안으로.
+    const container = pickContainer(body.parent_id, body.is_personal);
+    if (container) container.children.push(folder);
     return HttpResponse.json({ data: folder }, { status: 201 });
   }),
 
@@ -77,6 +93,7 @@ export const libraryHandlers = [
       );
     }
     const parentId = fd.get("parent_id");
+    const isPersonal = fd.get("is_personal") === "true";
     const node: LibraryNode = {
       id: `file_${crypto.randomUUID().slice(0, 8)}`,
       name: file.name,
@@ -89,9 +106,8 @@ export const libraryHandlers = [
         visible_to_roles: ["viewer", "worker", "admin", "super_admin"],
       },
     };
-    const parent = typeof parentId === "string" ? findFolder(LIBRARY_TREE, parentId) : null;
-    if (parent) parent.children.push(node);
-    else LIBRARY_TREE.push(node);
+    const container = pickContainer(typeof parentId === "string" ? parentId : null, isPersonal);
+    if (container) container.children.push(node);
     return HttpResponse.json({ data: node }, { status: 201 });
   }),
 

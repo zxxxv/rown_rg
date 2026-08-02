@@ -12,7 +12,12 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
-import { libraryFileDownloadUrl, useDeleteNode, useSetNodeVisibility } from "@/api/library";
+import {
+  libraryFileDownloadUrl,
+  resolveDownloadUrl,
+  useDeleteNode,
+  useSetNodeVisibility,
+} from "@/api/library";
 import { useProject } from "@/api/projects";
 import type { LibraryNode, SourceKind, UserRoleType } from "@/api/types";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -120,19 +125,25 @@ function FolderBody({
         <Stat label="총 크기" value={formatSize(stats.bytes)} />
       </dl>
 
-      <div className="flex flex-wrap gap-2">
-        <Button
-          onClick={() =>
-            toast("이 폴더 전체를 현재 프로젝트에 추가 — 구현 예정", {
-              description: `${stats.files}개 파일이 후보로 추가됩니다.`,
-            })
-          }
-        >
-          <FilePlus2 className="mr-1 h-4 w-4" />
-          현재 프로젝트에 추가
-        </Button>
-        <DeleteNodeButton node={node} />
-      </div>
+      {node.virtual ? (
+        <p className="rounded border border-dashed border-border bg-bg-secondary px-3 py-2 text-xs text-fg-tertiary">
+          읽기 전용 폴더입니다 — 프로젝트·완성본 등 시스템이 구성한 뷰라 직접 편집할 수 없습니다.
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() =>
+              toast("이 폴더 전체를 현재 프로젝트에 추가 — 구현 예정", {
+                description: `${stats.files}개 파일이 후보로 추가됩니다.`,
+              })
+            }
+          >
+            <FilePlus2 className="mr-1 h-4 w-4" />
+            현재 프로젝트에 추가
+          </Button>
+          <DeleteNodeButton node={node} />
+        </div>
+      )}
 
       {subfolders.length > 0 ? (
         <section>
@@ -198,6 +209,12 @@ function FileCard({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
 
 function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
   const meta = node.file_meta;
+  // 실파일은 표준 다운로드 URL, 가상파일은 download_url(완성본·웹출처 등)만. 없으면 버튼 숨김.
+  const downloadHref = node.virtual
+    ? node.download_url
+      ? resolveDownloadUrl(node.download_url)
+      : null
+    : libraryFileDownloadUrl(node.id);
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -254,22 +271,30 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
       </section>
 
       <footer className="flex flex-wrap gap-2 border-t border-border pt-3">
-        <Button
-          onClick={() =>
-            toast(`현재 프로젝트에 추가 — 구현 예정 (${node.name})`, {
-              description: "자료 검토 단계에서 자동 후보로 등록됩니다.",
-            })
-          }
-        >
-          <FilePlus2 className="mr-1 h-4 w-4" />
-          현재 프로젝트에 추가
-        </Button>
-        <Button variant="outline" onClick={() => downloadFile(node.id, node.name)}>
-          <Download className="mr-1 h-4 w-4" />
-          다운로드
-        </Button>
-        <VisibilityDialogButton node={node} />
-        <DeleteNodeButton node={node} />
+        {!node.virtual ? (
+          <Button
+            onClick={() =>
+              toast(`현재 프로젝트에 추가 — 구현 예정 (${node.name})`, {
+                description: "자료 검토 단계에서 자동 후보로 등록됩니다.",
+              })
+            }
+          >
+            <FilePlus2 className="mr-1 h-4 w-4" />
+            현재 프로젝트에 추가
+          </Button>
+        ) : null}
+        {downloadHref ? (
+          <Button variant="outline" onClick={() => downloadFile(downloadHref, node.name)}>
+            <Download className="mr-1 h-4 w-4" />
+            다운로드
+          </Button>
+        ) : null}
+        {!node.virtual ? (
+          <>
+            <VisibilityDialogButton node={node} />
+            <DeleteNodeButton node={node} />
+          </>
+        ) : null}
       </footer>
 
       <p className="flex items-center gap-1 text-xs text-fg-tertiary">
@@ -280,10 +305,16 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
   );
 }
 
-function downloadFile(nodeId: string, filename: string) {
+function downloadFile(href: string, filename: string) {
   const a = document.createElement("a");
-  a.href = libraryFileDownloadUrl(nodeId);
-  a.download = filename;
+  a.href = href;
+  if (/^https?:\/\//.test(href)) {
+    // 외부 출처(웹 검색 등)는 새 탭으로 연다(cross-origin은 download 속성 무시됨).
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+  } else {
+    a.download = filename;
+  }
   document.body.appendChild(a);
   a.click();
   a.remove();

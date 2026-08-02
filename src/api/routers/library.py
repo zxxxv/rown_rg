@@ -15,8 +15,9 @@ GET files/{id}/download, PATCH nodes/{id}/visibility.
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, UploadFile, status
@@ -35,12 +36,14 @@ from src.api.schemas.library_node import (
     LibraryTreeFolder,
     LibraryTreeResponse,
     VisibilityUpdateRequest,
+    WritableTarget,
 )
 from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from src.core.types import Role
 from src.db.models.library_node import LibraryNode
 from src.db.models.project import Project
+from src.db.models.project_source import ProjectSource
 from src.db.models.user import User
 
 router = APIRouter(prefix="/library", tags=["library"])
@@ -56,6 +59,9 @@ def _is_admin(user: User) -> bool:
 
 
 def _can_view(node: LibraryNode, user: User) -> bool:
+    # 개인 노드는 소유자 본인만 — 관리자도 타인의 개인 자료는 못 본다("개인=나만").
+    if node.is_personal:
+        return node.created_by == user.id
     if _is_admin(user):
         return True
     if not node.visible_to_roles and not node.visible_to_users:
@@ -102,11 +108,132 @@ async def _get_parent_folder(session: AsyncSession, parent_id: UUID | None) -> L
     return parent
 
 
+# 프로젝트 소스 타입(project_sources.source_type) → (id 접미사, 가상 하위 폴더 라벨).
+_SOURCE_GROUPS: list[tuple[str, str, str]] = [
+    ("web_search", "ai", "AI 수집 자료"),
+    ("upload", "up", "사용자 업로드"),
+    ("library", "lib", "라이브러리 참조"),
+]
+_REGISTERED_BY = {"web_search": "AI 수집", "library": "라이브러리 참조"}
+
+
+def _source_file(src: ProjectSource, pid: UUID, owner_name: str) -> LibraryTreeFile:
+    """project_sources 1건 → 가상 파일 노드(읽기전용). 원본 복사 없이 참조만."""
+    name = src.title or src.url or f"{src.source_type} 자료"
+    download_url: str | None = None
+    if src.source_type == "library" and src.library_node_id is not None:
+        download_url = f"library/files/{src.library_node_id}/download"
+    elif src.source_type == "web_search" and src.url:
+        download_url = src.url
+    return LibraryTreeFile(
+        id=f"ps-{src.id}",
+        name=name,
+        virtual=True,
+        download_url=download_url,
+        file_meta=LibraryFileMeta(
+            size_bytes=0,
+            registered_at=src.created_at,
+            registered_by=_REGISTERED_BY.get(src.source_type, owner_name),
+            source_kind=src.source_type,
+            visible_to_roles=ALL_ROLES,
+            project_id=str(pid),
+        ),
+    )
+
+
+def _project_folder(
+    pid: UUID,
+    title: str,
+    updated_at: datetime,
+    sources: list[ProjectSource],
+    owner_name: str,
+) -> LibraryTreeFolder:
+    """프로젝트 1건 → 가상 폴더(완성본 + AI수집/업로드/참조). project_sources·export 합성."""
+    base = f"proj-{pid}"
+    children: list[LibraryTreeFolder | LibraryTreeFile] = []
+
+    # 완성본 — export가 렌더된 프로젝트만(결정적 경로 <export_dir>/<id>.hwpx).
+    export_path = Path(settings.export_dir) / f"{pid}.hwpx"
+    if export_path.is_file():
+        children.append(
+            LibraryTreeFile(
+                id=f"{base}-final",
+                name=f"{title}.hwpx",
+                virtual=True,
+                download_url=f"projects/{pid}/export",
+                file_meta=LibraryFileMeta(
+                    size_bytes=export_path.stat().st_size,
+                    registered_at=updated_at,
+                    registered_by=owner_name,
+                    source_kind="library",
+                    visible_to_roles=ALL_ROLES,
+                    project_id=str(pid),
+                ),
+            )
+        )
+
+    for source_type, suffix, label in _SOURCE_GROUPS:
+        files: list[LibraryTreeFolder | LibraryTreeFile] = [
+            _source_file(s, pid, owner_name) for s in sources if s.source_type == source_type
+        ]
+        children.append(
+            LibraryTreeFolder(id=f"{base}-{suffix}", name=label, virtual=True, children=files)
+        )
+
+    return LibraryTreeFolder(id=base, name=title, virtual=True, children=children)
+
+
+async def _build_projects_folder(session: AsyncSession, current_user: User) -> LibraryTreeFolder:
+    """개인 루트의 '프로젝트' 가상 폴더 — 내 프로젝트만(소유자 스코프).
+
+    관리자도 라이브러리에선 자기 프로젝트만 본다(전체 조회는 admin 대시보드/scope=all).
+    이로써 라이브러리와 프로젝트 목록(기본 scope=mine)의 가시성이 일치한다.
+    """
+    projs = (
+        await session.execute(
+            select(Project.id, Project.title, Project.updated_at)
+            .where(Project.owner_id == current_user.id)
+            .order_by(Project.created_at.desc())
+        )
+    ).all()
+    empty = LibraryTreeFolder(id="me-projects", name="프로젝트", virtual=True, children=[])
+    if not projs:
+        return empty
+
+    proj_ids = [p.id for p in projs]
+    srcs = (
+        (
+            await session.execute(
+                select(ProjectSource)
+                .where(ProjectSource.project_id.in_(proj_ids))
+                .order_by(ProjectSource.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_proj: dict[UUID, list[ProjectSource]] = defaultdict(list)
+    for s in srcs:
+        by_proj[s.project_id].append(s)
+
+    empty.children = [
+        _project_folder(pid, title, updated_at, by_proj[pid], current_user.name)
+        for pid, title, updated_at in projs
+    ]
+    return empty
+
+
 @router.get("/tree", response_model=LibraryTreeResponse, response_model_exclude_none=True)
 async def get_tree(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> LibraryTreeResponse:
+    """개인 루트(나만) + 회사 공유(조직 전체) 2탑레벨.
+
+    - 개인 루트: 프로젝트(가상뷰)·프롬프트(Phase 2)·내 자료(개인 업로드) — 전부 소유자 스코프.
+    - 회사 공유: 실 library_nodes(is_personal=false), 파일은 역할 가시성 적용.
+    가상 노드(프로젝트/완성본/소스 등)는 virtual=True로 표시, 업로드·삭제 대상이 아니다.
+    """
     nodes = (
         (
             await session.execute(
@@ -130,28 +257,52 @@ async def get_tree(
                 id=str(n.id), name=n.name, file_meta=_file_meta(n, _creator_name(n))
             )
         children = [built for c in children_map[n.id] if (built := build(c)) is not None]
-        return LibraryTreeFolder(id=str(n.id), name=n.name, children=children)
-
-    tree = [built for n in children_map[None] if (built := build(n)) is not None]
-
-    # 프로젝트를 이름 폴더로 노출 — 가시성은 프로젝트 목록과 동일(관리자=전체, 일반=자기 것).
-    # 합성 폴더라 업로드 대상은 아니고 표시·탐색용이다(id는 비-UUID "proj-...").
-    proj_stmt = select(Project.id, Project.title).order_by(Project.created_at.desc())
-    if current_user.role not in (Role.SUPER_ADMIN.value, Role.ADMIN.value):
-        proj_stmt = proj_stmt.where(Project.owner_id == current_user.id)
-    projects = (await session.execute(proj_stmt)).all()
-    if projects:
-        project_group = LibraryTreeFolder(
-            id="projects-root",
-            name="프로젝트",
-            children=[
-                LibraryTreeFolder(id=f"proj-{pid}", name=title, children=[])
-                for pid, title in projects
-            ],
+        scope: Literal["personal", "company"] = "personal" if n.is_personal else "company"
+        return LibraryTreeFolder(
+            id=str(n.id),
+            name=n.name,
+            children=children,
+            writable=WritableTarget(parent_id=str(n.id), scope=scope),
         )
-        tree = [project_group, *tree]
 
-    return LibraryTreeResponse(tree=tree)
+    # 최상위 실 노드를 회사 공유 / 내 개인으로 가른다.
+    company_roots = [
+        built for n in children_map[None] if not n.is_personal and (built := build(n)) is not None
+    ]
+    personal_roots = [
+        built
+        for n in children_map[None]
+        if n.is_personal and n.created_by == current_user.id and (built := build(n)) is not None
+    ]
+
+    projects_folder = await _build_projects_folder(session, current_user)
+
+    me_root = LibraryTreeFolder(
+        id="me",
+        name=current_user.name,
+        virtual=True,
+        children=[
+            projects_folder,
+            # 프롬프트는 Phase 2(user_prompts)에서 채운다 — 지금은 빈 가상 폴더.
+            LibraryTreeFolder(id="me-prompts", name="프롬프트", virtual=True, children=[]),
+            LibraryTreeFolder(
+                id="me-files",
+                name="내 자료",
+                virtual=True,
+                writable=WritableTarget(parent_id=None, scope="personal"),
+                children=personal_roots,
+            ),
+        ],
+    )
+    company_root = LibraryTreeFolder(
+        id="company",
+        name="회사 공유",
+        virtual=True,
+        writable=WritableTarget(parent_id=None, scope="company"),
+        children=company_roots,
+    )
+
+    return LibraryTreeResponse(tree=[me_root, company_root])
 
 
 @router.post(
@@ -165,17 +316,26 @@ async def create_folder(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(require_role(*WRITERS))],
 ) -> LibraryTreeFolder:
-    await _get_parent_folder(session, data.parent_id)
+    parent = await _get_parent_folder(session, data.parent_id)
+    # 상위 폴더가 있으면 개인/공유 성격을 상속, 최상위면 요청값(개인 루트=True/회사=False).
+    is_personal = parent.is_personal if parent is not None else data.is_personal
     node = LibraryNode(
         name=data.name,
         type="folder",
         parent_id=data.parent_id,
         created_by=current_user.id,
+        is_personal=is_personal,
     )
     session.add(node)
     await session.flush()
     await session.refresh(node)
-    return LibraryTreeFolder(id=str(node.id), name=node.name, children=[])
+    scope: Literal["personal", "company"] = "personal" if is_personal else "company"
+    return LibraryTreeFolder(
+        id=str(node.id),
+        name=node.name,
+        children=[],
+        writable=WritableTarget(parent_id=str(node.id), scope=scope),
+    )
 
 
 @router.post(
@@ -189,8 +349,11 @@ async def upload_file(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(require_role(*WRITERS))],
     parent_id: Annotated[UUID | None, Form()] = None,
+    is_personal: Annotated[bool, Form()] = False,
 ) -> LibraryTreeFile:
-    await _get_parent_folder(session, parent_id)
+    parent = await _get_parent_folder(session, parent_id)
+    # 상위 폴더가 있으면 개인/공유 성격 상속, 최상위면 요청값(내 자료=True/회사 공유=False).
+    personal = parent.is_personal if parent is not None else is_personal
     content = await file.read()
     if len(content) > MAX_UPLOAD_BYTES:
         raise ValidationError(
@@ -207,6 +370,7 @@ async def upload_file(
         mime_type=file.content_type,
         metadata_={"source_kind": "upload"},
         created_by=current_user.id,
+        is_personal=personal,
     )
     session.add(node)
     await session.flush()
