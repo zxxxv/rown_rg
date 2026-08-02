@@ -60,6 +60,20 @@ class WritableTarget(BaseModel):
     scope: Literal["personal", "company"]
 
 
+class PromptRef(BaseModel):
+    """프롬프트 파일 노드 마커 — 이 노드는 자료 파일이 아니라 프롬프트다.
+
+    프론트는 이 마커가 있으면 상세 패널에서 프롬프트 에디터/뷰어를 연다.
+    - scope=personal: ref=user_prompt id, editable=True → PATCH /prompts/personal/{ref}
+    - scope=system  : ref=에이전트 id 또는 조각 이름, editable=False (읽기전용)
+    """
+
+    scope: Literal["personal", "system"]
+    kind: Literal["agent", "rule"]
+    ref: str
+    editable: bool = False
+
+
 class LibraryTreeFile(BaseModel):
     # 프론트 계약(LibraryNodeSchema)은 id를 string으로 본다. 실노드는 UUID를 str로,
     # 합성 노드(프로젝트 폴더 등)는 "proj-..." 같은 비-UUID 문자열을 쓴다.
@@ -71,6 +85,8 @@ class LibraryTreeFile(BaseModel):
     virtual: bool = False
     # 가상 파일의 다운로드 경로(API base 기준 상대경로 또는 절대 URL). 실파일은 None.
     download_url: str | None = None
+    # 프롬프트 노드면 마커(에디터/뷰어를 여는 신호). 일반 파일은 None.
+    prompt: PromptRef | None = None
 
 
 class LibraryTreeFolder(BaseModel):

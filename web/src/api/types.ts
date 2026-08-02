@@ -272,6 +272,15 @@ export const WritableTargetSchema = z.object({
 });
 export type WritableTarget = z.infer<typeof WritableTargetSchema>;
 
+// 프롬프트 파일 노드 마커 — 있으면 상세 패널이 프롬프트 에디터/뷰어를 연다.
+export const PromptRefSchema = z.object({
+  scope: z.enum(["personal", "system"]),
+  kind: z.enum(["agent", "rule"]),
+  ref: z.string(),
+  editable: z.boolean(),
+});
+export type PromptRef = z.infer<typeof PromptRefSchema>;
+
 // virtual: 합성 노드(개인 루트·프로젝트·완성본·소스 등) — 삭제/권한변경 불가.
 // download_url: 가상 파일의 다운로드 경로(API base 상대경로 또는 절대 URL). 실파일은 없음.
 export type LibraryNode =
@@ -290,6 +299,7 @@ export type LibraryNode =
       file_meta: LibraryFileMeta;
       virtual?: boolean;
       download_url?: string | null;
+      prompt?: PromptRef | null;
     };
 
 export const LibraryNodeSchema: z.ZodType<LibraryNode> = z.lazy(() =>
@@ -309,6 +319,7 @@ export const LibraryNodeSchema: z.ZodType<LibraryNode> = z.lazy(() =>
       file_meta: LibraryFileMetaSchema,
       virtual: z.boolean().optional(),
       download_url: z.string().nullish(),
+      prompt: PromptRefSchema.nullish(),
     }),
   ]),
 );

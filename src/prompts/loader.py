@@ -89,6 +89,11 @@ def load_component(name: str) -> str:
     return _read_markdown(_COMPONENTS_DIR, name)
 
 
+def list_components() -> list[str]:
+    """공용 프롬프트 조각 이름 전체를 정렬해 돌려준다(작성 규칙 카탈로그)."""
+    return sorted(p.stem for p in _COMPONENTS_DIR.glob("*.md"))
+
+
 def load_workflow_role(name: str) -> str:
     """워크플로 역할 시스템 프롬프트(workflow_roles/*.md)를 읽는다. 예: "toc_system"."""
     return _read_markdown(_ROLES_DIR, name)

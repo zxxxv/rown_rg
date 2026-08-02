@@ -41,8 +41,9 @@ from src.db.models.section import Section
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from src.db.models.verify_finding import VerifyFinding
-from src.prompts import list_analysts, list_presets, load_preset
+from src.prompts import list_presets, load_preset
 from src.services.generation.planner import MAX_SECTIONS
+from src.services.prompts import resolve_analysts
 from src.workflows.runner import get_pending_gate, resume_run, start_run
 
 # 단계 기반 근사 진행률 — 섹션 단위 세밀화는 추후 진행 이벤트로
@@ -65,11 +66,12 @@ presets_router = APIRouter(prefix="/presets", tags=["presets"])
 analysts_router = APIRouter(prefix="/analysts", tags=["analysts"])
 
 
-def _validate_outline_config(config: dict) -> None:
+def _validate_outline_config(config: dict, known_analysts: set[str]) -> None:
     """config.outline이 있으면 형태·섹션 수·에이전트 이름을 검증한다.
 
     outline은 planner LLM을 우회해 그대로 실행되므로 생성/수정 시점에 막는 게
-    마지막 방어선이다. UI는 카탈로그에서만 고르지만 API 직접 호출을 대비한다.
+    마지막 방어선이다. known_analysts는 개인→시스템 병합 카탈로그의 id·name 집합
+    (개인 에이전트도 배정 가능하도록 호출부에서 resolve_analysts로 계산해 넘긴다).
     """
     outline = config.get("outline")
     if outline is None:
@@ -89,16 +91,21 @@ def _validate_outline_config(config: dict) -> None:
             message=f"섹션이 너무 많습니다: {len(sections)}개 (최대 {MAX_SECTIONS})",
             code="OUTLINE_TOO_LARGE",
         )
-    known: set[str] = set()
-    for a in list_analysts():
-        known.add(a.id)
-        known.add(a.name)
-    unknown = sorted({name for s in sections for name in s.analysts} - known)
+    unknown = sorted({name for s in sections for name in s.analysts} - known_analysts)
     if unknown:
         raise ValidationError(
             message=f"알 수 없는 분석 에이전트: {', '.join(unknown)}",
             code="UNKNOWN_ANALYST",
         )
+
+
+async def _known_analyst_names(session: AsyncSession, owner_id: UUID) -> set[str]:
+    """개인→시스템 병합 에이전트의 id·name 집합(outline 검증용)."""
+    known: set[str] = set()
+    for a in await resolve_analysts(session, owner_id):
+        known.add(a.id)
+        known.add(a.name)
+    return known
 
 
 @presets_router.get("", response_model=list[PresetRead])
@@ -156,9 +163,13 @@ async def get_preset_detail(
 
 @analysts_router.get("", response_model=list[AnalystRead])
 async def get_analysts(
-    _: Annotated[User, Depends(get_current_active_user)],
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> list[AnalystRead]:
-    """분석 에이전트 카탈로그(전 종) — 섹션별 담당 배정 UI의 선택지."""
+    """분석 에이전트 카탈로그 — 섹션별 담당 배정 UI의 선택지.
+
+    개인→시스템 병합 목록(개인 에이전트가 있으면 함께/덮어써서 노출).
+    """
     return [
         AnalystRead(
             id=a.id,
@@ -167,7 +178,7 @@ async def get_analysts(
             desc=a.desc,
             pages=a.volume_target.pages if a.volume_target else None,
         )
-        for a in list_analysts()
+        for a in await resolve_analysts(session, current_user.id)
     ]
 
 
@@ -203,7 +214,7 @@ async def create_project(
                 code="UNKNOWN_PRESET",
             ) from None
     # 사용자 확정 목차가 실려 있으면 여기서 검증해 확정한다 (실행 시점 실패 방지).
-    _validate_outline_config(data.config)
+    _validate_outline_config(data.config, await _known_analyst_names(session, current_user.id))
     project = Project(
         title=data.title,
         topic=data.topic,
@@ -328,7 +339,7 @@ async def update_project_config(
     생성 후 변경 불가(프론트 edit 모드도 readonly).
     """
     project = await _get_authorized_project(project_id, session, current_user)
-    _validate_outline_config(data.config)
+    _validate_outline_config(data.config, await _known_analyst_names(session, current_user.id))
     project.config = data.config
     await session.flush()
     await session.refresh(project)

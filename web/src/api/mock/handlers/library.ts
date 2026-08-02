@@ -1,5 +1,5 @@
 import { HttpResponse, http } from "msw";
-import { LIBRARY_TREE } from "@/api/mock/fixtures/library";
+import { LIBRARY_TREE, syncPromptFolders } from "@/api/mock/fixtures/library";
 import { DEMO_ADMIN_USER } from "@/api/mock/fixtures/users";
 import type { LibraryNode } from "@/api/types";
 import { env } from "@/env";
@@ -53,6 +53,7 @@ function pickContainer(
 
 export const libraryHandlers = [
   http.get(url("library/tree"), () => {
+    syncPromptFolders(); // 개인 프롬프트 CRUD를 트리에 반영
     return HttpResponse.json({ data: { tree: LIBRARY_TREE } }, { status: 200 });
   }),
 

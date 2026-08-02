@@ -1,4 +1,10 @@
 import { DEMO_PROJECTS } from "@/api/mock/fixtures/projects";
+import {
+  PERSONAL_PROMPTS,
+  personalPromptNode,
+  SYSTEM_PROMPTS,
+  systemPromptNode,
+} from "@/api/mock/fixtures/prompts";
 import { DEMO_ADMIN_USER } from "@/api/mock/fixtures/users";
 import type { LibraryFileMeta, LibraryNode, Project, SourceKind, UserRoleType } from "@/api/types";
 
@@ -434,7 +440,16 @@ export const LIBRARY_TREE: LibraryNode[] = [
         virtual: true,
         children: DEMO_PROJECTS.map((p) => projectFolder(p, sampleFilesForProject(p))),
       },
-      { id: "me-prompts", name: "프롬프트", type: "folder", virtual: true, children: [] },
+      {
+        id: "me-prompts",
+        name: "프롬프트",
+        type: "folder",
+        virtual: true,
+        children: [
+          myPromptFolder("me-agents", "내 에이전트", "agent"),
+          myPromptFolder("me-rules", "내 작성 규칙", "rule"),
+        ],
+      },
       {
         id: "me-files",
         name: "내 자료",
@@ -451,9 +466,56 @@ export const LIBRARY_TREE: LibraryNode[] = [
     type: "folder",
     virtual: true,
     writable: { parent_id: null, scope: "company" },
-    children: withWritable(SHARED_CHILDREN, "company"),
+    children: [...withWritable(SHARED_CHILDREN, "company"), systemPromptsFolder()],
   },
 ];
+
+function myPromptFolder(id: string, name: string, kind: "agent" | "rule"): LibraryNode {
+  return {
+    id,
+    name,
+    type: "folder",
+    virtual: true,
+    children: PERSONAL_PROMPTS.filter((p) => p.kind === kind).map(personalPromptNode),
+  };
+}
+
+function systemPromptsFolder(): LibraryNode {
+  return {
+    id: "sys-prompts",
+    name: "시스템 프롬프트",
+    type: "folder",
+    virtual: true,
+    children: [
+      {
+        id: "sys-agents",
+        name: "에이전트",
+        type: "folder",
+        virtual: true,
+        children: SYSTEM_PROMPTS.filter((p) => p.kind === "agent").map(systemPromptNode),
+      },
+      {
+        id: "sys-rules",
+        name: "작성 규칙",
+        type: "folder",
+        virtual: true,
+        children: SYSTEM_PROMPTS.filter((p) => p.kind === "rule").map(systemPromptNode),
+      },
+    ],
+  };
+}
+
+/** 개인 프롬프트 CRUD 후 트리의 '내 에이전트/내 작성 규칙'을 스토어에서 다시 채운다. */
+export function syncPromptFolders(): void {
+  const agents = findFolderById(LIBRARY_TREE, "me-agents");
+  if (agents) {
+    agents.children = PERSONAL_PROMPTS.filter((p) => p.kind === "agent").map(personalPromptNode);
+  }
+  const rules = findFolderById(LIBRARY_TREE, "me-rules");
+  if (rules) {
+    rules.children = PERSONAL_PROMPTS.filter((p) => p.kind === "rule").map(personalPromptNode);
+  }
+}
 
 export function createProjectFolderForLibrary(project: Project): void {
   const group = findFolderById(LIBRARY_TREE, "me-projects");

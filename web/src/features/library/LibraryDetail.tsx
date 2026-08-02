@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { PromptBody, PromptCreateButton } from "@/features/library/PromptPanel";
 
 interface LibraryDetailProps {
   node: LibraryNode | null;
@@ -92,6 +93,8 @@ export function LibraryDetail({ node, path, onRequestUpload }: LibraryDetailProp
 
       {node.type === "folder" ? (
         <FolderBody node={node} onRequestUpload={onRequestUpload} />
+      ) : node.prompt ? (
+        <PromptBody prompt={node.prompt} />
       ) : (
         <FileBody node={node} />
       )}
@@ -116,6 +119,8 @@ function FolderBody({
   const stats = countDescendants(node);
   const files = node.children.filter((c) => c.type === "file");
   const subfolders = node.children.filter((c) => c.type === "folder");
+  // '내 에이전트'/'내 작성 규칙' 폴더는 새 프롬프트 생성 진입점.
+  const isPromptContainer = node.id === "me-agents" || node.id === "me-rules";
 
   return (
     <div className="flex flex-col gap-4">
@@ -125,7 +130,14 @@ function FolderBody({
         <Stat label="총 크기" value={formatSize(stats.bytes)} />
       </dl>
 
-      {node.virtual ? (
+      {isPromptContainer ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <PromptCreateButton folderId={node.id} />
+          <span className="text-xs text-fg-tertiary">
+            내 것을 만들면 보고서 생성 시 시스템 기본값보다 우선 적용됩니다.
+          </span>
+        </div>
+      ) : node.virtual ? (
         <p className="rounded border border-dashed border-border bg-bg-secondary px-3 py-2 text-xs text-fg-tertiary">
           읽기 전용 폴더입니다 — 프로젝트·완성본 등 시스템이 구성한 뷰라 직접 편집할 수 없습니다.
         </p>

@@ -13,6 +13,7 @@ from src.db.models.section import Section
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from src.db.models.user_limit import UserLimit
+from src.db.models.user_prompt import UserPrompt
 from src.db.models.verify_finding import VerifyFinding
 
 __all__ = [
@@ -31,5 +32,6 @@ __all__ = [
     "TokenUsage",
     "User",
     "UserLimit",
+    "UserPrompt",
     "VerifyFinding",
 ]

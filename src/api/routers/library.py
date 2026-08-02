@@ -15,7 +15,7 @@ GET files/{id}/download, PATCH nodes/{id}/visibility.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
@@ -35,6 +35,7 @@ from src.api.schemas.library_node import (
     LibraryTreeFile,
     LibraryTreeFolder,
     LibraryTreeResponse,
+    PromptRef,
     VisibilityUpdateRequest,
     WritableTarget,
 )
@@ -45,6 +46,8 @@ from src.db.models.library_node import LibraryNode
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.user import User
+from src.prompts import list_analysts, list_components
+from src.services.prompts import list_personal
 
 router = APIRouter(prefix="/library", tags=["library"])
 
@@ -223,6 +226,92 @@ async def _build_projects_folder(session: AsyncSession, current_user: User) -> L
     return empty
 
 
+# 시스템 프롬프트 노드 표시용 고정 타임스탬프(파일 카탈로그라 등록 시각이 없다).
+_PROMPT_EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _prompt_file(
+    node_id: str, name: str, ref: PromptRef, registered_by: str, registered_at: datetime
+) -> LibraryTreeFile:
+    """프롬프트 파일 노드(가상). 프론트는 prompt 마커로 에디터를 연다(file_meta=표시용 최소값)."""
+    return LibraryTreeFile(
+        id=node_id,
+        name=name,
+        virtual=True,
+        prompt=ref,
+        file_meta=LibraryFileMeta(
+            size_bytes=0,
+            registered_at=registered_at,
+            registered_by=registered_by,
+            source_kind="library",
+            visible_to_roles=ALL_ROLES,
+        ),
+    )
+
+
+async def _build_prompts_folder(session: AsyncSession, current_user: User) -> LibraryTreeFolder:
+    """개인 루트의 '프롬프트' 폴더 — 내 에이전트/내 작성 규칙(개인 DB, 편집 가능)."""
+    personals = await list_personal(session, current_user.id)
+
+    def node(p: object) -> LibraryTreeFile:
+        return _prompt_file(
+            f"uprompt-{p.id}",  # type: ignore[attr-defined]
+            p.name,  # type: ignore[attr-defined]
+            PromptRef(scope="personal", kind=p.kind, ref=str(p.id), editable=True),  # type: ignore[attr-defined]
+            current_user.name,
+            p.updated_at,  # type: ignore[attr-defined]
+        )
+
+    agents: list[LibraryTreeFolder | LibraryTreeFile] = [
+        node(p) for p in personals if p.kind == "agent"
+    ]
+    rules: list[LibraryTreeFolder | LibraryTreeFile] = [
+        node(p) for p in personals if p.kind == "rule"
+    ]
+    return LibraryTreeFolder(
+        id="me-prompts",
+        name="프롬프트",
+        virtual=True,
+        children=[
+            LibraryTreeFolder(id="me-agents", name="내 에이전트", virtual=True, children=agents),
+            LibraryTreeFolder(id="me-rules", name="내 작성 규칙", virtual=True, children=rules),
+        ],
+    )
+
+
+def _system_prompts_folder() -> LibraryTreeFolder:
+    """회사 공유의 '시스템 프롬프트' 폴더 — 에이전트/작성 규칙(파일 카탈로그, 읽기전용)."""
+    agents: list[LibraryTreeFolder | LibraryTreeFile] = [
+        _prompt_file(
+            f"sysagent-{a.id}",
+            a.name,
+            PromptRef(scope="system", kind="agent", ref=a.id, editable=False),
+            "시스템",
+            _PROMPT_EPOCH,
+        )
+        for a in list_analysts()
+    ]
+    rules: list[LibraryTreeFolder | LibraryTreeFile] = [
+        _prompt_file(
+            f"syscomp-{name}",
+            name,
+            PromptRef(scope="system", kind="rule", ref=name, editable=False),
+            "시스템",
+            _PROMPT_EPOCH,
+        )
+        for name in list_components()
+    ]
+    return LibraryTreeFolder(
+        id="sys-prompts",
+        name="시스템 프롬프트",
+        virtual=True,
+        children=[
+            LibraryTreeFolder(id="sys-agents", name="에이전트", virtual=True, children=agents),
+            LibraryTreeFolder(id="sys-rules", name="작성 규칙", virtual=True, children=rules),
+        ],
+    )
+
+
 @router.get("/tree", response_model=LibraryTreeResponse, response_model_exclude_none=True)
 async def get_tree(
     session: Annotated[AsyncSession, Depends(get_async_session)],
@@ -276,6 +365,7 @@ async def get_tree(
     ]
 
     projects_folder = await _build_projects_folder(session, current_user)
+    prompts_folder = await _build_prompts_folder(session, current_user)
 
     me_root = LibraryTreeFolder(
         id="me",
@@ -283,8 +373,7 @@ async def get_tree(
         virtual=True,
         children=[
             projects_folder,
-            # 프롬프트는 Phase 2(user_prompts)에서 채운다 — 지금은 빈 가상 폴더.
-            LibraryTreeFolder(id="me-prompts", name="프롬프트", virtual=True, children=[]),
+            prompts_folder,
             LibraryTreeFolder(
                 id="me-files",
                 name="내 자료",
@@ -299,7 +388,8 @@ async def get_tree(
         name="회사 공유",
         virtual=True,
         writable=WritableTarget(parent_id=None, scope="company"),
-        children=company_roots,
+        # 실 공유 노드(seed 포함) + 시스템 프롬프트(읽기전용) 카탈로그.
+        children=[*company_roots, _system_prompts_folder()],
     )
 
     return LibraryTreeResponse(tree=[me_root, company_root])
