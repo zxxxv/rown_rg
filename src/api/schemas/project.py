@@ -107,6 +107,20 @@ class ProjectUpdate(BaseModel):
     depth_mode: DepthMode | None = None
 
 
+class VerifyFindingRead(BaseModel):
+    """PM 검증 경고 항목 — assemble 직후 pm_verify가 저장한 문서 횡단 일관성 경고."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    chapter_number: int
+    severity: str  # critical | warning
+    category: str
+    section_ref: str | None = None
+    detail: str
+    created_at: datetime
+
+
 class ProjectRead(ProjectBase):
     model_config = ConfigDict(from_attributes=True)
 

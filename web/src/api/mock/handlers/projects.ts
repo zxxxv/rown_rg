@@ -149,6 +149,37 @@ export const projectsHandlers = [
     );
   }),
 
+  // GET /projects/{id}/verify-report — PM 검증 경고 리포트(실계약 미러, 데모 2건)
+  http.get(url("projects/:id/verify-report"), ({ params }) => {
+    const id = String(params.id);
+    return HttpResponse.json(
+      {
+        data: [
+          {
+            id: `${id}-vf-1`,
+            chapter_number: 2,
+            severity: "critical",
+            category: "법령 시점",
+            section_ref: "2.3",
+            detail:
+              "「고령친화산업진흥법」이 2장에서는 '시행 중', 4장에서는 '개정 추진 중'으로 상충 표기됨",
+            created_at: "2026-07-24T02:00:00Z",
+          },
+          {
+            id: `${id}-vf-2`,
+            chapter_number: 3,
+            severity: "warning",
+            category: "통계 중복",
+            section_ref: "3.1",
+            detail: "고령화율 24.1% 통계가 1.2절과 동일 출처로 중복 인용됨 — 한쪽은 요약 처리 권장",
+            created_at: "2026-07-24T02:00:00Z",
+          },
+        ],
+      },
+      { status: 200 },
+    );
+  }),
+
   // GET /projects/{id}/export — HWPX 파일(더미 blob)
   http.get(url("projects/:id/export"), ({ params }) => {
     const id = String(params.id);

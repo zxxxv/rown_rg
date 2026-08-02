@@ -226,6 +226,13 @@ async def _default_section_store(state: ProjectState) -> None:
     await persist_sections(state)
 
 
+async def _default_pm_verifier(state: ProjectState) -> int:
+    """PM 검증 리포트 생성·저장(챕터당 1콜). lazy import로 LLM·DB 의존을 미룬다."""
+    from src.services.qa.pm_verify import run_pm_verify
+
+    return await run_pm_verify(state)
+
+
 # 주입 지점 — 테스트는 이 전역들을 fake로 교체한다.
 _plan_client: LLMClient | None = None
 _research_service_factory: Callable[[], WebResearchService] = WebResearchService
@@ -235,6 +242,7 @@ _retriever_factory: Callable[[ProjectState], SectionRetriever] = _default_retrie
 _write_client: LLMClient | None = None
 _exporter: Callable[[ProjectState], Path] = _default_exporter
 _section_store: Callable[[ProjectState], Awaitable[None]] = _default_section_store
+_pm_verifier: Callable[[ProjectState], Awaitable[int]] = _default_pm_verifier
 
 
 async def write(state: ProjectState) -> ProjectState:
@@ -276,6 +284,20 @@ async def assemble(state: ProjectState) -> ProjectState:
     # 선택 확정 섹션을 정규 테이블에 저장 — 사후 조회·편집(/sections)의 원천.
     # 렌더 성공 여부와 무관하게 저장한다(부분 완성도 열람 가능해야 함).
     await _section_store(state)
+    if settings.pm_verify_enabled and drafts:
+        emit_step(pid, "export", "PM 검증 리포트", "started")
+        try:
+            n_findings = await _pm_verifier(state)
+            emit_step(pid, "export", "PM 검증 리포트", "completed")
+            logger.info(
+                "assemble.pm_verify", project_id=str(state.project_id), n_findings=n_findings
+            )
+        except Exception:
+            # 경고 리포트는 품질 보조 — 실패해도 렌더·완료를 막지 않는다.
+            logger.warning(
+                "assemble.pm_verify_failed", project_id=str(state.project_id), exc_info=True
+            )
+            emit_step(pid, "export", "PM 검증 리포트", "failed")
     if result.passed and drafts:
         path = _exporter(state)
         logger.info("assemble.exported", project_id=str(state.project_id), path=str(path))

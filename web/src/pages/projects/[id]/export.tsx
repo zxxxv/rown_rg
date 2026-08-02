@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { env } from "@/env";
 import { useDownload } from "@/features/export/useDownload";
+import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
@@ -114,6 +115,8 @@ function CompletedView({ project }: { project: Project }) {
           </dl>
         </div>
       </header>
+
+      <VerifyReportCard projectId={project.id} />
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <FormatCard

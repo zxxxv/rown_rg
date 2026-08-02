@@ -117,6 +117,10 @@ class Settings(BaseSettings):
     raptor_model: str = "gemini-2.5-flash"  # 요약 전용 — 종료 시 lite/후속 flash로 .env 교체
     raptor_top_k: int = 3  # 섹션 검색에 곁들일 배경 맥락 요약 수
 
+    # PM 검증 — assemble 직후 챕터당 1콜, 문서 횡단 일관성 경고 리포트(차단 아님).
+    pm_verify_enabled: bool = True
+    verify_model: str = "claude-sonnet-4-6"  # 테스트 시 .env로 haiku 교체
+
     @property
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION

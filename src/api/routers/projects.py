@@ -22,6 +22,7 @@ from src.api.schemas.project import (
     PresetSectionRead,
     ProjectCreate,
     ProjectRead,
+    VerifyFindingRead,
 )
 from src.api.schemas.section import (
     ChapterNode,
@@ -39,6 +40,7 @@ from src.db.models.project import Project
 from src.db.models.section import Section
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
+from src.db.models.verify_finding import VerifyFinding
 from src.prompts import list_analysts, list_presets, load_preset
 from src.services.generation.planner import MAX_SECTIONS
 from src.workflows.runner import get_pending_gate, resume_run, start_run
@@ -353,6 +355,29 @@ async def delete_project(
     # ORM 관계는 lazy="raise"라 session.delete()의 관계 로딩을 피하고
     # DB FK CASCADE에 맡기는 Core DELETE를 쓴다.
     await session.execute(delete(Project).where(Project.id == project.id))
+
+
+@router.get("/{project_id}/verify-report", response_model=list[VerifyFindingRead])
+async def get_verify_report(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> list[VerifyFinding]:
+    """PM 검증 경고 리포트 — assemble 직후 챕터당 1콜 pm_verify의 결과.
+
+    차단이 아닌 참고용: 절 간 수치·용어 충돌, 법령 시점 상충(critical),
+    챕터 간 통계 중복 등 문서 횡단 문제를 사람이 편집기에서 판단한다.
+    아직 검증 전이거나 경고가 없으면 빈 배열.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    rows = (
+        await session.execute(
+            select(VerifyFinding)
+            .where(VerifyFinding.project_id == project.id)
+            .order_by(VerifyFinding.chapter_number, VerifyFinding.created_at)
+        )
+    ).scalars()
+    return list(rows)
 
 
 @router.get("/{project_id}/export")
