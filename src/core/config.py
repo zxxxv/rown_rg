@@ -49,9 +49,9 @@ class Settings(BaseSettings):
     # 웹 리서치 비용 노브 — 검색/회수 횟수와 응답 상한
     research_max_uses: int = 5
     research_max_tokens: int = 8000
-    # 섹션 작성 출력 상한(토큰) — 에이전트 volume_target이 있어도 이 값으로 캡
-    # (비용 폭주 방지). 운영 품질 모드에서 .env로 상향(예: 16000)
-    write_max_tokens: int = 4096
+    # 섹션 작성 출력 상한(토큰) — 에이전트 volume_target이 있어도 이 값으로 캡.
+    # 기본 16000 = 품질 모드(분량 목표 실현). 저비용 테스트 시 .env로 하향(예: 4096)
+    write_max_tokens: int = 16000
     # Anthropic SDK 요청 타임아웃(초). SDK 내부 재시도는 0으로 고정한다 —
     # 재시도는 어댑터가 소유하며, SDK가 타임아웃된 고비용 서버도구 턴을 조용히
     # 재실행하면 과금만 배가된다(2026-07-21 스모크에서 실측).
