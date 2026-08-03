@@ -178,6 +178,7 @@ async def _rehydrate_qa_selection(
 async def _execute(project_id: uuid.UUID) -> None:
     """척추를 현재 단계부터 게이트 또는 완료까지 한 구간 전진시키고 영속화한다."""
     owner_id: uuid.UUID | None = None
+    entered_from_created = False
     try:
         async with async_session_maker() as session:
             project = await session.get(Project, project_id)
@@ -187,6 +188,14 @@ async def _execute(project_id: uuid.UUID) -> None:
             owner_id = project.owner_id
 
             state = _state_from_project(project)
+            if project.status == ProjectStage.CREATED.value:
+                # 표시용 선행 전이: 실행에 들어간 순간부터 UI가 '시작 전'으로
+                # 보이지 않게 researching으로 먼저 영속화한다. 척추 진행 판단은
+                # 위에서 이미 만든 in-memory state(CREATED) 기준이라 단계를
+                # 건너뛰지 않는다(엔드포인트 상태 선점 사고와 다른 지점).
+                entered_from_created = True
+                project.status = ProjectStage.RESEARCHING.value
+                await session.commit()
             state = await _rehydrate_section_plan(session, project.id, state)
             state = await _rehydrate_qa_selection(session, project.id, state)
             outcome = await advance(state)
@@ -222,6 +231,22 @@ async def _execute(project_id: uuid.UUID) -> None:
                 await _notify_safe(owner_id, project_id, "success", page="export")
     except Exception:
         logger.exception("project.run_failed", project_id=str(project_id))
+        if entered_from_created:
+            # 첫 구간(research)에서 죽은 실행은 created로 복귀 — 사용자가
+            # '작성 시작'으로 재시도할 수 있어야 한다(researching 고착 방지).
+            try:
+                async with async_session_maker() as recovery:
+                    await recovery.execute(
+                        update(Project)
+                        .where(
+                            Project.id == project_id,
+                            Project.status == ProjectStage.RESEARCHING.value,
+                        )
+                        .values(status=ProjectStage.CREATED.value)
+                    )
+                    await recovery.commit()
+            except Exception:
+                logger.warning("project.status_rollback_failed", project_id=str(project_id))
         emit_error(project_id, "run_failed", "실행 중 오류가 발생했습니다")
         if owner_id is not None:
             await _notify_safe(owner_id, project_id, "failed", page="progress")
