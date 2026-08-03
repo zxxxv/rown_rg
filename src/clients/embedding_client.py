@@ -6,6 +6,7 @@ and a concrete :class:`BgeM3Client` adapter backed by an ONNX INT8 model.
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import hashlib
 import time
@@ -381,7 +382,10 @@ class BgeM3Client(EmbeddingClient):
                     )
                     gc.collect()
 
-                vectors = self._encode(chunk)
+                # 동기 ONNX 추론을 워커 스레드로 — 이벤트 루프에서 직접 돌리면 색인
+                # 내내 API 전체가 얼어붙는다(2026-08-04 실측: 개요 조회 무응답).
+                # ONNX runtime은 추론 중 GIL을 놓으므로 스레드 오프로드가 유효하다.
+                vectors = await asyncio.to_thread(self._encode, chunk)
                 for k, safe_text in enumerate(chunk):
                     vec = vectors[k]
                     # 캐시 키는 안전 cut된 텍스트 — 원본과 동일 임베딩이 보장되므로 cut 기준
