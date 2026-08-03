@@ -15,12 +15,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SourceDetailDialog } from "@/features/source-review/SourceDetailDialog";
-import {
-  applySourceFilters,
-  DEFAULT_FILTERS,
-  SourceFilters,
-  type SourceFiltersState,
-} from "@/features/source-review/SourceFilters";
 import { UploadDropzone, type UploadingFile } from "@/features/source-review/UploadDropzone";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -33,12 +27,12 @@ export default function SourcesPage() {
   const sourcesQuery = useProjectSources(projectId);
   const patchSource = usePatchSource(projectId);
 
-  const [filters, setFilters] = useState<SourceFiltersState>(DEFAULT_FILTERS);
   const [activeSource, setActiveSource] = useState<Source | null>(null);
   const [uploading] = useState<UploadingFile[]>([]);
 
+  // 필터 사이드바 제거됨 — 실데이터에 의미 있는 분류축이 없어(전부 웹 수집)
+  // 분류가 실제로 동작하지 않았다. 목록은 수집 순서 그대로.
   const items = sourcesQuery.data?.items ?? [];
-  const filtered = useMemo(() => applySourceFilters(items, filters), [items, filters]);
   const counts = useMemo(() => {
     let included = 0;
     let excluded = 0;
@@ -129,86 +123,69 @@ export default function SourcesPage() {
 
         <UploadDropzone onFiles={handleFiles} uploading={uploading} />
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
-          <SourceFilters value={filters} onChange={setFilters} />
-
-          <main>
-            {sourcesQuery.isLoading ? (
-              <LoadingSkeleton variant="card" count={6} />
-            ) : sourcesQuery.isError ? (
-              <EmptyState
-                title="자료를 불러오지 못했습니다"
-                description="잠시 후 다시 시도해 주세요."
-                action={
-                  <Button variant="outline" onClick={() => void sourcesQuery.refetch()}>
-                    다시 시도
-                  </Button>
-                }
-              />
-            ) : filtered.length === 0 ? (
-              <EmptyState
-                title={
-                  items.length === 0 ? "아직 수집된 자료가 없습니다" : "조건에 맞는 자료가 없습니다"
-                }
-                description={
-                  items.length === 0
-                    ? "AI 자동 검색이 진행되거나 파일을 직접 업로드하면 표시됩니다."
-                    : "필터를 변경하거나 초기화해 보세요."
-                }
-                action={
-                  items.length > 0 ? (
-                    <Button variant="outline" onClick={() => setFilters(DEFAULT_FILTERS)}>
-                      필터 초기화
-                    </Button>
-                  ) : undefined
-                }
-              />
-            ) : (
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {filtered.map((s) => (
-                  <SourceCard
-                    key={s.id}
-                    title={s.title}
-                    source={s.source}
-                    publishedAt={s.published_at}
-                    pages={s.pages}
-                    reliability={s.reliability}
-                    summary={s.summary}
-                    kindLabel={s.source_kind === "web_search" ? "웹 검색" : undefined}
-                    onClick={() => setActiveSource(s)}
-                    className={cn(
-                      s.is_included === true && "border-fg-success/40",
-                      s.is_included === false && "opacity-60",
-                    )}
-                    actions={
-                      <>
-                        <Button
-                          size="sm"
-                          variant={s.is_included ? "secondary" : "default"}
-                          disabled={s.is_included === true}
-                          onClick={() => setIncluded(s.id, true)}
-                        >
-                          {s.is_included ? "채택됨" : "채택"}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant={s.is_included === false ? "secondary" : "outline"}
-                          disabled={s.is_included === false}
-                          onClick={() => setIncluded(s.id, false)}
-                        >
-                          {s.is_included === false ? "제외됨" : "제외"}
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setActiveSource(s)}>
-                          상세보기
-                        </Button>
-                      </>
-                    }
-                  />
-                ))}
-              </div>
-            )}
-          </main>
-        </div>
+        <main>
+          {sourcesQuery.isLoading ? (
+            <LoadingSkeleton variant="card" count={6} />
+          ) : sourcesQuery.isError ? (
+            <EmptyState
+              title="자료를 불러오지 못했습니다"
+              description="잠시 후 다시 시도해 주세요."
+              action={
+                <Button variant="outline" onClick={() => void sourcesQuery.refetch()}>
+                  다시 시도
+                </Button>
+              }
+            />
+          ) : items.length === 0 ? (
+            <EmptyState
+              title="아직 수집된 자료가 없습니다"
+              description="AI 자동 검색이 진행되거나 파일을 직접 업로드하면 표시됩니다."
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {items.map((s) => (
+                <SourceCard
+                  key={s.id}
+                  title={s.title}
+                  source={s.source}
+                  publishedAt={s.published_at}
+                  pages={s.pages}
+                  reliability={s.reliability}
+                  summary={s.summary}
+                  kindLabel={s.source_kind === "web_search" ? "웹 검색" : undefined}
+                  onClick={() => setActiveSource(s)}
+                  className={cn(
+                    s.is_included === true && "border-fg-success/40",
+                    s.is_included === false && "opacity-60",
+                  )}
+                  actions={
+                    <>
+                      <Button
+                        size="sm"
+                        variant={s.is_included ? "secondary" : "default"}
+                        disabled={s.is_included === true}
+                        onClick={() => setIncluded(s.id, true)}
+                      >
+                        {s.is_included ? "채택됨" : "채택"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={s.is_included === false ? "secondary" : "outline"}
+                        disabled={s.is_included === false}
+                        onClick={() => setIncluded(s.id, false)}
+                      >
+                        {s.is_included === false ? "제외됨" : "제외"}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setActiveSource(s)}>
+                        상세보기
+                      </Button>
+                    </>
+                  }
+                />
+              ))}
+            </div>
+          )}
+        </main>
       </div>
 
       <FinalizeBar
