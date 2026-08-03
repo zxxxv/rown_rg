@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, CheckCircle2, Download, FileCode, FileText } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, Download, FileText } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useProject } from "@/api/projects";
 import type { Project } from "@/api/types";
@@ -8,7 +8,6 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { env } from "@/env";
 import { useDownload } from "@/features/export/useDownload";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
@@ -92,10 +91,11 @@ function NotReadyView({
 
 function CompletedView({ project }: { project: Project }) {
   const download = useDownload();
-  const pages = 280;
-  const components = 142;
   const completedAt = project.updated_at?.slice(0, 10) ?? project.created_at.slice(0, 10);
 
+  // 목업 잔재 정리(2026-08-04): 가짜 메타(~280p·컴포넌트·파일크기), 정적 샘플을
+  // 내려주던 Markdown 카드, 가짜/비활성 '부가 자료' 4종 제거 — 실동작(HWPX 다운로드
+  // + 검증 리포트)만 남긴다. Markdown·출처 색인 출력은 백엔드 구현 시 복원.
   return (
     <>
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -104,13 +104,11 @@ function CompletedView({ project }: { project: Project }) {
             <h1 className="text-3xl font-semibold text-fg">보고서 출력</h1>
             <Badge variant="default" className="bg-bg-success text-fg-success">
               <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-              진행률 100%
+              작성 완료
             </Badge>
           </div>
           <p className="text-sm text-fg-secondary">{project.title}</p>
           <dl className="flex flex-wrap gap-x-4 font-mono text-xs text-fg-tertiary">
-            <Meta label="전체 페이지" value={`~${pages}p`} />
-            <Meta label="컴포넌트" value={`${components}개`} />
             <Meta label="작성 완료" value={completedAt} />
           </dl>
         </div>
@@ -118,12 +116,11 @@ function CompletedView({ project }: { project: Project }) {
 
       <VerifyReportCard projectId={project.id} />
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <FormatCard
           icon={FileText}
           title="HWPX"
           subtitle="회사 표준 양식"
-          size="~2.8 MB"
           accent
           thumbnailLabel="HWPX 미리보기"
           showStyle
@@ -136,58 +133,7 @@ function CompletedView({ project }: { project: Project }) {
             })
           }
         />
-        <FormatCard
-          icon={FileCode}
-          title="Markdown"
-          subtitle="기술 검토용 원본"
-          size="~180 KB"
-          thumbnailLabel="MD 원문"
-          onDownload={() =>
-            download({
-              url: "/samples/sample.md",
-              filename: `${project.id}.md`,
-              label: "Markdown",
-            })
-          }
-        />
       </div>
-
-      <Separator />
-
-      <section className="flex flex-col gap-3">
-        <header>
-          <h2 className="text-base font-semibold text-fg">부가 자료</h2>
-          <p className="text-xs text-fg-tertiary">검수·재현·검증용 보조 출력물</p>
-        </header>
-        <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <ExtraRow
-            label="출처 색인 (CSV)"
-            description="본문 내 모든 [ref:id] → 자료 매핑"
-            onDownload={() =>
-              download({
-                url: "/samples/sample-refs.csv",
-                filename: `${project.id}-refs.csv`,
-                label: "출처 색인",
-              })
-            }
-          />
-          <ExtraRow
-            label="편집 이력 (JSON)"
-            description="편집기 본격 작동 후 활성"
-            disabledReason="편집 이력 없음 — 추후 활성화"
-          />
-          <ExtraRow
-            label="일관성 그래프 (JSON)"
-            description="섹션 간 주장·수치 그래프"
-            disabledReason="추후 활성화"
-          />
-          <ExtraRow
-            label="약어·용어집 (HWPX 부록)"
-            description="자동 추출된 용어 정의"
-            disabledReason="추후 활성화"
-          />
-        </ul>
-      </section>
     </>
   );
 }
@@ -205,7 +151,6 @@ function FormatCard({
   icon: Icon,
   title,
   subtitle,
-  size,
   thumbnailLabel,
   showStyle,
   accent,
@@ -214,7 +159,6 @@ function FormatCard({
   icon: typeof FileText;
   title: string;
   subtitle: string;
-  size: string;
   thumbnailLabel: string;
   showStyle?: boolean;
   accent?: boolean;
@@ -249,8 +193,7 @@ function FormatCard({
         ) : (
           <p className="text-xs text-fg-tertiary">원본 마크다운 — 양식 없이 그대로 출력합니다.</p>
         )}
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-mono text-xs text-fg-tertiary">{size}</span>
+        <div className="flex justify-end">
           <Button size="sm" onClick={onDownload}>
             <Download className="mr-1 h-3.5 w-3.5" />
             다운로드
@@ -258,40 +201,5 @@ function FormatCard({
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function ExtraRow({
-  label,
-  description,
-  onDownload,
-  disabledReason,
-}: {
-  label: string;
-  description: string;
-  onDownload?: () => void;
-  disabledReason?: string;
-}) {
-  const disabled = Boolean(disabledReason);
-  return (
-    <li
-      className={cn(
-        "flex items-center justify-between gap-3 rounded border border-border bg-bg p-3",
-        disabled && "opacity-60",
-      )}
-    >
-      <div className="flex flex-col gap-0.5">
-        <span className="text-sm font-medium text-fg">{label}</span>
-        <span className="text-xs text-fg-tertiary">{disabledReason ?? description}</span>
-      </div>
-      <Button
-        size="sm"
-        variant={disabled ? "ghost" : "outline"}
-        disabled={disabled}
-        onClick={onDownload}
-      >
-        <Download className="h-3.5 w-3.5" />
-      </Button>
-    </li>
   );
 }
