@@ -4,7 +4,12 @@
 미리보기와 임베딩을 오염시켰다(벤처스퀘어 기사 사례).
 """
 
-from src.workflows.stages import _source_preview, clean_web_markdown, has_usable_content
+from src.workflows.stages import (
+    _source_preview,
+    clean_web_markdown,
+    has_usable_content,
+    relevance_excerpt,
+)
 
 _SAMPLE = (
     "---\n"
@@ -106,6 +111,29 @@ class TestKoreanSiteHeaderUi:
         preview = _source_preview(self._HEADER)
         assert preview is not None
         assert preview.startswith("유연근무제 도입")
+
+
+class TestRelevanceExcerpt:
+    """절 제목 키워드 주변 발췌 — 자체 스니펫(관련성 근거) 생성."""
+
+    _MD = (
+        "서론에 해당하는 도입 문장이다. 배경 설명이 길게 이어진다. "
+        "국내 협업툴 시장 규모는 2025년 5천억 원으로 성장했다. "
+        "성장 동인은 원격근무 확산이다. 결론 문장이다."
+    )
+
+    def test_excerpt_centers_on_keyword_sentence(self):
+        out = relevance_excerpt(self._MD, ["국내외 시장 규모 및 구조"])
+        assert out is not None
+        assert "시장 규모는 2025년" in out
+        assert out.startswith("…")  # 문서 중간 발췌 표시
+
+    def test_no_keyword_match_returns_none(self):
+        # 폴백은 호출부(_source_preview) 몫 — 함수 자체는 정직하게 None
+        assert relevance_excerpt("무관한 내용의 문장이다.", ["밸류체인 생태계"]) is None
+
+    def test_stopword_only_title_returns_none(self):
+        assert relevance_excerpt(self._MD, ["및 등 관련"]) is None
 
 
 class TestHasUsableContent:
