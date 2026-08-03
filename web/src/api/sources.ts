@@ -1,11 +1,55 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { z } from "zod";
 import { apiClient } from "@/api/client";
-import {
-  type Source,
-  type SourceListResponse,
-  SourceListResponseSchema,
-  SourceSchema,
-} from "@/api/types";
+import type { Source, SourceListResponse } from "@/api/types";
+
+// ─── 실계약: GET/PATCH /projects/{id}/sources ───────────────────────────
+// project_sources 행 + metadata 신호(수집 시 web indexer가 영속화).
+// is_included는 2-상태(bool) — 기본 채택, 사람은 제외만 고른다.
+// (업로드·finalize 엔드포인트는 없음: 업로드는 라이브러리 연동 후속,
+//  확정은 진행 게이트의 POST /decide가 담당)
+export const SourceItemSchema = z.object({
+  id: z.string(),
+  source_type: z.enum(["library", "upload", "web_search"]),
+  title: z.string().nullish(),
+  url: z.string().nullish(),
+  reliability: z.enum(["high", "medium", "low"]).nullish(),
+  is_included: z.boolean(),
+  matched_sections: z.array(z.string()),
+  page_age: z.string().nullish(),
+  preview: z.string().nullish(),
+  has_content: z.boolean(),
+  created_at: z.string(),
+});
+export type SourceItem = z.infer<typeof SourceItemSchema>;
+
+// 기존 화면(SourceCard·필터·상세)이 쓰는 레거시 Source 모양으로 변환.
+// 신뢰도는 high/medium/low → 대표 수치 근사(표시용).
+const RELIABILITY_NUM: Record<string, number> = { high: 0.9, medium: 0.6, low: 0.3 };
+
+function toLegacySource(projectId: string, s: SourceItem): Source {
+  let host = "";
+  if (s.url) {
+    try {
+      host = new URL(s.url).hostname;
+    } catch {
+      host = s.url;
+    }
+  }
+  return {
+    id: s.id,
+    project_id: projectId,
+    title: s.title ?? s.url ?? "(제목 없음)",
+    source: host || (s.source_type === "web_search" ? "웹 검색" : s.source_type),
+    source_kind: s.source_type,
+    url: s.url ?? undefined,
+    published_at: s.page_age ?? undefined,
+    reliability: s.reliability ? (RELIABILITY_NUM[s.reliability] ?? 0.5) : 0.5,
+    summary: s.preview ?? (s.has_content ? "" : "본문 회수 실패 — 검색 근거로 쓰이지 않습니다."),
+    is_included: s.is_included,
+    preview: s.preview ?? undefined,
+  };
+}
 
 export const sourceKeys = {
   all: ["sources"] as const,
@@ -14,7 +58,8 @@ export const sourceKeys = {
 
 export async function getProjectSources(projectId: string): Promise<SourceListResponse> {
   const data = await apiClient.get<unknown>(`projects/${projectId}/sources`);
-  return SourceListResponseSchema.parse(data);
+  const items = z.array(SourceItemSchema).parse(data);
+  return { items: items.map((s) => toLegacySource(projectId, s)), total: items.length };
 }
 
 export function useProjectSources(projectId: string) {
@@ -27,7 +72,7 @@ export function useProjectSources(projectId: string) {
 
 export interface PatchSourceInput {
   sid: string;
-  is_included: boolean | null;
+  is_included: boolean;
 }
 
 export function usePatchSource(projectId: string) {
@@ -38,7 +83,7 @@ export function usePatchSource(projectId: string) {
       const data = await apiClient.patch<unknown>(`projects/${projectId}/sources/${sid}`, {
         json: { is_included },
       });
-      return SourceSchema.parse(data);
+      return toLegacySource(projectId, SourceItemSchema.parse(data));
     },
     onMutate: async ({ sid, is_included }) => {
       await qc.cancelQueries({ queryKey: key });
@@ -56,31 +101,6 @@ export function usePatchSource(projectId: string) {
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: key });
-    },
-  });
-}
-
-export function useUploadSource(projectId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (file: File): Promise<Source> => {
-      const fd = new FormData();
-      fd.append("file", file);
-      const data = await apiClient.post<unknown>(`projects/${projectId}/sources/upload`, {
-        body: fd,
-      });
-      return SourceSchema.parse(data);
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: sourceKeys.list(projectId) });
-    },
-  });
-}
-
-export function useFinalizeSources(projectId: string) {
-  return useMutation({
-    mutationFn: async () => {
-      await apiClient.post<unknown>(`projects/${projectId}/sources/finalize`);
     },
   });
 }

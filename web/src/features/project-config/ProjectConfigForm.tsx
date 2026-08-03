@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { mergeKeepDirty } from "./_merge";
 import { DepthSelector } from "./DepthSelector";
 import { DifferentiatorToggle } from "./DifferentiatorToggle";
+import { ModelModePicker } from "./ModelModePicker";
 import { OutlineDesigner } from "./OutlineDesigner";
 import { OutputAndNotification } from "./OutputAndNotification";
 import { PresetSelect } from "./PresetSelect";
@@ -129,8 +130,14 @@ export function ProjectConfigForm({
           <Section number={3} title="목차 설계">
             <OutlineDesigner />
           </Section>
-          <Section number={4} title="작성 깊이" badge={isEdit ? "수정 불가" : undefined}>
-            <DepthSelector disabled={isEdit} />
+          <Section number={4} title="작성 깊이·모델" badge={isEdit ? "수정 불가" : undefined}>
+            <div className="flex flex-col gap-4">
+              <DepthSelector disabled={isEdit} />
+              <div className="flex flex-col gap-2">
+                <p className="text-xs font-medium text-fg-secondary">모델 품질</p>
+                <ModelModePicker disabled={isEdit} />
+              </div>
+            </div>
           </Section>
 
           {/* 필수 결정은 위 4개로 끝 — 나머지는 기본값으로 충분해 접어둔다. */}
@@ -173,6 +180,9 @@ export function ProjectConfigForm({
                   : "미구성 (필수)"}
               </Badge>
               <Badge variant="secondary">깊이 · {DEPTH_LABEL[watchedConfig.depth_mode]}</Badge>
+              <Badge variant="secondary">
+                모델 · {watchedConfig.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
+              </Badge>
               {activeDiffCount > 0 ? (
                 <Badge variant="secondary">기능 {activeDiffCount}개</Badge>
               ) : null}

@@ -129,6 +129,7 @@ const PRESET_POOL: Preset[] = [
 const DEFAULT_CONFIG: ProjectConfig = {
   preset: "preliminary_feasibility",
   sources: { use_library: true, use_upload: true, use_web_search: true },
+  model_mode: "standard",
   enabled_analyzers: ["STEEP", "COST_BENEFIT"],
   enable_pre_reconciliation: true,
   enable_consistency_graph: true,
@@ -165,6 +166,7 @@ const W4_DEMO_PROJECT: Project = {
   config: {
     preset: "preliminary_feasibility",
     sources: { use_library: true, use_upload: true, use_web_search: true },
+    model_mode: "standard",
     enabled_analyzers: ["STEEP", "COST_BENEFIT", "RISK"],
     enable_pre_reconciliation: true,
     enable_consistency_graph: true,

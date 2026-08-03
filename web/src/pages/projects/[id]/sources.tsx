@@ -3,13 +3,9 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { decideSourcePool } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
-import {
-  useFinalizeSources,
-  usePatchSource,
-  useProjectSources,
-  useUploadSource,
-} from "@/api/sources";
+import { usePatchSource, useProjectSources } from "@/api/sources";
 import type { Source } from "@/api/types";
 import { SourceCard } from "@/components/data-display/SourceCard";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -36,12 +32,10 @@ export default function SourcesPage() {
 
   const sourcesQuery = useProjectSources(projectId);
   const patchSource = usePatchSource(projectId);
-  const uploadSource = useUploadSource(projectId);
-  const finalizeSources = useFinalizeSources(projectId);
 
   const [filters, setFilters] = useState<SourceFiltersState>(DEFAULT_FILTERS);
   const [activeSource, setActiveSource] = useState<Source | null>(null);
-  const [uploading, setUploading] = useState<UploadingFile[]>([]);
+  const [uploading] = useState<UploadingFile[]>([]);
 
   const items = sourcesQuery.data?.items ?? [];
   const filtered = useMemo(() => applySourceFilters(items, filters), [items, filters]);
@@ -57,33 +51,14 @@ export default function SourcesPage() {
     return { included, excluded, pending };
   }, [items]);
 
-  const handleFiles = (files: File[]) => {
-    for (const file of files) {
-      const tempId = `upl_${crypto.randomUUID()}`;
-      setUploading((prev) => [...prev, { id: tempId, name: file.name, progress: 0 }]);
-      const ticker = window.setInterval(() => {
-        setUploading((prev) =>
-          prev.map((f) =>
-            f.id === tempId ? { ...f, progress: Math.min(90, f.progress + 12) } : f,
-          ),
-        );
-      }, 200);
-      uploadSource
-        .mutateAsync(file)
-        .then(() => {
-          window.clearInterval(ticker);
-          setUploading((prev) => prev.filter((f) => f.id !== tempId));
-        })
-        .catch((err: unknown) => {
-          window.clearInterval(ticker);
-          setUploading((prev) => prev.filter((f) => f.id !== tempId));
-          const msg = err instanceof ApiError ? err.message : "알 수 없는 오류";
-          toast.error(`업로드 실패: ${file.name}`, { description: msg });
-        });
-    }
+  // 업로드 → 인덱싱 합류는 라이브러리 연동과 함께 배선 예정(백엔드 미구현).
+  const handleFiles = (_files: File[]) => {
+    toast.info("자료 업로드는 준비 중입니다", {
+      description: "라이브러리 연동 후 활성화됩니다 — 지금은 웹 수집 자료만 검토할 수 있습니다.",
+    });
   };
 
-  const setIncluded = (sid: string, is_included: boolean | null) => {
+  const setIncluded = (sid: string, is_included: boolean) => {
     patchSource.mutate(
       { sid, is_included },
       {
@@ -95,17 +70,22 @@ export default function SourcesPage() {
     );
   };
 
+  // 확정 = 진행 게이트의 decide(approve). 제외 선택은 PATCH로 이미 반영돼 있어
+  // 빈 excluded로 승인만 보낸다. 게이트 대기 상태가 아니면 백엔드가 422로 알려준다.
   const handleFinalize = useMutation({
-    mutationFn: async () => {
-      await finalizeSources.mutateAsync();
-    },
+    mutationFn: () => decideSourcePool({ projectId, excludedSourceIds: [], action: "approve" }),
     onSuccess: () => {
-      toast.success("자료 검토 완료 — 인덱싱을 시작합니다.");
+      toast.success("자료 검토 완료 — 작성을 이어갑니다.");
       navigate(`/projects/${projectId}/progress`);
     },
     onError: (err: unknown) => {
       const msg = err instanceof ApiError ? err.message : "검토 완료 처리에 실패했습니다.";
-      toast.error("검토 완료 실패", { description: msg });
+      toast.error("검토 완료 실패", {
+        description:
+          msg.includes("게이트") || msg.includes("대기")
+            ? "자료 검토 대기 상태가 아닙니다 — 진행 화면을 확인하세요."
+            : msg,
+      });
     },
   });
 
@@ -204,17 +184,19 @@ export default function SourcesPage() {
                       <>
                         <Button
                           size="sm"
-                          variant={s.is_included === true ? "secondary" : "default"}
-                          onClick={() => setIncluded(s.id, s.is_included === true ? null : true)}
+                          variant={s.is_included ? "secondary" : "default"}
+                          disabled={s.is_included === true}
+                          onClick={() => setIncluded(s.id, true)}
                         >
-                          {s.is_included === true ? "채택 취소" : "채택"}
+                          {s.is_included ? "채택됨" : "채택"}
                         </Button>
                         <Button
                           size="sm"
                           variant={s.is_included === false ? "secondary" : "outline"}
-                          onClick={() => setIncluded(s.id, s.is_included === false ? null : false)}
+                          disabled={s.is_included === false}
+                          onClick={() => setIncluded(s.id, false)}
                         >
-                          {s.is_included === false ? "제외 취소" : "제외"}
+                          {s.is_included === false ? "제외됨" : "제외"}
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => setActiveSource(s)}>
                           상세보기

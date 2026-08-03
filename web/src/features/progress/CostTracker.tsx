@@ -1,10 +1,10 @@
 import { cn } from "@/lib/utils";
 
+// 실측 누적만 표시한다 — 이전의 "/ 예상치" 분모는 estimator의 가짜 근사여서
+// 실비용을 왜곡했다(예: $0.23 실측 옆에 $115 추정). 비용은 소수 2자리로.
 export interface CostTrackerProps {
   tokensUsed: number;
-  tokensExpected: number;
   costUsed: number;
-  costExpected: number;
   className?: string;
 }
 
@@ -14,63 +14,21 @@ function formatTokens(n: number): string {
   return `${n}`;
 }
 
-function pct(used: number, expected: number): number {
-  if (expected <= 0) return 0;
-  return Math.min(100, Math.max(0, (used / expected) * 100));
-}
-
-export function CostTracker({
-  tokensUsed,
-  tokensExpected,
-  costUsed,
-  costExpected,
-  className,
-}: CostTrackerProps) {
-  const tokenPct = pct(tokensUsed, tokensExpected);
-  const costPct = pct(costUsed, costExpected);
-
+export function CostTracker({ tokensUsed, costUsed, className }: CostTrackerProps) {
   return (
     <div className={cn("flex flex-col gap-3 rounded border border-border bg-bg p-4", className)}>
-      <p className="text-xs font-medium text-fg-secondary">누적 비용</p>
-
-      <Row
-        label="토큰"
-        used={formatTokens(tokensUsed)}
-        expected={formatTokens(tokensExpected)}
-        percent={tokenPct}
-      />
-      <Row
-        label="비용"
-        used={`$${costUsed.toFixed(0)}`}
-        expected={`$${costExpected.toFixed(0)}`}
-        percent={costPct}
-      />
+      <p className="text-xs font-medium text-fg-secondary">누적 사용량 (실측)</p>
+      <Row label="토큰" value={formatTokens(tokensUsed)} />
+      <Row label="비용" value={`$${costUsed.toFixed(2)}`} />
     </div>
   );
 }
 
-function Row({
-  label,
-  used,
-  expected,
-  percent,
-}: {
-  label: string;
-  used: string;
-  expected: string;
-  percent: number;
-}) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span className="text-fg-tertiary">{label}</span>
-        <span className="font-mono text-fg">
-          {used} <span className="text-fg-tertiary">/ {expected}</span>
-        </span>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-tertiary">
-        <div className="h-full bg-accent transition-[width]" style={{ width: `${percent}%` }} />
-      </div>
+    <div className="flex items-center justify-between gap-2 text-xs">
+      <span className="text-fg-tertiary">{label}</span>
+      <span className="font-mono text-sm text-fg">{value}</span>
     </div>
   );
 }
