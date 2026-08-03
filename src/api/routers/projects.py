@@ -233,6 +233,11 @@ async def create_project(
     session.add(project)
     await session.flush()
     await session.refresh(project, ["owner"])
+    # 커밋 소유권 규칙의 예외: 생성 직후 클라이언트가 곧바로 /run·조회를 부른다
+    # (자동 실행 UX). 티어다운 커밋은 응답 전송 뒤라 그 사이 도착한 요청이
+    # 미커밋 행을 못 보고 404가 난다(2026-08-03 실측, 13ms 간격) — 응답 전에
+    # 커밋한다. expire_on_commit=False라 이후 직렬화도 안전.
+    await session.commit()
     return project
 
 
