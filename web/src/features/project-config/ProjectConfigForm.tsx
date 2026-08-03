@@ -119,7 +119,12 @@ export function ProjectConfigForm({
 
   return (
     <FormProvider {...form}>
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+      {/* 생성 = 2컬럼(본문+고정 요약 사이드바). 수정(edit)은 개요 아코디언 같은
+          좁은 컨테이너에 임베드되므로 단일 컬럼 + 하단 액션 바로 그린다 —
+          320px 고정 사이드바가 좁은 폭에서 본문을 짓누르는 문제 방지. */}
+      <div
+        className={cn("grid grid-cols-1 gap-6", !isEdit && "lg:grid-cols-[minmax(0,1fr)_320px]")}
+      >
         <div className="flex flex-col gap-8">
           <Section number={1} title="기본 정보" badge={isEdit ? "수정 불가" : undefined}>
             <BasicInfo readOnly={isEdit} />
@@ -168,17 +173,10 @@ export function ProjectConfigForm({
           </details>
         </div>
 
-        <aside className="flex flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
-          <div className="flex flex-col gap-2 rounded border border-border bg-bg p-4">
-            <p className="text-xs font-medium text-fg-secondary">선택 옵션 요약</p>
+        {isEdit ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
             <div className="flex flex-wrap gap-1.5">
               <Badge variant="secondary">프리셋 · {presetLabel(watchedConfig.preset)}</Badge>
-              <Badge variant="secondary">
-                목차 ·{" "}
-                {watchedConfig.outline
-                  ? `${watchedConfig.outline.chapters.reduce((n, c) => n + c.sections.length, 0)}절 확정`
-                  : "미구성 (필수)"}
-              </Badge>
               <Badge variant="secondary">깊이 · {DEPTH_LABEL[watchedConfig.depth_mode]}</Badge>
               <Badge variant="secondary">
                 모델 · {watchedConfig.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
@@ -187,30 +185,66 @@ export function ProjectConfigForm({
                 <Badge variant="secondary">기능 {activeDiffCount}개</Badge>
               ) : null}
             </div>
-          </div>
-          <div className="flex flex-col gap-2">
-            <Button
-              type="button"
-              size="lg"
-              className="w-full"
-              onClick={() => void onClickSubmit()}
-              disabled={submitting || isSubmitting}
-            >
-              {submitting || isSubmitting ? "처리 중…" : isEdit ? "저장" : "프로젝트 생성"}
-            </Button>
-            {onCancel ? (
+            <div className="flex items-center gap-2">
+              {onCancel ? (
+                <Button type="button" variant="ghost" onClick={onCancel} disabled={submitting}>
+                  취소
+                </Button>
+              ) : null}
               <Button
                 type="button"
-                variant="ghost"
-                className="w-full"
-                onClick={onCancel}
-                disabled={submitting}
+                onClick={() => void onClickSubmit()}
+                disabled={submitting || isSubmitting}
               >
-                취소
+                {submitting || isSubmitting ? "처리 중…" : "저장"}
               </Button>
-            ) : null}
+            </div>
           </div>
-        </aside>
+        ) : (
+          <aside className="flex flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
+            <div className="flex flex-col gap-2 rounded border border-border bg-bg p-4">
+              <p className="text-xs font-medium text-fg-secondary">선택 옵션 요약</p>
+              <div className="flex flex-wrap gap-1.5">
+                <Badge variant="secondary">프리셋 · {presetLabel(watchedConfig.preset)}</Badge>
+                <Badge variant="secondary">
+                  목차 ·{" "}
+                  {watchedConfig.outline
+                    ? `${watchedConfig.outline.chapters.reduce((n, c) => n + c.sections.length, 0)}절 확정`
+                    : "미구성 (필수)"}
+                </Badge>
+                <Badge variant="secondary">깊이 · {DEPTH_LABEL[watchedConfig.depth_mode]}</Badge>
+                <Badge variant="secondary">
+                  모델 · {watchedConfig.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
+                </Badge>
+                {activeDiffCount > 0 ? (
+                  <Badge variant="secondary">기능 {activeDiffCount}개</Badge>
+                ) : null}
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Button
+                type="button"
+                size="lg"
+                className="w-full"
+                onClick={() => void onClickSubmit()}
+                disabled={submitting || isSubmitting}
+              >
+                {submitting || isSubmitting ? "처리 중…" : "프로젝트 생성"}
+              </Button>
+              {onCancel ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full"
+                  onClick={onCancel}
+                  disabled={submitting}
+                >
+                  취소
+                </Button>
+              ) : null}
+            </div>
+          </aside>
+        )}
       </div>
     </FormProvider>
   );
