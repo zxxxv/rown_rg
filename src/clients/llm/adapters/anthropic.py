@@ -22,6 +22,8 @@ _MAX_TOOL_TURNS = 8
 # 회수 본문 총 예산(토큰) — 200k 컨텍스트에서 시스템·검색결과·생성분을 뺀 안전선.
 # 페이지당 상한 = min(cfg.max_content_tokens, 예산 // max_uses)로 곱이 항상 예산 이하.
 _FETCH_BUDGET_TOKENS = 100_000
+# pause_turn 재전송에서 이보다 큰 base64 PDF는 본문 생략(100페이지 제한 400 회피)
+_PDF_RESEND_MAX_CHARS = 500_000
 # provider-중립 web_search → Anthropic 서버 도구 버전.
 # _20260209(동적 필터링)는 Opus 4.6+/Sonnet 4.6+ 전용 — Haiku 등 구형 모델은
 # basic 변형을 써야 한다(아니면 400). 모델별 선택은 _web_tool_types.
@@ -129,8 +131,11 @@ class AnthropicAdapter(BaseLLMAdapter):
             model = result.model
 
             if stop_reason == "pause_turn":
-                # 서버 도구 루프 한도 → assistant content blocks를 그대로 돌려보내 이어간다.
-                anth_messages.append({"role": "assistant", "content": result.content})
+                # 서버 도구 루프 한도 → assistant content blocks를 돌려보내 이어간다.
+                # 단, 대형 PDF 회수 결과는 생략(아래 _sanitize_for_resend 참고).
+                anth_messages.append(
+                    {"role": "assistant", "content": self._sanitize_for_resend(result.content)}
+                )
                 continue
             break
 
@@ -208,6 +213,42 @@ class AnthropicAdapter(BaseLLMAdapter):
                         doc_title = getattr(doc, "title", None)
                         if doc_title and not s.get("title"):
                             s["title"] = doc_title
+
+    @staticmethod
+    def _sanitize_for_resend(blocks: Any) -> list[Any]:
+        """pause_turn 재전송에서 대형 PDF 회수 결과를 안내 텍스트로 치환한다.
+
+        web_fetch가 회수한 100페이지 초과 PDF는 재전송 시 API가 400으로 거부해
+        챕터 수집 전체를 죽인다(2026-08-03 실측: 6챕터 중 3챕터 실패). 우리 추출
+        경로는 PDF 본문을 쓰지 않으므로(_extract_doc_text가 PDF는 None) 큰 PDF를
+        생략해도 잃는 것이 거의 없다. 페이지 수는 클라이언트에서 알 수 없어
+        base64 길이를 근사 기준으로 쓴다.
+        """
+        out: list[Any] = []
+        for b in blocks:
+            try:
+                if getattr(b, "type", "") == "web_fetch_tool_result":
+                    content = getattr(b, "content", None)
+                    doc = getattr(content, "content", None)
+                    source = getattr(doc, "source", None)
+                    data = getattr(source, "data", None)
+                    if (
+                        getattr(source, "type", "") == "base64"
+                        and isinstance(data, str)
+                        and len(data) > _PDF_RESEND_MAX_CHARS
+                    ):
+                        replaced = b.model_dump()
+                        replaced["content"]["content"]["source"] = {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "[대형 PDF 본문 생략 — 재전송 제한 회피. URL로만 참조하라]",
+                        }
+                        out.append(replaced)
+                        continue
+            except Exception:  # noqa: BLE001 — 어떤 블록이든 원본 그대로 재전송이 기본
+                pass
+            out.append(b)
+        return out
 
     @staticmethod
     def _extract_doc_text(doc: Any) -> str | None:

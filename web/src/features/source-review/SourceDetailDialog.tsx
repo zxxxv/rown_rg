@@ -127,21 +127,6 @@ export function SourceDetailDialog({
                       <ConfidenceBadge value={source.reliability} />
                     </dd>
                   </div>
-                  {source.url ? (
-                    <div className="flex flex-col gap-0.5">
-                      <dt className="text-xs text-fg-tertiary">원본</dt>
-                      <dd>
-                        <a
-                          href={source.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-sm text-fg-info hover:underline"
-                        >
-                          원본 페이지 열기 <ExternalLink className="h-3 w-3" />
-                        </a>
-                      </dd>
-                    </div>
-                  ) : null}
                 </dl>
                 <p className="rounded border border-dashed border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg-secondary">
                   본문을 회수하지 못한 출처입니다 — 검색 근거로 쓰이지 않습니다. 필요한 자료면
