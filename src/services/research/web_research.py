@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import urlparse
 
 import structlog
 from pydantic import BaseModel
@@ -32,6 +33,10 @@ SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
 - web_search로 각 목차 섹션에 관련된 페이지를 찾는다.
 - 유용한 페이지는 web_fetch로 **본문 전체를 회수**한다(요약·추측 금지, 실제 내용 근거).
 - 각 출처에 대해 어느 목차 섹션에 해당하는지, 신뢰도(high/medium/low), 최신성을 판단한다.
+- 신뢰도 판정 기준(반드시 이 루브릭을 따른다):
+  * high — 정부·공공기관(통계청·부처·지자체 등), 학술지·대학·국책/공인 연구기관, 국제기구
+  * medium — 주요 언론사 보도, 산업 협회·시장조사기관 리포트, 기업 공식 발표(IR·백서)
+  * low — 개인 블로그·커뮤니티·위키, 출처 불명 집계 사이트, 광고성 콘텐츠
 - 한국 맥락이면 공식·정부·학술·주요 언론 등 권위 있는 출처를 우선한다.
 
 작업을 마치면 **마지막 메시지에 아래 형식의 JSON만** 출력한다(설명 문장 없이):
@@ -132,10 +137,31 @@ def _parse_manifest(text: str) -> dict:
         return {"sources": []}
 
 
+# 도메인 기반 결정적 신뢰도 상향 — LLM 판정과 무관하게 무조건 high.
+# 정부(go.kr)·대학(ac.kr)·공인 연구기관(re.kr)·해외 정부/대학(.gov/.edu)만 —
+# or.kr은 사설 단체도 쓸 수 있어 제외(LLM 루브릭 판단에 맡김).
+_TRUSTED_DOMAIN_SUFFIXES = (".go.kr", ".ac.kr", ".re.kr", ".gov", ".edu")
+
+
+def _domain_reliability(url: str) -> str | None:
+    """신뢰 도메인이면 'high', 아니면 None(판정 유지)."""
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return None
+    for suffix in _TRUSTED_DOMAIN_SUFFIXES:
+        if host.endswith(suffix) or host == suffix.lstrip("."):
+            return "high"
+    return None
+
+
 def _merge_sources(
     web_sources: list[WebSource], manifest: dict, outline: list[str]
 ) -> list[CollectedSource]:
-    """어댑터가 정규화한 web_sources(본문·title·page_age)에 매니페스트의 섹션·신뢰도를 결합."""
+    """어댑터가 정규화한 web_sources(본문·title·page_age)에 매니페스트의 섹션·신뢰도를 결합.
+
+    신뢰도는 매니페스트(LLM 루브릭 판정)를 기본으로 하되, 신뢰 도메인
+    (_TRUSTED_DOMAIN_SUFFIXES)은 결정적으로 high로 오버라이드한다.
+    """
     by_url = {ws.url: ws for ws in web_sources}
     outline_set = set(outline)
     out: list[CollectedSource] = []
@@ -153,7 +179,7 @@ def _merge_sources(
                 url=url,
                 title=item.get("title") or (ws.title if ws else None),
                 content_md=ws.content_md if ws else None,
-                reliability=item.get("reliability"),
+                reliability=_domain_reliability(url) or item.get("reliability"),
                 matched_sections=[s for s in (item.get("sections") or []) if s in outline_set],
                 page_age=ws.page_age if ws else None,
             )
@@ -166,7 +192,11 @@ def _merge_sources(
             continue
         out.append(
             CollectedSource(
-                url=ws.url, title=ws.title, content_md=ws.content_md, page_age=ws.page_age
+                url=ws.url,
+                title=ws.title,
+                content_md=ws.content_md,
+                reliability=_domain_reliability(ws.url),
+                page_age=ws.page_age,
             )
         )
     return out
