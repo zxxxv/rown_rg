@@ -107,6 +107,28 @@ class ProjectUpdate(BaseModel):
     depth_mode: DepthMode | None = None
 
 
+class SourceItemRead(BaseModel):
+    """자료 검토 페이지용 출처 1건 — project_sources 행 + metadata 신호."""
+
+    id: UUID
+    source_type: str  # library | upload | web_search
+    title: str | None = None
+    url: str | None = None
+    reliability: str | None = None  # high | medium | low
+    is_included: bool
+    matched_sections: list[str] = Field(default_factory=list)
+    page_age: str | None = None
+    preview: str | None = None
+    has_content: bool = False
+    created_at: datetime
+
+
+class SourceIncludeUpdate(BaseModel):
+    """자료 채택/제외 토글 — 제외분은 색인·검색 근거에서 빠진다."""
+
+    is_included: bool
+
+
 class VerifyFindingRead(BaseModel):
     """PM 검증 경고 항목 — assemble 직후 pm_verify가 저장한 문서 횡단 일관성 경고."""
 

@@ -46,9 +46,12 @@ class Settings(BaseSettings):
     planner_model: str = "claude-sonnet-4-6"
     research_model: str = "claude-sonnet-4-6"
     write_model: str = "claude-sonnet-4-6"
-    # 웹 리서치 비용 노브 — 검색/회수 횟수와 응답 상한
+    # 웹 리서치 비용 노브 — 검색/회수 횟수와 응답 상한 (챕터당 1콜 분할 수집이라
+    # 총 수집 폭 = 챕터 수 × max_uses)
     research_max_uses: int = 5
     research_max_tokens: int = 8000
+    # 자료 풀 권장 하한 — 미달이어도 차단하지 않고 게이트에 경고 표시(추가 조사 유도)
+    research_min_sources: int = 20
     # 섹션 작성 출력 상한(토큰) — 에이전트 volume_target이 있어도 이 값으로 캡.
     # 기본 16000 = 품질 모드(분량 목표 실현). 저비용 테스트 시 .env로 하향(예: 4096)
     write_max_tokens: int = 16000

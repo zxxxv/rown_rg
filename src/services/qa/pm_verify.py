@@ -164,9 +164,9 @@ async def persist_findings(project_id: UUID, rows: list[dict[str, Any]]) -> None
         await session.commit()
 
 
-async def run_pm_verify(state: ProjectState) -> int:
+async def run_pm_verify(state: ProjectState, *, model: str | None = None) -> int:
     """stages 진입점 — 검증 후 저장, 경고 수를 돌려준다."""
-    rows = await verify_report(state)
+    rows = await verify_report(state, model=model)
     await persist_findings(state.project_id, rows)
     n_critical = sum(1 for r in rows if r["severity"] == "critical")
     logger.info(
