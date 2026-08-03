@@ -19,6 +19,9 @@ from src.core.config import settings
 
 # 서버 도구 루프가 pause_turn으로 끊길 때 재호출하는 최대 횟수(무한루프 가드)
 _MAX_TOOL_TURNS = 8
+# 회수 본문 총 예산(토큰) — 200k 컨텍스트에서 시스템·검색결과·생성분을 뺀 안전선.
+# 페이지당 상한 = min(cfg.max_content_tokens, 예산 // max_uses)로 곱이 항상 예산 이하.
+_FETCH_BUDGET_TOKENS = 100_000
 # provider-중립 web_search → Anthropic 서버 도구 버전.
 # _20260209(동적 필터링)는 Opus 4.6+/Sonnet 4.6+ 전용 — Haiku 등 구형 모델은
 # basic 변형을 써야 한다(아니면 400). 모델별 선택은 _web_tool_types.
@@ -158,13 +161,19 @@ class AnthropicAdapter(BaseLLMAdapter):
             search["blocked_domains"] = cfg.blocked_domains
         tools: list[dict[str, Any]] = [search]
         if cfg.fetch_pages:
+            # 불변식: 회수 본문 총량(fetch 횟수 × 페이지당 상한)이 컨텍스트 예산을
+            # 넘지 못하게 페이지당 상한을 자동 축소한다. max_uses만 올리고 상한을
+            # 잊어도 prompt too long(200k 초과)이 구조적으로 재발하지 않게 하는 장치.
+            per_page = min(
+                cfg.max_content_tokens,
+                max(4_000, _FETCH_BUDGET_TOKENS // max(1, cfg.max_uses)),
+            )
             tools.append(
                 {
                     "type": fetch_type,
                     "name": "web_fetch",
                     "max_uses": cfg.max_uses,
-                    # 페이지당 회수 본문 상한 — 누적 컨텍스트 폭주(prompt too long) 방지
-                    "max_content_tokens": cfg.max_content_tokens,
+                    "max_content_tokens": per_page,
                 }
             )
         return tools
