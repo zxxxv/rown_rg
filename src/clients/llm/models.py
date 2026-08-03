@@ -47,16 +47,28 @@ MODELS: tuple[ModelSpec, ...] = (
     ),
     # Google (Gemini) — text 기준 단가, cached_input=context caching
     # 출처: ai.google.dev/gemini-api/docs/pricing
+    # 2.5 계열은 신규 사용자에게 종료됨(2026-08-03 실측: generateContent 404
+    # "no longer available to new users") — 과거 비용 행 단가 해석을 위해 유지만 한다.
     ModelSpec(
         "gemini-2.5-flash-lite",
         "gemini",
         ModelPricing(Decimal("0.10"), Decimal("0.40"), Decimal("0.01")),
-        default=True,
     ),
     ModelSpec(
         "gemini-2.5-flash",
         "gemini",
         ModelPricing(Decimal("0.30"), Decimal("2.50"), Decimal("0.03")),
+    ),
+    ModelSpec(
+        "gemini-3.5-flash-lite",
+        "gemini",
+        ModelPricing(Decimal("0.30"), Decimal("2.50"), Decimal("0.03")),
+        default=True,
+    ),
+    ModelSpec(
+        "gemini-3.5-flash",
+        "gemini",
+        ModelPricing(Decimal("1.50"), Decimal("9.00"), Decimal("0.15")),
     ),
     # OpenAI (GPT) — Standard tier 단가, cached_input=cached input
     # 출처: developers.openai.com/api/docs/pricing
