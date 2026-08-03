@@ -83,6 +83,31 @@ class TestSpaMenuPlaceholders:
         assert preview.startswith("Remote Workplace Services Market")
 
 
+class TestKoreanSiteHeaderUi:
+    """정부 누리집 헤더 UI(고용노동부 사례 2) — 화면크기·통합검색·javascript 링크."""
+
+    _HEADER = (
+        "- 화면크기 * 작게 * 보통 * 조금 크게 * 크게 * 가장 크게 * 초기화\n"
+        "- Language 메뉴 검색\n"
+        "## 통합검색\n"
+        "검색어를 입력해주세요 검색\n"
+        "**인기검색어** **최근검색어** 최근검색어 전체 삭제\n"
+        '- [민원](javascript:void(0);) * [민원이용안내](javascript:void(0); "메뉴 열림")\n'
+    ) + ("유연근무제 도입 사업장의 생산성 변화를 다룬 실제 본문 문장이다. " * 8)
+
+    def test_header_ui_removed(self):
+        cleaned = clean_web_markdown(self._HEADER)
+        assert "화면크기" not in cleaned
+        assert "인기검색어" not in cleaned
+        assert "javascript:void" not in cleaned
+        assert "실제 본문 문장이다" in cleaned
+
+    def test_preview_starts_with_article(self):
+        preview = _source_preview(self._HEADER)
+        assert preview is not None
+        assert preview.startswith("유연근무제 도입")
+
+
 class TestHasUsableContent:
     def test_banner_only_page_is_not_usable(self):
         """정부 누리집 배너만 회수된 페이지(고용노동부 매뉴얼 사례) → 본문 없음 판정."""
