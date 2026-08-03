@@ -77,16 +77,15 @@ export default function SourcesPage() {
     return () => clearTimeout(timer);
   }, [collecting, newCount]);
 
+  // 채택/제외 2-상태(기본 채택) — '대기' 상태는 실계약에 없다
   const counts = useMemo(() => {
     let included = 0;
     let excluded = 0;
-    let pending = 0;
     for (const s of items) {
-      if (s.is_included === true) included++;
-      else if (s.is_included === false) excluded++;
-      else pending++;
+      if (s.is_included === false) excluded++;
+      else included++;
     }
-    return { included, excluded, pending };
+    return { included, excluded };
   }, [items]);
 
   // 업로드 → 인덱싱 합류는 라이브러리 연동과 함께 배선 예정(백엔드 미구현).
@@ -159,9 +158,6 @@ export default function SourcesPage() {
               </Badge>
               <Badge className="border-fg-success/30 bg-bg-success px-2.5 py-1 font-mono text-sm text-fg-success">
                 채택 {counts.included}
-              </Badge>
-              <Badge variant="secondary" className="px-2.5 py-1 font-mono text-sm">
-                대기 {counts.pending}
               </Badge>
               <Badge className="border-fg-danger/30 bg-bg-danger px-2.5 py-1 font-mono text-sm text-fg-danger">
                 제외 {counts.excluded}
