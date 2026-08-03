@@ -6,7 +6,7 @@ import { parseQaSelectPayload } from "@/api/checkpoints";
 import { useProgressSnapshot } from "@/api/progress";
 import { useProject } from "@/api/projects";
 import { EmptyState } from "@/components/feedback/EmptyState";
-import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
+import { PageLoading } from "@/components/feedback/PageLoading";
 import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -66,7 +66,7 @@ export default function QaSelectPage() {
         </header>
 
         {snapshotQuery.isLoading ? (
-          <LoadingSkeleton variant="block" />
+          <PageLoading label="진행 상태를 불러오는 중…" />
         ) : payload ? (
           <QaSelectGate
             projectId={projectId}
