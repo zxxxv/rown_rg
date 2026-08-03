@@ -58,7 +58,7 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
     current = 4;
     currentPhase = "action";
     actionLabel = "후보 선택으로 이동";
-    actionTo = `/projects/${projectId}/progress`;
+    actionTo = `/projects/${projectId}/qa-select`;
   } else {
     switch (status) {
       case "researching":

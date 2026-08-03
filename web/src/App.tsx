@@ -22,6 +22,7 @@ import ExportPage from "@/pages/projects/[id]/export";
 import OverviewPage from "@/pages/projects/[id]/overview";
 import PreviewPage from "@/pages/projects/[id]/preview";
 import ProgressPage from "@/pages/projects/[id]/progress";
+import QaSelectPage from "@/pages/projects/[id]/qa-select";
 import ReconcilePage from "@/pages/projects/[id]/reconcile";
 import SourcesPage from "@/pages/projects/[id]/sources";
 import NewProjectPage from "@/pages/projects/new";
@@ -93,6 +94,14 @@ const routes = [
     element: (
       <RequireAuth>
         <SourcesPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/projects/:id/qa-select",
+    element: (
+      <RequireAuth>
+        <QaSelectPage />
       </RequireAuth>
     ),
   },
