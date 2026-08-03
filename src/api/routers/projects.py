@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -290,25 +290,21 @@ async def run_project(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> RunResponse:
     project = await _get_authorized_project(project_id, session, current_user)
-    # 원자적 선점: created → researching 조건부 UPDATE. 연타·중복 요청이 와도
-    # 정확히 한 요청만 실행을 시작한다(상태 확인 후 spawn 사이의 레이스 차단 —
-    # 2026-08-03 실측: 연속 클릭 3건이 전부 202로 통과해 파이프라인 3중 기동).
-    claimed = (
-        await session.execute(
-            update(Project)
-            .where(Project.id == project.id, Project.status == ProjectStage.CREATED.value)
-            .values(status=ProjectStage.RESEARCHING.value)
-            .returning(Project.id)
-        )
-    ).scalar_one_or_none()
-    if claimed is None:
+    # 새로 생성된 프로젝트만 실행(thread_id=project_id 재사용 충돌 회피).
+    # 주의: 여기서 status를 미리 researching으로 바꾸면 안 된다 — 상태는 척추의
+    # 진행 위치라서 선점하면 _execute가 research 단계를 건너뛴다(2026-08-03 실사고:
+    # 자료 0건·게이트 없이 폴백 목차로 완료). 중복 기동 차단은 runner의
+    # 인프로세스 가드(_RUNNING, 단일 워커 전제)가 담당한다.
+    if project.status != ProjectStage.CREATED.value:
         raise ValidationError(
             message=f"실행할 수 없는 상태입니다(현재: {project.status})",
             code="PROJECT_NOT_RUNNABLE",
         )
-    await session.commit()
-    # 백그라운드 실행 시작 — 즉시 반환. 사용자 세션과 분리되어 진행된다.
-    await start_run(project.id)
+    if not await start_run(project.id):
+        raise ValidationError(
+            message="이미 실행 중인 프로젝트입니다",
+            code="ALREADY_RUNNING",
+        )
     return RunResponse(project_id=str(project.id), status=ProjectStage.RESEARCHING)
 
 

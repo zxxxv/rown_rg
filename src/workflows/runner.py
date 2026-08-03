@@ -248,9 +248,32 @@ async def get_pending_gate(session: AsyncSession, project_id: uuid.UUID) -> dict
     return {"review_point_id": str(review.id), "gate": review.gate, "payload": review.payload}
 
 
-async def start_run(project_id: uuid.UUID) -> None:
-    """프로젝트 실행 시작(백그라운드). 즉시 반환된다."""
-    _spawn(_execute(project_id))
+# 프로젝트별 실행 중복 방지 — 단일 워커(인프로세스 이벤트 루프) 전제.
+# 연타·중복 요청이 와도 프로젝트당 파이프라인 태스크는 하나만 산다.
+# (상태 선점 방식은 금지: status는 척추의 진행 위치라 미리 바꾸면 단계를 건너뛴다)
+_RUNNING: set[uuid.UUID] = set()
+
+
+def _spawn_guarded(project_id: uuid.UUID) -> bool:
+    """이미 실행 중이면 False. 아니면 _execute를 spawn하고 True."""
+    if project_id in _RUNNING:
+        logger.warning("project.already_running", project_id=str(project_id))
+        return False
+    _RUNNING.add(project_id)
+
+    async def _run() -> None:
+        try:
+            await _execute(project_id)
+        finally:
+            _RUNNING.discard(project_id)
+
+    _spawn(_run())
+    return True
+
+
+async def start_run(project_id: uuid.UUID) -> bool:
+    """프로젝트 실행 시작(백그라운드). 이미 실행 중이면 False, 시작했으면 True."""
+    return _spawn_guarded(project_id)
 
 
 async def resume_run(project_id: uuid.UUID, decision: dict[str, Any]) -> None:
@@ -276,4 +299,4 @@ async def resume_run(project_id: uuid.UUID, decision: dict[str, Any]) -> None:
             if n_excluded:
                 logger.info("source_pool.pruned", project_id=str(project_id), excluded=n_excluded)
         await session.commit()
-    _spawn(_execute(project_id))
+    _spawn_guarded(project_id)
