@@ -49,7 +49,7 @@ export default function SourcesPage() {
         toast.error("추가 검색 실패", {
           description:
             msg.includes("게이트") || msg.includes("대기")
-              ? "자료 검토 대기 상태가 아닙니다 — 진행 화면을 확인하세요."
+              ? "자료 검토 대기 상태가 아닙니다 — 개요의 진행 단계를 확인하세요."
               : msg,
         });
       },
@@ -114,14 +114,14 @@ export default function SourcesPage() {
     mutationFn: () => decideSourcePool({ projectId, excludedSourceIds: [], action: "approve" }),
     onSuccess: () => {
       toast.success("자료 검토 완료 — 작성을 이어갑니다.");
-      navigate(`/projects/${projectId}/progress`);
+      navigate(`/projects/${projectId}/overview`);
     },
     onError: (err: unknown) => {
       const msg = err instanceof ApiError ? err.message : "검토 완료 처리에 실패했습니다.";
       toast.error("검토 완료 실패", {
         description:
           msg.includes("게이트") || msg.includes("대기")
-            ? "자료 검토 대기 상태가 아닙니다 — 진행 화면을 확인하세요."
+            ? "자료 검토 대기 상태가 아닙니다 — 개요의 진행 단계를 확인하세요."
             : msg,
       });
     },

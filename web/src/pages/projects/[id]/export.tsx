@@ -82,8 +82,8 @@ function NotReadyView({
       title="아직 완료되지 않은 보고서입니다"
       description={`현재 상태: ${project.status} — 작성·검증이 끝난 후 출력할 수 있습니다.`}
       action={
-        <Button onClick={() => onNavigate(`/projects/${project.id}/progress`)}>
-          진행 패널로 <ArrowRight className="ml-1 h-4 w-4" />
+        <Button onClick={() => onNavigate(`/projects/${project.id}/overview`)}>
+          개요의 진행 단계로 <ArrowRight className="ml-1 h-4 w-4" />
         </Button>
       }
     />

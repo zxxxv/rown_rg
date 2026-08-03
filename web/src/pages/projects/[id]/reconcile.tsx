@@ -126,8 +126,8 @@ export default function ReconcilePage() {
             title="모순 없음"
             description="모든 자료가 일관됩니다. 다음 단계로 진행할 수 있습니다."
             action={
-              <Button onClick={() => navigate(`/projects/${projectId}/progress`)}>
-                진행 패널로 <ArrowRight className="ml-1 h-4 w-4" />
+              <Button onClick={() => navigate(`/projects/${projectId}/overview`)}>
+                개요의 진행 단계로 <ArrowRight className="ml-1 h-4 w-4" />
               </Button>
             }
           />
@@ -143,7 +143,7 @@ export default function ReconcilePage() {
               {allResolved ? (
                 <AllResolvedView
                   total={counts.total}
-                  onNext={() => navigate(`/projects/${projectId}/progress`)}
+                  onNext={() => navigate(`/projects/${projectId}/overview`)}
                 />
               ) : selected ? (
                 <ContradictionCompare

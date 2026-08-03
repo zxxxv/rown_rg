@@ -28,7 +28,8 @@ export default function NewProjectPage() {
           description: `${msg} — 개요 화면에서 다시 시작할 수 있습니다.`,
         });
       }
-      navigate(`/projects/${project.id}/progress`, { replace: true });
+      // 개요의 진행 단계 스테퍼가 실행을 지켜보는 화면이다(진행 페이지는 폐지됨).
+      navigate(`/projects/${project.id}/overview`, { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 422) {

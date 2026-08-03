@@ -21,11 +21,16 @@ import ProjectsPage from "@/pages/projects";
 import ExportPage from "@/pages/projects/[id]/export";
 import OverviewPage from "@/pages/projects/[id]/overview";
 import PreviewPage from "@/pages/projects/[id]/preview";
-import ProgressPage from "@/pages/projects/[id]/progress";
 import QaSelectPage from "@/pages/projects/[id]/qa-select";
 import ReconcilePage from "@/pages/projects/[id]/reconcile";
 import SourcesPage from "@/pages/projects/[id]/sources";
 import NewProjectPage from "@/pages/projects/new";
+
+// 진행 페이지는 폐지됐다(개요의 진행 단계 스테퍼로 통합) — 옛 링크는 개요로 넘긴다.
+function ProgressRedirect() {
+  const { id } = useParams<{ id: string }>();
+  return <Navigate to={`/projects/${id}/overview`} replace />;
+}
 
 // 편집기는 미리보기·편집 화면으로 통합됐다 — 기존 /editor 링크는 /preview로 넘긴다.
 function EditorRedirect() {
@@ -141,7 +146,7 @@ const routes = [
     path: "/projects/:id/progress",
     element: (
       <RequireAuth>
-        <ProgressPage />
+        <ProgressRedirect />
       </RequireAuth>
     ),
   },
