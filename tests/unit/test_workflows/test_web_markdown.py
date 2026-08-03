@@ -4,7 +4,7 @@
 미리보기와 임베딩을 오염시켰다(벤처스퀘어 기사 사례).
 """
 
-from src.workflows.stages import _source_preview, clean_web_markdown
+from src.workflows.stages import _source_preview, clean_web_markdown, has_usable_content
 
 _SAMPLE = (
     "---\n"
@@ -46,3 +46,32 @@ class TestCleanWebMarkdown:
         md = "정부는 [보도자료](https://ex/press)에서 정책 방향을 밝혔다.\n"
         cleaned = clean_web_markdown(md)
         assert "보도자료" in cleaned and "정책 방향" in cleaned
+
+    def test_gov_banner_removed(self):
+        md = (
+            "이 누리집은 대한민국 공식 전자정부 누리집입니다.\n"
+            "- **공식 누리집 주소 확인하기** go.kr 주소를 사용하는 누리집은…\n"
+            "- **아이콘 또는 HTTPS 확인하기** 웹 브라우저의 자물쇠 아이콘과 주소 앞 https…\n"
+            "실제 본문 문장이다.\n"
+        )
+        cleaned = clean_web_markdown(md)
+        assert "전자정부" not in cleaned
+        assert "실제 본문 문장이다." == cleaned
+
+
+class TestHasUsableContent:
+    def test_banner_only_page_is_not_usable(self):
+        """정부 누리집 배너만 회수된 페이지(고용노동부 매뉴얼 사례) → 본문 없음 판정."""
+        md = (
+            "이 누리집은 대한민국 공식 전자정부 누리집입니다.\n"
+            "- **공식 누리집 주소 확인하기** go.kr …\n"
+            "짧은 잔재 문장.\n"
+        )
+        assert has_usable_content(md) is False
+
+    def test_real_article_is_usable(self):
+        assert has_usable_content("의미 있는 본문 문장이다. " * 30) is True
+
+    def test_empty_is_not_usable(self):
+        assert has_usable_content("") is False
+        assert has_usable_content(None) is False
