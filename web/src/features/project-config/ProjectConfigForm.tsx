@@ -257,11 +257,17 @@ function BasicInfo({ readOnly }: { readOnly?: boolean }) {
         <Label htmlFor="pf-title">보고서 제목</Label>
         <Input
           id="pf-title"
+          placeholder="예: 2026년 국내 이차전지 산업 동향과 대응 전략"
           {...register("title")}
           readOnly={readOnly}
           aria-invalid={errors.title ? "true" : undefined}
           className={ro}
         />
+        {!readOnly ? (
+          <p className="text-xs text-fg-tertiary">
+            완성된 보고서의 표지 제목이자 프로젝트 이름입니다 — 보고서에 그대로 실립니다.
+          </p>
+        ) : null}
         {errors.title ? <p className="text-xs text-fg-danger">{errors.title.message}</p> : null}
       </div>
       <div className="flex flex-col gap-1.5">
@@ -269,11 +275,18 @@ function BasicInfo({ readOnly }: { readOnly?: boolean }) {
         <Textarea
           id="pf-topic"
           rows={3}
+          placeholder="예: 국내 이차전지 산업의 시장 규모와 최근 3년 추이를 분석하고, 소재·셀·완성차 관점의 공급망 리스크와 향후 5년 대응 전략을 제시"
           {...register("topic")}
           readOnly={readOnly}
           aria-invalid={errors.topic ? "true" : undefined}
           className={ro}
         />
+        {!readOnly ? (
+          <p className="text-xs text-fg-tertiary">
+            AI가 자료를 검색하고 본문을 쓸 때 쓰는 실제 지시문입니다. 무엇을(대상), 어떤
+            관점으로(범위·목적), 필요하면 기간·지역까지 문장으로 적을수록 자료 조사가 정확해집니다.
+          </p>
+        ) : null}
         {errors.topic ? <p className="text-xs text-fg-danger">{errors.topic.message}</p> : null}
       </div>
     </div>
