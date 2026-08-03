@@ -1,5 +1,6 @@
 from typing import Any
 
+import structlog
 from anthropic import (
     APIConnectionError,
     APIError,
@@ -16,6 +17,8 @@ from src.clients.llm.base import (
     WebSource,
 )
 from src.core.config import settings
+
+logger = structlog.get_logger(__name__)
 
 # 서버 도구 루프가 pause_turn으로 끊길 때 재호출하는 최대 횟수(무한루프 가드)
 _MAX_TOOL_TURNS = 8
@@ -139,6 +142,15 @@ class AnthropicAdapter(BaseLLMAdapter):
                 continue
             break
 
+        if stop_reason == "max_tokens":
+            # 최종 텍스트(매니페스트 JSON)가 잘리면 신뢰도·매칭섹션이 조용히
+            # 소실된다(회수 본문은 web_sources로 살아남음) — 침묵하지 않는다.
+            logger.warning(
+                "anthropic.web_search.truncated",
+                model=model,
+                max_tokens=request.max_tokens,
+                n_sources=len(sources),
+            )
         web_sources = [WebSource(**fields) for fields in sources.values()]
         return CompletionResponse(
             content="".join(text_parts),
@@ -173,14 +185,19 @@ class AnthropicAdapter(BaseLLMAdapter):
                 cfg.max_content_tokens,
                 max(4_000, _FETCH_BUDGET_TOKENS // max(1, cfg.max_uses)),
             )
-            tools.append(
-                {
-                    "type": fetch_type,
-                    "name": "web_fetch",
-                    "max_uses": cfg.max_uses,
-                    "max_content_tokens": per_page,
-                }
-            )
+            fetch: dict[str, Any] = {
+                "type": fetch_type,
+                "name": "web_fetch",
+                "max_uses": cfg.max_uses,
+                "max_content_tokens": per_page,
+            }
+            # 도메인 필터는 검색·회수 양쪽에 일관 적용 — 검색만 거르면 모델이
+            # 검색 밖 URL(본문 내 링크 등)을 회수해 필터를 우회할 수 있다.
+            if cfg.allowed_domains:
+                fetch["allowed_domains"] = cfg.allowed_domains
+            if cfg.blocked_domains:
+                fetch["blocked_domains"] = cfg.blocked_domains
+            tools.append(fetch)
         return tools
 
     def _collect_sources(self, blocks: Any, sources: dict[str, dict[str, Any]]) -> None:
