@@ -121,13 +121,20 @@ class TestPlanSectionsWithPreset:
         assert plan[3].analysts == ["STEEP분석"]  # ch02 1번째 섹션
         assert plan[4].analysts == []  # 프리셋 범위 밖 챕터는 배정 없음
 
-    async def test_parses_direction_and_key_points(self):
+    async def test_direction_key_points_from_preset(self):
+        """LLM에는 제목만 시키고 direction·key_points는 프리셋 위치 복사가 기본.
+
+        (LLM이 direction을 내놓은 구식 응답이면 그 값을 우선 보존 — 방어적 호환)
+        """
         plan = await plan_sections(
             "수소전기차", "산업동향보고서", client=_StubClient(_PRESET_MANIFEST)
         )
+        # 1번 섹션: 매니페스트에 direction이 있으면 그대로(구식 응답 호환)
         assert plan[0].direction == "산업 범위와 분류 체계"
         assert plan[0].key_points == ["산업 분류", "범위"]
-        assert plan[1].direction == ""  # 누락 시 기본값
+        # 2번 섹션: 제목만 온 정상 경로 — 프리셋 원문이 위치 기반으로 채워진다
+        assert plan[1].direction == "산업 밸류체인 분석"
+        assert plan[1].key_points == ["밸류체인", "주요 플레이어"]
 
     async def test_free_report_type_keeps_generic_path(self):
         client = _StubClient(_FENCED)

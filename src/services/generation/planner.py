@@ -36,14 +36,13 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_MAX_TOKENS = 12000
 MAX_SECTIONS = 40  # 무한성 캡 — 초과분은 버리고 경고 (최대 프리셋: 예비타당성조사 35섹션)
 
+# 출력은 제목까지만 — direction·key_points를 LLM에 시키면 35섹션×장문으로
+# 출력이 폭주해 잘린다(2026-08-03 실측). 두 필드는 프리셋에서 위치 기반 복사.
 _MANIFEST_FORMAT = (
     "마지막 메시지에 아래 형식의 JSON만 출력한다(설명 문장 없이):\n"
-    '```json\n{"sections": [{"chapter": 1, "section": 1, "title": "...", '
-    '"direction": "...", "key_points": ["..."]}]}\n```\n'
-    "분량 규칙(위반 시 출력이 잘려 전체가 무효가 된다):\n"
-    "- direction: 한 문장, 80자 이내. 본문 내용을 쓰지 말 것.\n"
-    "- key_points: 최대 3개, 각 25자 이내의 명사구. 세부 과제·수치 나열 금지.\n"
-    "- 섹션 수·순서는 프리셋 골격과 동일하게 유지."
+    '```json\n{"sections": [{"chapter": 1, "section": 1, "title": "..."}]}\n```\n'
+    "규칙: 섹션 제목만 출력한다. direction·key_points·설명은 출력하지 말 것.\n"
+    "섹션 수·순서는 프리셋 골격과 동일하게 유지."
 )
 
 _SYSTEM = (
@@ -178,24 +177,32 @@ def _preset_skeleton(preset: ReportPreset) -> dict[str, Any]:
     }
 
 
-def _assign_analysts(plan: list[SectionPlan], preset: ReportPreset) -> list[SectionPlan]:
-    """생성 목차의 챕터를 프리셋 챕터에 위치로 대응시켜 담당 분석 에이전트를 배정.
+def _enrich_from_preset(plan: list[SectionPlan], preset: ReportPreset) -> list[SectionPlan]:
+    """생성 목차의 섹션을 프리셋 섹션에 위치로 대응시켜 에이전트·방향·핵심포인트를 채운다.
 
     toc_system 규칙상 챕터 수·순서는 프리셋과 동일하게 유지되므로 챕터는 번호로,
     챕터 안의 섹션은 등장 순서(초과분은 마지막 섹션)로 매핑한다 — LLM 판단이 아닌
-    결정적 배정. 프리셋 범위 밖 챕터는 배정 없이 둔다.
+    결정적 배정. LLM에는 제목만 시키므로 direction·key_points도 여기서 프리셋
+    원문을 복사한다(출력 폭주 방지 + 카탈로그가 단일 진실). 프리셋 범위 밖
+    챕터는 그대로 둔다.
     """
     counters: dict[int, int] = {}
-    assigned: list[SectionPlan] = []
+    enriched: list[SectionPlan] = []
     for sp in plan:
         idx = counters.get(sp.chapter_number, 0)
         counters[sp.chapter_number] = idx + 1
         if 1 <= sp.chapter_number <= len(preset.chapters):
             sections = preset.chapters[sp.chapter_number - 1].sections
-            agents = sections[min(idx, len(sections) - 1)].agents
-            sp = sp.model_copy(update={"analysts": list(agents)})
-        assigned.append(sp)
-    return assigned
+            src = sections[min(idx, len(sections) - 1)]
+            sp = sp.model_copy(
+                update={
+                    "analysts": list(src.agents),
+                    "direction": sp.direction or src.direction,
+                    "key_points": sp.key_points or list(src.key_points),
+                }
+            )
+        enriched.append(sp)
+    return enriched
 
 
 async def plan_sections(
@@ -252,6 +259,6 @@ async def plan_sections(
         logger.warning("planner.truncated", planned=len(plan), cap=MAX_SECTIONS)
         plan = plan[:MAX_SECTIONS]
     if preset is not None:
-        plan = _assign_analysts(plan, preset)
+        plan = _enrich_from_preset(plan, preset)
     logger.info("planner.done", topic=topic, n_sections=len(plan), preset=preset and preset.name)
     return plan
