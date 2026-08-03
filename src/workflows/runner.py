@@ -121,10 +121,14 @@ async def _rehydrate_section_plan(
 ) -> ProjectState:
     """resume 시 SOURCE_POOL review payload에서 section_plan을 되살린다.
 
-    plan은 projects 테이블에 없어 게이트 payload가 유일한 복원원이다. RESEARCHING
-    (→write 재개)이 아니거나 plan이 이미 있으면 그대로 둔다(멱등).
+    plan은 projects 테이블에 없어 게이트 payload가 유일한 복원원이다. 확정 게이트 이후
+    구간(RESEARCHING→index, INDEXING→write)에서 재개될 때 복원하며, 이미 plan이 있거나
+    해당 구간이 아니면 그대로 둔다(멱등).
     """
-    if state.current_stage is not ProjectStage.RESEARCHING or state.section_plan:
+    if (
+        state.current_stage not in (ProjectStage.RESEARCHING, ProjectStage.INDEXING)
+        or state.section_plan
+    ):
         return state
     review = (
         await session.execute(
@@ -273,10 +277,12 @@ async def get_pending_gate(session: AsyncSession, project_id: uuid.UUID) -> dict
     return {"review_point_id": str(review.id), "gate": review.gate, "payload": review.payload}
 
 
-# 프로젝트별 실행 중복 방지 — 단일 워커(인프로세스 이벤트 루프) 전제.
-# 연타·중복 요청이 와도 프로젝트당 파이프라인 태스크는 하나만 산다.
-# (상태 선점 방식은 금지: status는 척추의 진행 위치라 미리 바꾸면 단계를 건너뛴다)
 _RUNNING: set[uuid.UUID] = set()
+
+
+def is_running(project_id: uuid.UUID) -> bool:
+    """해당 프로젝트의 파이프라인 태스크가 이 프로세스에서 실행 중인지 (단일 워커 전제)."""
+    return project_id in _RUNNING
 
 
 def _spawn_guarded(project_id: uuid.UUID) -> bool:

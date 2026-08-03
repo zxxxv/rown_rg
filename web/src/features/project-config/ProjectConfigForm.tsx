@@ -94,6 +94,16 @@ export function ProjectConfigForm({
   }, [watchedConfig.enable_critic_agent, watchedConfig.enable_consistency_graph, setValue]);
 
   const onClickSubmit = handleSubmit(async (values) => {
+    // 목차는 필수(AI 설계 없음) — 유효한 절이 없으면 생성 자체를 막는다.
+    if (!isEdit) {
+      const total = values.config.outline?.chapters.reduce((n, c) => n + c.sections.length, 0) ?? 0;
+      if (total === 0) {
+        toast.error("목차를 구성해 주세요", {
+          description: "장·절을 1개 이상 만들어야 시작할 수 있습니다 (3. 목차 설계)",
+        });
+        return;
+      }
+    }
     await onSubmit?.(values);
   });
 
@@ -159,8 +169,8 @@ export function ProjectConfigForm({
               <Badge variant="secondary">
                 목차 ·{" "}
                 {watchedConfig.outline
-                  ? `${watchedConfig.outline.chapters.reduce((n, c) => n + c.sections.length, 0)}절 직접 확정`
-                  : "AI 설계"}
+                  ? `${watchedConfig.outline.chapters.reduce((n, c) => n + c.sections.length, 0)}절 확정`
+                  : "미구성 (필수)"}
               </Badge>
               <Badge variant="secondary">깊이 · {DEPTH_LABEL[watchedConfig.depth_mode]}</Badge>
               {activeDiffCount > 0 ? (

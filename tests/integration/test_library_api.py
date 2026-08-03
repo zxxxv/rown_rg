@@ -110,7 +110,23 @@ class TestLibraryApi:
                 "title": "고령화 대응 보고서",
                 "topic": "지방 인구 감소",
                 "preset": None,
-                "config": {},
+                "config": {
+                    "outline": {
+                        "chapters": [
+                            {
+                                "title": "1장",
+                                "sections": [
+                                    {
+                                        "title": "개요",
+                                        "direction": "",
+                                        "key_points": [],
+                                        "analysts": [],
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                },
                 "depth_mode": "standard",
             },
         )
@@ -147,7 +163,23 @@ class TestLibraryApi:
                 "title": "워커의 비밀 프로젝트",
                 "topic": "테스트",
                 "preset": None,
-                "config": {},
+                "config": {
+                    "outline": {
+                        "chapters": [
+                            {
+                                "title": "1장",
+                                "sections": [
+                                    {
+                                        "title": "개요",
+                                        "direction": "",
+                                        "key_points": [],
+                                        "analysts": [],
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                },
                 "depth_mode": "standard",
             },
         )

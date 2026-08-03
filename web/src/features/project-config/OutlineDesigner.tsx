@@ -1,13 +1,4 @@
-import {
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  Plus,
-  RotateCcw,
-  Sparkles,
-  Trash2,
-  Wrench,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 import { useAnalysts } from "@/api/analysts";
@@ -21,10 +12,8 @@ import { cn } from "@/lib/utils";
 import type { ProjectFormValues } from "./schema";
 
 // ─── 목차 설계 — 프리셋 골격을 펼쳐 장·절·에이전트를 직접 확정하는 편집기 ───
-// 확정된 목차(config.outline)는 백엔드 planner LLM을 우회해 그대로 실행된다.
-// "AI 자동 설계"로 두면 outline을 보내지 않아 기존(LLM 설계) 경로로 동작한다.
-
-type Mode = "auto" | "manual";
+// 목차는 사람이 무조건 만든다(2026-08-03 확정): AI 목차 설계 없음. 확정된
+// config.outline이 그대로 실행되고, 그 목차 순서로 자료 조사가 진행된다.
 
 // 편집기 내부 초안 — _id는 리렌더·재정렬 안정용 클라이언트 전용 키(제출 시 제거).
 interface DraftSection {
@@ -94,7 +83,6 @@ export function OutlineDesigner() {
   const preset = useWatch<ProjectFormValues, "config.preset">({ name: "config.preset" });
   const detailQuery = usePresetDetail(preset ?? null);
 
-  const [mode, setMode] = useState<Mode>("auto");
   const [chapters, setChapters] = useState<DraftChapter[]>([]);
   // 펼쳐진 장 id 집합 — 프리셋 로드 시 전부 접힘(35섹션 프리셋 스크롤 방지),
   // 새로 추가한 장만 자동으로 펼친다.
@@ -108,26 +96,26 @@ export function OutlineDesigner() {
       return next;
     });
 
-  // 폼과 동기화 — 유효한 절이 하나도 없으면 outline을 보내지 않는다(AI 설계로 폴백).
+  // 폼과 동기화. 목차는 필수(AI 설계 없음) — 유효한 절이 없으면 undefined가
+  // 저장되고 폼 제출 단계에서 차단된다.
   const sync = useCallback(
-    (next: DraftChapter[], nextMode: Mode) => {
+    (next: DraftChapter[]) => {
       setChapters(next);
-      setMode(nextMode);
-      setValue("config.outline", nextMode === "manual" ? toOutline(next) : undefined, {
-        shouldDirty: true,
-      });
+      setValue("config.outline", toOutline(next), { shouldDirty: true });
     },
     [setValue],
   );
 
-  // 마운트: 기존 config.outline(수정 모드·재방문)이 있으면 그대로 편집기로 복원.
-  // 이후 흐름은 기본 auto(AI 설계) — 프리셋을 골라도 "직접 설계하기"를 눌러야
-  // 골격이 펼쳐진다(처음 화면을 짧게 유지).
+  // 마운트: 기존 config.outline(수정 모드·재방문) 복원 → 없으면 프리셋 골격
+  // (상세 도착 시) 또는 자유 주제 빈 장 1개로 시작. 목차 편집기는 항상 펼쳐진다.
   const mountedRef = useRef(false);
   const prevPresetRef = useRef<string | null | undefined>(undefined);
-  // 상세 로딩 전에 "직접 설계"를 누르거나 편집 중 프리셋을 바꾼 경우 —
-  // 해당 프리셋 상세가 도착하면 골격을 로드하도록 예약한다.
   const pendingSkeletonRef = useRef<string | null>(null);
+  const startBlank = useCallback(() => {
+    const blank = { _id: draftId(), title: "", sections: [emptySection()] };
+    setExpandedIds(new Set([blank._id]));
+    sync([blank]);
+  }, [sync]);
   useEffect(() => {
     if (!mountedRef.current) {
       mountedRef.current = true;
@@ -141,26 +129,25 @@ export function OutlineDesigner() {
             sections: ch.sections.map((s) => ({ ...s, _id: draftId() })),
           })),
         );
-        setMode("manual");
+        return;
       }
+      if (preset) pendingSkeletonRef.current = preset;
+      else startBlank();
       return;
     }
     if (prevPresetRef.current !== (preset ?? null)) {
       prevPresetRef.current = preset ?? null;
-      if (mode === "manual") {
-        // 편집 중 유형 변경: 새 프리셋 골격으로 리셋(도착 시), 자유 주제면 AI 설계로.
-        if (preset) pendingSkeletonRef.current = preset;
-        else sync([], "auto");
-      }
+      if (preset) pendingSkeletonRef.current = preset;
+      else startBlank();
     }
-  }, [preset, getValues, sync, mode]);
+  }, [preset, getValues, startBlank]);
 
-  // 예약된 골격 로드 — 프리셋 상세가 도착하는 시점에 편집기를 채운다.
+  // 예약된 골격 로드 — 프리셋 상세가 도착하는 시점에 편집기를 채운다(전부 접힘).
   useEffect(() => {
     if (!preset || !detailQuery.data) return;
     if (pendingSkeletonRef.current !== preset) return;
     pendingSkeletonRef.current = null;
-    sync(fromPreset(detailQuery.data), "manual");
+    sync(fromPreset(detailQuery.data));
     setExpandedIds(new Set());
   }, [preset, detailQuery.data, sync]);
 
@@ -168,45 +155,6 @@ export function OutlineDesigner() {
     (n, ch) => n + ch.sections.filter((s) => s.title.trim()).length,
     0,
   );
-
-  if (mode === "auto") {
-    return (
-      <div className="flex flex-col gap-3 rounded border border-border bg-bg p-4">
-        <div className="flex items-start gap-2">
-          <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
-          <p className="text-sm text-fg-secondary">
-            {preset
-              ? "AI가 이 유형의 표준 골격을 주제에 맞게 다듬어 목차를 설계합니다. 그대로 시작해도 됩니다."
-              : "AI가 주제에 맞는 목차를 새로 설계합니다. 그대로 시작해도 됩니다."}
-          </p>
-        </div>
-        <div>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              if (!preset) {
-                const blank = { _id: draftId(), title: "", sections: [emptySection()] };
-                sync([blank], "manual");
-                setExpandedIds(new Set([blank._id]));
-              } else if (detailQuery.data) {
-                sync(fromPreset(detailQuery.data), "manual");
-                setExpandedIds(new Set());
-              } else {
-                // 상세 로딩 전 — 도착 시 골격 로드 예약 (그동안 스켈레톤 표시)
-                pendingSkeletonRef.current = preset;
-                sync([], "manual");
-              }
-            }}
-          >
-            <Wrench className="mr-1 h-3.5 w-3.5" aria-hidden />
-            목차 직접 설계·에이전트 배정
-          </Button>
-        </div>
-      </div>
-    );
-  }
 
   if (preset && detailQuery.isLoading && chapters.length === 0) {
     return <LoadingSkeleton variant="card" count={2} />;
@@ -216,8 +164,8 @@ export function OutlineDesigner() {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-accent/40 bg-bg-info p-3">
         <p className="text-xs text-fg-secondary">
-          이 목차가 <span className="font-medium text-fg">그대로 실행</span>됩니다 (AI가 수정하지
-          않음) · 유효한 절 {totalSections}개
+          목차는 <span className="font-medium text-fg">직접 확정</span>합니다 (AI가 목차를 만들지
+          않음) · 확정된 목차 순서로 자료를 조사합니다 · 유효한 절 {totalSections}개
         </p>
         <div className="flex gap-1.5">
           <Button
@@ -247,7 +195,7 @@ export function OutlineDesigner() {
               disabled={!detailQuery.data}
               onClick={() => {
                 if (!detailQuery.data) return;
-                sync(fromPreset(detailQuery.data), "manual");
+                sync(fromPreset(detailQuery.data));
                 setExpandedIds(new Set());
               }}
             >
@@ -255,10 +203,6 @@ export function OutlineDesigner() {
               프리셋 골격으로 리셋
             </Button>
           ) : null}
-          <Button type="button" variant="ghost" size="sm" onClick={() => sync([], "auto")}>
-            <Sparkles className="mr-1 h-3.5 w-3.5" aria-hidden />
-            AI 설계에 맡기기
-          </Button>
         </div>
       </div>
 
@@ -270,19 +214,9 @@ export function OutlineDesigner() {
           count={chapters.length}
           expanded={expandedIds.has(chapter._id)}
           onToggle={() => toggleChapter(chapter._id)}
-          onChange={(next) =>
-            sync(
-              chapters.map((c, i) => (i === ci ? next : c)),
-              "manual",
-            )
-          }
-          onMove={(delta) => sync(move(chapters, ci, delta), "manual")}
-          onRemove={() =>
-            sync(
-              chapters.filter((_, i) => i !== ci),
-              "manual",
-            )
-          }
+          onChange={(next) => sync(chapters.map((c, i) => (i === ci ? next : c)))}
+          onMove={(delta) => sync(move(chapters, ci, delta))}
+          onRemove={() => sync(chapters.filter((_, i) => i !== ci))}
         />
       ))}
 
@@ -293,7 +227,7 @@ export function OutlineDesigner() {
         className="w-fit"
         onClick={() => {
           const added = { _id: draftId(), title: "", sections: [emptySection()] };
-          sync([...chapters, added], "manual");
+          sync([...chapters, added]);
           setExpandedIds((prev) => new Set(prev).add(added._id));
         }}
       >

@@ -22,7 +22,18 @@ async def _create_project(test_client: AsyncClient, token: str) -> dict:
             "title": "삭제 테스트",
             "topic": "삭제 대상 프로젝트",
             "preset": None,
-            "config": {},
+            "config": {
+                "outline": {
+                    "chapters": [
+                        {
+                            "title": "1장",
+                            "sections": [
+                                {"title": "개요", "direction": "", "key_points": [], "analysts": []}
+                            ],
+                        }
+                    ]
+                }
+            },
             "depth_mode": "standard",
         },
     )

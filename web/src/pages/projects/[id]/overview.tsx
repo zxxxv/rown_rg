@@ -165,7 +165,8 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
 
   const deleteProject = useDeleteProject();
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const canDelete = project.status === "completed" || project.status === "archived";
+  // 삭제는 항상 노출 — 백엔드가 '실행 중인 순간'만 막는다(게이트 대기·실패 잔류 정리 가능).
+  const canDelete = true;
   const onDelete = async () => {
     try {
       await deleteProject.mutateAsync(project.id);

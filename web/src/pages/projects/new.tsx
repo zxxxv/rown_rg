@@ -63,8 +63,8 @@ export default function NewProjectPage() {
           </Button>
           <h1 className="text-3xl font-semibold text-fg">새 프로젝트</h1>
           <p className="text-sm text-fg-secondary">
-            프리셋을 고른 뒤 7개 영역의 옵션을 검토하고 작성을 시작하세요. 옵션은 작성 도중에도 일부
-            변경할 수 있습니다.
+            보고서 유형을 고르고 목차(장·절)를 직접 확정하면, 그 목차 순서로 자료 조사가 시작됩니다.
+            수집된 자료는 검토 단계에서 확정·제외할 수 있습니다.
           </p>
         </header>
 

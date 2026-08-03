@@ -44,7 +44,7 @@ from src.db.models.verify_finding import VerifyFinding
 from src.prompts import list_presets, load_preset
 from src.services.generation.planner import MAX_SECTIONS
 from src.services.prompts import resolve_analysts
-from src.workflows.runner import get_pending_gate, resume_run, start_run
+from src.workflows.runner import get_pending_gate, is_running, resume_run, start_run
 
 # 단계 기반 근사 진행률 — 섹션 단위 세밀화는 추후 진행 이벤트로
 _STAGE_PERCENT: dict[str, int] = {
@@ -213,7 +213,13 @@ async def create_project(
                 message=f"알 수 없는 프리셋입니다: {data.preset} (가능: {available})",
                 code="UNKNOWN_PRESET",
             ) from None
-    # 사용자 확정 목차가 실려 있으면 여기서 검증해 확정한다 (실행 시점 실패 방지).
+    # 목차는 사람이 만든다(2026-08-03 확정): AI 목차 설계 경로를 쓰지 않으므로
+    # outline 없는 생성은 거부한다 — 실행 시점이 아니라 생성 시점에 막는다.
+    if data.config.get("outline") is None:
+        raise ValidationError(
+            message="목차가 필요합니다 — 생성 화면에서 장·절을 구성하세요 (config.outline)",
+            code="OUTLINE_REQUIRED",
+        )
     _validate_outline_config(data.config, await _known_analyst_names(session, current_user.id))
     project = Project(
         title=data.title,
@@ -359,16 +365,18 @@ async def delete_project(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> None:
-    """완료(completed·archived)된 프로젝트 영구 삭제.
+    """프로젝트 영구 삭제 — 파이프라인이 실제 실행 중인 순간만 막는다.
 
-    하위 데이터(sources·chunks·raptor·consistency·review_points)는 DB FK CASCADE로
-    함께 삭제되고, token_usage는 SET NULL이라 사용량·비용 기록은 남는다.
+    (2026-08-03 완화: 이전엔 완료·보관만 허용했으나, 게이트 대기·실패 잔류
+    프로젝트를 지울 수 없어 실험 잔재가 쌓였다.) 하위 데이터(sources·chunks·
+    raptor·consistency·review_points)는 DB FK CASCADE로 함께 삭제되고,
+    token_usage는 SET NULL이라 사용량·비용 기록은 남는다.
     """
     project = await _get_authorized_project(project_id, session, current_user)
-    if project.status not in (ProjectStage.COMPLETED.value, ProjectStage.ARCHIVED.value):
+    if is_running(project.id):
         raise ValidationError(
-            message=f"완료된 프로젝트만 삭제할 수 있습니다(현재: {project.status})",
-            code="PROJECT_NOT_DELETABLE",
+            message="실행 중인 프로젝트는 삭제할 수 없습니다 — 게이트 도달 후 다시 시도하세요",
+            code="PROJECT_RUNNING",
         )
     # ORM 관계는 lazy="raise"라 session.delete()의 관계 로딩을 피하고
     # DB FK CASCADE에 맡기는 Core DELETE를 쓴다.
