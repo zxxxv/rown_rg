@@ -104,12 +104,50 @@ export function SourceDetailDialog({
                 </div>
               </section>
             ) : (
-              // 본문을 회수하지 못한 출처 — 있지도 않은 본문 영역을 그리지 않고,
-              // 검색 근거로 쓰이지 않는다는 사실과 확인 경로(원본 링크)만 안내한다.
-              <p className="rounded border border-dashed border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg-secondary">
-                본문을 회수하지 못한 출처입니다 — 검색 근거로 쓰이지 않습니다. 내용은 상단의 원본
-                링크에서 직접 확인하세요.
-              </p>
+              // 본문을 회수하지 못한 출처 — 본문 영역 대신 갖고 있는 요약 정보(출처·
+              // 발행·신뢰도)를 보여주고, 검색 근거로 쓰이지 않는다는 사실을 안내한다.
+              <section className="flex flex-col gap-2">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">
+                  요약 정보
+                </h3>
+                <dl className="grid grid-cols-2 gap-3 rounded border border-border bg-bg-secondary p-3 text-sm">
+                  <div className="flex flex-col gap-0.5">
+                    <dt className="text-xs text-fg-tertiary">출처</dt>
+                    <dd className="truncate font-mono text-sm text-fg">{source.source}</dd>
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <dt className="text-xs text-fg-tertiary">발행 시점</dt>
+                    <dd className="font-mono text-sm text-fg">
+                      {source.published_at ?? "확인 안 됨"}
+                    </dd>
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <dt className="text-xs text-fg-tertiary">신뢰도</dt>
+                    <dd>
+                      <ConfidenceBadge value={source.reliability} />
+                    </dd>
+                  </div>
+                  {source.url ? (
+                    <div className="flex flex-col gap-0.5">
+                      <dt className="text-xs text-fg-tertiary">원본</dt>
+                      <dd>
+                        <a
+                          href={source.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-sm text-fg-info hover:underline"
+                        >
+                          원본 페이지 열기 <ExternalLink className="h-3 w-3" />
+                        </a>
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+                <p className="rounded border border-dashed border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg-secondary">
+                  본문을 회수하지 못한 출처입니다 — 검색 근거로 쓰이지 않습니다. 필요한 자료면
+                  원본을 확인한 뒤 직접 업로드하거나 추가 검색을 이용하세요.
+                </p>
+              </section>
             )}
           </div>
         </ScrollArea>

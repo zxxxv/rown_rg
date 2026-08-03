@@ -153,10 +153,19 @@ export default function SourcesPage() {
                 검토 지점 #1
               </Badge>
             </div>
-            <div className="flex items-center gap-3 font-mono text-sm">
-              <span className="text-fg-success">채택 {counts.included}</span>
-              <span className="text-fg-tertiary">대기 {counts.pending}</span>
-              <span className="text-fg-danger">제외 {counts.excluded}</span>
+            <div className="flex items-center gap-1.5">
+              <Badge variant="outline" className="px-2.5 py-1 font-mono text-sm">
+                총 {items.length}
+              </Badge>
+              <Badge className="border-fg-success/30 bg-bg-success px-2.5 py-1 font-mono text-sm text-fg-success">
+                채택 {counts.included}
+              </Badge>
+              <Badge variant="secondary" className="px-2.5 py-1 font-mono text-sm">
+                대기 {counts.pending}
+              </Badge>
+              <Badge className="border-fg-danger/30 bg-bg-danger px-2.5 py-1 font-mono text-sm text-fg-danger">
+                제외 {counts.excluded}
+              </Badge>
             </div>
           </div>
           <p className="text-sm text-fg-secondary">

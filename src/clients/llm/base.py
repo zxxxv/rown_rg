@@ -15,6 +15,9 @@ class WebSearchConfig(BaseModel):
 
     max_uses: int = 5
     fetch_pages: bool = True  # 검색으로 찾은 페이지 본문까지 회수(web_fetch 류)할지
+    # 회수 페이지당 본문 토큰 상한 — pause_turn 루프가 회수 전문을 대화에 누적시키므로
+    # 상한이 없으면 큰 페이지 몇 개로 컨텍스트 한도(200k)를 뚫는다(2026-08-03 실측 1.35M).
+    max_content_tokens: int = 20_000
     allowed_domains: list[str] | None = None
     blocked_domains: list[str] | None = None
     user_country: str | None = None  # 검색 지역화 힌트(ISO alpha-2), 예: "KR"

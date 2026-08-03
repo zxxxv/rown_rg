@@ -158,7 +158,15 @@ class AnthropicAdapter(BaseLLMAdapter):
             search["blocked_domains"] = cfg.blocked_domains
         tools: list[dict[str, Any]] = [search]
         if cfg.fetch_pages:
-            tools.append({"type": fetch_type, "name": "web_fetch", "max_uses": cfg.max_uses})
+            tools.append(
+                {
+                    "type": fetch_type,
+                    "name": "web_fetch",
+                    "max_uses": cfg.max_uses,
+                    # 페이지당 회수 본문 상한 — 누적 컨텍스트 폭주(prompt too long) 방지
+                    "max_content_tokens": cfg.max_content_tokens,
+                }
+            )
         return tools
 
     def _collect_sources(self, blocks: Any, sources: dict[str, dict[str, Any]]) -> None:
