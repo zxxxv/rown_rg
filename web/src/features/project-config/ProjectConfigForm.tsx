@@ -176,7 +176,7 @@ export function ProjectConfigForm({
               onClick={() => void onClickSubmit()}
               disabled={submitting || isSubmitting}
             >
-              {submitting || isSubmitting ? "처리 중…" : isEdit ? "저장" : "시작"}
+              {submitting || isSubmitting ? "처리 중…" : isEdit ? "저장" : "프로젝트 생성"}
             </Button>
             {onCancel ? (
               <Button

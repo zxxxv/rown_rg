@@ -40,6 +40,8 @@ export interface ProgressSnapshot {
   eta_seconds?: number;
   pending_checkpoint_id: string | null;
   pending_gate: PendingGate | null;
+  /** status=created — 아직 실행이 시작되지 않음(자료조사 진행처럼 그리면 안 됨) */
+  not_started: boolean;
 }
 
 const PHASE_ORDER: PhaseName[] = ["research", "indexing", "writing", "qa", "export"];
@@ -70,6 +72,7 @@ export function toProgressSnapshot(res: ProjectProgress): ProgressSnapshot {
     cost_usd: res.cost_usd,
     pending_checkpoint_id: res.pending_gate?.review_point_id ?? null,
     pending_gate: res.pending_gate,
+    not_started: res.status === "created",
   };
 }
 
