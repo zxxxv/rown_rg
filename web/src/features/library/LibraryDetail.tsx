@@ -1,14 +1,17 @@
 import {
   ArrowUpRight,
+  ChevronDown,
+  ChevronUp,
   Download,
   FilePlus2,
   FileText,
+  Folder,
   FolderOpen,
   Settings,
   Shield,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
@@ -33,11 +36,22 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { PromptBody, PromptCreateButton } from "@/features/library/PromptPanel";
 
 interface LibraryDetailProps {
   node: LibraryNode | null;
-  path: string[];
+  /** 조상 폴더 경로(자신 제외) — 브레드크럼 클릭 이동용 id 포함 */
+  path: { id: string; name: string }[];
+  /** 우측 패널에서의 이동(폴더 진입·파일 열기·브레드크럼) — 좌측 트리 선택과 동일 상태 */
+  onNavigate?: (id: string) => void;
   /** 상단 파일 업로드 input을 여는 콜백(빈 폴더 안내 버튼용) */
   onRequestUpload?: () => void;
 }
@@ -57,24 +71,37 @@ function formatSize(bytes: number): string {
   return `${bytes} B`;
 }
 
-function countDescendants(node: LibraryNode): { folders: number; files: number; bytes: number } {
+function countDescendants(node: LibraryNode): {
+  folders: number;
+  files: number;
+  bytes: number;
+  /** 하위에서 가장 최근 등록일(ISO) — 폴더 행의 '최근 등록' 표시용 */
+  latest: string | null;
+} {
   if (node.type === "file") {
-    return { folders: 0, files: 1, bytes: node.file_meta.size_bytes };
+    return {
+      folders: 0,
+      files: 1,
+      bytes: node.file_meta.size_bytes,
+      latest: node.file_meta.registered_at,
+    };
   }
   let folders = 0;
   let files = 0;
   let bytes = 0;
+  let latest: string | null = null;
   for (const child of node.children) {
     const sub = countDescendants(child);
     if (child.type === "folder") folders += 1;
     folders += sub.folders;
     files += sub.files;
     bytes += sub.bytes;
+    if (sub.latest && (!latest || sub.latest > latest)) latest = sub.latest;
   }
-  return { folders, files, bytes };
+  return { folders, files, bytes, latest };
 }
 
-export function LibraryDetail({ node, path, onRequestUpload }: LibraryDetailProps) {
+export function LibraryDetail({ node, path, onNavigate, onRequestUpload }: LibraryDetailProps) {
   if (!node) {
     return (
       <EmptyState
@@ -87,12 +114,12 @@ export function LibraryDetail({ node, path, onRequestUpload }: LibraryDetailProp
   return (
     <article className="flex flex-col gap-5">
       <header className="flex flex-col gap-2 border-b border-border pb-4">
-        <Breadcrumb path={path} />
+        <Breadcrumb path={path} onNavigate={onNavigate} />
         <h2 className="text-xl font-semibold text-fg">{node.name}</h2>
       </header>
 
       {node.type === "folder" ? (
-        <FolderBody node={node} onRequestUpload={onRequestUpload} />
+        <FolderBody node={node} onNavigate={onNavigate} onRequestUpload={onRequestUpload} />
       ) : node.prompt ? (
         <PromptBody prompt={node.prompt} />
       ) : (
@@ -102,33 +129,126 @@ export function LibraryDetail({ node, path, onRequestUpload }: LibraryDetailProp
   );
 }
 
-function Breadcrumb({ path }: { path: string[] }) {
+function Breadcrumb({
+  path,
+  onNavigate,
+}: {
+  path: { id: string; name: string }[];
+  onNavigate?: (id: string) => void;
+}) {
   if (path.length === 0) {
     return <p className="font-mono text-xs text-fg-tertiary">/</p>;
   }
-  return <p className="font-mono text-xs text-fg-tertiary">/ {path.join(" / ")}</p>;
+  return (
+    <p className="flex flex-wrap items-center gap-1 font-mono text-xs text-fg-tertiary">
+      /
+      {path.map((seg) => (
+        <span key={seg.id} className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => onNavigate?.(seg.id)}
+            className="rounded px-0.5 transition-colors hover:bg-bg-secondary hover:text-fg"
+          >
+            {seg.name}
+          </button>
+          <span aria-hidden>/</span>
+        </span>
+      ))}
+    </p>
+  );
+}
+
+// 폴더 목록 정렬 축 — 폴더가 항상 파일보다 먼저 오고, 그 안에서 정렬한다.
+type SortKey = "name" | "kind" | "size" | "registrant" | "date";
+
+interface FolderRow {
+  node: LibraryNode;
+  isFolder: boolean;
+  name: string;
+  kind: string;
+  sizeBytes: number;
+  pages: number | null;
+  registrant: string | null;
+  /** ISO 등록일 — 폴더는 하위 최근 등록일 */
+  date: string | null;
+  isProject: boolean;
 }
 
 function FolderBody({
   node,
+  onNavigate,
   onRequestUpload,
 }: {
   node: Extract<LibraryNode, { type: "folder" }>;
+  onNavigate?: (id: string) => void;
   onRequestUpload?: () => void;
 }) {
   const stats = countDescendants(node);
-  const files = node.children.filter((c) => c.type === "file");
-  const subfolders = node.children.filter((c) => c.type === "folder");
   // '내 에이전트'/'내 작성 규칙' 폴더는 새 프롬프트 생성 진입점.
   const isPromptContainer = node.id === "me-agents" || node.id === "me-rules";
 
+  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortAsc, setSortAsc] = useState(true);
+  const toggleSort = (key: SortKey) => {
+    if (key === sortKey) setSortAsc((v) => !v);
+    else {
+      setSortKey(key);
+      setSortAsc(true);
+    }
+  };
+
+  const rows = useMemo<FolderRow[]>(() => {
+    const mapped = node.children.map<FolderRow>((child) => {
+      if (child.type === "folder") {
+        const sub = countDescendants(child);
+        return {
+          node: child,
+          isFolder: true,
+          name: child.name,
+          kind: "폴더",
+          sizeBytes: sub.bytes,
+          pages: null,
+          registrant: null,
+          date: sub.latest,
+          isProject: false,
+        };
+      }
+      return {
+        node: child,
+        isFolder: false,
+        name: child.name,
+        kind: KIND_LABEL[child.file_meta.source_kind],
+        sizeBytes: child.file_meta.size_bytes,
+        pages: child.file_meta.page_count ?? null,
+        registrant: child.file_meta.registered_by,
+        date: child.file_meta.registered_at,
+        isProject: Boolean(child.file_meta.project_id),
+      };
+    });
+    const dir = sortAsc ? 1 : -1;
+    const cmp = (a: FolderRow, b: FolderRow): number => {
+      if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
+      switch (sortKey) {
+        case "size":
+          return (a.sizeBytes - b.sizeBytes) * dir;
+        case "date":
+          return (a.date ?? "").localeCompare(b.date ?? "") * dir;
+        case "kind":
+          return a.kind.localeCompare(b.kind, "ko") * dir;
+        case "registrant":
+          return (a.registrant ?? "").localeCompare(b.registrant ?? "", "ko") * dir;
+        default:
+          return a.name.localeCompare(b.name, "ko") * dir;
+      }
+    };
+    return mapped.sort(cmp);
+  }, [node.children, sortKey, sortAsc]);
+
   return (
     <div className="flex flex-col gap-4">
-      <dl className="grid grid-cols-3 gap-3 rounded border border-border bg-bg-secondary p-3 font-mono text-sm">
-        <Stat label="하위 폴더" value={`${stats.folders}개`} />
-        <Stat label="하위 파일" value={`${stats.files}개`} />
-        <Stat label="총 크기" value={formatSize(stats.bytes)} />
-      </dl>
+      <p className="font-mono text-xs text-fg-tertiary">
+        하위 폴더 {stats.folders}개 · 파일 {stats.files}개 · 총 {formatSize(stats.bytes)}
+      </p>
 
       {isPromptContainer ? (
         <div className="flex flex-wrap items-center gap-2">
@@ -157,33 +277,91 @@ function FolderBody({
         </div>
       )}
 
-      {subfolders.length > 0 ? (
-        <section>
-          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-fg-tertiary">
-            하위 폴더 ({subfolders.length})
-          </h3>
-          <ul className="grid grid-cols-2 gap-2 lg:grid-cols-3">
-            {subfolders.map((sub) => (
-              <li
-                key={sub.id}
-                className="flex items-center gap-2 rounded border border-border bg-bg p-3 text-sm"
-              >
-                <span className="font-medium text-fg">{sub.name}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {files.length > 0 ? (
-        <section>
-          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-fg-tertiary">
-            파일 ({files.length})
-          </h3>
-          <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {files.map((f) => (f.type === "file" ? <FileCard key={f.id} node={f} /> : null))}
-          </ul>
-        </section>
+      {rows.length > 0 ? (
+        <div className="overflow-x-auto rounded border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <SortHead
+                  label="이름"
+                  me="name"
+                  sortKey={sortKey}
+                  asc={sortAsc}
+                  onSort={toggleSort}
+                />
+                <SortHead
+                  label="종류"
+                  me="kind"
+                  sortKey={sortKey}
+                  asc={sortAsc}
+                  onSort={toggleSort}
+                />
+                <SortHead
+                  label="크기"
+                  me="size"
+                  sortKey={sortKey}
+                  asc={sortAsc}
+                  onSort={toggleSort}
+                />
+                <TableHead className="text-right font-mono text-xs">페이지</TableHead>
+                <SortHead
+                  label="등록자"
+                  me="registrant"
+                  sortKey={sortKey}
+                  asc={sortAsc}
+                  onSort={toggleSort}
+                />
+                <SortHead
+                  label="등록일"
+                  me="date"
+                  sortKey={sortKey}
+                  asc={sortAsc}
+                  onSort={toggleSort}
+                />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow
+                  key={row.node.id}
+                  onClick={() => onNavigate?.(row.node.id)}
+                  className="cursor-pointer"
+                >
+                  <TableCell className="max-w-[320px]">
+                    <span className="flex items-center gap-2">
+                      {row.isFolder ? (
+                        <Folder className="h-4 w-4 shrink-0 text-fg-info" aria-hidden />
+                      ) : (
+                        <FileText className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
+                      )}
+                      <span className="truncate text-sm font-medium text-fg">{row.name}</span>
+                      {row.isProject ? (
+                        <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+                          프로젝트
+                        </Badge>
+                      ) : null}
+                    </span>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs text-fg-secondary">
+                    {row.kind}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-right font-mono text-xs text-fg-secondary">
+                    {formatSize(row.sizeBytes)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-right font-mono text-xs text-fg-tertiary">
+                    {row.pages !== null ? `${row.pages}p` : "—"}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs text-fg-secondary">
+                    {row.registrant ?? "—"}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-xs text-fg-tertiary">
+                    {row.date ? row.date.slice(0, 10) : "—"}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       ) : (
         <EmptyState
           title="비어있는 폴더"
@@ -201,21 +379,40 @@ function FolderBody({
   );
 }
 
-function FileCard({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
+function SortHead({
+  label,
+  me,
+  sortKey,
+  asc,
+  onSort,
+}: {
+  label: string;
+  me: SortKey;
+  sortKey: SortKey;
+  asc: boolean;
+  onSort: (key: SortKey) => void;
+}) {
+  const active = sortKey === me;
+  const alignRight = me === "size";
   return (
-    <li className="flex flex-col gap-2 rounded border border-border bg-bg p-3">
-      <div className="flex items-start justify-between gap-2">
-        <span className="line-clamp-2 text-sm font-medium text-fg">{node.name}</span>
-        <Badge variant="secondary" className="font-mono text-[10px]">
-          {KIND_LABEL[node.file_meta.source_kind]}
-        </Badge>
-      </div>
-      <div className="flex flex-wrap items-center gap-x-2 font-mono text-[11px] text-fg-tertiary">
-        <span>{formatSize(node.file_meta.size_bytes)}</span>
-        {node.file_meta.page_count !== undefined ? <span>{node.file_meta.page_count}p</span> : null}
-        <span>{node.file_meta.registered_at.slice(0, 10)}</span>
-      </div>
-    </li>
+    <TableHead className={alignRight ? "text-right" : undefined}>
+      <button
+        type="button"
+        onClick={() => onSort(me)}
+        className={`inline-flex items-center gap-1 font-mono text-xs transition-colors hover:text-fg ${
+          active ? "text-fg" : "text-fg-tertiary"
+        }`}
+      >
+        {label}
+        {active ? (
+          asc ? (
+            <ChevronUp className="h-3 w-3" aria-hidden />
+          ) : (
+            <ChevronDown className="h-3 w-3" aria-hidden />
+          )
+        ) : null}
+      </button>
+    </TableHead>
   );
 }
 

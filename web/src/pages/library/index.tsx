@@ -28,14 +28,15 @@ import { cn } from "@/lib/utils";
 
 interface Lookup {
   node: LibraryNode | null;
-  path: string[];
+  /** 조상 폴더 경로(자신 제외) — id를 실어 브레드크럼 클릭 이동에 쓴다. */
+  path: { id: string; name: string }[];
 }
 
-function findNode(tree: LibraryNode[], id: string, path: string[] = []): Lookup {
+function findNode(tree: LibraryNode[], id: string, path: Lookup["path"] = []): Lookup {
   for (const node of tree) {
     if (node.id === id) return { node, path };
     if (node.type === "folder") {
-      const sub = findNode(node.children, id, [...path, node.name]);
+      const sub = findNode(node.children, id, [...path, { id: node.id, name: node.name }]);
       if (sub.node) return sub;
     }
   }
@@ -234,6 +235,7 @@ export default function LibraryPage() {
               <LibraryDetail
                 node={lookup.node}
                 path={lookup.path}
+                onNavigate={setSelectedId}
                 onRequestUpload={() => fileInputRef.current?.click()}
               />
             </main>
