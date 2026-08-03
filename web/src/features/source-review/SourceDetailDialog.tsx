@@ -17,6 +17,8 @@ export interface SourceDetailDialogProps {
   source: Source | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** 검토 게이트가 닫힌 뒤(확정 이후)에는 채택/제외 버튼을 숨긴다 */
+  readOnly?: boolean;
   onInclude: (sid: string) => void;
   onExclude: (sid: string) => void;
 }
@@ -25,6 +27,7 @@ export function SourceDetailDialog({
   source,
   open,
   onOpenChange,
+  readOnly = false,
   onInclude,
   onExclude,
 }: SourceDetailDialogProps) {
@@ -137,14 +140,16 @@ export function SourceDetailDialog({
           </div>
         </ScrollArea>
 
-        <DialogFooter className="gap-2">
-          <Button variant="secondary" onClick={() => onExclude(source.id)} disabled={isExcluded}>
-            제외
-          </Button>
-          <Button onClick={() => onInclude(source.id)} disabled={isIncluded}>
-            채택
-          </Button>
-        </DialogFooter>
+        {readOnly ? null : (
+          <DialogFooter className="gap-2">
+            <Button variant="secondary" onClick={() => onExclude(source.id)} disabled={isExcluded}>
+              제외
+            </Button>
+            <Button onClick={() => onInclude(source.id)} disabled={isIncluded}>
+              채택
+            </Button>
+          </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   );

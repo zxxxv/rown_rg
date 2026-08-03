@@ -5,6 +5,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { decideSourcePool, useDecideCollectMore } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
+import { useProgressSnapshot } from "@/api/progress";
 import { usePatchSource, useProjectSources } from "@/api/sources";
 import type { Source } from "@/api/types";
 import { SourceCard } from "@/components/data-display/SourceCard";
@@ -33,6 +34,11 @@ export default function SourcesPage() {
     refetchInterval: collecting ? 5_000 : false,
   });
   const patchSource = usePatchSource(projectId);
+
+  // 검토는 SOURCE_POOL 게이트가 열려 있을 때만 유효 — 확정 후(작성·완료)에는
+  // 이 페이지가 읽기 전용 기록이 된다(채택/제외/추가 검색/검토 완료 숨김).
+  const snapshot = useProgressSnapshot(projectId);
+  const reviewOpen = snapshot.data?.pending_gate?.gate === "source_pool";
 
   const handleCollectMore = () => {
     if (collectMore.isPending || collecting) return;
@@ -165,12 +171,13 @@ export default function SourcesPage() {
             </div>
           </div>
           <p className="text-sm text-fg-secondary">
-            AI가 수집한 자료를 검토하고 채택할 자료를 결정해 주세요. 추가 자료는 아래 드롭존에
-            끌어다 놓으면 됩니다.
+            {reviewOpen
+              ? "AI가 수집한 자료를 검토하고 채택할 자료를 결정해 주세요. 추가 자료는 아래 드롭존에 끌어다 놓으면 됩니다."
+              : "검토가 완료된 자료 목록입니다 (읽기 전용) — 채택된 자료만 본문 작성의 검색 근거로 사용됐습니다."}
           </p>
         </header>
 
-        <UploadDropzone onFiles={handleFiles} uploading={uploading} />
+        {reviewOpen ? <UploadDropzone onFiles={handleFiles} uploading={uploading} /> : null}
 
         {collecting ? (
           <div className="flex items-center gap-3 rounded-md border border-fg-info/30 bg-bg-info px-4 py-3 text-sm">
@@ -221,27 +228,45 @@ export default function SourcesPage() {
                     s.is_included === false && "opacity-60",
                   )}
                   actions={
-                    <>
-                      <Button
-                        size="sm"
-                        variant={s.is_included ? "secondary" : "default"}
-                        disabled={s.is_included === true}
-                        onClick={() => setIncluded(s.id, true)}
-                      >
-                        {s.is_included ? "채택됨" : "채택"}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={s.is_included === false ? "secondary" : "outline"}
-                        disabled={s.is_included === false}
-                        onClick={() => setIncluded(s.id, false)}
-                      >
-                        {s.is_included === false ? "제외됨" : "제외"}
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setActiveSource(s)}>
-                        상세보기
-                      </Button>
-                    </>
+                    reviewOpen ? (
+                      <>
+                        <Button
+                          size="sm"
+                          variant={s.is_included ? "secondary" : "default"}
+                          disabled={s.is_included === true}
+                          onClick={() => setIncluded(s.id, true)}
+                        >
+                          {s.is_included ? "채택됨" : "채택"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={s.is_included === false ? "secondary" : "outline"}
+                          disabled={s.is_included === false}
+                          onClick={() => setIncluded(s.id, false)}
+                        >
+                          {s.is_included === false ? "제외됨" : "제외"}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setActiveSource(s)}>
+                          상세보기
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Badge
+                          variant="outline"
+                          className={
+                            s.is_included === false
+                              ? "border-fg-danger/30 text-fg-danger"
+                              : "border-fg-success/30 text-fg-success"
+                          }
+                        >
+                          {s.is_included === false ? "제외됨" : "채택됨"}
+                        </Badge>
+                        <Button size="sm" variant="ghost" onClick={() => setActiveSource(s)}>
+                          상세보기
+                        </Button>
+                      </>
+                    )
                   }
                 />
               ))}
@@ -250,15 +275,17 @@ export default function SourcesPage() {
         </main>
       </div>
 
-      <FinalizeBar
-        canFinalize={canFinalize}
-        isPending={handleFinalize.isPending}
-        onUploadFocus={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-        onFinalize={() => handleFinalize.mutate()}
-        includedCount={counts.included}
-        onCollectMore={handleCollectMore}
-        collectPending={collectMore.isPending || collecting}
-      />
+      {reviewOpen ? (
+        <FinalizeBar
+          canFinalize={canFinalize}
+          isPending={handleFinalize.isPending}
+          onUploadFocus={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          onFinalize={() => handleFinalize.mutate()}
+          includedCount={counts.included}
+          onCollectMore={handleCollectMore}
+          collectPending={collectMore.isPending || collecting}
+        />
+      ) : null}
 
       <SourceDetailDialog
         source={activeSource}
@@ -266,6 +293,7 @@ export default function SourcesPage() {
         onOpenChange={(o) => {
           if (!o) setActiveSource(null);
         }}
+        readOnly={!reviewOpen}
         onInclude={(sid) => setIncluded(sid, true)}
         onExclude={(sid) => setIncluded(sid, false)}
       />

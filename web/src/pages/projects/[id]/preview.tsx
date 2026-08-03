@@ -29,7 +29,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { useAuth } from "@/hooks/useAuth";
@@ -127,9 +126,11 @@ export default function PreviewPage() {
           />
         ) : (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-            <ScrollArea className="h-[calc(100vh-220px)] rounded border border-border bg-bg">
+            {/* 트리는 내부 스크롤 없이 아래로 쭉 펼친다 — 목차 전체가 한눈에 보이고
+                페이지 스크롤 하나로 탐색한다(사용자 요청, 2026-08-04) */}
+            <aside className="self-start rounded border border-border bg-bg">
               <SectionTree tree={tree} selectedId={selectedId} onSelect={selectSection} />
-            </ScrollArea>
+            </aside>
 
             <main className="rounded border border-border bg-bg">
               {selectedId ? (
@@ -172,10 +173,11 @@ interface SectionTreeProps {
 function SectionTree({ tree, selectedId, onSelect }: SectionTreeProps) {
   return (
     <nav aria-label="섹션 트리" className="flex flex-col p-2">
-      {tree.map((chapter) => (
+      {tree.map((chapter, chIdx) => (
         <div key={chapter.id} className="mb-2">
           <TreeItem
             id={chapter.id}
+            label={`${chIdx + 1}장`}
             title={chapter.title}
             level={1}
             status={chapter.status}
@@ -183,10 +185,11 @@ function SectionTree({ tree, selectedId, onSelect }: SectionTreeProps) {
             onSelect={onSelect}
           />
           <ul className="ml-2 flex flex-col">
-            {chapter.children.map((section) => (
+            {chapter.children.map((section, secIdx) => (
               <li key={section.id}>
                 <TreeItem
                   id={section.id}
+                  label={`${chIdx + 1}.${secIdx + 1}`}
                   title={section.title}
                   level={2}
                   status={section.status}
@@ -204,6 +207,7 @@ function SectionTree({ tree, selectedId, onSelect }: SectionTreeProps) {
 
 function TreeItem({
   id,
+  label,
   title,
   level,
   status,
@@ -211,6 +215,8 @@ function TreeItem({
   onSelect,
 }: {
   id: string;
+  /** 사람이 읽는 순번(1장, 1.1) — 실데이터 id는 UUID라 라벨로 못 쓴다 */
+  label: string;
   title: SectionNode["title"];
   level: 1 | 2;
   status: SectionStatus;
@@ -230,7 +236,7 @@ function TreeItem({
         !selected && "hover:bg-bg-secondary",
       )}
     >
-      <span className="font-mono text-[11px] text-fg-tertiary">{id}</span>
+      <span className="shrink-0 font-mono text-[11px] text-fg-tertiary">{label}</span>
       <span className="line-clamp-1 flex-1">{title}</span>
       <StatusDot kind={STATUS_KIND[status]} />
     </button>
