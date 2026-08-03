@@ -39,7 +39,11 @@ MAX_SECTIONS = 40  # 무한성 캡 — 초과분은 버리고 경고 (최대 프
 _MANIFEST_FORMAT = (
     "마지막 메시지에 아래 형식의 JSON만 출력한다(설명 문장 없이):\n"
     '```json\n{"sections": [{"chapter": 1, "section": 1, "title": "...", '
-    '"direction": "...", "key_points": ["..."]}]}\n```'
+    '"direction": "...", "key_points": ["..."]}]}\n```\n'
+    "분량 규칙(위반 시 출력이 잘려 전체가 무효가 된다):\n"
+    "- direction: 한 문장, 80자 이내. 본문 내용을 쓰지 말 것.\n"
+    "- key_points: 최대 3개, 각 25자 이내의 명사구. 세부 과제·수치 나열 금지.\n"
+    "- 섹션 수·순서는 프리셋 골격과 동일하게 유지."
 )
 
 _SYSTEM = (
@@ -218,17 +222,30 @@ async def plan_sections(
     else:
         system = _SYSTEM
         user = json.dumps({"topic": topic, "report_type": report_type}, ensure_ascii=False)
-    request = CompletionRequest(
-        model=model,
-        system=system,
-        messages=[Message(role="user", content=user)],
-        max_tokens=max_tokens,
-        cache_key=None,
-    )
-    with token_context(user_id=user_id, project_id=project_id, operation="plan.outline"):
-        response = await client.complete(request)
-
-    plan = _to_plan(_parse_manifest(response.content))
+    # 1회 재시도: 출력 잘림(max_tokens) 등으로 파싱이 깨질 수 있고, LOCAL
+    # 카세트는 실패 응답도 녹화·재생하므로 같은 입력의 재시도는 오염된 녹화를
+    # 그대로 돌려받는다 — 재시도에는 별도 cache_key를 부여해 우회한다.
+    plan: list[SectionPlan] = []
+    for attempt in (0, 1):
+        request = CompletionRequest(
+            model=model,
+            system=system,
+            messages=[Message(role="user", content=user)],
+            max_tokens=max_tokens,
+            cache_key=f"plan-retry:{report_type}:{topic}" if attempt else None,
+        )
+        with token_context(user_id=user_id, project_id=project_id, operation="plan.outline"):
+            response = await client.complete(request)
+        plan = _to_plan(_parse_manifest(response.content))
+        if plan:
+            break
+        logger.warning(
+            "planner.parse_failed",
+            topic=topic,
+            attempt=attempt,
+            stop_reason=response.stop_reason,
+            output_tokens=response.output_tokens,
+        )
     if not plan:
         raise ValueError(f"플래너가 유효한 목차를 반환하지 않음 (topic={topic!r})")
     if len(plan) > MAX_SECTIONS:
