@@ -59,6 +59,30 @@ class TestCleanWebMarkdown:
         assert "실제 본문 문장이다." == cleaned
 
 
+class TestSpaMenuPlaceholders:
+    """JS 렌더 사이트 메뉴 잔재(polarismarketresearch 사례) — 미리보기가 제목부터 시작."""
+
+    _SPA = (
+        "× ×\n"
+        "Reports - Loading…\n"
+        "Services - Loading…\n"
+        "About Us - Loading…\n"
+        "Search Result ×\n"
+        "Reports Press Blogs ×\n"
+        "Remote Workplace Services Market Share, Size, Trends, Industry Analysis Report\n"
+    ) + ("The market size was valued at USD 20 billion in 2025. " * 5)
+
+    def test_loading_placeholders_removed(self):
+        cleaned = clean_web_markdown(self._SPA)
+        assert "Loading…" not in cleaned
+        assert "× ×" not in cleaned
+
+    def test_preview_skips_short_menu_lines(self):
+        preview = _source_preview(self._SPA)
+        assert preview is not None
+        assert preview.startswith("Remote Workplace Services Market")
+
+
 class TestHasUsableContent:
     def test_banner_only_page_is_not_usable(self):
         """정부 누리집 배너만 회수된 페이지(고용노동부 매뉴얼 사례) → 본문 없음 판정."""
