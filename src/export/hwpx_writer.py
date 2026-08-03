@@ -58,7 +58,15 @@ class Table:
     rows: list[list[str]]
 
 
-Block = Heading | Paragraph | Table
+@dataclass(frozen=True)
+class PageBreak:
+    """쪽 나눔 — 다음 블록이 새 페이지에서 시작한다(챕터 경계 등)."""
+
+
+Block = Heading | Paragraph | Table | PageBreak
+
+# 표 머리행 음영(옅은 회색) — 본문 행과 시각적으로 구분한다.
+TABLE_HEADER_SHADE = "#E6E6E6"
 
 
 def build_report(
@@ -82,13 +90,24 @@ def build_report(
     if apply_chrome:
         _apply_company_chrome(doc)
 
+    pending_page_break = False
     for block in blocks:
+        if isinstance(block, PageBreak):
+            # 실제 나눔은 '다음 문단'의 pageBreak 속성으로 표현된다(HWPX 규격).
+            pending_page_break = True
+            continue
         if isinstance(block, Heading):
-            _add_heading(doc, block)
+            para = _add_heading(doc, block)
         elif isinstance(block, Paragraph):
-            _add_body(doc, block.text, block.indent)
+            para = _add_body(doc, block.text, block.indent)
         else:
             _add_table(doc, block)
+            para = None
+        if pending_page_break and para is not None:
+            element = getattr(para, "element", None)
+            if element is not None:
+                element.set("pageBreak", "1")
+            pending_page_break = False
 
     out = Path(output_path)
     doc.save_to_path(str(out))
@@ -108,7 +127,7 @@ def _apply_company_chrome(doc: HwpxDocument) -> None:
     doc.set_page_number(target="footer", format="page", align="CENTER")
 
 
-def _add_heading(doc: HwpxDocument, heading: Heading) -> None:
+def _add_heading(doc: HwpxDocument, heading: Heading):
     level = max(1, min(heading.level, MAX_HEADING_LEVEL))
     char_id = doc.ensure_run_style(font=HEADING_FONT, size=HEADING_SIZE_PT[level], bold=True)
     # inherit_style=False: 앞 문단의 paraPr(특히 개요)을 물려받지 않고 깨끗하게 시작한다.
@@ -122,9 +141,10 @@ def _add_heading(doc: HwpxDocument, heading: Heading) -> None:
         spacing_before_pt=12.0,
         spacing_after_pt=6.0,
     )
+    return para
 
 
-def _add_body(doc: HwpxDocument, text: str, indent: int = 0) -> None:
+def _add_body(doc: HwpxDocument, text: str, indent: int = 0):
     char_id = doc.ensure_run_style(font=BODY_FONT, size=BODY_SIZE_PT)
     # inherit_style=False: 앞 제목의 개요(OUTLINE) paraPr 상속을 차단 → 본문이 목차에 안 잡힘.
     para = doc.add_paragraph(text, char_pr_id_ref=char_id, inherit_style=False)
@@ -137,6 +157,7 @@ def _add_body(doc: HwpxDocument, text: str, indent: int = 0) -> None:
     if indent > 0:
         fmt["indent_left_mm"] = indent * OUTLINE_INDENT_MM
     doc.set_paragraph_format(**fmt)
+    return para
 
 
 def _add_table(doc: HwpxDocument, table: Table) -> None:
@@ -145,6 +166,11 @@ def _add_table(doc: HwpxDocument, table: Table) -> None:
     tbl = doc.add_table(n_rows, n_cols)
     for col, head in enumerate(table.headers):
         tbl.set_cell_text(0, col, head)
+        try:
+            # 머리행 음영 — API 버전에 따라 없을 수 있어 방어적으로 시도한다.
+            tbl.set_cell_shading(0, col, TABLE_HEADER_SHADE)
+        except Exception:  # noqa: BLE001 — 음영은 장식, 실패해도 표는 유효
+            pass
     for row_idx, row in enumerate(table.rows, start=1):
         for col, value in enumerate(row):
             tbl.set_cell_text(row_idx, col, value)

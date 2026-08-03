@@ -23,7 +23,7 @@ import structlog
 
 from src.core.config import settings
 from src.core.state import ProjectState
-from src.export.hwpx_writer import Block, Heading, Paragraph, Table, build_report
+from src.export.hwpx_writer import Block, Heading, PageBreak, Paragraph, Table, build_report
 
 logger = structlog.get_logger(__name__)
 
@@ -55,9 +55,14 @@ def _strip_citations(text: str) -> str:
     return _CITATION_RE.sub("", text)
 
 
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_HR_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
+
+
 def _clean_inline(text: str) -> str:
-    """HWPX 평문 렌더에서 의미 없는 인라인 마크다운 강조 기호 제거."""
-    return text.replace("**", "")
+    """HWPX 평문 렌더에서 의미 없는 인라인 마크다운 기호 제거(강조·링크)."""
+    text = text.replace("**", "")
+    return _MD_LINK_RE.sub(r"\1", text)
 
 
 def _outline_level(line: str) -> int | None:
@@ -114,17 +119,37 @@ def markdown_to_blocks(md: str) -> list[Block]:
             flush_para()
             flush_table()
             continue
+        if _HR_RE.match(line):
+            # 마크다운 구분선(---)은 시각 장식 — 문서에 리터럴로 남기지 않는다.
+            flush_para()
+            flush_table()
+            continue
         if line.startswith("|"):
             flush_para()
             table_buf.append(_table_cells(line))
             continue
         flush_table()
+        if line.startswith(">"):
+            # 인용 블록(주석·제약 사항) — '>' 기호를 벗기고 한 단계 들여쓴 문단으로.
+            flush_para()
+            quoted = _clean_inline(line.lstrip("> ").strip())
+            if quoted:
+                blocks.append(Paragraph(text=quoted, indent=1))
+            continue
         heading = _HEADING_RE.match(line)
         if heading:
             flush_para()
-            blocks.append(
-                Heading(level=_CONTENT_HEADING_LEVEL, text=_clean_inline(heading.group(2)).strip())
-            )
+            text = _clean_inline(heading.group(2)).strip()
+            marker_level = _outline_level(text)
+            if marker_level is not None:
+                # "## □ 추진 배경"류 — 마커 달린 헤딩은 개조식 문단으로 강등해
+                # 작성 규칙(□→ㅇ→-)의 계층을 살린다(전부 헤딩3으로 눌리면 위계 붕괴).
+                blocks.append(Paragraph(text=text, indent=marker_level))
+            elif len(heading.group(1)) <= 2:
+                blocks.append(Heading(level=_CONTENT_HEADING_LEVEL, text=text))
+            else:
+                # ###+ 무마커 소제목은 최상위 개조식(□ 상당) 문단으로.
+                blocks.append(Paragraph(text=text, indent=0))
             continue
         level = _outline_level(line)
         if level is not None:
@@ -136,6 +161,31 @@ def markdown_to_blocks(md: str) -> list[Block]:
     flush_para()
     flush_table()
     return blocks
+
+
+def _drop_duplicate_lead_heading(md: str, chapter: int, section: int) -> str:
+    """본문 첫 헤딩이 '# N.N …'로 섹션 제목을 반복하면 제거한다(제목 이중 인쇄 방지)."""
+    lines = md.splitlines()
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        if not line:
+            continue
+        m = _HEADING_RE.match(line)
+        if m and m.group(2).strip().startswith(f"{chapter}.{section}"):
+            return "\n".join(lines[:i] + lines[i + 1 :])
+        break
+    return md
+
+
+def _chapter_titles(state: ProjectState) -> dict[int, str]:
+    """config.outline에서 챕터 제목을 위치 기반으로 복원(없으면 빈 dict)."""
+    titles: dict[int, str] = {}
+    outline = state.options.get("outline") if isinstance(state.options, dict) else None
+    if isinstance(outline, dict):
+        for i, ch in enumerate(outline.get("chapters") or [], start=1):
+            if isinstance(ch, dict) and isinstance(ch.get("title"), str) and ch["title"].strip():
+                titles[i] = ch["title"].strip()
+    return titles
 
 
 def report_blocks(state: ProjectState) -> list[Block]:
@@ -152,13 +202,14 @@ def report_blocks(state: ProjectState) -> list[Block]:
     if not rendered:
         return blocks
 
-    # 목차 — 렌더되는 섹션만 번호·제목으로 나열(본문과 항상 일치).
+    # 목차 — 렌더되는 섹션만 번호·제목으로 나열(본문과 항상 일치). 표지 다음 쪽에.
+    blocks.append(PageBreak())
     blocks.append(Heading(level=1, text="목차"))
     for plan in rendered:
         entry = f"{plan.chapter_number}.{plan.section_number}  {plan.title}"
         blocks.append(Paragraph(text=entry, indent=1))
 
-    # 본문 — 챕터 경계에서 앞 장의 약어 정리를 flush한다.
+    # 본문 — 챕터 경계에서 앞 장의 약어 정리를 flush하고 새 쪽에서 시작한다.
     chapter_abbrs: dict[str, str] = {}
     current_chapter: int | None = None
 
@@ -169,13 +220,24 @@ def report_blocks(state: ProjectState) -> list[Block]:
             blocks.append(Table(headers=["약어", "전체 명칭"], rows=rows))
             chapter_abbrs.clear()
 
+    ch_titles = _chapter_titles(state)
     for plan in rendered:
-        if current_chapter is not None and plan.chapter_number != current_chapter:
-            flush_glossary()
+        if plan.chapter_number != current_chapter:
+            if current_chapter is not None:
+                flush_glossary()
+            blocks.append(PageBreak())  # 챕터는 항상 새 쪽에서 시작
+            ch_title = ch_titles.get(plan.chapter_number)
+            chapter_text = (
+                f"제{plan.chapter_number}장 {ch_title}"
+                if ch_title
+                else f"제{plan.chapter_number}장"
+            )
+            blocks.append(Heading(level=1, text=chapter_text))
         current_chapter = plan.chapter_number
         title = f"{plan.chapter_number}.{plan.section_number} {plan.title}"
         blocks.append(Heading(level=2, text=title))
         content = _strip_citations(drafts[plan.section_id].content)
+        content = _drop_duplicate_lead_heading(content, plan.chapter_number, plan.section_number)
         blocks.extend(markdown_to_blocks(content))
         _collect_abbreviations(content, chapter_abbrs)
     flush_glossary()

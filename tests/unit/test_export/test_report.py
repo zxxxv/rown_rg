@@ -12,7 +12,7 @@ from src.core.types import (
     SectionDraft,
     SectionPlan,
 )
-from src.export.hwpx_writer import Heading, Paragraph, Table
+from src.export.hwpx_writer import Heading, PageBreak, Paragraph, Table
 from src.services.export.report import export_report, markdown_to_blocks, report_blocks
 
 
@@ -46,6 +46,26 @@ class TestMarkdownToBlocks:
     def test_bold_marker_not_treated_as_outline(self):
         # "**"로 시작하는 강조는 개조식 '*' 마커가 아니다(마커는 뒤에 공백 필요).
         assert markdown_to_blocks("**핵심** 요약임") == [Paragraph(text="핵심 요약임")]
+
+    def test_marker_heading_demoted_to_outline(self):
+        """'## □ …'류 마커 헤딩은 개조식 문단으로 강등 — 위계 붕괴·마커 노출 방지."""
+        md = "## □ 추진 배경\n### ㅇ 세부 동인\n#### - 사례\n"
+        assert markdown_to_blocks(md) == [
+            Paragraph(text="□ 추진 배경", indent=0),
+            Paragraph(text="ㅇ 세부 동인", indent=1),
+            Paragraph(text="- 사례", indent=2),
+        ]
+
+    def test_deep_plain_heading_becomes_top_outline(self):
+        # 마커 없는 ###+ 소제목은 최상위 개조식 문단으로 렌더된다.
+        assert markdown_to_blocks("### 데이터 수집\n") == [Paragraph(text="데이터 수집", indent=0)]
+
+    def test_hr_skipped_blockquote_and_link_cleaned(self):
+        md = "---\n> **주석**: 제약 사항임\n[출처](https://ex) 참고\n"
+        assert markdown_to_blocks(md) == [
+            Paragraph(text="주석: 제약 사항임", indent=1),
+            Paragraph(text="출처 참고"),
+        ]
 
     def test_gfm_table(self):
         md = "| 구분 | 값 |\n|---|---|\n| 고령화율 | 17.1% |\n| GDP | 3.2% |\n"
@@ -120,8 +140,9 @@ class TestReportBlocks:
         state = _state_with_selected_drafts()
         blocks = report_blocks(state)
         assert blocks[0] == Heading(level=1, text="인구 고령화 대응 방안")
-        # 제목 다음에 목차가 오고, 렌더되는 섹션이 번호·제목으로 나열된다.
-        assert blocks[1] == Heading(level=1, text="목차")
+        # 표지 다음 쪽 나눔 후 목차 — 렌더되는 섹션이 번호·제목으로 나열된다.
+        assert blocks[1] == PageBreak()
+        assert blocks[2] == Heading(level=1, text="목차")
         toc_texts = [b.text for b in blocks if isinstance(b, Paragraph)]
         assert any(t.startswith("1.1") and "개요" in t for t in toc_texts)
         assert any(t.startswith("2.1") and "분석" in t for t in toc_texts)
@@ -158,6 +179,39 @@ class TestReportBlocks:
         ]
         # 2장 정리표: NEA만.
         assert glossary_tables[1].rows == [["NEA", "National Energy Agency"]]
+
+    def test_chapters_start_on_new_page_with_chapter_heading(self):
+        """챕터마다 쪽 나눔 + 장 헤딩('제N장 …', outline 제목 없으면 '제N장')."""
+        blocks = report_blocks(_state_with_selected_drafts())
+        i1 = blocks.index(Heading(level=1, text="제1장"))
+        i2 = blocks.index(Heading(level=1, text="제2장"))
+        assert isinstance(blocks[i1 - 1], PageBreak)
+        assert isinstance(blocks[i2 - 1], PageBreak)
+
+    def test_duplicate_lead_heading_dropped(self):
+        """본문이 '# 1.1 개요'로 시작하면 섹션 헤딩과 중복이라 제거된다."""
+        state = _state_with_selected_drafts()
+        sec = state.section_plan[0]
+        dup_body = "# 1.1 개요\n\nㅇ 실제 내용 문장임"
+        draft = SectionDraft(section_id=sec.section_id, content=dup_body, cited_chunk_ids=[])
+        candidate = SectionCandidate(draft=draft)
+        state = state.model_copy(
+            update={
+                "section_candidates": [
+                    SectionCandidateSet(section_id=sec.section_id, candidates=[candidate]),
+                    *[c for c in state.section_candidates if c.section_id != sec.section_id],
+                ],
+                "section_selections": {
+                    **state.section_selections,
+                    sec.section_id: candidate.candidate_id,
+                },
+            }
+        )
+        blocks = report_blocks(state)
+        texts = [b.text for b in blocks if isinstance(b, Heading | Paragraph)]
+        # 섹션 헤딩(1.1 개요)은 한 번만, 본문 쪽 중복 헤딩은 사라진다.
+        assert texts.count("1.1 개요") == 1
+        assert any("실제 내용" in t for t in texts)
 
     def test_glossary_flushes_before_next_chapter(self):
         blocks = report_blocks(_state_with_abbreviations())
