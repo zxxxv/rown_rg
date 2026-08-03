@@ -1,9 +1,9 @@
 import { useMutation } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { decideSourcePool } from "@/api/checkpoints";
+import { decideSourcePool, useDecideCollectMore } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
 import { usePatchSource, useProjectSources } from "@/api/sources";
 import type { Source } from "@/api/types";
@@ -24,8 +24,37 @@ export default function SourcesPage() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
 
-  const sourcesQuery = useProjectSources(projectId);
+  // 추가 검색(+10건) — 게이트를 닫지 않는 보충 수집. 시작 시점 자료 수를 기준선으로
+  // 잡아 배너에 "+n건 수집됨"을 보여주고, 도는 동안 목록을 폴링으로 따라잡는다.
+  const collectMore = useDecideCollectMore();
+  const [collectBaseline, setCollectBaseline] = useState<number | null>(null);
+  const collecting = collectBaseline !== null;
+  const sourcesQuery = useProjectSources(projectId, {
+    refetchInterval: collecting ? 5_000 : false,
+  });
   const patchSource = usePatchSource(projectId);
+
+  const handleCollectMore = () => {
+    if (collectMore.isPending || collecting) return;
+    const baseline = sourcesQuery.data?.items.length ?? 0;
+    collectMore.mutate(projectId, {
+      onSuccess: () => {
+        setCollectBaseline(baseline);
+        toast.success("추가 검색을 시작했습니다 (+10건 목표)", {
+          description: "기존 자료는 유지됩니다 — 수집되는 대로 목록에 추가됩니다.",
+        });
+      },
+      onError: (err: unknown) => {
+        const msg = err instanceof ApiError ? err.message : "추가 검색 요청에 실패했습니다.";
+        toast.error("추가 검색 실패", {
+          description:
+            msg.includes("게이트") || msg.includes("대기")
+              ? "자료 검토 대기 상태가 아닙니다 — 진행 화면을 확인하세요."
+              : msg,
+        });
+      },
+    });
+  };
 
   const [activeSource, setActiveSource] = useState<Source | null>(null);
   const [uploading] = useState<UploadingFile[]>([]);
@@ -33,6 +62,21 @@ export default function SourcesPage() {
   // 필터 사이드바 제거됨 — 실데이터에 의미 있는 분류축이 없어(전부 웹 수집)
   // 분류가 실제로 동작하지 않았다. 목록은 수집 순서 그대로.
   const items = sourcesQuery.data?.items ?? [];
+
+  // 백그라운드 수집 종료 판정: 배치 목표(+10건) 도달 시 즉시, 아니면 4분 타임아웃.
+  // (수집 완료를 직접 알리는 신호가 이 페이지엔 없어 보수적으로 마감한다)
+  const newCount = collecting ? Math.max(0, items.length - (collectBaseline ?? 0)) : 0;
+  useEffect(() => {
+    if (!collecting) return;
+    if (newCount >= 10) {
+      setCollectBaseline(null);
+      toast.success(`추가 검색 완료 — 새 자료 ${newCount}건이 도착했습니다.`);
+      return;
+    }
+    const timer = setTimeout(() => setCollectBaseline(null), 4 * 60_000);
+    return () => clearTimeout(timer);
+  }, [collecting, newCount]);
+
   const counts = useMemo(() => {
     let included = 0;
     let excluded = 0;
@@ -123,6 +167,18 @@ export default function SourcesPage() {
 
         <UploadDropzone onFiles={handleFiles} uploading={uploading} />
 
+        {collecting ? (
+          <div className="flex items-center gap-3 rounded-md border border-fg-info/30 bg-bg-info px-4 py-3 text-sm">
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-fg-info" aria-hidden />
+            <p className="text-fg-secondary">
+              추가 검색이 백그라운드에서 진행 중입니다 — 새 자료가 도착하는 대로 목록에 추가됩니다.
+              {newCount > 0 ? (
+                <span className="ml-1 font-medium text-fg">+{newCount}건 수집됨</span>
+              ) : null}
+            </p>
+          </div>
+        ) : null}
+
         <main>
           {sourcesQuery.isLoading ? (
             <LoadingSkeleton variant="card" count={6} />
@@ -155,7 +211,7 @@ export default function SourcesPage() {
                   kindLabel={s.source_kind === "web_search" ? "웹 검색" : undefined}
                   onClick={() => setActiveSource(s)}
                   className={cn(
-                    s.is_included === true && "border-fg-success/40",
+                    s.is_included === true && "border-fg-success/40 bg-bg-success",
                     s.is_included === false && "opacity-60",
                   )}
                   actions={
@@ -194,6 +250,8 @@ export default function SourcesPage() {
         onUploadFocus={() => window.scrollTo({ top: 0, behavior: "smooth" })}
         onFinalize={() => handleFinalize.mutate()}
         includedCount={counts.included}
+        onCollectMore={handleCollectMore}
+        collectPending={collectMore.isPending || collecting}
       />
 
       <SourceDetailDialog
@@ -215,12 +273,16 @@ function FinalizeBar({
   includedCount,
   onUploadFocus,
   onFinalize,
+  onCollectMore,
+  collectPending,
 }: {
   canFinalize: boolean;
   isPending: boolean;
   includedCount: number;
   onUploadFocus: () => void;
   onFinalize: () => void;
+  onCollectMore: () => void;
+  collectPending: boolean;
 }) {
   return (
     <div className="fixed inset-x-0 bottom-0 z-10 border-t border-border bg-bg/95 backdrop-blur">
@@ -229,21 +291,31 @@ function FinalizeBar({
           <ArrowLeft className="mr-1 h-4 w-4" />
           자료 추가 업로드
         </Button>
-        <TooltipProvider delayDuration={150}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span>
-                <Button size="lg" disabled={!canFinalize} onClick={onFinalize}>
-                  {isPending ? "처리 중…" : `검토 완료 (${includedCount}개 채택)`}
-                  <ArrowRight className="ml-1 h-4 w-4" />
-                </Button>
-              </span>
-            </TooltipTrigger>
-            {!canFinalize && includedCount === 0 ? (
-              <TooltipContent>최소 1개 자료를 채택하세요</TooltipContent>
-            ) : null}
-          </Tooltip>
-        </TooltipProvider>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="lg"
+            disabled={collectPending || isPending}
+            onClick={onCollectMore}
+          >
+            {collectPending ? "추가 검색 진행 중…" : "추가 검색 (+10건)"}
+          </Button>
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span>
+                  <Button size="lg" disabled={!canFinalize} onClick={onFinalize}>
+                    {isPending ? "처리 중…" : `검토 완료 (${includedCount}개 채택)`}
+                    <ArrowRight className="ml-1 h-4 w-4" />
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              {!canFinalize && includedCount === 0 ? (
+                <TooltipContent>최소 1개 자료를 채택하세요</TooltipContent>
+              ) : null}
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       </div>
     </div>
   );

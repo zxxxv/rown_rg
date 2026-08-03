@@ -62,11 +62,13 @@ export async function getProjectSources(projectId: string): Promise<SourceListRe
   return { items: items.map((s) => toLegacySource(projectId, s)), total: items.length };
 }
 
-export function useProjectSources(projectId: string) {
+export function useProjectSources(projectId: string, opts?: { refetchInterval?: number | false }) {
   return useQuery({
     queryKey: sourceKeys.list(projectId),
     queryFn: () => getProjectSources(projectId),
     enabled: Boolean(projectId),
+    // 추가 검색이 백그라운드에서 도는 동안 목록을 폴링으로 따라잡는 용도.
+    refetchInterval: opts?.refetchInterval ?? false,
   });
 }
 

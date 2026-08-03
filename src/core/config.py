@@ -50,8 +50,10 @@ class Settings(BaseSettings):
     # 총 수집 폭 = 챕터 수 × max_uses)
     research_max_uses: int = 5
     research_max_tokens: int = 8000
-    # 자료 풀 권장 하한 — 미달이어도 차단하지 않고 게이트에 경고 표시(추가 조사 유도)
+    # 자료 풀 권장 하한 = 초기 수집 목표 — 미달이어도 차단하지 않고 게이트에 경고 표시
     research_min_sources: int = 20
+    # '추가 조사' 한 라운드의 신규 출처 목표 — 사람이 누를 때마다 이만큼씩 보충
+    research_more_batch: int = 10
     # 섹션 작성 출력 상한(토큰) — 에이전트 volume_target이 있어도 이 값으로 캡.
     # 기본 16000 = 품질 모드(분량 목표 실현). 저비용 테스트 시 .env로 하향(예: 4096)
     write_max_tokens: int = 16000
