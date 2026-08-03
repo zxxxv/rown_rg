@@ -31,6 +31,9 @@ export interface ProgressUiState {
   checkpoint_level: 1 | 2 | null;
   /** 게이트 종류·payload — 스냅샷(REST)에서만 채워진다 (WS checkpoint 메시지엔 없음) */
   pending_gate: PendingGate | null;
+  /** 실행 시작·마지막 활동(ISO, 서버 근사) — 경과 시간이 재진입에도 이어지게 한다 */
+  started_at: string | null;
+  last_activity_at: string | null;
   error: { code: string; message: string } | null;
   finished: boolean;
 }
@@ -64,6 +67,8 @@ export function initialProgressState(): ProgressUiState {
     checkpoint_id: null,
     checkpoint_level: null,
     pending_gate: null,
+    started_at: null,
+    last_activity_at: null,
     error: null,
     finished: false,
   };
@@ -96,6 +101,8 @@ function reducer(state: ProgressUiState, action: Action): ProgressUiState {
       eta_seconds: s.eta_seconds ?? state.eta_seconds,
       checkpoint_id: s.pending_checkpoint_id,
       pending_gate: s.pending_gate,
+      started_at: s.started_at ?? state.started_at,
+      last_activity_at: s.last_activity_at ?? state.last_activity_at,
     };
   }
   if (action.type === "clear_checkpoint") {

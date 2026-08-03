@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -26,6 +27,10 @@ class ProgressResponse(BaseModel):
     # 이 프로젝트의 누적 토큰·비용 (token_usage 합산, 프론트 CostTracker용)
     tokens_used: int = 0
     cost_usd: float = 0.0
+    # 실행 시작·마지막 활동 시각 — 별도 컬럼 없이 token_usage 최초/최종 기록으로 근사.
+    # (첫 LLM 콜은 실행 시작 수 초 내라 경과 시간 표시엔 충분) 기록 없으면 None.
+    started_at: datetime | None = None
+    last_activity_at: datetime | None = None
 
 
 class DecideRequest(BaseModel):

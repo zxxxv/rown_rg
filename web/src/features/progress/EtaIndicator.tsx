@@ -3,6 +3,8 @@ import { cn } from "@/lib/utils";
 
 export interface EtaIndicatorProps {
   startedAt: number;
+  /** 종료된 실행의 마지막 활동 시각 — 주어지면 시계를 멈추고 여기까지의 경과로 고정 */
+  endedAt?: number;
   etaSeconds: number | null;
   className?: string;
 }
@@ -17,15 +19,17 @@ function formatDuration(ms: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-export function EtaIndicator({ startedAt, etaSeconds, className }: EtaIndicatorProps) {
+export function EtaIndicator({ startedAt, endedAt, etaSeconds, className }: EtaIndicatorProps) {
   const [now, setNow] = useState(() => Date.now());
+  const frozen = endedAt !== undefined;
 
   useEffect(() => {
+    if (frozen) return;
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(t);
-  }, []);
+  }, [frozen]);
 
-  const elapsedMs = now - startedAt;
+  const elapsedMs = (endedAt ?? now) - startedAt;
   const remainingMs = etaSeconds !== null ? etaSeconds * 1000 : null;
 
   return (
