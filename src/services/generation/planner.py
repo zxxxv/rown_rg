@@ -31,7 +31,9 @@ from src.prompts import ReportPreset, load_preset, load_workflow_role
 logger = structlog.get_logger(__name__)
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
-DEFAULT_MAX_TOKENS = 4096  # 최대 프리셋(35섹션) 매니페스트가 2048을 넘을 수 있어 여유 확보
+# 최대 프리셋(예비타당성조사 35섹션)은 direction·key_points 포함 시 매니페스트가
+# 7천 토큰을 넘는다 — 4096은 실측 잘림(stop_reason=max_tokens, 2026-08-03)으로 상향.
+DEFAULT_MAX_TOKENS = 12000
 MAX_SECTIONS = 40  # 무한성 캡 — 초과분은 버리고 경고 (최대 프리셋: 예비타당성조사 35섹션)
 
 _MANIFEST_FORMAT = (
