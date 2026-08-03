@@ -48,6 +48,7 @@ function toLegacySource(projectId: string, s: SourceItem): Source {
     summary: s.preview ?? (s.has_content ? "" : "본문 회수 실패 — 검색 근거로 쓰이지 않습니다."),
     is_included: s.is_included,
     preview: s.preview ?? undefined,
+    matched_sections: s.matched_sections,
   };
 }
 

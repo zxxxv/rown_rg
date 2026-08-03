@@ -10,6 +10,8 @@ export interface SourceCardProps {
   pages?: number;
   reliability?: number;
   summary?: string;
+  /** 이 자료가 매칭된 목차 절 제목들 — 칩으로 표시(최대 3개 + n) */
+  sections?: string[];
   kindLabel?: string;
   onClick?: () => void;
   actions?: ReactNode;
@@ -23,6 +25,7 @@ export function SourceCard({
   pages,
   reliability,
   summary,
+  sections,
   kindLabel,
   onClick,
   actions,
@@ -73,6 +76,19 @@ export function SourceCard({
           </div>
         ) : null}
       </dl>
+
+      {sections && sections.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-1">
+          {sections.slice(0, 3).map((sec) => (
+            <Badge key={sec} variant="outline" className="max-w-[180px] truncate text-[10px]">
+              {sec}
+            </Badge>
+          ))}
+          {sections.length > 3 ? (
+            <span className="font-mono text-[10px] text-fg-tertiary">+{sections.length - 3}</span>
+          ) : null}
+        </div>
+      ) : null}
 
       {summary ? <p className="line-clamp-3 text-sm text-fg-secondary">{summary}</p> : null}
 

@@ -208,6 +208,7 @@ export default function SourcesPage() {
                   pages={s.pages}
                   reliability={s.reliability}
                   summary={s.summary}
+                  sections={s.matched_sections}
                   kindLabel={s.source_kind === "web_search" ? "웹 검색" : undefined}
                   onClick={() => setActiveSource(s)}
                   className={cn(

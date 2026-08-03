@@ -165,6 +165,8 @@ export const SourceSchema = z.object({
   is_included: z.boolean().nullable(),
   quotes: z.array(z.string()).optional(),
   preview: z.string().optional(),
+  /** 이 출처가 매칭된 목차 절 제목들(수집 LLM 판정) — 검토 화면 '관련 목차' 표시용 */
+  matched_sections: z.array(z.string()).optional(),
   library_file_id: z.string().optional(),
 });
 export type Source = z.infer<typeof SourceSchema>;

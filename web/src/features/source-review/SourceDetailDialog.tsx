@@ -1,6 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import type { Source } from "@/api/types";
 import { ConfidenceBadge } from "@/components/data-display/ConfidenceBadge";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -60,12 +61,20 @@ export function SourceDetailDialog({
 
         <ScrollArea className="max-h-[60vh] pr-2">
           <div className="flex flex-col gap-4">
-            <section>
-              <h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-tertiary">
-                요약
-              </h3>
-              <p className="text-sm leading-relaxed text-fg">{source.summary}</p>
-            </section>
+            {source.matched_sections && source.matched_sections.length > 0 ? (
+              <section>
+                <h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-tertiary">
+                  관련 목차
+                </h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {source.matched_sections.map((sec) => (
+                    <Badge key={sec} variant="outline" className="text-xs">
+                      {sec}
+                    </Badge>
+                  ))}
+                </div>
+              </section>
+            ) : null}
 
             {source.quotes && source.quotes.length > 0 ? (
               <section>
@@ -85,15 +94,23 @@ export function SourceDetailDialog({
               </section>
             ) : null}
 
-            <section>
-              <h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-tertiary">
-                본문 첫 페이지 미리보기
-              </h3>
-              <div className="rounded border border-border bg-bg-secondary p-4 text-sm leading-relaxed text-fg-secondary">
-                {source.preview ??
-                  "본문 미리보기는 인덱싱 단계에서 추출됩니다. 현재는 자료의 자동 요약과 핵심 인용구만 표시됩니다."}
-              </div>
-            </section>
+            {source.preview ? (
+              <section>
+                <h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-tertiary">
+                  본문 미리보기
+                </h3>
+                <div className="rounded border border-border bg-bg-secondary p-4 text-sm leading-relaxed text-fg-secondary">
+                  {source.preview}
+                </div>
+              </section>
+            ) : (
+              // 본문을 회수하지 못한 출처 — 있지도 않은 본문 영역을 그리지 않고,
+              // 검색 근거로 쓰이지 않는다는 사실과 확인 경로(원본 링크)만 안내한다.
+              <p className="rounded border border-dashed border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg-secondary">
+                본문을 회수하지 못한 출처입니다 — 검색 근거로 쓰이지 않습니다. 내용은 상단의 원본
+                링크에서 직접 확인하세요.
+              </p>
+            )}
           </div>
         </ScrollArea>
 
