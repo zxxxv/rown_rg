@@ -40,8 +40,21 @@ def hit_to_chunk(hit: SearchHit) -> RetrievedChunk:
 
 
 def _section_query(section: SectionPlan) -> str:
-    """섹션 검색 쿼리 — 지금은 제목. 추후 챕터 맥락·키워드로 확장 가능."""
+    """1차 검색 쿼리 — 절 제목만. pgroonga &@~가 공백 항을 AND로 묶으므로
+    여기에 주제 문장을 붙이면 키워드 재현율이 무너진다(짧게 유지)."""
     return section.title
+
+
+def _rerank_query(section: SectionPlan, topic: str | None) -> str:
+    """재채점·요약 검색용 주제 앵커 쿼리 — '주제 — 절 제목 — 작성 방향'.
+
+    절 제목만으로 재채점하면 '시장 규모' 같은 일반 제목이 주제와 무관한 청크를
+    상위로 올린다(2026-08-03 주제 표류 실측: 원격근무 보고서에 공유오피스 시장
+    청크가 대량 유입). cross-encoder에 주제를 결합하면 이탈 청크가 채점 단계에서
+    밀려난다 — 1차 검색(재현율)은 건드리지 않는 최소 침습 지점.
+    """
+    parts = [topic or "", section.title, section.direction or ""]
+    return " — ".join(p.strip() for p in parts if p and p.strip())
 
 
 async def retrieve_for_section(
@@ -54,18 +67,20 @@ async def retrieve_for_section(
     reranker: RerankerClient | None = None,
     fetch_k: int = DEFAULT_FETCH_K,
     summary_fetcher: SummaryFetcher | None = None,
+    topic: str | None = None,
 ) -> list[RetrievedChunk]:
     """한 섹션의 근거 청크를 검색해 RetrievedChunk 리스트로 반환.
 
     reranker가 주어지면 넓게(fetch_k) 검색한 뒤 cross-encoder로 재채점해 top_k로
-    줄인다. 재채점 질의는 항상 원 쿼리다 — HyDE 확장은 semantic 백엔드 내부에만
-    적용되므로 여기서는 보이지 않는다.
+    줄인다. 1차 검색은 절 제목(재현율), 재채점·요약 검색은 주제 앵커 쿼리
+    (_rerank_query)를 쓴다 — 주제 이탈 청크를 채점 단계에서 걸러낸다.
 
     summary_fetcher(RAPTOR)가 있으면 요약 노드(is_summary=True)를 뒤에 덧붙인다 —
     리랭킹 대상이 아니며, 후보 생성에서 인용 불가 배경 맥락으로만 쓰인다.
     실패는 삼킨다(맥락 부재가 검색 실패가 되어선 안 된다).
     """
     query = _section_query(section)
+    anchored = _rerank_query(section, topic)
     if reranker is None:
         hits = await client.search(query, project_id, track, top_k)
     else:
@@ -73,11 +88,11 @@ async def retrieve_for_section(
         from src.services.retrieval._reranking import rerank_hits
 
         wide = await client.search(query, project_id, track, max(fetch_k, top_k))
-        hits = await rerank_hits(reranker, query, wide, top_k=top_k)
+        hits = await rerank_hits(reranker, anchored, wide, top_k=top_k)
     chunks = [hit_to_chunk(h) for h in hits]
     if summary_fetcher is not None:
         try:
-            chunks.extend(await summary_fetcher(query))
+            chunks.extend(await summary_fetcher(anchored))
         except Exception:
             logger.warning("retrieval.summary_fetch_failed", project_id=str(project_id))
     return chunks
@@ -92,6 +107,7 @@ def make_section_retriever(
     reranker: RerankerClient | None = None,
     fetch_k: int = DEFAULT_FETCH_K,
     summary_fetcher: SummaryFetcher | None = None,
+    topic: str | None = None,
 ) -> SectionRetriever:
     """프로젝트·검색기에 바인딩된 SectionRetriever를 만든다 (write 루프 주입용)."""
 
@@ -105,6 +121,7 @@ def make_section_retriever(
             reranker=reranker,
             fetch_k=fetch_k,
             summary_fetcher=summary_fetcher,
+            topic=topic,
         )
 
     return _retrieve

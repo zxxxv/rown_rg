@@ -112,7 +112,7 @@ class TestRerankerPath:
         assert client.calls[0][3] == 5
         # 재채점(역순 점수) 상위 2개로 축소·재정렬
         assert [c.content for c in chunks] == ["h4", "h3"]
-        # 재채점 질의는 원 쿼리(섹션 제목)
+        # topic 미지정이면 재채점 질의는 절 제목 그대로
         assert reranker.calls[0][0] == "경제성 분석"
         # 원본 점수는 audit 가능해야 하므로 score가 리랭커 점수로 교체됨
         assert chunks[0].score == 0.4
@@ -134,3 +134,28 @@ class TestRerankerPath:
         client = _FakeSearchClient([])
         await retrieve_for_section(_section(), client=client, project_id=uuid4(), top_k=10)
         assert client.calls[0][3] == 10
+
+    async def test_topic_anchor_applies_to_rerank_not_recall(self):
+        """주제 앵커는 재채점 쿼리에만 — 1차 검색(pgroonga AND)은 절 제목 유지.
+
+        절 제목만으로 재채점하면 일반 제목이 주제 무관 청크를 상위로 올린다
+        (2026-08-03 주제 표류 실측). 앵커는 채점 단계에서만 결합한다.
+        """
+        hits = [_hit("h0")]
+        client = _FakeSearchClient(hits)
+        reranker = _FakeReranker()
+        await retrieve_for_section(
+            _section("국내외 시장 규모 및 구조"),
+            client=client,
+            project_id=uuid4(),
+            top_k=1,
+            reranker=reranker,  # type: ignore[arg-type]
+            fetch_k=1,
+            topic="원격/하이브리드 근무 형태와 조직 내 소통",
+        )
+        # 1차 검색 쿼리는 절 제목 그대로(재현율 보호)
+        assert client.calls[0][0] == "국내외 시장 규모 및 구조"
+        # 재채점 쿼리에는 주제가 앞에 결합된다
+        assert reranker.calls[0][0] == (
+            "원격/하이브리드 근무 형태와 조직 내 소통 — 국내외 시장 규모 및 구조"
+        )
