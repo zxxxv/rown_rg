@@ -45,8 +45,23 @@ _FORMAT = (
     "문제가 없으면 빈 배열을 출력한다."
 )
 
-# 숫자+단위 토큰 — 선행 챕터 통계 중복 검사용 다이제스트(결정적, LLM 아님)
-_NUM_RE = re.compile(r"\d[\d,.]*\s?(?:%|억\s?원|조\s?원|만\s?원|억|조|만|명|건|개소|개|년|배|%p|p)")
+# 숫자+단위 토큰 — 선행 챕터 통계 중복 검사용 다이제스트(결정적, LLM 아님).
+# '년'은 단위에서 제외한다: 연도(2024년)·기간(3년)은 통계가 아니라 시점 표기라
+# 다이제스트에 실으면 모델이 "2024년 재등장"을 중복 인용으로 오판한다
+# (2026-08-03 실측: 경고 25건 중 12건이 이 노이즈).
+_NUM_RE = re.compile(r"\d[\d,.]*\s?(?:%|억\s?원|조\s?원|만\s?원|억|조|만|명|건|개소|개|배|%p|p)")
+
+# 후처리 안전망 — 모델이 그래도 연도만 문제 삼은 '중복 인용' 경고를 내면 버린다.
+_QUOTED_RE = re.compile(r"['\"‘’“”]([^'\"‘’“”]{1,24})['\"‘’“”]")
+_YEAR_ONLY_RE = re.compile(r"^\d{4}년?$")
+
+
+def _is_year_only_duplicate(category: str, detail: str) -> bool:
+    """중복 인용 계열 경고인데 인용된 값이 전부 연도(YYYY[년])뿐이면 True."""
+    if "중복" not in category:
+        return False
+    quoted = _QUOTED_RE.findall(detail)
+    return bool(quoted) and all(_YEAR_ONLY_RE.match(q.strip()) for q in quoted)
 
 
 def numeric_digest(texts: list[str], cap: int = _MAX_DIGEST_ITEMS) -> list[str]:
@@ -101,11 +116,14 @@ def _to_rows(chapter_number: int, manifest: dict[str, Any]) -> list[dict[str, An
         severity = item.get("severity")
         category = item.get("category")
         section = item.get("section")
+        category_str = category.strip() if isinstance(category, str) else "기타"
+        if _is_year_only_duplicate(category_str, detail):
+            continue  # 연도 재언급은 결함이 아니다 — 노이즈 차단
         rows.append(
             {
                 "chapter_number": chapter_number,
                 "severity": severity if severity in _SEVERITIES else "warning",
-                "category": (category.strip() if isinstance(category, str) else "기타")[:40],
+                "category": category_str[:40],
                 "section_ref": section.strip()[:20]
                 if isinstance(section, str) and section.strip()
                 else None,

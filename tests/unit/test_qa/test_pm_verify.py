@@ -70,6 +70,12 @@ class TestNumericDigest:
         texts = [" ".join(f"{i}건" for i in range(100))]
         assert len(numeric_digest(texts, cap=10)) == 10
 
+    def test_years_excluded_from_digest(self):
+        """연도·기간(N년)은 통계가 아니다 — 다이제스트에 실리면 '2024년 재등장'이
+        중복 인용으로 오판된다(2026-08-03 실측: 경고 25건 중 12건이 이 노이즈)."""
+        out = numeric_digest(["2024년 기준 시장은 45억 달러, 2007년 이후 3년간 성장"])
+        assert all("년" not in token for token in out)
+
 
 class TestToRows:
     def test_normalizes_and_filters(self):
@@ -101,6 +107,34 @@ class TestToRows:
             ]
         }
         assert len(_to_rows(1, manifest)) == MAX_FINDINGS_PER_CHAPTER
+
+    def test_year_only_duplicate_findings_dropped(self):
+        """인용 값이 연도뿐인 '중복 인용' 경고는 후처리에서 버린다(노이즈 차단)."""
+        manifest = {
+            "findings": [
+                {
+                    "severity": "critical",
+                    "category": "중복 인용",
+                    "detail": "선행 챕터에서 이미 인용된 수치 '2008년'이 재인용됨.",
+                },
+                {
+                    "severity": "warning",
+                    "category": "중복 인용",
+                    "detail": "'46.2%' (IT/ITES 점유율)가 선행 챕터에서 이미 인용됨.",
+                },
+                {
+                    "severity": "warning",
+                    "category": "시간적 범위 일관성",
+                    "detail": "'2021년' 조사를 '2024년' 기준으로 서술함.",  # 중복 계열 아님 → 유지
+                },
+            ]
+        }
+        rows = _to_rows(5, manifest)
+        details = [r["detail"] for r in rows]
+        assert len(rows) == 2
+        assert not any("2008년" in d for d in details)
+        assert any("46.2%" in d for d in details)
+        assert any("시간적" in r["category"] for r in rows)
 
 
 class TestVerifyReport:
