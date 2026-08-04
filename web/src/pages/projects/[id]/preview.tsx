@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Eye, Pencil, Save, Sparkles, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertTriangle, ArrowLeft, Eye, Pencil, Save, Sparkles, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
@@ -14,6 +14,7 @@ import {
   useSectionContent,
 } from "@/api/sections";
 import type { ChapterNode, SectionNode, SectionStatus } from "@/api/types";
+import { useVerifyReport } from "@/api/verify";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
@@ -55,6 +56,27 @@ export default function PreviewPage() {
   const tree = sectionsQuery.data?.tree ?? [];
   const selectedId = params.get("section") ?? findFirstCompleted(tree);
   const contentQuery = useSectionContent(projectId, selectedId);
+
+  // 선택된 절의 PM 경고만 본문 위에 인라인 표시 — 고칠 대상 옆에 고칠 이유를 둔다.
+  const verifyQuery = useVerifyReport(projectId);
+  const selectedRef = useMemo(() => {
+    if (!selectedId) return null;
+    for (const [ci, ch] of tree.entries()) {
+      for (const [si, s] of ch.children.entries()) {
+        if (s.id === selectedId) return `${ci + 1}.${si + 1}`;
+      }
+    }
+    return null;
+  }, [tree, selectedId]);
+  const sectionFindings = useMemo(() => {
+    if (!selectedRef || !verifyQuery.data) return [];
+    return verifyQuery.data.filter((f) => {
+      const ref = f.section_ref ?? "";
+      if (!ref.startsWith(selectedRef)) return false;
+      const next = ref[selectedRef.length];
+      return next === undefined || !/[0-9]/.test(next); // '1.1'이 '1.12'에 오매칭되지 않게
+    });
+  }, [verifyQuery.data, selectedRef]);
 
   // Prefetch source refs for hover cards
   useEffect(() => {
@@ -113,8 +135,9 @@ export default function PreviewPage() {
           </div>
         </header>
 
-        {/* PM 검증 경고 전체 목록 — 고칠 수 있는 화면에 두는 것이 맞다(§ 참조로 절 수정) */}
-        <VerifyReportCard projectId={projectId} />
+        {/* PM 검증 경고 — 고칠 수 있는 화면에 두되 접힌 한 줄로 시작(편집을 가리지 않게).
+            절을 선택하면 그 절의 경고만 본문 위에 인라인 표시된다. */}
+        <VerifyReportCard projectId={projectId} collapsible />
 
         {sectionsQuery.isLoading ? (
           <LoadingSkeleton variant="block" />
@@ -137,6 +160,29 @@ export default function PreviewPage() {
             </aside>
 
             <main className="rounded border border-border bg-bg">
+              {selectedId && sectionFindings.length > 0 ? (
+                <div className="flex flex-col gap-1.5 border-b border-fg-warning/30 bg-bg-warning px-4 py-3">
+                  <p className="flex items-center gap-1.5 text-xs font-medium text-fg">
+                    <AlertTriangle className="h-3.5 w-3.5 text-fg-warning" aria-hidden />이 절의 PM
+                    경고 {sectionFindings.length}건
+                  </p>
+                  <ul className="flex flex-col gap-1">
+                    {sectionFindings.map((f) => (
+                      <li key={f.id} className="text-xs text-fg-secondary">
+                        <span
+                          className={cn(
+                            "mr-1 font-medium",
+                            f.severity === "critical" ? "text-fg-danger" : "text-fg-warning",
+                          )}
+                        >
+                          [{f.category}]
+                        </span>
+                        {f.detail}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               {selectedId ? (
                 <SectionView
                   key={selectedId}

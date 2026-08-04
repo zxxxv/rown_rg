@@ -1,4 +1,5 @@
-import { AlertTriangle, ArrowRight, ShieldAlert, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ArrowRight, ChevronDown, ShieldAlert, ShieldCheck } from "lucide-react";
+import { useState } from "react";
 import { useVerifyReport, type VerifyFinding } from "@/api/verify";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,13 +13,17 @@ import { cn } from "@/lib/utils";
 export function VerifyReportCard({
   projectId,
   compact = false,
+  collapsible = false,
   onOpenEditor,
 }: {
   projectId: string;
   compact?: boolean;
+  /** 접힌 한 줄로 시작 — 편집 화면처럼 경고가 본작업을 가리면 안 되는 곳용 */
+  collapsible?: boolean;
   onOpenEditor?: () => void;
 }) {
   const query = useVerifyReport(projectId);
+  const [open, setOpen] = useState(false);
 
   if (query.isLoading || query.isError) return null;
   const findings = query.data ?? [];
@@ -33,6 +38,35 @@ export function VerifyReportCard({
   }
 
   const criticalCount = findings.filter((f) => f.severity === "critical").length;
+
+  if (collapsible && !open) {
+    // 접힌 한 줄 — 편집 화면에서 경고가 본작업을 가리지 않게 하고, 필요할 때만 편다.
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={cn(
+          "flex w-full flex-wrap items-center gap-2 rounded border p-3 text-left text-sm transition-colors",
+          criticalCount > 0
+            ? "border-fg-danger/40 bg-bg-danger hover:border-fg-danger"
+            : "border-fg-warning/40 bg-bg-warning hover:border-fg-warning",
+        )}
+      >
+        {criticalCount > 0 ? (
+          <ShieldAlert className="h-4 w-4 shrink-0 text-fg-danger" aria-hidden />
+        ) : (
+          <AlertTriangle className="h-4 w-4 shrink-0 text-fg-warning" aria-hidden />
+        )}
+        <span className="font-medium text-fg">
+          PM 검증 경고 {findings.length}건{criticalCount > 0 ? ` (critical ${criticalCount})` : ""}
+        </span>
+        <span className="text-xs text-fg-tertiary">
+          절을 선택하면 해당 경고가 본문 위에 표시됩니다 — 전체 목록 펼치기
+        </span>
+        <ChevronDown className="ml-auto h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
+      </button>
+    );
+  }
 
   if (compact) {
     return (
@@ -88,6 +122,17 @@ export function VerifyReportCard({
           PM 검증 경고 {findings.length}건{criticalCount > 0 ? ` (critical ${criticalCount})` : ""}
         </h2>
         <span className="text-xs text-fg-tertiary">납품 전 확인 권장 — 편집기에서 수정 가능</span>
+        {collapsible ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto"
+            onClick={() => setOpen(false)}
+            aria-label="경고 목록 접기"
+          >
+            접기 <ChevronDown className="ml-1 h-3.5 w-3.5 rotate-180" aria-hidden />
+          </Button>
+        ) : null}
       </header>
 
       <div className="flex flex-col gap-3">
