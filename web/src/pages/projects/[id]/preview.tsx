@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -111,6 +112,9 @@ export default function PreviewPage() {
             </div>
           </div>
         </header>
+
+        {/* PM 검증 경고 전체 목록 — 고칠 수 있는 화면에 두는 것이 맞다(§ 참조로 절 수정) */}
+        <VerifyReportCard projectId={projectId} />
 
         {sectionsQuery.isLoading ? (
           <LoadingSkeleton variant="block" />

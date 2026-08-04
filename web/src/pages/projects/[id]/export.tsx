@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, CheckCircle2, Download, FileText } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, Download } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useProject } from "@/api/projects";
 import type { Project } from "@/api/types";
@@ -7,21 +7,10 @@ import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { env } from "@/env";
 import { useDownload } from "@/features/export/useDownload";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { useAuth } from "@/hooks/useAuth";
-import { cn } from "@/lib/utils";
-
-const COMPANY_STYLE: { label: string; value: string }[] = [
-  { label: "본문 폰트", value: "함초롬바탕 11pt" },
-  { label: "제목", value: "함초롬돋움 16/14/12pt" },
-  { label: "줄간격", value: "160%" },
-  { label: "여백", value: "상하 20mm · 좌 30mm · 우 20mm" },
-  { label: "머리말", value: "주식회사 로운인사이트" },
-  { label: "꼬리말", value: "페이지 번호" },
-];
 
 export default function ExportPage() {
   const { id: projectId = "" } = useParams<{ id: string }>();
@@ -90,12 +79,12 @@ function NotReadyView({
 }
 
 function CompletedView({ project }: { project: Project }) {
+  const navigate = useNavigate();
   const download = useDownload();
   const completedAt = project.updated_at?.slice(0, 10) ?? project.created_at.slice(0, 10);
 
-  // 목업 잔재 정리(2026-08-04): 가짜 메타(~280p·컴포넌트·파일크기), 정적 샘플을
-  // 내려주던 Markdown 카드, 가짜/비활성 '부가 자료' 4종 제거 — 실동작(HWPX 다운로드
-  // + 검증 리포트)만 남긴다. Markdown·출처 색인 출력은 백엔드 구현 시 복원.
+  // 카드(미리보기 자리표시자+양식 표)는 제거 — 우상단 다운로드 버튼 하나로 단순화
+  // (2026-08-04 사용자 요청). 실동작은 HWPX 다운로드 + 검증 리포트 두 가지뿐이다.
   return (
     <>
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -110,21 +99,12 @@ function CompletedView({ project }: { project: Project }) {
           <p className="text-sm text-fg-secondary">{project.title}</p>
           <dl className="flex flex-wrap gap-x-4 font-mono text-xs text-fg-tertiary">
             <Meta label="작성 완료" value={completedAt} />
+            <Meta label="양식" value="회사 표준 (함초롬바탕 11pt)" />
           </dl>
         </div>
-      </header>
-
-      <VerifyReportCard projectId={project.id} />
-
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <FormatCard
-          icon={FileText}
-          title="HWPX"
-          subtitle="회사 표준 양식"
-          accent
-          thumbnailLabel="HWPX 미리보기"
-          showStyle
-          onDownload={() =>
+        <Button
+          size="lg"
+          onClick={() =>
             download({
               // 파일 응답 — ky 언래핑 없이 브라우저 다운로드로 직접 연결한다.
               url: `${env.VITE_API_BASE_URL.replace(/\/$/, "")}/projects/${project.id}/export`,
@@ -132,8 +112,18 @@ function CompletedView({ project }: { project: Project }) {
               label: "HWPX",
             })
           }
-        />
-      </div>
+        >
+          <Download className="mr-1 h-4 w-4" />
+          HWPX 다운로드
+        </Button>
+      </header>
+
+      {/* QA 산출물의 전체 목록은 수정 가능한 미리보기·편집에 있다 — 여기선 요약만 */}
+      <VerifyReportCard
+        projectId={project.id}
+        compact
+        onOpenEditor={() => navigate(`/projects/${project.id}/preview`)}
+      />
     </>
   );
 }
@@ -144,62 +134,5 @@ function Meta({ label, value }: { label: string; value: string }) {
       <dt>{label}</dt>
       <dd className="text-fg-secondary">{value}</dd>
     </div>
-  );
-}
-
-function FormatCard({
-  icon: Icon,
-  title,
-  subtitle,
-  thumbnailLabel,
-  showStyle,
-  accent,
-  onDownload,
-}: {
-  icon: typeof FileText;
-  title: string;
-  subtitle: string;
-  thumbnailLabel: string;
-  showStyle?: boolean;
-  accent?: boolean;
-  onDownload: () => void;
-}) {
-  return (
-    <Card className={cn(accent && "border-accent/40 bg-bg-info")}>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-lg">{title}</CardTitle>
-          <Icon className="h-5 w-5 text-fg-secondary" aria-hidden />
-        </div>
-        <CardDescription>{subtitle}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <div
-          role="img"
-          aria-label={thumbnailLabel}
-          className="flex aspect-[3/4] items-center justify-center rounded border border-border bg-bg-secondary text-xs text-fg-tertiary"
-        >
-          {thumbnailLabel}
-        </div>
-        {showStyle ? (
-          <dl className="flex flex-col gap-1 rounded border border-border bg-bg p-2 font-mono text-[11px]">
-            {COMPANY_STYLE.map((row) => (
-              <div key={row.label} className="flex justify-between gap-2">
-                <dt className="text-fg-tertiary">{row.label}</dt>
-                <dd className="text-right text-fg">{row.value}</dd>
-              </div>
-            ))}
-          </dl>
-        ) : (
-          <p className="text-xs text-fg-tertiary">원본 마크다운 — 양식 없이 그대로 출력합니다.</p>
-        )}
-        <div className="flex justify-end">
-          <Button size="sm" onClick={onDownload}>
-            <Download className="mr-1 h-3.5 w-3.5" />
-            다운로드
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
   );
 }
