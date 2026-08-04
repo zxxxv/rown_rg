@@ -18,7 +18,6 @@ import LibraryPage from "@/pages/library";
 import LoginPage from "@/pages/login";
 import ProfilePage from "@/pages/profile";
 import ProjectsPage from "@/pages/projects";
-import ExportPage from "@/pages/projects/[id]/export";
 import OverviewPage from "@/pages/projects/[id]/overview";
 import PreviewPage from "@/pages/projects/[id]/preview";
 import QaSelectPage from "@/pages/projects/[id]/qa-select";
@@ -27,7 +26,8 @@ import SourcesPage from "@/pages/projects/[id]/sources";
 import NewProjectPage from "@/pages/projects/new";
 
 // 진행 페이지는 폐지됐다(개요의 진행 단계 스테퍼로 통합) — 옛 링크는 개요로 넘긴다.
-function ProgressRedirect() {
+// 출력 페이지도 폐지됐다(개요 헤더의 즉시 다운로드 + 요약 카드로 통합, 2026-08-04).
+function OverviewRedirect() {
   const { id } = useParams<{ id: string }>();
   return <Navigate to={`/projects/${id}/overview`} replace />;
 }
@@ -122,7 +122,7 @@ const routes = [
     path: "/projects/:id/export",
     element: (
       <RequireAuth>
-        <ExportPage />
+        <OverviewRedirect />
       </RequireAuth>
     ),
   },
@@ -146,7 +146,7 @@ const routes = [
     path: "/projects/:id/progress",
     element: (
       <RequireAuth>
-        <ProgressRedirect />
+        <OverviewRedirect />
       </RequireAuth>
     ),
   },
