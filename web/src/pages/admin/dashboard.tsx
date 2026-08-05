@@ -1,21 +1,31 @@
-import { Activity, DollarSign, FileCheck2, Users } from "lucide-react";
+import { Activity, DollarSign, FileCheck2, FolderKanban, Users } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
 import { toast } from "sonner";
-import { useAdminDashboard, useApproveQuotaExtension } from "@/api/admin";
+import {
+  type AdminDashboardParams,
+  useAdminDashboard,
+  useApproveQuotaExtension,
+  useUserUsageDetail,
+} from "@/api/admin";
 import { ApiError } from "@/api/client";
 import type {
   AdminDashboardData,
   AdminDashboardPeriod,
   QuotaRequest,
+  UserDailySeries,
+  UserUsageDetail,
   UserUsageRow,
 } from "@/api/mock/fixtures/admin";
 import { useSetUserQuota } from "@/api/users";
@@ -60,12 +70,17 @@ const PERIOD_LABEL: Record<AdminDashboardPeriod, string> = {
   last_month: "지난 달",
   last_7_days: "최근 7일",
   last_30_days: "최근 30일",
+  custom: "구간 선택",
 };
 
 export default function AdminDashboardPage() {
   const { user, logout } = useAuth();
-  const [period, setPeriod] = useState<AdminDashboardPeriod>("this_month");
-  const dashboard = useAdminDashboard({ period });
+  const [period, setPeriod] = useState<AdminDashboardPeriod>("last_30_days");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+  const [detailUserId, setDetailUserId] = useState<string | null>(null);
+  const params = { period, start: customStart, end: customEnd };
+  const dashboard = useAdminDashboard(params);
 
   return (
     <AppShell
@@ -83,7 +98,14 @@ export default function AdminDashboardPage() {
                 : "사용 현황 불러오는 중…"}
             </p>
           </div>
-          <PeriodSelect value={period} onChange={setPeriod} />
+          <PeriodSelect
+            value={period}
+            onChange={setPeriod}
+            start={customStart}
+            end={customEnd}
+            onStart={setCustomStart}
+            onEnd={setCustomEnd}
+          />
         </header>
 
         {dashboard.isLoading ? (
@@ -91,7 +113,11 @@ export default function AdminDashboardPage() {
         ) : dashboard.isError || !dashboard.data ? (
           <EmptyState
             title="대시보드를 불러오지 못했습니다"
-            description="잠시 후 다시 시도해 주세요."
+            description={
+              period === "custom" && !(customStart && customEnd)
+                ? "구간(시작·종료 날짜)을 선택하세요."
+                : "잠시 후 다시 시도해 주세요."
+            }
             action={
               <Button variant="outline" onClick={() => void dashboard.refetch()}>
                 다시 시도
@@ -99,9 +125,15 @@ export default function AdminDashboardPage() {
             }
           />
         ) : (
-          <DashboardBody data={dashboard.data} />
+          <DashboardBody data={dashboard.data} onSelectUser={setDetailUserId} />
         )}
       </div>
+
+      <UserDetailDialog
+        userId={detailUserId}
+        params={params}
+        onClose={() => setDetailUserId(null)}
+      />
     </AppShell>
   );
 }
@@ -109,26 +141,64 @@ export default function AdminDashboardPage() {
 function PeriodSelect({
   value,
   onChange,
+  start,
+  end,
+  onStart,
+  onEnd,
 }: {
   value: AdminDashboardPeriod;
   onChange: (period: AdminDashboardPeriod) => void;
+  start: string;
+  end: string;
+  onStart: (v: string) => void;
+  onEnd: (v: string) => void;
 }) {
   return (
-    <Select value={value} onValueChange={(v) => onChange(v as AdminDashboardPeriod)}>
-      <SelectTrigger className="w-40">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="this_month">이번 달</SelectItem>
-        <SelectItem value="last_month">지난 달</SelectItem>
-        <SelectItem value="last_7_days">최근 7일</SelectItem>
-        <SelectItem value="last_30_days">최근 30일</SelectItem>
-      </SelectContent>
-    </Select>
+    <div className="flex flex-wrap items-center gap-2">
+      <Select value={value} onValueChange={(v) => onChange(v as AdminDashboardPeriod)}>
+        <SelectTrigger className="w-36">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="last_30_days">최근 30일</SelectItem>
+          <SelectItem value="last_7_days">최근 7일</SelectItem>
+          <SelectItem value="this_month">이번 달</SelectItem>
+          <SelectItem value="last_month">지난 달</SelectItem>
+          <SelectItem value="custom">구간 선택</SelectItem>
+        </SelectContent>
+      </Select>
+      {value === "custom" ? (
+        <div className="flex items-center gap-1">
+          <Input
+            type="date"
+            value={start}
+            max={end || undefined}
+            onChange={(e) => onStart(e.target.value)}
+            className="w-36"
+            aria-label="시작 날짜"
+          />
+          <span className="text-fg-tertiary">~</span>
+          <Input
+            type="date"
+            value={end}
+            min={start || undefined}
+            onChange={(e) => onEnd(e.target.value)}
+            className="w-36"
+            aria-label="종료 날짜"
+          />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
-function DashboardBody({ data }: { data: AdminDashboardData }) {
+function DashboardBody({
+  data,
+  onSelectUser,
+}: {
+  data: AdminDashboardData;
+  onSelectUser: (userId: string) => void;
+}) {
   const costPct = (data.kpis.total_cost_usd / data.kpis.cost_limit_usd) * 100;
   const costTone = costPct >= 90 ? "danger" : costPct >= 70 ? "warning" : "default";
   const periodLabel = PERIOD_LABEL[data.period.type];
@@ -200,8 +270,20 @@ function DashboardBody({ data }: { data: AdminDashboardData }) {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">날짜별 사용자 기여 ({periodLabel})</CardTitle>
+          <CardDescription>상위 6명 + 기타를 쌓아 '누가 언제 얼마나' 썼는지 표시</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="h-80 w-full">
+            <UserDailyChart series={data.user_daily} onSelectUser={onSelectUser} />
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <UsageTable rows={data.user_usage} periodLabel={periodLabel} />
+        <UsageTable rows={data.user_usage} periodLabel={periodLabel} onSelectUser={onSelectUser} />
         <QuotaRequestsPanel requests={data.quota_requests} />
       </div>
     </div>
@@ -211,7 +293,14 @@ function DashboardBody({ data }: { data: AdminDashboardData }) {
 const ACCENT = "var(--color-accent)";
 const WARNING = "var(--color-text-warning)";
 
-function DailyCostChart({ points }: { points: AdminDashboardData["daily_costs"] }) {
+function DailyCostChart({
+  points,
+  showUsers = true,
+}: {
+  points: AdminDashboardData["daily_costs"];
+  // 단일 사용자 상세에선 '사용자 명수'가 무의미하므로 끈다(금액만).
+  showUsers?: boolean;
+}) {
   const data = useMemo(
     () =>
       points.map((p) => ({
@@ -267,15 +356,105 @@ function DailyCostChart({ points }: { points: AdminDashboardData["daily_costs"] 
           strokeWidth={2}
           fill="url(#costGradient)"
         />
-        <Area
-          type="monotone"
-          dataKey="users"
-          stroke={WARNING}
-          strokeWidth={1}
-          fill="none"
-          strokeDasharray="3 3"
-        />
+        {showUsers ? (
+          <Area
+            type="monotone"
+            dataKey="users"
+            stroke={WARNING}
+            strokeWidth={1}
+            fill="none"
+            strokeDasharray="3 3"
+          />
+        ) : null}
       </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+// 카테고리형 팔레트(dataviz 검증 슬롯 1–6, 스택 인접쌍 통과). '기타'는 중립 회색.
+const USER_SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"];
+const OTHER_COLOR = "var(--color-text-tertiary)";
+
+function UserDailyChart({
+  series,
+  onSelectUser,
+}: {
+  // 백엔드 버전 스큐(옛 응답엔 user_daily 없음)에도 안 터지게 undefined 허용.
+  series: UserDailySeries | undefined;
+  onSelectUser: (userId: string) => void;
+}) {
+  const users = series?.users ?? [];
+  const points = series?.points ?? [];
+  const nameByKey = useMemo(() => new Map(users.map((u) => [u.key, u.name])), [users]);
+  const data = useMemo(
+    () =>
+      points.map((p) => {
+        const row: Record<string, number | string> = { date: p.date.slice(5) };
+        for (const u of users) row[u.key] = p.costs[u.key] ?? 0;
+        return row;
+      }),
+    [points, users],
+  );
+  const colorFor = (key: string, idx: number) =>
+    key === "other" ? OTHER_COLOR : (USER_SERIES_COLORS[idx % USER_SERIES_COLORS.length] as string);
+
+  if (users.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-fg-tertiary">
+        이 기간에 사용 기록이 없습니다.
+      </div>
+    );
+  }
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+        <CartesianGrid
+          strokeDasharray="3 3"
+          stroke="var(--color-border-tertiary)"
+          vertical={false}
+        />
+        <XAxis
+          dataKey="date"
+          tick={{ fontSize: 11, fill: "var(--color-text-tertiary)" }}
+          interval={Math.max(0, Math.floor(data.length / 8))}
+          stroke="var(--color-border-primary)"
+        />
+        <YAxis
+          tick={{ fontSize: 11, fill: "var(--color-text-tertiary)" }}
+          stroke="var(--color-border-primary)"
+          tickFormatter={(v) => `$${v}`}
+          width={48}
+        />
+        <Tooltip
+          contentStyle={{
+            backgroundColor: "var(--color-background-primary)",
+            border: "1px solid var(--color-border-primary)",
+            borderRadius: 6,
+            fontSize: 12,
+          }}
+          formatter={(value, key) => [`$${value}`, nameByKey.get(String(key)) ?? String(key)]}
+        />
+        <Legend
+          formatter={(key) => nameByKey.get(String(key)) ?? String(key)}
+          wrapperStyle={{ fontSize: 11 }}
+        />
+        {users.map((u, idx) => (
+          <Bar
+            key={u.key}
+            dataKey={u.key}
+            stackId="cost"
+            fill={colorFor(u.key, idx)}
+            // 스택 세그먼트 사이 표면 갭(가독성) — dataviz 규약.
+            stroke="var(--color-background-primary)"
+            strokeWidth={1}
+            cursor={u.key === "other" ? undefined : "pointer"}
+            onClick={() => {
+              if (u.key !== "other") onSelectUser(u.key);
+            }}
+          />
+        ))}
+      </BarChart>
     </ResponsiveContainer>
   );
 }
@@ -304,13 +483,20 @@ const ROLE_LABEL: Record<string, string> = {
   viewer: "뷰어",
 };
 
-function UsageTable({ rows, periodLabel }: { rows: UserUsageRow[]; periodLabel: string }) {
-  const [quotaTarget, setQuotaTarget] = useState<UserUsageRow | null>(null);
+function UsageTable({
+  rows,
+  periodLabel,
+  onSelectUser,
+}: {
+  rows: UserUsageRow[];
+  periodLabel: string;
+  onSelectUser: (userId: string) => void;
+}) {
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">사용자별 사용량</CardTitle>
-        <CardDescription>{periodLabel} 토큰·비용 누적</CardDescription>
+        <CardDescription>{periodLabel} 토큰·비용 누적 — 행을 클릭하면 상세</CardDescription>
       </CardHeader>
       <CardContent className="p-0">
         <Table>
@@ -332,7 +518,9 @@ function UsageTable({ rows, periodLabel }: { rows: UserUsageRow[]; periodLabel: 
               return (
                 <TableRow
                   key={row.user_id}
+                  onClick={() => onSelectUser(row.user_id)}
                   className={cn(
+                    "cursor-pointer",
                     tone === "danger" && "bg-bg-danger/30",
                     tone === "warning" && "bg-bg-warning/20",
                   )}
@@ -387,8 +575,8 @@ function UsageTable({ rows, periodLabel }: { rows: UserUsageRow[]; periodLabel: 
                     {row.last_active.slice(0, 10)}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" onClick={() => setQuotaTarget(row)}>
-                      한도 조정
+                    <Button variant="ghost" size="sm" onClick={() => onSelectUser(row.user_id)}>
+                      상세
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -397,38 +585,61 @@ function UsageTable({ rows, periodLabel }: { rows: UserUsageRow[]; periodLabel: 
           </TableBody>
         </Table>
       </CardContent>
-      <QuotaAdjustDialog target={quotaTarget} onClose={() => setQuotaTarget(null)} />
     </Card>
   );
 }
 
-function QuotaAdjustDialog({
-  target,
+function MiniStat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="flex flex-col gap-0.5 rounded border border-border bg-bg-secondary px-3 py-2">
+      <span className="text-[11px] text-fg-tertiary">{label}</span>
+      <span className="font-mono text-base font-semibold text-fg">{value}</span>
+      {sub ? <span className="font-mono text-[11px] text-fg-tertiary">{sub}</span> : null}
+    </div>
+  );
+}
+
+/** 사용자 클릭 상세 — 기간 지출·보고서 건수·프로젝트별 비용·일별 추이 + 한도 조정(인라인 흡수). */
+function UserDetailDialog({
+  userId,
+  params,
   onClose,
 }: {
-  target: UserUsageRow | null;
+  userId: string | null;
+  params: AdminDashboardParams;
   onClose: () => void;
 }) {
+  const detail = useUserUsageDetail(userId, params);
+  return (
+    <Dialog open={userId !== null} onOpenChange={(open) => (!open ? onClose() : undefined)}>
+      <DialogContent className="max-w-2xl">
+        {detail.isLoading || !detail.data ? (
+          <div className="py-10">
+            <LoadingSkeleton variant="row" count={5} />
+          </div>
+        ) : (
+          <UserDetailBody data={detail.data} onDone={onClose} />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function UserDetailBody({ data, onDone }: { data: UserUsageDetail; onDone: () => void }) {
   const setQuota = useSetUserQuota();
   const [amount, setAmount] = useState("");
-
-  const close = () => {
-    setAmount("");
-    onClose();
-  };
-
   const parsed = Number(amount);
   const valid = amount.trim() !== "" && Number.isFinite(parsed) && parsed >= 0;
+  const pct = Math.round((data.total_cost_usd / Math.max(1, data.limit_usd)) * 100);
 
-  const submit = () => {
-    if (!target || !valid) return;
+  const saveQuota = () => {
+    if (!valid) return;
     setQuota.mutate(
-      { userId: target.user_id, monthly_limit_usd: parsed },
+      { userId: data.user_id, monthly_limit_usd: parsed },
       {
-        // useSetUserQuota가 성공 시 admin dashboard 쿼리를 invalidate한다
         onSuccess: (res) => {
-          toast.success(`${target.name}의 월 한도를 $${res.monthly_limit_usd}로 설정했습니다.`);
-          close();
+          toast.success(`${data.name}의 월 한도를 $${res.monthly_limit_usd}로 설정했습니다.`);
+          setAmount("");
         },
         onError: (err) => {
           const msg = err instanceof ApiError ? err.message : "처리 중 오류";
@@ -439,37 +650,94 @@ function QuotaAdjustDialog({
   };
 
   return (
-    <Dialog open={target !== null} onOpenChange={(open) => (!open ? close() : undefined)}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>월 한도 조정 — {target?.name}</DialogTitle>
-          <DialogDescription>
-            현재 한도 ${target?.limit_usd} · 이번 달 사용 ${target?.cost_usd}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="dashboard-quota-amount">새 월 한도 (USD)</Label>
+    <>
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          {data.name}
+          <StatusDot
+            kind={ROLE_KIND[data.role] ?? "tertiary"}
+            label={ROLE_LABEL[data.role] ?? data.role}
+          />
+        </DialogTitle>
+        <DialogDescription>
+          {data.email} · {data.period.label}
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <MiniStat label="기간 지출" value={`$${data.total_cost_usd}`} />
+        <MiniStat label="월 한도" value={`$${data.limit_usd}`} sub={`${pct}%`} />
+        <MiniStat label="완료 보고서" value={`${data.reports_completed}건`} />
+        <MiniStat label="진행 중" value={`${data.reports_in_progress}건`} />
+      </div>
+
+      <div className="h-40 w-full">
+        <DailyCostChart points={data.daily_costs} showUsers={false} />
+      </div>
+
+      <div className="max-h-56 overflow-y-auto rounded border border-border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>프로젝트 (총 {data.reports_total})</TableHead>
+              <TableHead>상태</TableHead>
+              <TableHead className="text-right">비용</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.projects.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={3} className="text-center text-xs text-fg-tertiary">
+                  이 기간에 프로젝트가 없습니다.
+                </TableCell>
+              </TableRow>
+            ) : (
+              data.projects.map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell className="max-w-[280px]">
+                    <span className="flex items-center gap-2">
+                      <FolderKanban className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" aria-hidden />
+                      <span className="truncate text-sm text-fg">{p.title}</span>
+                    </span>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs text-fg-secondary">
+                    {p.status}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-right font-mono text-sm">
+                    ${p.cost_usd}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      <div className="flex items-end gap-2 border-t border-border pt-3">
+        <div className="flex flex-1 flex-col gap-1.5">
+          <Label htmlFor="detail-quota">월 한도 조정 (USD)</Label>
           <Input
-            id="dashboard-quota-amount"
+            id="detail-quota"
             type="number"
             min={0}
             step={10}
             inputMode="decimal"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            placeholder={target ? String(target.limit_usd) : "예: 200"}
+            placeholder={String(data.limit_usd)}
           />
         </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={close} disabled={setQuota.isPending}>
-            취소
-          </Button>
-          <Button onClick={submit} disabled={!valid || setQuota.isPending}>
-            {setQuota.isPending ? "처리 중…" : "저장"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <Button onClick={saveQuota} disabled={!valid || setQuota.isPending}>
+          {setQuota.isPending ? "저장 중…" : "한도 저장"}
+        </Button>
+      </div>
+
+      <DialogFooter>
+        <Button variant="ghost" onClick={onDone}>
+          닫기
+        </Button>
+      </DialogFooter>
+    </>
   );
 }
 

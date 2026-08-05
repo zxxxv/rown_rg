@@ -94,7 +94,34 @@ def _last_month_start(today: datetime) -> datetime:
 
 
 class TestAdminDashboardPeriod:
-    async def test_default_period_is_this_month(
+    async def test_default_period_is_last_30_days(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        admin_user: User,
+        admin_token: str,
+    ) -> None:
+        # 기본 기간은 최근 30일(2026-08-05 변경). 창 밖(30일 이전) 사용량은 제외된다.
+        today = now()
+        midnight = datetime(today.year, today.month, today.day, tzinfo=today.tzinfo)
+        window_start = midnight - timedelta(days=29)
+        await _add_usage(test_session, admin_user, Decimal("50"), created_at=today)
+        await _add_usage(
+            test_session,
+            admin_user,
+            Decimal("999"),
+            created_at=window_start - timedelta(seconds=1),
+        )
+
+        response = await test_client.get("/api/v1/admin/dashboard", headers=_auth(admin_token))
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["period"]["type"] == "last_30_days"
+        assert body["kpis"]["total_cost_usd"] == 50.0
+        assert len(body["daily_costs"]) == 30
+
+    async def test_this_month_still_available_via_param(
         self,
         test_client: AsyncClient,
         test_session: AsyncSession,
@@ -110,12 +137,84 @@ class TestAdminDashboardPeriod:
             created_at=_this_month_start(today) - timedelta(seconds=1),
         )
 
-        response = await test_client.get("/api/v1/admin/dashboard", headers=_auth(admin_token))
+        response = await test_client.get(
+            "/api/v1/admin/dashboard",
+            params={"period": "this_month"},
+            headers=_auth(admin_token),
+        )
 
         assert response.status_code == 200
         body = response.json()
         assert body["period"]["type"] == "this_month"
         assert body["kpis"]["total_cost_usd"] == 50.0
+
+    async def test_custom_range_uses_start_end_inclusive(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        admin_user: User,
+        admin_token: str,
+    ) -> None:
+        today = now()
+        tz = today.tzinfo
+        start = (today - timedelta(days=5)).date()
+        end = (today - timedelta(days=3)).date()
+        # 구간 안(end 당일 포함) vs 구간 밖(end 다음날)
+        in_range = datetime(end.year, end.month, end.day, 12, 0, tzinfo=tz)
+        out_range = datetime(end.year, end.month, end.day, tzinfo=tz) + timedelta(days=1)
+        await _add_usage(test_session, admin_user, Decimal("40"), created_at=in_range)
+        await _add_usage(test_session, admin_user, Decimal("999"), created_at=out_range)
+
+        response = await test_client.get(
+            "/api/v1/admin/dashboard",
+            params={"period": "custom", "start": str(start), "end": str(end)},
+            headers=_auth(admin_token),
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["period"]["type"] == "custom"
+        assert body["kpis"]["total_cost_usd"] == 40.0
+        assert body["period"]["label"] == f"{start} ~ {end}"
+        # start~end(포함) = 3일
+        assert len(body["daily_costs"]) == 3
+
+    async def test_custom_range_missing_bounds_returns_422(
+        self, test_client: AsyncClient, admin_token: str
+    ) -> None:
+        response = await test_client.get(
+            "/api/v1/admin/dashboard",
+            params={"period": "custom"},
+            headers=_auth(admin_token),
+        )
+        assert response.status_code == 422
+
+    async def test_user_daily_series_top_n_plus_other(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        admin_user: User,
+        admin_token: str,
+    ) -> None:
+        today = now()
+        await _add_usage(test_session, admin_user, Decimal("25"), created_at=today)
+
+        response = await test_client.get(
+            "/api/v1/admin/dashboard",
+            params={"period": "last_30_days"},
+            headers=_auth(admin_token),
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "user_daily" in body
+        keys = {u["key"] for u in body["user_daily"]["users"]}
+        assert str(admin_user.id) in keys
+        # 일별 포인트는 30일치, admin 기여가 오늘 날짜에 잡힌다
+        assert len(body["user_daily"]["points"]) == 30
+        assert any(
+            p["costs"].get(str(admin_user.id), 0) == 25.0 for p in body["user_daily"]["points"]
+        )
 
     async def test_last_month_excludes_this_month_includes_boundary(
         self,
@@ -236,7 +335,12 @@ class TestAdminDashboardCompletedReports:
         assert in_range.completed_at is not None
         assert out_of_range.completed_at is not None
 
-        response = await test_client.get("/api/v1/admin/dashboard", headers=_auth(admin_token))
+        # 경계값이 '이번 달' 기준이므로 명시적으로 this_month로 조회한다(기본은 최근 30일).
+        response = await test_client.get(
+            "/api/v1/admin/dashboard",
+            params={"period": "this_month"},
+            headers=_auth(admin_token),
+        )
 
         assert response.status_code == 200
         assert response.json()["kpis"]["completed_reports"] == 1
@@ -316,3 +420,54 @@ class TestAdminDashboardQuotaSettingsOverride:
         second = await test_client.get("/api/v1/admin/dashboard", headers=_auth(admin_token))
         assert second.status_code == 200
         assert second.json()["kpis"]["cost_limit_usd"] == 6000.0
+
+
+class TestUserUsageDetail:
+    async def test_detail_reports_counts_and_project_cost(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        admin_user: User,
+        admin_token: str,
+    ) -> None:
+        today = now()
+        completed = await _add_project(
+            test_session, admin_user, ProjectStage.COMPLETED.value, completed_at=today
+        )
+        await _add_project(test_session, admin_user, ProjectStage.WRITING.value)
+        usage = TokenUsage(
+            user_id=admin_user.id,
+            project_id=completed.id,
+            model="claude-opus-4-7",
+            operation="test_op",
+            input_tokens=10,
+            output_tokens=10,
+            cost_usd=Decimal("15"),
+            mode="replay",
+        )
+        test_session.add(usage)
+        await test_session.commit()
+
+        response = await test_client.get(
+            f"/api/v1/admin/users/{admin_user.id}/usage", headers=_auth(admin_token)
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["reports_total"] == 2
+        assert body["reports_completed"] == 1
+        assert body["reports_in_progress"] == 1
+        assert body["total_cost_usd"] == 15.0
+        proj = next(p for p in body["projects"] if p["id"] == str(completed.id))
+        assert proj["cost_usd"] == 15.0
+        assert len(body["daily_costs"]) == 30
+
+    async def test_detail_404_for_unknown_user(
+        self, test_client: AsyncClient, admin_token: str
+    ) -> None:
+        from uuid import uuid4
+
+        response = await test_client.get(
+            f"/api/v1/admin/users/{uuid4()}/usage", headers=_auth(admin_token)
+        )
+        assert response.status_code == 404

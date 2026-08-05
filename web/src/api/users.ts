@@ -24,6 +24,12 @@ export const AdminUserSchema = z.object({
 export type AdminUser = z.infer<typeof AdminUserSchema>;
 
 export const AdminUserListSchema = z.array(AdminUserSchema);
+// 백엔드 GET /users는 {items, total} 페이지네이션(UserListResponse)을 반환한다.
+// 과거·목업은 배열만 주므로 둘 다 수용한다(버전 스큐 방어).
+export const AdminUserListResponseSchema = z.union([
+  AdminUserListSchema,
+  z.object({ items: AdminUserListSchema, total: z.number().int().nonnegative() }),
+]);
 
 export interface UsersListParams {
   limit?: number;
@@ -44,7 +50,8 @@ export async function getUsers(params: UsersListParams = {}): Promise<AdminUser[
   if (params.offset !== undefined) searchParams.offset = String(params.offset);
   if (params.q) searchParams.q = params.q;
   const data = await apiClient.get<unknown>("users", { searchParams });
-  return AdminUserListSchema.parse(data);
+  const parsed = AdminUserListResponseSchema.parse(data);
+  return Array.isArray(parsed) ? parsed : parsed.items;
 }
 
 export function useUsersList(params: UsersListParams = {}) {

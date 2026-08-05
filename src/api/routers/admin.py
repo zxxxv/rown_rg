@@ -1,5 +1,6 @@
 import ipaddress
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
@@ -26,7 +27,12 @@ from src.api.schemas.admin import (
     QuotaSettingsPatchBody,
     ResetPasswordInput,
     SetUserLimitInput,
+    UserDailyPoint,
+    UserDailySeries,
     UserLimitRead,
+    UserSeriesMeta,
+    UserUsageDetail,
+    UserUsageDetailProject,
     UserUsageRow,
 )
 from src.api.schemas.common import Page
@@ -60,18 +66,37 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 _ACTIVE_PROJECT_STATUSES = ("researching", "indexing", "writing", "reviewing")
 
 
-def _resolve_period_range(period: DashboardPeriod, today: datetime) -> tuple[datetime, datetime]:
-    """period를 (range_start, range_end)로 변환한다. start는 포함, end는 배타적 상한."""
-    midnight = datetime(today.year, today.month, today.day, tzinfo=today.tzinfo)
-    this_month_start = datetime(today.year, today.month, 1, tzinfo=today.tzinfo)
+def _resolve_period_range(
+    period: DashboardPeriod,
+    today: datetime,
+    start: date | None = None,
+    end: date | None = None,
+) -> tuple[datetime, datetime]:
+    """period를 (range_start, range_end)로 변환한다. start는 포함, end는 배타적 상한.
 
+    custom은 start/end(둘 다 필수, start<=end)로 구간을 직접 지정하며 end는 포함(그날 끝까지).
+    """
+    tz = today.tzinfo
+    midnight = datetime(today.year, today.month, today.day, tzinfo=tz)
+    this_month_start = datetime(today.year, today.month, 1, tzinfo=tz)
+
+    if period == DashboardPeriod.CUSTOM:
+        if start is None or end is None or start > end:
+            raise ValidationError(
+                message="custom 기간은 start·end(start ≤ end)가 필요합니다",
+                code="INVALID_CUSTOM_RANGE",
+            )
+        range_start = datetime(start.year, start.month, start.day, tzinfo=tz)
+        # end 포함 → 배타적 상한은 end 다음날 0시.
+        range_end = datetime(end.year, end.month, end.day, tzinfo=tz) + timedelta(days=1)
+        return range_start, range_end
     if period == DashboardPeriod.THIS_MONTH:
         return this_month_start, today
     if period == DashboardPeriod.LAST_MONTH:
         if today.month == 1:
-            last_month_start = datetime(today.year - 1, 12, 1, tzinfo=today.tzinfo)
+            last_month_start = datetime(today.year - 1, 12, 1, tzinfo=tz)
         else:
-            last_month_start = datetime(today.year, today.month - 1, 1, tzinfo=today.tzinfo)
+            last_month_start = datetime(today.year, today.month - 1, 1, tzinfo=tz)
         return last_month_start, this_month_start
     if period == DashboardPeriod.LAST_7_DAYS:
         return midnight - timedelta(days=6), today
@@ -82,11 +107,16 @@ def _resolve_period_range(period: DashboardPeriod, today: datetime) -> tuple[dat
 async def get_admin_dashboard(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     _: Annotated[User, Depends(require_role(*ADMINS))],
-    period: Annotated[DashboardPeriod, Query()] = DashboardPeriod.THIS_MONTH,
+    period: Annotated[DashboardPeriod, Query()] = DashboardPeriod.LAST_30_DAYS,
+    start: Annotated[date | None, Query()] = None,
+    end: Annotated[date | None, Query()] = None,
 ) -> AdminDashboardData:
-    """관리자 대시보드 — KPI·일별 비용·사용자별 사용량·증액 요청을 한 번에 집계한다."""
+    """관리자 대시보드 — KPI·일별 비용·사용자별 사용량·증액 요청을 한 번에 집계한다.
+
+    기본 기간은 최근 30일. period=custom + start/end로 임의 구간을 조회한다.
+    """
     today = now()
-    range_start, range_end = _resolve_period_range(period, today)
+    range_start, range_end = _resolve_period_range(period, today, start, end)
 
     # --- KPIs ---
     total_cost = (
@@ -167,6 +197,56 @@ async def get_admin_dashboard(
         )
         d += timedelta(days=1)
 
+    # --- 날짜별 사용자 기여 (상위 N명 + '기타') — 사용자별 누적 차트용 ---
+    top_n = 6
+    puser_rows = (
+        await session.execute(
+            select(
+                day_col.label("day"),
+                TokenUsage.user_id.label("user_id"),
+                func.coalesce(func.sum(TokenUsage.cost_usd), 0).label("cost"),
+            )
+            .where(
+                TokenUsage.created_at >= range_start,
+                TokenUsage.created_at < range_end,
+                TokenUsage.user_id.is_not(None),
+            )
+            .group_by(day_col, TokenUsage.user_id)
+            .order_by(day_col)
+        )
+    ).all()
+    user_totals: dict[UUID, float] = defaultdict(float)
+    for r in puser_rows:
+        user_totals[r.user_id] += float(r.cost)
+    top_ids = [
+        uid for uid, _ in sorted(user_totals.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    ]
+    top_set = set(top_ids)
+    top_names: dict[UUID, str] = (
+        {
+            uid: name
+            for uid, name in (
+                await session.execute(select(User.id, User.name).where(User.id.in_(top_ids)))
+            ).all()
+        }
+        if top_ids
+        else {}
+    )
+    series_meta = [UserSeriesMeta(key=str(uid), name=top_names.get(uid, "?")) for uid in top_ids]
+    if any(uid not in top_set for uid in user_totals):
+        series_meta.append(UserSeriesMeta(key="other", name="기타"))
+    day_user_cost: dict[date, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for r in puser_rows:
+        skey = str(r.user_id) if r.user_id in top_set else "other"
+        day_user_cost[r.day][skey] += float(r.cost)
+    user_daily_points: list[UserDailyPoint] = []
+    cur = range_start.date()
+    while cur <= last_day:
+        costs = {k: round(v, 6) for k, v in day_user_cost.get(cur, {}).items()}
+        user_daily_points.append(UserDailyPoint(date=cur, costs=costs))
+        cur += timedelta(days=1)
+    user_daily = UserDailySeries(users=series_meta, points=user_daily_points)
+
     # --- 사용자별 사용량 (활성 사용자 전체, 비용 높은 순) ---
     usage_subq = (
         select(
@@ -229,8 +309,122 @@ async def get_admin_dashboard(
         period=AdminDashboardPeriod(type=period, label=f"{range_start.date()} ~ {last_day}"),
         kpis=kpis,
         daily_costs=daily_costs,
+        user_daily=user_daily,
         user_usage=user_usage,
         quota_requests=quota_requests,
+    )
+
+
+@router.get("/users/{user_id}/usage", response_model=UserUsageDetail)
+async def get_user_usage_detail(
+    user_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    _: Annotated[User, Depends(require_role(*ADMINS))],
+    period: Annotated[DashboardPeriod, Query()] = DashboardPeriod.LAST_30_DAYS,
+    start: Annotated[date | None, Query()] = None,
+    end: Annotated[date | None, Query()] = None,
+) -> UserUsageDetail:
+    """사용자 클릭 상세 — 기간 내 지출·보고서 건수·프로젝트별 비용·일별 추이."""
+    user = await session.get(User, user_id)
+    if user is None:
+        raise NotFoundError(message="사용자를 찾을 수 없습니다", code="USER_NOT_FOUND")
+    today = now()
+    range_start, range_end = _resolve_period_range(period, today, start, end)
+    last_day = (range_end - timedelta(microseconds=1)).date()
+
+    total_cost = (
+        await session.execute(
+            select(func.coalesce(func.sum(TokenUsage.cost_usd), 0)).where(
+                TokenUsage.user_id == user_id,
+                TokenUsage.created_at >= range_start,
+                TokenUsage.created_at < range_end,
+            )
+        )
+    ).scalar_one()
+
+    user_limit = await session.get(UserLimit, user_id)
+    limit_usd = (
+        user_limit.monthly_limit_usd
+        if user_limit is not None
+        else await get_role_default_limit_usd(session, user.role)
+    )
+
+    # 소유 프로젝트 — 건수(전체/완료/진행) + 기간 내 프로젝트별 비용
+    proj_rows = (
+        await session.execute(
+            select(
+                Project.id, Project.title, Project.status, Project.completed_at, Project.created_at
+            )
+            .where(Project.owner_id == user_id)
+            .order_by(Project.created_at.desc())
+        )
+    ).all()
+    reports_total = len(proj_rows)
+    reports_completed = sum(1 for p in proj_rows if p.status == "completed")
+    reports_in_progress = sum(1 for p in proj_rows if p.status in _ACTIVE_PROJECT_STATUSES)
+
+    cost_by_project: dict[UUID, float] = {
+        pid: float(cost)
+        for pid, cost in (
+            await session.execute(
+                select(TokenUsage.project_id, func.coalesce(func.sum(TokenUsage.cost_usd), 0))
+                .where(
+                    TokenUsage.user_id == user_id,
+                    TokenUsage.created_at >= range_start,
+                    TokenUsage.created_at < range_end,
+                    TokenUsage.project_id.is_not(None),
+                )
+                .group_by(TokenUsage.project_id)
+            )
+        ).all()
+    }
+    projects = [
+        UserUsageDetailProject(
+            id=p.id,
+            title=p.title,
+            status=p.status,
+            cost_usd=cost_by_project.get(p.id, 0.0),
+            completed_at=p.completed_at,
+            created_at=p.created_at,
+        )
+        for p in proj_rows[:30]
+    ]
+
+    # 이 사용자의 일별 비용 (연속 시리즈, 누락일 0)
+    du_col = func.date(TokenUsage.created_at)
+    daily_rows = (
+        await session.execute(
+            select(du_col.label("day"), func.coalesce(func.sum(TokenUsage.cost_usd), 0).label("c"))
+            .where(
+                TokenUsage.user_id == user_id,
+                TokenUsage.created_at >= range_start,
+                TokenUsage.created_at < range_end,
+            )
+            .group_by(du_col)
+            .order_by(du_col)
+        )
+    ).all()
+    by_day = {r.day: float(r.c) for r in daily_rows}
+    daily_costs: list[DailyCostPoint] = []
+    cur = range_start.date()
+    while cur <= last_day:
+        c = by_day.get(cur, 0.0)
+        daily_costs.append(DailyCostPoint(date=cur, cost_usd=c, users=1 if c > 0 else 0))
+        cur += timedelta(days=1)
+
+    return UserUsageDetail(
+        user_id=user.id,
+        name=user.name,
+        email=user.email,
+        role=user.role,  # type: ignore[arg-type]
+        period=AdminDashboardPeriod(type=period, label=f"{range_start.date()} ~ {last_day}"),
+        total_cost_usd=float(total_cost),
+        limit_usd=float(limit_usd),
+        reports_total=reports_total,
+        reports_completed=reports_completed,
+        reports_in_progress=reports_in_progress,
+        projects=projects,
+        daily_costs=daily_costs,
     )
 
 

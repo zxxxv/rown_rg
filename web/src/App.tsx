@@ -12,6 +12,7 @@ import ForbiddenPage from "@/pages/403";
 import AdminDashboardPage from "@/pages/admin/dashboard";
 import AdminIpPage from "@/pages/admin/ip";
 import AdminSettingsPage from "@/pages/admin/settings";
+import AdminTokensPage from "@/pages/admin/tokens";
 import AdminUsersPage from "@/pages/admin/users";
 import CallbackPage from "@/pages/callback";
 import LibraryPage from "@/pages/library";
@@ -154,6 +155,14 @@ const routes = [
     element: (
       <RequireAuth minRole="admin">
         <AdminUsersPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/admin/tokens",
+    element: (
+      <RequireAuth minRole="admin">
+        <AdminTokensPage />
       </RequireAuth>
     ),
   },

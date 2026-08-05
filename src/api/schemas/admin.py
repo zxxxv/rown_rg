@@ -52,12 +52,13 @@ class LimitRequestRead(BaseModel):
 
 
 class DashboardPeriod(StrEnum):
-    """대시보드 조회 기간 옵션."""
+    """대시보드 조회 기간 옵션. custom은 start/end 쿼리로 구간을 직접 지정한다."""
 
     THIS_MONTH = "this_month"
     LAST_MONTH = "last_month"
     LAST_7_DAYS = "last_7_days"
     LAST_30_DAYS = "last_30_days"
+    CUSTOM = "custom"
 
 
 class AdminDashboardPeriod(BaseModel):
@@ -65,13 +66,61 @@ class AdminDashboardPeriod(BaseModel):
     label: str
 
 
+class UserSeriesMeta(BaseModel):
+    """사용자별 누적 차트의 시리즈 1개(상위 N명 + 'other' 기타 버킷)."""
+
+    key: str  # user_id(문자열) 또는 "other"
+    name: str  # 표시 이름 또는 "기타"
+
+
+class UserDailyPoint(BaseModel):
+    date: date
+    # key(user_id 또는 "other") → 그날 비용. 값 없는 시리즈는 프론트에서 0 처리.
+    costs: dict[str, float]
+
+
+class UserDailySeries(BaseModel):
+    """날짜별 사용자 기여 — 상위 N명 시리즈 + 나머지는 'other'로 합산."""
+
+    users: list[UserSeriesMeta]
+    points: list[UserDailyPoint]
+
+
 class AdminDashboardData(BaseModel):
     period: AdminDashboardPeriod
     kpis: AdminKPI
     daily_costs: list[DailyCostPoint]
+    # 날짜별 '누가 얼마나' — 사용자별 누적 차트용(상위 N명 + 기타).
+    user_daily: UserDailySeries
     user_usage: list[UserUsageRow]
     # 프론트 계약상 JSON 키는 quota_requests 유지(web dashboard가 data.quota_requests 사용).
     quota_requests: list[LimitRequestRead]
+
+
+class UserUsageDetailProject(BaseModel):
+    id: UUID
+    title: str
+    status: str
+    cost_usd: float  # 이 기간 이 프로젝트에 귀속된 비용
+    completed_at: datetime | None = None
+    created_at: datetime
+
+
+class UserUsageDetail(BaseModel):
+    """사용자 클릭 상세 — 기간 내 지출·보고서 건수·프로젝트별 비용·일별 추이."""
+
+    user_id: UUID
+    name: str
+    email: str
+    role: UserRole
+    period: AdminDashboardPeriod
+    total_cost_usd: float
+    limit_usd: float
+    reports_total: int
+    reports_completed: int
+    reports_in_progress: int
+    projects: list[UserUsageDetailProject]
+    daily_costs: list[DailyCostPoint]
 
 
 class LimitDecisionInput(BaseModel):
@@ -139,6 +188,8 @@ class IpWhitelistRead(BaseModel):
     created_by: UUID | None
     created_at: datetime
     updated_at: datetime
+
+
 class QuotaSettingRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
