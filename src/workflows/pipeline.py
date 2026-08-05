@@ -53,7 +53,17 @@ def _source_pool_gate(state: ProjectState) -> UserReviewPoint:
     """
     # 커버리지는 본문 있는 자료만 센다 — 본문 없는 출처(URL만)는 검색 근거가
     # 못 되므로 총량에 넣으면 "44건인데 쓸 건 5건"이 충분으로 위장된다(2026-08-03 실측).
-    n_usable = sum(1 for s in state.sources if s.has_content)
+    usable = [s for s in state.sources if s.has_content]
+    n_usable = len(usable)
+    # 절별 커버리지 — 매칭 자료(matched_sections)가 하나도 없는 절을 표면화한다.
+    # 5.2 '해외 사례'처럼 자료 풀에 해당 절 재료가 아예 없으면 작성이 빈약해지거나
+    # 엉뚱한 자료로 채워진다(2026-08-05 숏폼 실측) — 추가 검색을 유도하는 신호.
+    matched_titles = {t for s in usable for t in (s.matched_sections or [])}
+    uncovered = [
+        f"{p.chapter_number}.{p.section_number} {p.title}"
+        for p in state.section_plan
+        if p.title not in matched_titles
+    ]
     return UserReviewPoint(
         gate=ReviewGate.SOURCE_POOL,
         payload={
@@ -65,6 +75,7 @@ def _source_pool_gate(state: ProjectState) -> UserReviewPoint:
                 "n_sources": n_usable,
                 "min_required": settings.research_min_sources,
                 "sufficient": n_usable >= settings.research_min_sources,
+                "uncovered_sections": uncovered,
             },
         },
     )

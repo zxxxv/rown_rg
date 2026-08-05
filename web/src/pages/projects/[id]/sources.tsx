@@ -1,9 +1,9 @@
 import { useMutation } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { decideSourcePool, useDecideCollectMore } from "@/api/checkpoints";
+import { decideSourcePool, parseSourcePoolPayload, useDecideCollectMore } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
 import { useProgressSnapshot } from "@/api/progress";
 import { usePatchSource, useProjectSources } from "@/api/sources";
@@ -42,6 +42,12 @@ export default function SourcesPage() {
     refetchInterval: collecting || gathering ? 5_000 : false,
   });
   const patchSource = usePatchSource(projectId);
+
+  // 커버리지 신호(게이트 payload) — 총량 부족·매칭 0건 절을 검토 화면에 표면화한다.
+  const coverage = useMemo(() => {
+    if (!reviewOpen) return null;
+    return parseSourcePoolPayload(snapshot.data?.pending_gate?.payload)?.coverage ?? null;
+  }, [reviewOpen, snapshot.data]);
 
   const handleCollectMore = () => {
     if (collectMore.isPending || collecting) return;
@@ -206,6 +212,29 @@ export default function SourcesPage() {
                 <span className="ml-1 font-medium text-fg">+{newCount}건 수집됨</span>
               ) : null}
             </p>
+          </div>
+        ) : null}
+
+        {/* 커버리지 경고 — 총량 부족·매칭 0건 절. 차단이 아니라 '추가 검색' 판단 근거. */}
+        {coverage && (!coverage.sufficient || coverage.uncovered_sections.length > 0) ? (
+          <div className="flex flex-col gap-1.5 rounded-md border border-fg-warning/40 bg-bg-warning px-4 py-3 text-sm">
+            {!coverage.sufficient ? (
+              <p className="flex items-center gap-2 text-fg">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-fg-warning" aria-hidden />
+                본문 있는 자료가 부족합니다 ({coverage.n_sources}/{coverage.min_required}건) — 추가
+                검색을 권장합니다.
+              </p>
+            ) : null}
+            {coverage.uncovered_sections.length > 0 ? (
+              <p className="text-xs text-fg-secondary">
+                매칭 자료가 없는 절 {coverage.uncovered_sections.length}개:{" "}
+                <span className="font-medium text-fg">
+                  {coverage.uncovered_sections.slice(0, 6).join(" · ")}
+                  {coverage.uncovered_sections.length > 6 ? " 외" : ""}
+                </span>{" "}
+                — 이 절들은 근거 부족으로 빈약하게 작성될 수 있습니다.
+              </p>
+            ) : null}
           </div>
         ) : null}
 

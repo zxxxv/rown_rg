@@ -50,16 +50,21 @@ class Settings(BaseSettings):
     # 총 수집 폭 = 챕터 수 × max_uses)
     research_max_uses: int = 5
     research_max_tokens: int = 8000
-    # 자료 풀 권장 하한 = 초기 수집 목표 — 미달이어도 차단하지 않고 게이트에 경고 표시
-    research_min_sources: int = 20
+    # 자료 풀 권장 하한 = 초기 수집 목표 — 미달이어도 차단하지 않고 게이트에 경고 표시.
+    # 40 = 분량 레버(2026-08-06): 절당 근거 공급이 분량의 1차 병목이라 자료 풀을 2배로.
+    research_min_sources: int = 40
     # '추가 조사' 한 라운드의 신규 출처 목표 — 사람이 누를 때마다 이만큼씩 보충
     research_more_batch: int = 10
+    # 절당 검색 근거 청크 수(리랭크 후 top-k) — 분량 레버: 10→16(2026-08-06 숏폼 실측:
+    # 절당 근거 ~5천자로는 목표 분량의 7~15%만 나옴 — 근거가 늘어야 본문이 는다)
+    retrieval_top_k: int = 16
     # 전역 동시 파이프라인 실행 상한 — 초과분은 FIFO 대기열(runner._run_slots).
     # 색인(임베딩 ONNX)이 CPU·메모리를 지배해 운영 스펙(2 vCPU/8GB) 기준 1이 안전선.
     max_concurrent_runs: int = 1
     # 섹션 작성 출력 상한(토큰) — 에이전트 volume_target이 있어도 이 값으로 캡.
-    # 기본 16000 = 품질 모드(분량 목표 실현). 저비용 테스트 시 .env로 하향(예: 4096)
-    write_max_tokens: int = 16000
+    # 24000 ≈ 한글 1.5~2만자 헤드룸(분량 레버와 정합 — 근거를 늘려도 캡이 막지 않게).
+    # 저비용 테스트 시 .env로 하향(예: 4096)
+    write_max_tokens: int = 24000
     # Anthropic SDK 요청 타임아웃(초). SDK 내부 재시도는 0으로 고정한다 —
     # 재시도는 어댑터가 소유하며, SDK가 타임아웃된 고비용 서버도구 턴을 조용히
     # 재실행하면 과금만 배가된다(2026-07-21 스모크에서 실측).

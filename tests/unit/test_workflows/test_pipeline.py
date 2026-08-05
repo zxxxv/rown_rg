@@ -259,6 +259,12 @@ class TestResearchPausesAtSourcePool:
         # 본문 없는 출처 B는 풀에 아예 실리지 않는다(껍데기 미스테이징 정책)
         assert "https://example.org/b" not in by_url
 
+        # 절별 커버리지 — 매칭 자료 0건인 절이 "N.N 제목"으로 표면화된다(추가 검색 신호).
+        # 출처 A가 "고령화 추이"에만 매칭됐으므로 "비용편익 분석"이 미커버로 잡힌다.
+        coverage = outcome.review.payload["coverage"]
+        assert not any("고령화 추이" in u for u in coverage["uncovered_sections"])
+        assert any("비용편익 분석" in u for u in coverage["uncovered_sections"])
+
 
 class TestStageDisplayHook:
     async def test_on_stage_reports_running_phase(self, fake_write: RetrievedChunk):

@@ -538,6 +538,8 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
         summary_fetcher=summary_fetcher,
         # 주제 앵커 — 재채점·RAPTOR 검색이 절 제목만으로 표류하지 않게(주제 표류 실측 대응)
         topic=state.topic,
+        # 절당 근거 공급량 — 분량의 1차 병목 레버(config.retrieval_top_k)
+        top_k=settings.retrieval_top_k,
     )
 
 

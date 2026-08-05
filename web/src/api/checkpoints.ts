@@ -135,6 +135,8 @@ export const SourcePoolCoverageSchema = z.object({
   n_sources: z.number().int(),
   min_required: z.number().int(),
   sufficient: z.boolean(),
+  // 매칭 자료가 0건인 절("N.N 제목") — 해당 절 재료가 풀에 없다는 신호(추가 검색 유도)
+  uncovered_sections: z.array(z.string()).default([]),
 });
 export type SourcePoolCoverage = z.infer<typeof SourcePoolCoverageSchema>;
 
