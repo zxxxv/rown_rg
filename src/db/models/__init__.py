@@ -11,6 +11,7 @@ from src.db.models.raptor_node import RaptorNode
 from src.db.models.refresh_token import RefreshToken
 from src.db.models.review_point import ReviewPoint
 from src.db.models.token_usage import TokenUsage
+from src.db.models.token_usage_retry import TokenUsageRetry
 from src.db.models.user import User
 from src.db.models.user_limit import UserLimit
 
@@ -28,6 +29,7 @@ __all__ = [
     "RefreshToken",
     "ReviewPoint",
     "TokenUsage",
+    "TokenUsageRetry",
     "User",
     "UserLimit",
 ]

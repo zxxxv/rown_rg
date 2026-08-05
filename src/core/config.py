@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     # X-API-Key
     internal_api_key: str = ""
 
+    # 토큰 사용량 기록 재시도 (record_usage 실패 시 token_usage_retry_queue에 적재 후
+    # 인프로세스 백그라운드 루프가 주기적으로 재처리 — src.clients.llm.token_usage_retry_worker)
+    token_usage_retry_interval_seconds: float = 30.0
+    token_usage_retry_max_attempts: int = 5
+    token_usage_retry_base_delay_seconds: float = 5.0
+    token_usage_retry_max_delay_seconds: float = 300.0
+
     # NAVER WORKS API
     nw_client_id: str
     nw_client_secret: str

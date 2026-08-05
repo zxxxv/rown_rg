@@ -9,6 +9,7 @@ from src.api.middleware.ip_whitelist import IPWhitelistMiddleware
 from src.api.middleware.logging import LoggingMiddleware
 from src.api.routers import api_v1_router
 from src.api.routers.notify import router as notify_router
+from src.clients.llm.token_usage_retry_worker import start_retry_loop, stop_retry_loop
 from src.core.config import settings
 from src.core.logging import configure_logging
 from src.db.session import async_engine
@@ -17,7 +18,9 @@ from src.db.session import async_engine
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_logging()
+    start_retry_loop()
     yield
+    await stop_retry_loop()
     await async_engine.dispose()
 
 
