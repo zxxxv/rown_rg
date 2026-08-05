@@ -51,6 +51,13 @@ function asVirtualFile(n: LibraryNode): LibraryNode {
   return n.type === "file" ? { ...n, virtual: true } : n;
 }
 
+/** AI 수집 자료 — 가상 파일 + 수집 원문 인라인 뷰어 경로(content_url). */
+function asAiVirtualFile(n: LibraryNode): LibraryNode {
+  return n.type === "file"
+    ? { ...n, virtual: true, content_url: `library/sources/${n.id}/content` }
+    : n;
+}
+
 function projectFolder(project: Project, children: LibraryNode[] = []): LibraryNode {
   const base = `pf_${project.id}`;
   return {
@@ -64,7 +71,7 @@ function projectFolder(project: Project, children: LibraryNode[] = []): LibraryN
         name: "AI 수집 자료",
         type: "folder",
         virtual: true,
-        children: children.filter(isAiKind).map(asVirtualFile),
+        children: children.filter(isAiKind).map(asAiVirtualFile),
       },
       {
         id: `${base}_up`,

@@ -2,15 +2,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
 
+export const SettingOptionSchema = z.object({ value: z.string(), label: z.string() });
+export type SettingOption = z.infer<typeof SettingOptionSchema>;
+
 export const SettingItemSchema = z.object({
   key: z.string(),
   label: z.string(),
   group: z.string(),
-  kind: z.enum(["str", "number", "bool"]),
+  kind: z.enum(["str", "number", "bool", "enum"]),
   is_secret: z.boolean(),
   configured: z.boolean(),
   source: z.enum(["db", "env", "none"]),
   value: z.string().nullable(),
+  options: z.array(SettingOptionSchema).nullish(),
 });
 export type SettingItem = z.infer<typeof SettingItemSchema>;
 

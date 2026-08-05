@@ -12,10 +12,13 @@ import type { ProjectFormValues } from "@/features/project-config/schema";
 /** 목록 페이지 크기 — 배열 길이 < limit 이면 다음 페이지 없음으로 판단한다. */
 export const PROJECT_PAGE_SIZE = 20;
 
-/** 서버 필터 — status는 ProjectStage 값(오값 422), q는 제목·주제·소유자명 부분검색.
+/** 목록 상태 필터 — 실제 단계값 + 'in_progress'(완료·보관·취소가 아닌 진행 단계 묶음, 백엔드 그룹 필터). */
+export type ProjectStatusFilter = ProjectStatus | "in_progress";
+
+/** 서버 필터 — status는 단계값 또는 'in_progress'(오값 422), q는 제목·주제·소유자명 부분검색.
  *  scope=all은 admin·super_admin만 전체를 본다(일반 사용자는 무시하고 자기 것). */
 export interface ProjectListFilters {
-  status?: ProjectStatus;
+  status?: ProjectStatusFilter;
   q?: string;
   scope?: "mine" | "all";
 }
@@ -121,6 +124,28 @@ export function useRunProject() {
   return useMutation({
     mutationKey: [...projectKeys.all, "run"],
     mutationFn: runProject,
+    onSuccess: (_res, id) => {
+      void qc.invalidateQueries({ queryKey: projectKeys.detail(id) });
+      void qc.invalidateQueries({ queryKey: projectKeys.all });
+    },
+  });
+}
+
+/** POST /projects/{id}/cancel — 진행 중 실행 취소(협조적). 실행 중이면 cancelling, 아니면 cancelled. */
+export interface CancelProjectResponse {
+  project_id: string;
+  status: "cancelling" | "cancelled";
+}
+
+export async function cancelProject(id: string): Promise<CancelProjectResponse> {
+  return apiClient.post<CancelProjectResponse>(`projects/${id}/cancel`);
+}
+
+export function useCancelProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...projectKeys.all, "cancel"],
+    mutationFn: cancelProject,
     onSuccess: (_res, id) => {
       void qc.invalidateQueries({ queryKey: projectKeys.detail(id) });
       void qc.invalidateQueries({ queryKey: projectKeys.all });

@@ -25,20 +25,23 @@ export default function SourcesPage() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
 
+  // 검토는 SOURCE_POOL 게이트가 열려 있을 때만 유효 — 확정 후(작성·완료)에는
+  // 이 페이지가 읽기 전용 기록이 된다(채택/제외/추가 검색/검토 완료 숨김).
+  // 게이트가 열리기 전(초기 수집 중)에는 스냅샷을 폴링해 게이트 도착을 따라잡는다.
+  const snapshot = useProgressSnapshot(projectId, true, { refetchInterval: 7_000 });
+  const reviewOpen = snapshot.data?.pending_gate?.gate === "source_pool";
+  // 초기 수집 진행 중 — 게이트 전이라 검토는 아직 못 하지만, 상태는 알려야 한다.
+  const gathering = snapshot.data?.status === "researching" && !reviewOpen;
+
   // 추가 검색(+10건) — 게이트를 닫지 않는 보충 수집. 시작 시점 자료 수를 기준선으로
   // 잡아 배너에 "+n건 수집됨"을 보여주고, 도는 동안 목록을 폴링으로 따라잡는다.
   const collectMore = useDecideCollectMore();
   const [collectBaseline, setCollectBaseline] = useState<number | null>(null);
   const collecting = collectBaseline !== null;
   const sourcesQuery = useProjectSources(projectId, {
-    refetchInterval: collecting ? 5_000 : false,
+    refetchInterval: collecting || gathering ? 5_000 : false,
   });
   const patchSource = usePatchSource(projectId);
-
-  // 검토는 SOURCE_POOL 게이트가 열려 있을 때만 유효 — 확정 후(작성·완료)에는
-  // 이 페이지가 읽기 전용 기록이 된다(채택/제외/추가 검색/검토 완료 숨김).
-  const snapshot = useProgressSnapshot(projectId);
-  const reviewOpen = snapshot.data?.pending_gate?.gate === "source_pool";
 
   const handleCollectMore = () => {
     if (collectMore.isPending || collecting) return;
@@ -171,13 +174,28 @@ export default function SourcesPage() {
             </div>
           </div>
           <p className="text-sm text-fg-secondary">
-            {reviewOpen
-              ? "AI가 수집한 자료를 검토하고 채택할 자료를 결정해 주세요. 추가 자료는 아래 드롭존에 끌어다 놓으면 됩니다."
-              : "검토가 완료된 자료 목록입니다 (읽기 전용) — 채택된 자료만 본문 작성의 검색 근거로 사용됐습니다."}
+            {gathering
+              ? "AI가 자료를 검색하고 있습니다 — 수집이 끝나면 여기서 검토를 시작할 수 있습니다."
+              : reviewOpen
+                ? "AI가 수집한 자료를 검토하고 채택할 자료를 결정해 주세요. 추가 자료는 아래 드롭존에 끌어다 놓으면 됩니다."
+                : "검토가 완료된 자료 목록입니다 (읽기 전용) — 채택된 자료만 본문 작성의 검색 근거로 사용됐습니다."}
           </p>
         </header>
 
         {reviewOpen ? <UploadDropzone onFiles={handleFiles} uploading={uploading} /> : null}
+
+        {gathering ? (
+          <div className="flex items-center gap-3 rounded-md border border-fg-info/30 bg-bg-info px-4 py-3 text-sm">
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-fg-info" aria-hidden />
+            <p className="text-fg-secondary">
+              자료 검색이 진행 중입니다 — 수집되는 대로 목록에 추가되고, 끝나면 검토 지점이
+              열립니다.
+              {items.length > 0 ? (
+                <span className="ml-1 font-medium text-fg">현재 {items.length}건</span>
+              ) : null}
+            </p>
+          </div>
+        ) : null}
 
         {collecting ? (
           <div className="flex items-center gap-3 rounded-md border border-fg-info/30 bg-bg-info px-4 py-3 text-sm">
@@ -206,8 +224,12 @@ export default function SourcesPage() {
             />
           ) : items.length === 0 ? (
             <EmptyState
-              title="아직 수집된 자료가 없습니다"
-              description="AI 자동 검색이 진행되거나 파일을 직접 업로드하면 표시됩니다."
+              title={gathering ? "자료를 검색하고 있습니다" : "아직 수집된 자료가 없습니다"}
+              description={
+                gathering
+                  ? "AI가 목차 기반으로 자료를 수집 중입니다 — 도착하는 대로 자동 표시됩니다."
+                  : "AI 자동 검색이 진행되거나 파일을 직접 업로드하면 표시됩니다."
+              }
             />
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -252,16 +274,19 @@ export default function SourcesPage() {
                       </>
                     ) : (
                       <>
-                        <Badge
-                          variant="outline"
-                          className={
-                            s.is_included === false
-                              ? "border-fg-danger/30 text-fg-danger"
-                              : "border-fg-success/30 text-fg-success"
-                          }
-                        >
-                          {s.is_included === false ? "제외됨" : "채택됨"}
-                        </Badge>
+                        {/* 수집 중(게이트 전)엔 채택/제외가 아직 결정 대상이 아니라 배지를 숨긴다 */}
+                        {!gathering ? (
+                          <Badge
+                            variant="outline"
+                            className={
+                              s.is_included === false
+                                ? "border-fg-danger/30 text-fg-danger"
+                                : "border-fg-success/30 text-fg-success"
+                            }
+                          >
+                            {s.is_included === false ? "제외됨" : "채택됨"}
+                          </Badge>
+                        ) : null}
                         <Button size="sm" variant="ghost" onClick={() => setActiveSource(s)}>
                           상세보기
                         </Button>

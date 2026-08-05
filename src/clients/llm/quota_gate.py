@@ -116,3 +116,20 @@ async def enforce() -> None:
         user_cost=user_cost,
         user_limit=user_limit,
     )
+
+
+async def check_user_quota(user_id: UUID) -> None:
+    """실행 시작 전 사전 검사 — 한도 도달이면 QuotaExceededError(→429).
+
+    LLM 게이트(enforce)와 같은 판정을 실행 진입점(POST /run·/decide)에서 미리 돌려,
+    "실행이 시작됐다가 백그라운드에서 조용히 죽는" UX를 막는다(2026-08-05 실측 지적).
+    """
+    if not settings.quota_enforcement_enabled:
+        return
+    org_cost, user_cost, user_limit = await _fetch_usage(user_id)
+    check_limits(
+        org_cost=org_cost,
+        org_limit=app_settings.get_decimal("org_monthly_cost_limit_usd"),
+        user_cost=user_cost,
+        user_limit=user_limit,
+    )

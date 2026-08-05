@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     research_min_sources: int = 20
     # '추가 조사' 한 라운드의 신규 출처 목표 — 사람이 누를 때마다 이만큼씩 보충
     research_more_batch: int = 10
+    # 전역 동시 파이프라인 실행 상한 — 초과분은 FIFO 대기열(runner._run_slots).
+    # 색인(임베딩 ONNX)이 CPU·메모리를 지배해 운영 스펙(2 vCPU/8GB) 기준 1이 안전선.
+    max_concurrent_runs: int = 1
     # 섹션 작성 출력 상한(토큰) — 에이전트 volume_target이 있어도 이 값으로 캡.
     # 기본 16000 = 품질 모드(분량 목표 실현). 저비용 테스트 시 .env로 하향(예: 4096)
     write_max_tokens: int = 16000
@@ -114,12 +117,14 @@ class Settings(BaseSettings):
 
     # HyDE 쿼리 확장 (dense 검색 전용) — 기본 off. 효과는 eval_search(nDCG)로 측정 후 결정
     hyde_enabled: bool = False
-    hyde_model: str = "gemini-3.5-flash-lite"  # 2.5 계열 신규사용자 종료(2026-08)로 승계
+    hyde_model: str = "gemini-3.1-flash-lite"  # 실작동 최저가(2026-08-04 실측 승계)
 
     # RAPTOR 요약 트리 — 인덱싱 후 의미 클러스터링 요약을 쌓아 검색 맥락으로 제공.
     # 트리 깊이는 depth_mode가 결정(indexing/raptor.DEPTH_LEVELS). 빌드 실패는 비치명.
     raptor_enabled: bool = True
-    raptor_model: str = "gemini-3.5-flash-lite"  # 2.5 계열 신규사용자 종료(2026-08)로 승계
+    raptor_model: str = "gemini-3.1-flash-lite"  # 실작동 최저가(2026-08-04 실측 승계)
+    # 약어 사전 설명 생성(assemble 1콜) — 배경 지원 기능이라 최저가 모델
+    glossary_model: str = "gemini-3.1-flash-lite"
     raptor_top_k: int = 3  # 섹션 검색에 곁들일 배경 맥락 요약 수
 
     # PM 검증 — assemble 직후 챕터당 1콜, 문서 횡단 일관성 경고 리포트(차단 아님).

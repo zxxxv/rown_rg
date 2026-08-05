@@ -1,11 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/api/client";
-import { type LibraryTreeResponse, LibraryTreeResponseSchema } from "@/api/types";
+import {
+  type LibraryTreeResponse,
+  LibraryTreeResponseSchema,
+  type SourceContent,
+  SourceContentSchema,
+} from "@/api/types";
 import { env } from "@/env";
 
 export const libraryKeys = {
   all: ["library"] as const,
   tree: () => [...libraryKeys.all, "tree"] as const,
+  sourceContent: (contentUrl: string) =>
+    [...libraryKeys.all, "source-content", contentUrl] as const,
 };
 
 export async function getLibraryTree(): Promise<LibraryTreeResponse> {
@@ -101,6 +108,21 @@ export function useSetNodeVisibility() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: libraryKeys.all });
+    },
+  });
+}
+
+/** AI 수집 자료의 수집 원문(content_md) 조회 — content_url이 있을 때만 활성.
+ *
+ * contentUrl은 트리 노드의 상대 경로(예: "library/sources/{id}/content")를 그대로 GET한다.
+ */
+export function useSourceContent(contentUrl: string | null | undefined) {
+  return useQuery<SourceContent>({
+    queryKey: libraryKeys.sourceContent(contentUrl ?? ""),
+    enabled: Boolean(contentUrl),
+    queryFn: async () => {
+      const data = await apiClient.get<unknown>(contentUrl as string);
+      return SourceContentSchema.parse(data);
     },
   });
 }

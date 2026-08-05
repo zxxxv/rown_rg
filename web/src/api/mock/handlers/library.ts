@@ -158,4 +158,24 @@ export const libraryHandlers = [
       },
     });
   }),
+
+  // AI 수집 자료의 수집 원문(content_md) — 노드 id로 파일을 찾아 제목 기반 목업 본문을 낸다.
+  http.get(url("library/sources/:id/content"), ({ params }) => {
+    const file = findFile(LIBRARY_TREE, String(params.id));
+    const title = file?.name ?? "수집 자료";
+    const contentMd = `# ${title}\n\n이것은 목업(mock) 수집 원문입니다. 실제 환경에서는 AI가 웹에서 수집해 저장한 마크다운 본문이 여기에 표시됩니다.\n\n- 원격/하이브리드 근무와 조직 내 소통에 관한 핵심 요지\n- 수집 시점의 전체 텍스트가 청킹·색인 전에 그대로 보존됩니다.\n\n> 참고: 이 화면은 라이브러리 안에서 원문을 바로 확인하기 위한 뷰어입니다.`;
+    return HttpResponse.json(
+      {
+        data: {
+          title,
+          url: file?.download_url ?? null,
+          reliability: "medium",
+          content_md: contentMd,
+          char_count: contentMd.length,
+          byte_count: new TextEncoder().encode(contentMd).length,
+        },
+      },
+      { status: 200 },
+    );
+  }),
 ];

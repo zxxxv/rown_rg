@@ -36,6 +36,7 @@ from src.api.schemas.library_node import (
     LibraryTreeFolder,
     LibraryTreeResponse,
     PromptRef,
+    SourceContentResponse,
     VisibilityUpdateRequest,
     WritableTarget,
 )
@@ -123,18 +124,26 @@ _REGISTERED_BY = {"web_search": "AI 수집", "library": "라이브러리 참조"
 def _source_file(src: ProjectSource, pid: UUID, owner_name: str) -> LibraryTreeFile:
     """project_sources 1건 → 가상 파일 노드(읽기전용). 원본 복사 없이 참조만."""
     name = src.title or src.url or f"{src.source_type} 자료"
+    # AI 수집 자료의 원문(content_md)은 수집 시점 metadata_에 저장돼 있다(web.py stage()).
+    content_md = (src.metadata_ or {}).get("content_md") or ""
     download_url: str | None = None
+    content_url: str | None = None
     if src.source_type == "library" and src.library_node_id is not None:
         download_url = f"library/files/{src.library_node_id}/download"
     elif src.source_type == "web_search" and src.url:
         download_url = src.url
+    # 수집 본문이 있으면 인라인 뷰어 경로를 준다 — 클릭 시 라이브러리 안에서 원문을 표시.
+    if content_md.strip():
+        content_url = f"library/sources/{src.id}/content"
     return LibraryTreeFile(
         id=f"ps-{src.id}",
         name=name,
         virtual=True,
         download_url=download_url,
+        content_url=content_url,
         file_meta=LibraryFileMeta(
-            size_bytes=0,
+            # 물리 파일이 없으므로 수집 본문의 UTF-8 바이트 길이를 크기로 쓴다(0 하드코딩 폐지).
+            size_bytes=len(content_md.encode("utf-8")),
             registered_at=src.created_at,
             registered_by=_REGISTERED_BY.get(src.source_type, owner_name),
             source_kind=src.source_type,
@@ -494,6 +503,46 @@ async def download_file(
         node.file_path,
         filename=node.name,
         media_type=node.mime_type or "application/octet-stream",
+    )
+
+
+@router.get("/sources/{source_id}/content", response_model=SourceContentResponse)
+async def get_source_content(
+    source_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SourceContentResponse:
+    """AI 수집 자료(웹 소스)의 수집 원문(content_md)을 반환 — 라이브러리 인라인 뷰어용.
+
+    원문은 project_sources.metadata_[content_md]에 수집 시점 저장된다(web.py stage()).
+    가시성: 소속 프로젝트 소유자만 — 라이브러리 프로젝트 뷰가 소유자 스코프라 관리자도
+    타인 프로젝트를 트리에서 못 보므로, 여기서도 admin 우회 없이 owner로만 한정한다.
+    타인 자료·미존재는 존재 은닉을 위해 모두 404로 통일한다.
+    """
+    row = (
+        await session.execute(
+            select(ProjectSource, Project.owner_id)
+            .join(Project, Project.id == ProjectSource.project_id)
+            .where(ProjectSource.id == source_id)
+        )
+    ).first()
+    if row is None:
+        raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
+    src, owner_id = row
+    if owner_id != current_user.id:
+        raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
+    content_md = (src.metadata_ or {}).get("content_md") or ""
+    if not content_md.strip():
+        raise NotFoundError(
+            message="수집된 본문이 없습니다(메타데이터만 있는 자료)", code="SOURCE_BODY_MISSING"
+        )
+    return SourceContentResponse(
+        title=src.title,
+        url=src.url,
+        reliability=src.reliability,
+        content_md=content_md,
+        char_count=len(content_md),
+        byte_count=len(content_md.encode("utf-8")),
     )
 
 

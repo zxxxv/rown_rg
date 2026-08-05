@@ -2,7 +2,7 @@ import type { SectionContentResponse } from "@/api/types";
 
 export const RICH_2_3 = `## 2.3 인구·고령화 영향
 
-본 사업의 수요는 수도권 인구 구조의 변화에 직접적인 영향을 받는다. 통계청의 2024년 인구주택총조사 표본 집계 결과에 따르면 65세 이상 고령 인구의 비율은 **19.2%**로 사상 최고를 기록했으며, 수도권 거주 인구는 전체의 **50.7%** [ref:src_kostat_2024]에 달한다. KDI의 거시 영향 분석은 2030년 잠재성장률을 **1.5%**로 둔화될 것으로 전망한다 [ref:src_kdi_aging].
+본 사업의 수요는 수도권 인구 구조의 변화에 직접적인 영향을 받는다. 통계청의 2024년 인구주택총조사 표본 집계 결과에 따르면 65세 이상 고령 인구의 비율은 **19.2%**로 사상 최고를 기록했으며, 수도권 거주 인구는 전체의 **50.7%** [1]에 달한다. KDI의 거시 영향 분석은 2030년 잠재성장률을 **1.5%**로 둔화될 것으로 전망한다 [2].
 
 ### 주요 통계
 
@@ -15,15 +15,15 @@ export const RICH_2_3 = `## 2.3 인구·고령화 영향
 ### 사업 수요에 미치는 영향
 
 1. **출퇴근 수요 감소**: 생산가능인구의 감소는 광역교통망의 출퇴근 수요를 2030년 기준 약 8% 감소시킬 것으로 추정된다.
-2. **여가·의료 통행 증가**: 반면 고령자의 여가·의료 통행은 연 평균 12% 증가가 예상된다 [ref:src_kdi_aging].
-3. **수도권 집중 지속**: 지방소멸 위험지역이 전국 시·군·구의 **49.6%** [ref:src_audit_gtx]에 달하면서 수도권 통행은 지속 증가 추세.
+2. **여가·의료 통행 증가**: 반면 고령자의 여가·의료 통행은 연 평균 12% 증가가 예상된다 [2].
+3. **수도권 집중 지속**: 지방소멸 위험지역이 전국 시·군·구의 **49.6%** [3]에 달하면서 수도권 통행은 지속 증가 추세.
 
 > 본 사업의 비용편익 분석은 이러한 인구 구조 변화를 반영하여 수요 추정 모델을 보정해야 한다. 단순 외삽이 아닌 **세대별·통행 목적별 분해 모델**이 필요하다.
 `;
 
 export const RICH_3_3 = `## 3.3 비용편익비 (B/C)
 
-본 사업의 비용편익 분석은 30년 운영 기간을 기준으로 한다. 기획재정부 예비타당성조사 운용 지침에 따라 사회적 할인율 **4.5%**를 적용하며, B/C 비율 **1.0 이상**을 권고 조건으로 한다 [ref:src_moef_preliminary].
+본 사업의 비용편익 분석은 30년 운영 기간을 기준으로 한다. 기획재정부 예비타당성조사 운용 지침에 따라 사회적 할인율 **4.5%**를 적용하며, B/C 비율 **1.0 이상**을 권고 조건으로 한다 [1].
 
 ### 비용·편익 추정 결과
 
@@ -41,7 +41,7 @@ export const RICH_3_3 = `## 3.3 비용편익비 (B/C)
 - 사업비가 **+15%** 증가 시 B/C는 1.07로 감소
 - 사회적 할인율 **5.5%** 적용 시 B/C는 1.05로 감소
 
-> 한국은행의 2025년 경제성장률 전망 **2.1%** [ref:src_bok_econ]을 반영하더라도 본 사업은 사업타당성 기준을 충족한다. 다만 감사원의 GTX 사업 효과 평가에서 지적한 **비용 초과 1.8조원** 사례 [ref:src_audit_gtx]를 고려하여 사업비 변동에 대한 추가 대응 계획이 필요하다.
+> 한국은행의 2025년 경제성장률 전망 **2.1%** [2]을 반영하더라도 본 사업은 사업타당성 기준을 충족한다. 다만 감사원의 GTX 사업 효과 평가에서 지적한 **비용 초과 1.8조원** 사례 [3]를 고려하여 사업비 변동에 대한 추가 대응 계획이 필요하다.
 
 ### 권고
 
@@ -57,12 +57,58 @@ const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
     source_ids: ["src_kostat_2024", "src_kdi_aging", "src_audit_gtx"],
     qa_status: "passed",
     level: 2,
+    citations: [
+      {
+        number: 1,
+        title: "2024 인구주택총조사 표본 집계 결과",
+        url: "https://kostat.go.kr/",
+        source_id: "src_kostat_2024",
+        reliability: "high",
+      },
+      {
+        number: 2,
+        title: "고령화 진전이 노동시장에 미치는 영향",
+        url: "https://kdi.re.kr/",
+        source_id: "src_kdi_aging",
+        reliability: "high",
+      },
+      {
+        number: 3,
+        title: "GTX 사업 효과 평가",
+        url: null,
+        source_id: "src_audit_gtx",
+        reliability: "high",
+      },
+    ],
   },
   "3.3": {
     content: RICH_3_3,
     source_ids: ["src_moef_preliminary", "src_bok_econ", "src_audit_gtx"],
     qa_status: "passed",
     level: 2,
+    citations: [
+      {
+        number: 1,
+        title: "공공투자 예비타당성조사 운용 지침",
+        url: "https://moef.go.kr/",
+        source_id: "src_moef_preliminary",
+        reliability: "high",
+      },
+      {
+        number: 2,
+        title: "한국은행 경제전망보고서 2024-IV",
+        url: "https://bok.or.kr/",
+        source_id: "src_bok_econ",
+        reliability: "high",
+      },
+      {
+        number: 3,
+        title: "GTX 사업 효과 평가",
+        url: null,
+        source_id: "src_audit_gtx",
+        reliability: "high",
+      },
+    ],
   },
 };
 
@@ -81,5 +127,6 @@ export function buildSectionContent(
     source_ids: [],
     qa_status: "passed",
     level: sectionId.includes(".") ? 2 : 1,
+    citations: [],
   };
 }

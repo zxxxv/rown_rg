@@ -17,9 +17,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import ProjectStage, ReviewGate, UserReviewPoint
-from src.workflows.stages import assemble, research, write
+from src.workflows import cancel
+from src.workflows.stages import assemble, collect, index, write
 from src.workflows.write_loop import qa_select_payload, section_plan_payload
 
 
@@ -49,12 +51,21 @@ def _source_pool_gate(state: ProjectState) -> UserReviewPoint:
     section_plan을 payload에 싣는 이유: plan은 projects 테이블에 없어, resume 시
     runner가 이 payload에서 복원한다(QA_SELECT 게이트와 같은 계약).
     """
+    # 커버리지는 본문 있는 자료만 센다 — 본문 없는 출처(URL만)는 검색 근거가
+    # 못 되므로 총량에 넣으면 "44건인데 쓸 건 5건"이 충분으로 위장된다(2026-08-03 실측).
+    n_usable = sum(1 for s in state.sources if s.has_content)
     return UserReviewPoint(
         gate=ReviewGate.SOURCE_POOL,
         payload={
             "message": "목차와 수집된 자료 풀을 검토·승인하세요.",
             "section_plan": section_plan_payload(state.section_plan),
             "sources": [s.model_dump(mode="json") for s in state.sources],
+            # 자료량 신호 — 미달은 차단이 아니라 '추가 조사' 유도(사람 판단).
+            "coverage": {
+                "n_sources": n_usable,
+                "min_required": settings.research_min_sources,
+                "sufficient": n_usable >= settings.research_min_sources,
+            },
         },
     )
 
@@ -66,28 +77,69 @@ def _qa_select_gate(state: ProjectState) -> UserReviewPoint:
 
 @dataclass(frozen=True)
 class Phase:
-    """단계 1개: current_stage == when일 때 run을 실행하고 advance_to로 전이한다."""
+    """단계 1개: current_stage == when일 때 run을 실행하고 advance_to로 전이한다.
+
+    running은 이 단계가 실행되는 동안의 표시용 상태 — 척추는 구간이 끝나야 상태를
+    저장하므로, 긴 구간(색인→작성) 동안 UI가 옛 위치를 가리키는 문제를 훅으로 푼다.
+    """
 
     when: ProjectStage
     run: Callable[[ProjectState], Awaitable[ProjectState]]
     advance_to: ProjectStage
+    running: ProjectStage
     gate: Callable[[ProjectState], UserReviewPoint] | None = None
 
 
-# 척추 단계 정의. research→(자료 승인)→write→(QA 후보 선택)→assemble→완료.
+# 척추 단계 정의. collect→(자료 승인)→index→write→(QA 후보 선택)→assemble→완료.
+# 임베딩(index)은 자료 승인 게이트 '뒤'에 온다 — 채택된 자료만 임베딩해 비용을 아낀다.
 PHASES: list[Phase] = [
-    Phase(ProjectStage.CREATED, research, ProjectStage.RESEARCHING, gate=_source_pool_gate),
-    Phase(ProjectStage.RESEARCHING, write, ProjectStage.REVIEWING, gate=_qa_select_gate),
-    Phase(ProjectStage.REVIEWING, assemble, ProjectStage.COMPLETED, gate=None),
+    Phase(
+        ProjectStage.CREATED,
+        collect,
+        ProjectStage.RESEARCHING,
+        running=ProjectStage.RESEARCHING,
+        gate=_source_pool_gate,
+    ),
+    Phase(
+        ProjectStage.RESEARCHING,
+        index,
+        ProjectStage.INDEXING,
+        running=ProjectStage.INDEXING,
+        gate=None,
+    ),
+    Phase(
+        ProjectStage.INDEXING,
+        write,
+        ProjectStage.REVIEWING,
+        running=ProjectStage.WRITING,
+        gate=_qa_select_gate,
+    ),
+    Phase(
+        ProjectStage.REVIEWING,
+        assemble,
+        ProjectStage.COMPLETED,
+        running=ProjectStage.REVIEWING,
+        gate=None,
+    ),
 ]
 
+OnStage = Callable[[ProjectStage], Awaitable[None]]
 
-async def advance(state: ProjectState) -> Outcome:
-    """현재 단계부터 게이트 또는 완료까지 전진한다."""
+
+async def advance(state: ProjectState, *, on_stage: OnStage | None = None) -> Outcome:
+    """현재 단계부터 게이트 또는 완료까지 전진한다.
+
+    on_stage: 각 단계 실행 직전에 '지금 실행 중인 단계'(Phase.running)를 알리는 훅.
+    runner가 표시용 상태 영속화에 쓴다 — 실패해도 척추 진행에 영향 없어야 한다(호출부 책임).
+    """
     while True:
+        # 단계 경계 취소 지점 — 사용자가 취소를 요청했으면 여기서 RunCancelled로 중단.
+        cancel.raise_if_cancelled(state.project_id)
         phase = next((p for p in PHASES if p.when == state.current_stage), None)
         if phase is None:
             return Done(state)
+        if on_stage is not None:
+            await on_stage(phase.running)
         state = await phase.run(state)
         state = state.with_stage(phase.advance_to)
         if phase.gate is not None:

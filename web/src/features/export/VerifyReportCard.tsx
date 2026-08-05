@@ -1,5 +1,13 @@
-import { AlertTriangle, ArrowRight, ChevronDown, ShieldAlert, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  ChevronDown,
+  Loader2,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react";
 import { useState } from "react";
+import { useProject } from "@/api/projects";
 import { useVerifyReport, type VerifyFinding } from "@/api/verify";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,12 +31,24 @@ export function VerifyReportCard({
   onOpenEditor?: () => void;
 }) {
   const query = useVerifyReport(projectId);
+  const projectQuery = useProject(projectId);
   const [open, setOpen] = useState(false);
 
   if (query.isLoading || query.isError) return null;
   const findings = query.data ?? [];
 
   if (findings.length === 0) {
+    // 빈 결과 ≠ 통과: PM 검증은 조립 단계(완료 직전)에 돌므로, 완료 전에는
+    // "아직 검증 전"이다 — 통과로 표시하면 거짓 안심을 준다(2026-08-05 지적).
+    const status = projectQuery.data?.status;
+    if (status !== "completed" && status !== "archived") {
+      return (
+        <div className="flex items-center gap-2 rounded border border-border bg-bg p-3 text-sm text-fg-secondary">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-fg-tertiary" aria-hidden />
+          PM 검증 대기 중 — 보고서 조립·검증이 끝나면 결과가 여기에 표시됩니다
+        </div>
+      );
+    }
     return (
       <div className="flex items-center gap-2 rounded border border-border bg-bg p-3 text-sm text-fg-secondary">
         <ShieldCheck className="h-4 w-4 shrink-0 text-fg-success" aria-hidden />

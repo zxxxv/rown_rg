@@ -21,7 +21,6 @@ import ProjectsPage from "@/pages/projects";
 import OverviewPage from "@/pages/projects/[id]/overview";
 import PreviewPage from "@/pages/projects/[id]/preview";
 import QaSelectPage from "@/pages/projects/[id]/qa-select";
-import ReconcilePage from "@/pages/projects/[id]/reconcile";
 import SourcesPage from "@/pages/projects/[id]/sources";
 import NewProjectPage from "@/pages/projects/new";
 
@@ -107,14 +106,6 @@ const routes = [
     element: (
       <RequireAuth>
         <QaSelectPage />
-      </RequireAuth>
-    ),
-  },
-  {
-    path: "/projects/:id/reconcile",
-    element: (
-      <RequireAuth>
-        <ReconcilePage />
       </RequireAuth>
     ),
   },

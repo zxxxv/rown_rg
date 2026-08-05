@@ -2,10 +2,22 @@
 
 from src.export.hwpx_writer import (
     Block,
+    Cover,
+    Figure,
     Heading,
+    PageBreak,
     Paragraph,
     Table,
     build_report,
 )
 
-__all__ = ["Block", "Heading", "Paragraph", "Table", "build_report"]
+__all__ = [
+    "Block",
+    "Cover",
+    "Figure",
+    "Heading",
+    "PageBreak",
+    "Paragraph",
+    "Table",
+    "build_report",
+]

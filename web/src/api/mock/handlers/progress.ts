@@ -117,6 +117,72 @@ const QA_SELECT_PAYLOAD = {
   ],
 };
 
+// 실계약 미러: pipeline._source_pool_gate — 수집된 자료 풀 + 사람이 취사선택할 신호.
+// 신호 없는(업로드/저신뢰·본문없음) 케이스도 데모에 포함해 UI 분기를 보여준다.
+const SOURCE_POOL_PAYLOAD = {
+  message: "수집된 자료 풀을 검토하고, 본문 작성에 쓰지 않을 자료는 제외한 뒤 진행하세요.",
+  section_plan: [],
+  sources: [
+    {
+      id: "0d000000-0000-4000-8000-0000000000a1",
+      source_type: "web_search",
+      title: "2024 인구주택총조사 표본 집계 결과",
+      url: "https://kostat.go.kr/board/2024-census",
+      reliability: "high",
+      matched_sections: ["인구·고령화 영향"],
+      page_age: "2024-08",
+      preview:
+        "65세 이상 고령 인구 비율은 19.2%로 사상 최고를 기록했으며, 수도권 거주 인구는 전체의 50.7%에 달한다.",
+      has_content: true,
+    },
+    {
+      id: "0d000000-0000-4000-8000-0000000000a2",
+      source_type: "web_search",
+      title: "광역교통 거시영향 분석 보고서",
+      url: "https://kdi.re.kr/report/macro-transport-2024",
+      reliability: "high",
+      matched_sections: ["비용편익비 (B/C)", "인구·고령화 영향"],
+      page_age: "2024-05",
+      preview:
+        "사회적 할인율 4.5%를 적용한 결과 B/C는 1.23으로 산정되었으며, 2030년 잠재성장률은 1.5%로 둔화될 전망이다.",
+      has_content: true,
+    },
+    {
+      id: "0d000000-0000-4000-8000-0000000000a3",
+      source_type: "web_search",
+      title: "예비타당성조사 운용 지침",
+      url: "https://moef.go.kr/guideline/preliminary",
+      reliability: "high",
+      matched_sections: ["비용편익비 (B/C)"],
+      page_age: "2023-12",
+      preview: "사회적 할인율 4.5%를 적용하고 B/C 1.0 이상을 권고 조건으로 한다.",
+      has_content: true,
+    },
+    {
+      id: "0d000000-0000-4000-8000-0000000000a4",
+      source_type: "web_search",
+      title: "GTX 사업 효과 평가",
+      url: "https://bai.go.kr/audit/gtx-effect",
+      reliability: "medium",
+      matched_sections: ["위험 요인 및 대응"],
+      page_age: "2023-06",
+      preview: "GTX 사업에서 비용 초과 1.8조원 사례가 지적되어 대응 계획이 필요하다.",
+      has_content: true,
+    },
+    {
+      id: "0d000000-0000-4000-8000-0000000000a5",
+      source_type: "web_search",
+      title: "언론 보도 종합 (본문 회수 실패)",
+      url: "https://news.example.com/transport-policy",
+      reliability: "low",
+      matched_sections: [],
+      page_age: "2025-03",
+      preview: null,
+      has_content: false,
+    },
+  ],
+};
+
 export const progressHandlers = [
   // 실계약: GET /projects/{id}/progress
   //   → {project_id, status, pending_gate|null, percent, tokens_used, cost_usd}
@@ -152,7 +218,7 @@ export const progressHandlers = [
       ? {
           review_point_id: state.pending_checkpoint_id,
           gate: isQaSelect ? "qa_select" : "source_pool",
-          payload: isQaSelect ? QA_SELECT_PAYLOAD : {},
+          payload: isQaSelect ? QA_SELECT_PAYLOAD : SOURCE_POOL_PAYLOAD,
         }
       : null;
 

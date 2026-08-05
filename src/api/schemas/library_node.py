@@ -85,6 +85,9 @@ class LibraryTreeFile(BaseModel):
     virtual: bool = False
     # 가상 파일의 다운로드 경로(API base 기준 상대경로 또는 절대 URL). 실파일은 None.
     download_url: str | None = None
+    # 수집 본문(content_md)이 있는 자료의 인라인 뷰어 경로(API base 상대). 클릭 시
+    # 라이브러리 안에서 원문을 보여준다. 본문 없는 자료는 None. (AI 수집 자료 전용)
+    content_url: str | None = None
     # 프롬프트 노드면 마커(에디터/뷰어를 여는 신호). 일반 파일은 None.
     prompt: PromptRef | None = None
 
@@ -107,6 +110,20 @@ class LibraryTreeResponse(BaseModel):
 # 자기참조(children) 해석 확정 — from __future__ annotations 지연 평가 대응
 LibraryTreeFolder.model_rebuild()
 LibraryTreeResponse.model_rebuild()
+
+
+class SourceContentResponse(BaseModel):
+    """AI 수집 자료(웹 소스)의 수집 원문 — 라이브러리 인라인 뷰어용.
+
+    원문은 project_sources.metadata_[content_md]에 수집 시점 저장된다(web.py stage()).
+    """
+
+    title: str | None = None
+    url: str | None = None
+    reliability: str | None = None
+    content_md: str
+    char_count: int
+    byte_count: int
 
 
 class FolderCreateRequest(BaseModel):

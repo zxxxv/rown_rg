@@ -33,6 +33,12 @@ _PLACEHOLDER_TOKENS: tuple[str, ...] = ("{{", "}}", "[[", "]]", "TODO", "TBD", "
 # 숫자·비율 토큰: 앞자리 숫자 + 선택적 천단위 콤마 + 선택적 소수부 + 선택적 %.
 _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
 
+# 비표준 인용 마커 — 대괄호 표기 중 정상 [n]이 아닌 것(2026-08-05 실측:
+# '[배경자료 제공됨]', '[배경 맥락]', '[근거 없음 - …]' 등 모델이 발명한 표기).
+# 마크다운 링크 [텍스트](url)와 그림/표 캡션([그림 1-1])은 정상 표기라 제외한다.
+_BRACKET_RE = re.compile(r"\[([^\[\]\n]{1,40})\](?!\()")
+_ALLOWED_BRACKET_RE = re.compile(r"^(?:\d+|그림\s?[\d\-. ]+|표\s?[\d\-. ]+)$")
+
 # 제어문자 (렌더 불가 신호) — 탭·개행·캐리지리턴(\x09-\x0d 중 일부)은 허용.
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
@@ -126,6 +132,30 @@ def check_numeric_grounded(draft: SectionDraft, cited_content: str) -> GateResul
     )
 
 
+def check_citation_markers(draft: SectionDraft) -> GateResult:
+    """인용 표기가 표준([n])인지 — 모델이 발명한 '[배경자료 제공됨]'류 마커 검출.
+
+    배경 요약(인용 불가)을 근거 삼을 때 나오는 오염 신호라 SOFT 경고로 사람에게
+    보여준다(후보 제외는 아님 — 본문 자체는 유효할 수 있다).
+    """
+    found: list[str] = []
+    for m in _BRACKET_RE.finditer(draft.content):
+        inner = m.group(1).strip()
+        if not _ALLOWED_BRACKET_RE.match(inner) and inner not in found:
+            found.append(inner)
+    passed = not found
+    detail = None
+    if not passed:
+        preview = ", ".join(f"[{t}]" for t in found[:3])
+        detail = f"비표준 인용 마커 {len(found)}종: {preview} — 인용은 [숫자]만 허용"
+    return GateResult(
+        check="citation_markers",
+        severity=CheckSeverity.SOFT,
+        passed=passed,
+        detail=detail,
+    )
+
+
 def check_bounds(
     draft: SectionDraft,
     *,
@@ -171,6 +201,7 @@ def run_section_gate(
     results = [
         check_citation_resolves(draft, valid_ids),
         check_renderable(draft),
+        check_citation_markers(draft),
         check_numeric_grounded(draft, cited_content),
         check_bounds(
             draft,

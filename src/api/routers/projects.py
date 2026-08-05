@@ -1,11 +1,13 @@
+import re
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -22,21 +24,35 @@ from src.api.schemas.project import (
     PresetSectionRead,
     ProjectCreate,
     ProjectRead,
+    SourceIncludeUpdate,
+    SourceItemRead,
     VerifyFindingRead,
 )
 from src.api.schemas.section import (
     ChapterNode,
+    SectionCitation,
     SectionContentResponse,
     SectionContentUpdate,
     SectionNode,
     SectionRewriteRequest,
     SectionTreeResponse,
 )
+from src.core.clock import now as clock_now
 from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from src.core.state import ProjectState
-from src.core.types import ProjectStage, SectionDraft, SectionPlan
+from src.core.types import (
+    ProjectStage,
+    SectionCandidate,
+    SectionCandidateSet,
+    SectionDraft,
+    SectionPlan,
+    SourceRef,
+    SourceType,
+)
 from src.db.models.project import Project
+from src.db.models.project_source import ProjectSource
+from src.db.models.review_point import ReviewPoint
 from src.db.models.section import Section
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
@@ -44,7 +60,9 @@ from src.db.models.verify_finding import VerifyFinding
 from src.prompts import list_presets, load_preset
 from src.services.generation.planner import MAX_SECTIONS
 from src.services.prompts import resolve_analysts
-from src.workflows.runner import get_pending_gate, is_running, resume_run, start_run
+from src.workflows import cancel
+from src.workflows.events import emit_error
+from src.workflows.runner import get_pending_gate, is_running, queue_status, resume_run, start_run
 
 # 단계 기반 근사 진행률 — 섹션 단위 세밀화는 추후 진행 이벤트로
 _STAGE_PERCENT: dict[str, int] = {
@@ -55,7 +73,21 @@ _STAGE_PERCENT: dict[str, int] = {
     ProjectStage.REVIEWING.value: 85,
     ProjectStage.COMPLETED.value: 100,
     ProjectStage.ARCHIVED.value: 100,
+    ProjectStage.CANCELLED.value: 0,
 }
+
+# 목록 화면의 '진행 중' 탭 — 단일 단계가 아니라 완료·보관·취소가 아닌 모든 진행 단계를 묶는다.
+# (created·researching·indexing·writing·reviewing) 프론트는 status=in_progress로 요청한다.
+_IN_PROGRESS_FILTER = "in_progress"
+_IN_PROGRESS_STATUSES = (
+    ProjectStage.CREATED.value,
+    ProjectStage.RESEARCHING.value,
+    ProjectStage.INDEXING.value,
+    ProjectStage.WRITING.value,
+    ProjectStage.REVIEWING.value,
+)
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -256,9 +288,12 @@ async def list_projects(
     scope=mine(기본)은 내 것만, scope=all은 전체 — 단 all은 admin·super_admin만 허용
     (일반 사용자는 scope와 무관하게 항상 자기 것). status=단계 필터, q=제목·주제·소유자명 검색.
     """
-    if status is not None and status not in _STAGE_PERCENT:
+    if status is not None and status != _IN_PROGRESS_FILTER and status not in _STAGE_PERCENT:
         raise ValidationError(
-            message=f"알 수 없는 status: {status} (가능: {', '.join(_STAGE_PERCENT)})",
+            message=(
+                f"알 수 없는 status: {status} "
+                f"(가능: {_IN_PROGRESS_FILTER}, {', '.join(_STAGE_PERCENT)})"
+            ),
             code="INVALID_STATUS_FILTER",
         )
     if scope not in ("mine", "all"):
@@ -269,7 +304,9 @@ async def list_projects(
     # 가시성: 일반 사용자는 항상 자기 것. 관리자는 scope=all일 때만 전체.
     if not (is_admin and scope == "all"):
         stmt = stmt.where(Project.owner_id == current_user.id)
-    if status is not None:
+    if status == _IN_PROGRESS_FILTER:
+        stmt = stmt.where(Project.status.in_(_IN_PROGRESS_STATUSES))
+    elif status is not None:
         stmt = stmt.where(Project.status == status)
     if q:
         pattern = f"%{q}%"
@@ -311,12 +348,63 @@ async def run_project(
             message=f"실행할 수 없는 상태입니다(현재: {project.status})",
             code="PROJECT_NOT_RUNNABLE",
         )
+    # 한도 사전 검사 — 시작됐다가 첫 LLM 콜에서 조용히 죽는 대신 여기서 429로 알린다.
+    from src.clients.llm.quota_gate import check_user_quota
+
+    await check_user_quota(project.owner_id)
     if not await start_run(project.id):
         raise ValidationError(
             message="이미 실행 중인 프로젝트입니다",
             code="ALREADY_RUNNING",
         )
     return RunResponse(project_id=str(project.id), status=ProjectStage.RESEARCHING)
+
+
+_TERMINAL_STATUSES = (
+    ProjectStage.COMPLETED.value,
+    ProjectStage.ARCHIVED.value,
+    ProjectStage.CANCELLED.value,
+)
+
+
+@router.post("/{project_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+async def cancel_project(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> dict[str, str]:
+    """진행 중인 실행을 취소한다(협조적 — 단계·절 경계에서 멈춘다).
+
+    - 실행 중: 취소 신호만 보내고 즉시 반환(status="cancelling"). 러너가 다음 경계에서
+      관측해 CANCELLED로 마무리하고 WS로 알린다.
+    - 게이트 대기 등 비실행 상태: 즉시 CANCELLED로 확정하고 대기 게이트를 해소한다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    if project.status in _TERMINAL_STATUSES:
+        raise ValidationError(
+            message=f"이미 종료된 프로젝트입니다(현재: {project.status})",
+            code="PROJECT_NOT_CANCELLABLE",
+        )
+    if project.status == ProjectStage.CREATED.value:
+        raise ValidationError(
+            message="아직 시작하지 않은 프로젝트입니다", code="PROJECT_NOT_RUNNING"
+        )
+
+    if is_running(project.id):
+        # 실행 중 — 협조적 취소 신호. 러너가 CANCELLED 확정 + WS 통지.
+        cancel.request(project.id)
+        return {"project_id": str(project.id), "status": "cancelling"}
+
+    # 비실행(게이트 대기 등) — 즉시 확정. 대기 게이트는 취소로 해소.
+    project.status = ProjectStage.CANCELLED.value
+    await session.execute(
+        update(ReviewPoint)
+        .where(ReviewPoint.project_id == project.id, ReviewPoint.status == "pending")
+        .values(status="resolved", resolved_at=clock_now(), decision={"outcome": "cancelled"})
+    )
+    await session.flush()
+    emit_error(project.id, "cancelled", "실행을 취소했습니다")
+    return {"project_id": str(project.id), "status": "cancelled"}
 
 
 @router.get("/{project_id}/progress", response_model=ProgressResponse)
@@ -331,6 +419,9 @@ async def get_progress(
             select(
                 func.coalesce(func.sum(TokenUsage.input_tokens + TokenUsage.output_tokens), 0),
                 func.coalesce(func.sum(TokenUsage.cost_usd), 0),
+                # 실행 시작·마지막 활동 근사 — 첫/마지막 LLM 콜 시각 (경과 시간 표시용)
+                func.min(TokenUsage.created_at),
+                func.max(TokenUsage.created_at),
             ).where(TokenUsage.project_id == project.id)
         )
     ).one()
@@ -341,6 +432,11 @@ async def get_progress(
         percent=_STAGE_PERCENT.get(project.status, 0),
         tokens_used=int(usage[0]),
         cost_usd=float(usage[1]),
+        # 첫 LLM 콜이 끝나기 전(token_usage 0행)엔 상태 전이 시각(updated_at)으로 폴백 —
+        # created→researching 직후 구간에서도 경과 시간이 새로고침에 초기화되지 않게.
+        started_at=usage[2] or (project.updated_at if project.status != "created" else None),
+        last_activity_at=usage[3],
+        queue_position=(queue_status(project.id) or {}).get("position"),
     )
 
 
@@ -374,8 +470,10 @@ async def delete_project(
 
     (2026-08-03 완화: 이전엔 완료·보관만 허용했으나, 게이트 대기·실패 잔류
     프로젝트를 지울 수 없어 실험 잔재가 쌓였다.) 하위 데이터(sources·chunks·
-    raptor·consistency·review_points)는 DB FK CASCADE로 함께 삭제되고,
-    token_usage는 SET NULL이라 사용량·비용 기록은 남는다.
+    raptor·consistency·review_points·sections)는 DB FK CASCADE로 함께 삭제되고,
+    token_usage는 SET NULL이라 사용량·비용 기록은 남는다. 디스크의 완성본
+    (<export_dir>/<id>.hwpx)도 함께 지운다 — 같은 id로 재조립될 일이 없어
+    남겨두면 라이브러리 '완성본' 뷰에 유령 파일로 남는다.
     """
     project = await _get_authorized_project(project_id, session, current_user)
     if is_running(project.id):
@@ -386,6 +484,107 @@ async def delete_project(
     # ORM 관계는 lazy="raise"라 session.delete()의 관계 로딩을 피하고
     # DB FK CASCADE에 맡기는 Core DELETE를 쓴다.
     await session.execute(delete(Project).where(Project.id == project.id))
+    export_path = Path(settings.export_dir) / f"{project.id}.hwpx"
+    try:
+        export_path.unlink(missing_ok=True)
+    except OSError:
+        # 파일 잠금 등으로 못 지워도 삭제 자체는 성공 처리(다음 삭제/정리 때 재시도)
+        logger.warning("project.export_cleanup_failed", project_id=str(project.id))
+
+
+@router.get("/{project_id}/sources", response_model=list[SourceItemRead])
+async def list_project_sources(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> list[SourceItemRead]:
+    """자료 검토 페이지용 자료 풀 — project_sources 행 + metadata 신호.
+
+    수집(collect)이 스테이징한 전 출처를 돌려준다(제외분 포함 — is_included로 구분).
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    rows = (
+        (
+            await session.execute(
+                select(ProjectSource)
+                .where(ProjectSource.project_id == project.id)
+                .order_by(ProjectSource.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    from src.workflows.stages import _source_preview, has_usable_content, relevance_excerpt
+
+    items: list[SourceItemRead] = []
+    for row in rows:
+        meta = row.metadata_ or {}
+        content_md = meta.get("content_md") or ""
+        usable = has_usable_content(content_md)
+        matched = list(meta.get("matched_sections") or [])
+        items.append(
+            SourceItemRead(
+                id=row.id,
+                source_type=row.source_type,
+                title=row.title,
+                url=row.url,
+                reliability=row.reliability,
+                is_included=row.is_included,
+                matched_sections=matched,
+                page_age=meta.get("page_age"),
+                # 관련 절 키워드 주변 발췌 우선(관련성 근거), 없으면 본문 앞부분
+                preview=(relevance_excerpt(content_md, matched) or _source_preview(content_md))
+                if usable
+                else None,
+                has_content=usable,
+                created_at=row.created_at,
+            )
+        )
+    return items
+
+
+@router.patch("/{project_id}/sources/{source_id}", response_model=SourceItemRead)
+async def update_project_source(
+    project_id: UUID,
+    source_id: UUID,
+    data: SourceIncludeUpdate,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SourceItemRead:
+    """자료 채택/제외 토글 — 제외분은 색인(index)·검색 근거에서 빠진다."""
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = (
+        await session.execute(
+            select(ProjectSource).where(
+                ProjectSource.project_id == project.id, ProjectSource.id == source_id
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
+    row.is_included = data.is_included
+    await session.flush()
+    from src.workflows.stages import _source_preview, has_usable_content, relevance_excerpt
+
+    meta = row.metadata_ or {}
+    content_md = meta.get("content_md") or ""
+    usable = has_usable_content(content_md)
+    matched = list(meta.get("matched_sections") or [])
+    return SourceItemRead(
+        id=row.id,
+        source_type=row.source_type,
+        title=row.title,
+        url=row.url,
+        reliability=row.reliability,
+        is_included=row.is_included,
+        matched_sections=matched,
+        page_age=meta.get("page_age"),
+        preview=(relevance_excerpt(content_md, matched) or _source_preview(content_md))
+        if usable
+        else None,
+        has_content=usable,
+        created_at=row.created_at,
+    )
 
 
 @router.get("/{project_id}/verify-report", response_model=list[VerifyFindingRead])
@@ -411,19 +610,90 @@ async def get_verify_report(
     return list(rows)
 
 
+def _state_for_export(project: Project, rows: list[Section]) -> ProjectState:
+    """sections 테이블의 확정 본문 → export_report가 먹는 최소 상태.
+
+    후보/선택 구조를 절당 1후보로 재구성한다 — 편집된 최신 본문이 곧 선택본.
+    """
+    plans: list[SectionPlan] = []
+    sets: list[SectionCandidateSet] = []
+    selections: dict[UUID, UUID] = {}
+    for row in rows:
+        plan = SectionPlan(
+            section_id=row.id,
+            chapter_number=row.chapter_number,
+            section_number=row.section_number,
+            title=row.title,
+        )
+        draft = SectionDraft(section_id=row.id, content=row.content or "", cited_chunk_ids=[])
+        candidate = SectionCandidate(draft=draft)
+        plans.append(plan)
+        sets.append(SectionCandidateSet(section_id=row.id, candidates=[candidate]))
+        selections[row.id] = candidate.candidate_id
+    return ProjectState(
+        project_id=project.id,
+        user_id=project.owner_id,
+        topic=project.topic,
+        section_plan=plans,
+        section_candidates=sets,
+        section_selections=selections,
+        options=project.config or {},
+    )
+
+
 @router.get("/{project_id}/export")
 async def download_export(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> FileResponse:
-    """완성된 보고서 HWPX 다운로드.
+    """완성된 보고서 HWPX 다운로드 — 항상 최신 sections로 재렌더 후 서빙.
 
-    assemble이 <export_dir>/<project_id>.hwpx 결정적 경로에 렌더하므로 상태 기록
-    없이 경로 규칙만으로 찾는다. 파일이 없으면(미완료·렌더 스킵) 404.
+    조립 시점 파일만 서빙하면 미리보기·편집에서 고친 본문이 다운로드에 반영되지
+    않는다(2026-08-04 지적). 렌더는 순수 코드(~1초)라 다운로드 시점 재렌더가
+    가장 안전하다. 재렌더 실패 시 조립 시점 파일로 폴백, 그것도 없으면 404.
     """
     project = await _get_authorized_project(project_id, session, current_user)
     path = Path(settings.export_dir) / f"{project.id}.hwpx"
+    rows = await _load_sections(session, project.id)
+    if rows:
+        try:
+            from src.services.export.report import export_report
+
+            state = _state_for_export(project, rows)
+            # 출처 최종장 — 채택 자료를 실어야 렌더된다(조립 경로와 동일 규칙).
+            src_rows = (
+                (
+                    await session.execute(
+                        select(ProjectSource)
+                        .where(
+                            ProjectSource.project_id == project.id,
+                            ProjectSource.is_included.is_(True),
+                        )
+                        .order_by(ProjectSource.created_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            state = state.model_copy(
+                update={
+                    "sources": [
+                        SourceRef(
+                            id=r.id,
+                            source_type=SourceType(r.source_type),
+                            title=r.title or r.url or "(제목 없음)",
+                            url=r.url,
+                            reliability=r.reliability,
+                        )
+                        for r in src_rows
+                    ]
+                }
+            )
+            # 약어 설명은 조립 시 저장한 사전(projects.glossary)에서 — 재렌더는 순수 코드.
+            path = export_report(state, glossary=project.glossary)
+        except Exception:
+            logger.warning("export.rerender_failed", project_id=str(project.id), exc_info=True)
     if not path.is_file():
         raise NotFoundError(
             message="보고서 파일이 아직 없습니다 (작성 미완료이거나 렌더되지 않음)",
@@ -446,6 +716,10 @@ async def decide_gate(
     project = await _get_authorized_project(project_id, session, current_user)
     if await get_pending_gate(session, project.id) is None:
         raise ValidationError(message="대기 중인 검토 게이트가 없습니다", code="NO_PENDING_GATE")
+    # 한도 사전 검사 — 재개 구간(색인·작성·추가 검색)도 LLM 비용이 크다.
+    from src.clients.llm.quota_gate import check_user_quota
+
+    await check_user_quota(project.owner_id)
     # 결정값으로 척추 재개 — 백그라운드. 게이트 다음 단계부터 이어서 진행된다.
     await resume_run(project.id, data.decision)
     return RunResponse(project_id=str(project.id), status=ProjectStage.RESEARCHING)
@@ -523,7 +797,80 @@ async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID
     return row
 
 
-def _section_content(row: Section) -> SectionContentResponse:
+# 본문 인용 마커 — 작성기(_extract_cited_ids)와 같은 [N] 규약.
+_CITE_NUM_RE = re.compile(r"\[(\d+)\]")
+
+
+def _citation_numbers(content: str) -> list[int]:
+    """본문의 [N] 인용 번호를 등장 순서대로 중복 없이 추출.
+
+    작성 시점 cited_chunk_ids(→sections.source_ids)가 바로 이 순서로 저장되므로
+    (candidates._extract_cited_ids), 위치 대응이 곧 [N]↔출처 매핑이다.
+    """
+    numbers: list[int] = []
+    seen: set[int] = set()
+    for m in _CITE_NUM_RE.finditer(content):
+        n = int(m.group(1))
+        if n not in seen:
+            seen.add(n)
+            numbers.append(n)
+    return numbers
+
+
+def _citations_from_numbers(
+    numbers: list[int], sources_ordered: list[ProjectSource]
+) -> list[SectionCitation]:
+    """전역 번호 → 채택 자료 목록(수집 순서) 직해석.
+
+    조립 시 renumber가 본문 번호를 이 순서로 재매핑하므로(출처 최종장과 동일),
+    번호 n = sources_ordered[n-1]이다. 범위 밖 번호(수동 편집 잔재)는 불명 처리.
+    """
+    citations: list[SectionCitation] = []
+    for n in sorted(numbers):
+        if 1 <= n <= len(sources_ordered):
+            r = sources_ordered[n - 1]
+            citations.append(
+                SectionCitation(
+                    number=n,
+                    title=r.title or r.url or "(제목 없음)",
+                    url=r.url,
+                    source_id=str(r.id),
+                    reliability=r.reliability,
+                )
+            )
+        else:
+            citations.append(SectionCitation(number=n, title="(출처 불명 — 번호 범위 밖)"))
+    return citations
+
+
+async def _section_citations(session: AsyncSession, row: Section) -> list[SectionCitation]:
+    """본문의 전역 인용 번호 [n]을 출처(제목·URL·신뢰도) 목록으로 푼다.
+
+    번호 체계 = 채택 자료의 수집 순서(renumber·출처 최종장과 동일 단일 진실).
+    """
+    numbers = _citation_numbers(row.content or "")
+    if not numbers:
+        return []
+    sources_ordered = (
+        (
+            await session.execute(
+                select(ProjectSource)
+                .where(
+                    ProjectSource.project_id == row.project_id,
+                    ProjectSource.is_included.is_(True),
+                )
+                .order_by(ProjectSource.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return _citations_from_numbers(numbers, list(sources_ordered))
+
+
+def _section_content(
+    row: Section, citations: list[SectionCitation] | None = None
+) -> SectionContentResponse:
     return SectionContentResponse(
         id=str(row.id),
         title=row.title,
@@ -531,6 +878,7 @@ def _section_content(row: Section) -> SectionContentResponse:
         source_ids=[str(s) for s in row.source_ids],
         qa_status=row.qa_status,
         level=row.level,
+        citations=citations or [],
     )
 
 
@@ -542,7 +890,8 @@ async def get_section_content(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> SectionContentResponse:
     project = await _get_authorized_project(project_id, session, current_user)
-    return _section_content(await _get_section(session, project.id, section_id))
+    row = await _get_section(session, project.id, section_id)
+    return _section_content(row, await _section_citations(session, row))
 
 
 @router.patch("/{project_id}/sections/{section_id}", response_model=SectionContentResponse)
@@ -558,9 +907,12 @@ async def update_section_content(
     row = await _get_section(session, project.id, section_id)
     row.content = data.content
     row.status = "completed"
+    # 본문 편집도 '최근 수정'에 반영 — 다운로드 재렌더(HWPX)와 함께 편집의
+    # 흔적이 프로젝트 레벨에서 보이게 한다.
+    project.updated_at = clock_now()
     await session.flush()
     await session.refresh(row)
-    return _section_content(row)
+    return _section_content(row, await _section_citations(session, row))
 
 
 async def _default_section_rewriter(
@@ -613,10 +965,20 @@ async def rewrite_section(
         title=row.title,
     )
     draft = await _section_rewriter(project, plan, data.instruction)
-    row.content = draft.content
+    content = draft.content
+    try:
+        # 재작성 결과도 전역 번호로 재매핑 — 문서의 나머지 절·출처장과 번호 체계 유지.
+        from src.services.sections.renumber import build_chunk_to_global, renumber_content
+
+        mapping = await build_chunk_to_global(project.id, set(draft.cited_chunk_ids))
+        content = renumber_content(draft.content, list(draft.cited_chunk_ids), mapping)
+    except Exception:
+        logger.warning("rewrite.renumber_failed", project_id=str(project.id), exc_info=True)
+    row.content = content
     row.source_ids = list(draft.cited_chunk_ids)
     row.status = "completed"
     row.qa_status = "passed"
+    project.updated_at = clock_now()
     await session.flush()
     await session.refresh(row)
-    return _section_content(row)
+    return _section_content(row, await _section_citations(session, row))

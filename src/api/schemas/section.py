@@ -30,6 +30,20 @@ class SectionTreeResponse(BaseModel):
     tree: list[ChapterNode]
 
 
+class SectionCitation(BaseModel):
+    """본문 [N] 마커 ↔ 원본 자료 매핑 한 줄.
+
+    number는 본문에 실제 등장하는 인용 번호. 편집으로 본문 마커 수가
+    저장된 출처 수와 어긋나면 남는 출처는 number=None으로 내려간다.
+    """
+
+    number: int | None = None
+    title: str
+    url: str | None = None
+    source_id: str | None = None
+    reliability: str | None = None  # high | medium | low (수집기 기록값)
+
+
 class SectionContentResponse(BaseModel):
     id: str
     title: str
@@ -37,6 +51,7 @@ class SectionContentResponse(BaseModel):
     source_ids: list[str]
     qa_status: str
     level: int
+    citations: list[SectionCitation] = Field(default_factory=list)
 
 
 class SectionRewriteRequest(BaseModel):

@@ -36,6 +36,7 @@ class ProjectStage(StrEnum):
     REVIEWING = "reviewing"  # QA·사용자 검토 게이트 대기
     COMPLETED = "completed"  # 작성·검토 완료, 최종 산출물 확정
     ARCHIVED = "archived"  # 완료본 보관 처리
+    CANCELLED = "cancelled"  # 사용자가 실행 도중 취소
 
 
 class SourceType(StrEnum):

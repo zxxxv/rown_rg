@@ -31,7 +31,7 @@ class TestSettingsApi:
         assert items["anthropic_api_key"]["is_secret"] is True
         assert items["anthropic_api_key"]["value"] is None
         # 비밀 아닌 값은 노출
-        assert items["planner_model"]["is_secret"] is False
+        assert items["nw_client_id"]["is_secret"] is False
 
     async def test_set_secret_encrypts_and_masks(
         self, test_client: AsyncClient, super_admin_token: str
@@ -53,31 +53,31 @@ class TestSettingsApi:
         self, test_client: AsyncClient, super_admin_token: str
     ) -> None:
         resp = await test_client.put(
-            "/api/v1/admin/settings/planner_model",
+            "/api/v1/admin/settings/nw_client_id",
             headers=_auth(super_admin_token),
-            json={"value": "claude-haiku-4-5"},
+            json={"value": "WORKS-CLIENT-XYZ"},
         )
         assert resp.status_code == 200
-        assert resp.json()["value"] == "claude-haiku-4-5"
-        assert app_settings.get_str("planner_model") == "claude-haiku-4-5"
+        assert resp.json()["value"] == "WORKS-CLIENT-XYZ"
+        assert app_settings.get_str("nw_client_id") == "WORKS-CLIENT-XYZ"
 
     async def test_clear_reverts_to_env(
         self, test_client: AsyncClient, super_admin_token: str
     ) -> None:
         await test_client.put(
-            "/api/v1/admin/settings/write_model",
+            "/api/v1/admin/settings/nw_service_account",
             headers=_auth(super_admin_token),
-            json={"value": "claude-haiku-4-5"},
+            json={"value": "svc@works"},
         )
-        assert app_settings.is_overridden("write_model") is True
+        assert app_settings.is_overridden("nw_service_account") is True
         # 빈 값 → 오버라이드 해제
         cleared = await test_client.put(
-            "/api/v1/admin/settings/write_model",
+            "/api/v1/admin/settings/nw_service_account",
             headers=_auth(super_admin_token),
             json={"value": ""},
         )
         assert cleared.status_code == 200
-        assert app_settings.is_overridden("write_model") is False
+        assert app_settings.is_overridden("nw_service_account") is False
 
     async def test_admin_forbidden(self, test_client: AsyncClient, admin_token: str) -> None:
         # super_admin 전용 — 일반 admin은 403

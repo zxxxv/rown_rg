@@ -11,6 +11,7 @@ _retriever_factory·_write_client·_exporter) — 테스트는 이를 fake로 �
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import UUID
@@ -18,6 +19,7 @@ from uuid import UUID
 import structlog
 
 from src.clients.llm.base import LLMClient
+from src.clients.llm.exceptions import LLMClientError
 from src.clients.llm.token_tracker import token_context
 from src.core import app_settings
 from src.core.config import settings
@@ -36,11 +38,141 @@ logger = structlog.get_logger(__name__)
 _PREVIEW_MAX_CHARS = 240
 
 
+# web_fetch가 마크다운 앞에 붙이는 메타 머리말(--- canonical/meta-description ---).
+# 미리보기·저장 본문에 남기면 사람 눈과 임베딩 양쪽에 노이즈다.
+_WEB_FRONTMATTER_RE = re.compile(r"\A\s*---\s*\n.*?\n\s*---\s*\n?", re.DOTALL)
+
+
+def strip_web_frontmatter(md: str) -> str:
+    """web_fetch 메타 머리말 제거 — 본문이 머리말뿐이면 빈 문자열이 된다."""
+    return _WEB_FRONTMATTER_RE.sub("", md, count=1)
+
+
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+# 링크·URL·구두점만으로 이뤄진 줄(내비게이션 메뉴·로고 등) — 본문 문장이 없다
+_LINK_ONLY_LINE_RE = re.compile(r"^\s*(?:\[[^\]]*\]\([^)]*\)|https?://\S+|[\s>*#|:•·—–×✕✖-])+\s*$")
+# 사이트 공통 배너 문구 — 이 마커가 든 줄은 본문이 아니다(정부 누리집 안내 배너,
+# JS 렌더 사이트의 메뉴 자리표시자 'Loading…' 등)
+_BOILERPLATE_MARKERS = (
+    "googletagmanager.com",
+    "javascript:void(0)",  # 클릭용 가짜 링크 — 어떤 사이트든 UI 요소
+    "대한민국 공식 전자정부 누리집",
+    "공식 누리집 주소 확인",
+    "아이콘 또는 HTTPS 확인",
+    "자물쇠 아이콘과 주소 앞",
+    "- Loading…",
+    # 한국 사이트 공통 접근성·검색 UI 문구(정부 누리집 헤더 등)
+    "화면크기",
+    "인기검색어",
+    "최근검색어",
+    "검색어 자동완성",
+    "검색어를 입력",
+    "본문 바로가기",
+    "주메뉴 바로가기",
+)
+# 정리 후 이 분량(자)이 안 되면 실본문이 아니라 배너·잔재로 판정 — 검색 근거 불가
+_MIN_CONTENT_CHARS = 200
+
+
+def clean_web_markdown(md: str) -> str:
+    """web_fetch 마크다운의 보일러플레이트 제거 — 미리보기·임베딩 오염 방지.
+
+    Anthropic 페처는 페이지 전체를 마크다운으로 주므로 상단 내비게이션·로고 링크·
+    추적 스크립트(GTM iframe) 잔재가 본문 앞에 붙는다(2026-08-03 실측). 머리말을
+    벗기고, 이미지와 링크만으로 이뤄진 줄을 걷어내 문장이 있는 줄만 남긴다.
+    """
+    md = strip_web_frontmatter(md)
+    kept: list[str] = []
+    for line in md.splitlines():
+        if any(marker in line for marker in _BOILERPLATE_MARKERS):
+            continue
+        no_img = _MD_IMAGE_RE.sub("", line)
+        if not no_img.strip():
+            continue
+        if _LINK_ONLY_LINE_RE.match(no_img):
+            continue
+        kept.append(no_img)
+    return "\n".join(kept).strip()
+
+
+def has_usable_content(content_md: str | None) -> bool:
+    """본문이 '검색 근거로 쓸 수 있는' 분량인지 판정.
+
+    정부 누리집 배너처럼 회수는 됐지만 실내용이 첨부파일(PDF·HWP)에 있는 페이지는
+    정리 후 몇 줄만 남는다(2026-08-03 고용노동부 매뉴얼 실측) — 이런 껍데기를
+    '본문 있음'으로 치면 커버리지가 위장되고 사람도 속는다.
+    """
+    if not content_md:
+        return False
+    return len(clean_web_markdown(content_md)) >= _MIN_CONTENT_CHARS
+
+
+# 발췌 키워드에서 뺄 조사·접속류 — 절 제목의 실질 명사만 매칭에 쓴다
+_TITLE_STOPWORDS = {"및", "등", "관련", "위한", "대한", "중심", "기반", "그리고", "통한"}
+_TOKEN_RE = re.compile(r"[A-Za-z0-9가-힣]{2,}")
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _title_keywords(titles: list[str]) -> list[str]:
+    kws: list[str] = []
+    for t in titles:
+        for tok in _TOKEN_RE.findall(t or ""):
+            if tok not in _TITLE_STOPWORDS and tok not in kws:
+                kws.append(tok)
+    return kws
+
+
+def relevance_excerpt(content_md: str | None, section_titles: list[str] | None) -> str | None:
+    """절 제목 키워드가 가장 많이 등장하는 문장 주변 발췌 — 관련성의 눈에 보이는 근거.
+
+    검색 스니펫을 우리 쪽에서 재현하는 장치다: 모델이 본 스니펫은 암호화라 저장이
+    안 되므로, 회수한 본문에서 '이 절과 관련인 이유'를 결정적으로 뽑아 보여준다.
+    매칭 문장이 없으면 None — 호출부가 본문 앞부분 미리보기로 폴백한다.
+    """
+    if not content_md or not section_titles:
+        return None
+    text = " ".join(clean_web_markdown(content_md).split())
+    if not text:
+        return None
+    keywords = _title_keywords(list(section_titles))
+    if not keywords:
+        return None
+    sentences = [s for s in _SENT_SPLIT_RE.split(text) if s.strip()]
+    best_i, best_hits = -1, 0
+    for i, sent in enumerate(sentences):
+        hits = sum(1 for k in keywords if k in sent)
+        if hits > best_hits:
+            best_i, best_hits = i, hits
+    if best_i < 0:
+        return None
+    excerpt = sentences[best_i]
+    j = best_i + 1
+    while len(excerpt) < _PREVIEW_MAX_CHARS and j < len(sentences):
+        excerpt += " " + sentences[j]
+        j += 1
+    if len(excerpt) > _PREVIEW_MAX_CHARS:
+        excerpt = excerpt[:_PREVIEW_MAX_CHARS].rstrip() + "…"
+    return ("…" if best_i > 0 else "") + excerpt
+
+
 def _source_preview(content_md: str | None) -> str | None:
-    """게이트 표시용 본문 미리보기 — 공백 정리 후 앞부분만. 본문 없으면 None."""
+    """게이트 표시용 본문 미리보기 — 보일러플레이트 제거 후 첫 '문장다운' 줄부터.
+
+    필터를 통과한 짧은 메뉴 잔재("Search Result ×" 류)가 앞머리에 남을 수 있어,
+    30자 미만의 짧은 선두 줄들은 건너뛰고 제목/문장부터 미리보기를 시작한다
+    (제목 줄 '# …'은 15자 이상이면 인정). 전부 짧으면 앞부분 그대로 폴백.
+    """
     if not content_md:
         return None
-    collapsed = " ".join(content_md.split())
+    lines = [ln.strip() for ln in clean_web_markdown(content_md).splitlines() if ln.strip()]
+    if not lines:
+        return None
+    start = 0
+    for i, ln in enumerate(lines):
+        if len(ln) >= 30 or (ln.startswith("#") and len(ln) >= 15):
+            start = i
+            break
+    collapsed = " ".join(" ".join(lines[start:]).split())
     if not collapsed:
         return None
     if len(collapsed) <= _PREVIEW_MAX_CHARS:
@@ -48,13 +180,199 @@ def _source_preview(content_md: str | None) -> str | None:
     return collapsed[:_PREVIEW_MAX_CHARS].rstrip() + "…"
 
 
-async def research(state: ProjectState) -> ProjectState:
-    """목차 설계 → 웹 수집 → 인덱싱.
+_ECONOMY_MODEL = "claude-haiku-4-5"
 
-    목차가 수집 질의(ResearchSpec.outline)의 입력이라 플래너가 먼저 돈다.
-    수집된 웹 본문은 즉시 청킹·임베딩되어(web indexer) write의 검색 대상이 된다.
-    본문 없는 출처도 자료 풀(project_sources·SourceRef)에는 남긴다 — 사람이
-    SOURCE_POOL 게이트에서 전체 풀을 보고 판단할 수 있게.
+
+def _models_for(state: ProjectState) -> dict[str, str]:
+    """프로젝트 품질 모드(config.model_mode) → 역할별 모델.
+
+    economy면 전 역할 Haiku(비용 우선), 아니면 전역 설정(DB 오버라이드→env).
+    RAPTOR(gemini)·임베딩은 모드와 무관.
+    """
+    mode = state.options.get("model_mode") if isinstance(state.options, dict) else None
+    if mode == "economy":
+        return {
+            "planner": _ECONOMY_MODEL,
+            "research": _ECONOMY_MODEL,
+            "write": _ECONOMY_MODEL,
+            "verify": _ECONOMY_MODEL,
+        }
+    return {
+        "planner": app_settings.get_str("planner_model"),
+        "research": app_settings.get_str("research_model"),
+        "write": app_settings.get_str("write_model"),
+        "verify": app_settings.get_str("verify_model"),
+    }
+
+
+def _chapter_groups(state: ProjectState) -> list[tuple[int, str, list[str]]]:
+    """챕터별 (번호, 제목, 절 제목들) — 분할 수집의 질의 단위.
+
+    챕터 제목은 SectionPlan에 없어 config.outline에서 위치로 가져오고, 없으면
+    'N장' 폴백(질의 topic 결합용이라 근사면 충분).
+    """
+    titles: dict[int, str] = {}
+    outline = state.options.get("outline") if isinstance(state.options, dict) else None
+    if isinstance(outline, dict):
+        for i, ch in enumerate(outline.get("chapters") or [], start=1):
+            if isinstance(ch, dict) and isinstance(ch.get("title"), str) and ch["title"].strip():
+                titles[i] = ch["title"].strip()
+    groups: dict[int, list[str]] = {}
+    for s in state.section_plan:
+        groups.setdefault(s.chapter_number, []).append(s.title)
+    return [(n, titles.get(n, f"{n}장"), groups[n]) for n in sorted(groups)]
+
+
+async def _collect_sources(
+    state: ProjectState,
+    *,
+    exclude_keys: set[str],
+    target: int | None = None,
+    ensure_coverage: bool = True,
+) -> list[SourceRef]:
+    """챕터당 1콜 분할 수집 → URL 중복 제거 → 스테이징 → SourceRef 목록.
+
+    보고서당 1콜은 full 보고서에 필요한 자료량(research_min_sources)이 구조적으로
+    안 나온다(2026-08-03 실측 2~16건) — 챕터마다 해당 절 제목으로 질의를 좁혀
+    수집 폭을 챕터 수 × research_max_uses로 늘린다(무한성 캡 유지).
+    exclude_keys는 이미 풀에 있는 출처의 URL 키 — '추가 조사' 보충 라운드가
+    기존 출처를 다시 담지 않게 한다.
+
+    target은 이번 호출의 신규 출처 목표치(초기=research_min_sources,
+    추가 조사=research_more_batch). ensure_coverage=True(초기 수집)면 1차 패스는
+    전 챕터를 돌아 커버리지를 보장하고, 목표 미달 시 보충 패스 1회로 채운다.
+    False(추가 조사)면 목표를 채우는 즉시 멈추고, 시작 챕터를 회전시켜 라운드마다
+    앞 챕터 자료만 늘어나는 편향을 피한다. 비용 상한 = 챕터 수 × 2콜.
+    """
+    pid = state.project_id
+    indexer = _web_indexer_factory()
+    refs: list[SourceRef] = []
+    seen: set[str] = set(exclude_keys)
+    chapters = _chapter_groups(state)
+    if not ensure_coverage and chapters:
+        offset = len(exclude_keys) % len(chapters)
+        chapters = chapters[offset:] + chapters[:offset]
+    n_ok = 0
+    last_error: Exception | None = None
+
+    def _target_met() -> bool:
+        # 목표는 '본문 있는(쓸 수 있는)' 자료 기준 — URL만 있는 껍데기는 세지 않는다
+        if target is None:
+            return False
+        return sum(1 for r in refs if r.has_content) >= target
+
+    for pass_no in (1, 2):
+        if pass_no > 1 and (target is None or _target_met()):
+            break
+        # 보충 성격의 콜(2차 패스 또는 추가 조사 라운드)은 질의를 심화 쪽으로 틀어
+        # 같은 검색 결과가 반복 회수(→전부 dedup)되는 낭비를 줄인다.
+        supplement = pass_no > 1 or not ensure_coverage
+        for ch_num, ch_title, section_titles in chapters:
+            if supplement and _target_met():
+                break
+            label = f"자료 수집 · {ch_num}장 {ch_title}" + (" (보충)" if pass_no > 1 else "")
+            emit_step(pid, "research", label, "started")
+            topic = f"{state.topic} — {ch_title}"
+            if supplement:
+                topic += " (추가 심화 자료: 통계·사례·상반된 관점)"
+            spec = ResearchSpec(
+                topic=topic,
+                report_type=state.preset or "blank",
+                outline=section_titles,
+            )
+            try:
+                with token_context(
+                    user_id=state.user_id,
+                    project_id=state.project_id,
+                    operation=f"research.collect:{ch_num}",
+                ):
+                    result = await _research_service_factory().collect(
+                        spec,
+                        model=_models_for(state)["research"],
+                        max_uses=settings.research_max_uses,
+                        max_tokens=settings.research_max_tokens,
+                    )
+            except LLMClientError as exc:
+                # 챕터 하나의 실패(재시도 소진·prompt too long 등)가 실행 전체를
+                # 죽이지 않게 격리한다 — 해당 챕터만 건너뛰고 나머지를 계속 모아
+                # 게이트를 열면, 사람이 '추가 조사'로 빈 챕터를 메울 수 있다.
+                emit_step(pid, "research", label, "failed")
+                last_error = exc
+                logger.warning(
+                    "research.chapter_failed",
+                    project_id=str(state.project_id),
+                    chapter=ch_num,
+                    error=str(exc),
+                )
+                continue
+            n_ok += 1
+            emit_step(pid, "research", label, "completed")
+            if result.coverage_gaps:
+                logger.warning(
+                    "research.coverage_gaps",
+                    project_id=str(state.project_id),
+                    chapter=ch_num,
+                    gaps=result.coverage_gaps,
+                )
+            for src in result.sources:
+                key = source_dedup_key(src.url, src.title)
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                content_md = clean_web_markdown(src.content_md or "")
+                has_content = has_usable_content(content_md)
+                if not has_content:
+                    # 본문 없는 출처는 풀에 넣지 않는다 — 검색 근거가 못 되는 껍데기가
+                    # 수십 건씩 쌓여 검토를 마비시켰다(2026-08-03 실측 127행 중 ~115
+                    # 껍데기). 사이트별 보일러플레이트 필터 추격전도 여기서 끝낸다.
+                    continue
+                # 출처 저장(원문은 metadata_에). id는 게이트 payload의 SourceRef.id와 일치해야
+                # 사람이 제외한 id가 그대로 색인 제외로 이어진다.
+                source_id = await indexer.stage(
+                    project_id=state.project_id,
+                    content_md=content_md,
+                    url=src.url,
+                    title=src.title,
+                    reliability=src.reliability,
+                    matched_sections=list(src.matched_sections),
+                    page_age=src.page_age,
+                )
+                # 신호를 SourceRef에 실어 게이트 payload로 — 사람이 취사선택할 근거.
+                refs.append(
+                    SourceRef(
+                        id=source_id,
+                        source_type=SourceType.WEB_SEARCH,
+                        title=src.title or src.url,
+                        url=src.url,
+                        reliability=src.reliability,
+                        matched_sections=list(src.matched_sections),
+                        page_age=src.page_age,
+                        preview=relevance_excerpt(content_md, list(src.matched_sections))
+                        or _source_preview(content_md),
+                        has_content=has_content,
+                    )
+                )
+    if n_ok == 0 and last_error is not None:
+        # 성공한 콜이 하나도 없으면 시스템 문제(키·네트워크·전면 한도)일 가능성이
+        # 높다 — 빈 게이트를 여는 대신 실행 실패로 승격해 원인이 드러나게 한다.
+        raise last_error
+    return refs
+
+
+def source_dedup_key(url: str | None, title: str | None) -> str:
+    """출처 중복 판정 키 — URL 우선, 없으면 제목(정규화)."""
+    return (url or title or "").strip().lower()
+
+
+async def collect(state: ProjectState) -> ProjectState:
+    """목차 확인 → 챕터 단위 웹 수집 → 출처 스테이징(원문 저장). SOURCE_POOL 게이트 직전까지.
+
+    목차가 수집 질의(ResearchSpec.outline)의 입력이라 먼저 확정돼야 한다(사람 목차
+    필수 정책 — outline이 없으면 레거시 LLM 플래너 폴백). 수집한 출처는
+    project_sources에 저장하되 **임베딩은 하지 않는다** — 원문은 metadata_에 담겨
+    확정 게이트 너머까지 살아남고, 사람이 채택한 출처만 이후 index 단계에서
+    임베딩된다. 본문 없는 출처도 풀에는 남긴다 — 사람이 전체 풀을 보고 판단.
     """
     pid = state.project_id
     emit_phase(pid, "research", "started")
@@ -68,7 +386,7 @@ async def research(state: ProjectState) -> ProjectState:
             plan = await plan_sections(
                 state.topic,
                 state.preset or "blank",
-                model=app_settings.get_str("planner_model"),
+                model=_models_for(state)["planner"],
                 client=_plan_client,
                 user_id=state.user_id,
                 project_id=state.project_id,
@@ -76,64 +394,60 @@ async def research(state: ProjectState) -> ProjectState:
         state = state.with_section_plan(plan)
         emit_step(pid, "research", "목차 설계", "completed")
 
-    spec = ResearchSpec(
-        topic=state.topic,
-        report_type=state.preset or "blank",
-        outline=[s.title for s in state.section_plan],
+    # 부분 실패 재시작이면 state.sources에 이전 스테이징 출처가 복원돼 있다(runner).
+    # 본문 있는 것만 제외해 중복을 막되, 본문 없는 껍데기는 재회수 기회를 준다
+    # (성공 시 stage 업서트로 같은 행이 승격). 부족분 계산도 본문 기준.
+    exclude = {
+        key for s in state.sources if s.has_content and (key := source_dedup_key(s.url, s.title))
+    }
+    usable_existing = sum(1 for s in state.sources if s.has_content)
+    remaining = max(0, settings.research_min_sources - usable_existing)
+    refs = await _collect_sources(state, exclude_keys=exclude, target=remaining or None)
+    logger.info(
+        "research.collected",
+        project_id=str(state.project_id),
+        n_sources=len(refs),
+        n_existing=len(state.sources),
     )
-    emit_step(pid, "research", "자료 수집·평가", "started")
-    with token_context(
-        user_id=state.user_id, project_id=state.project_id, operation="research.collect"
-    ):
-        result = await _research_service_factory().collect(
-            spec,
-            model=app_settings.get_str("research_model"),
-            max_uses=settings.research_max_uses,
-            max_tokens=settings.research_max_tokens,
-        )
-    emit_step(pid, "research", "자료 수집·평가", "completed")
     emit_phase(pid, "research", "completed")
-    if result.coverage_gaps:
-        logger.warning(
-            "research.coverage_gaps",
-            project_id=str(state.project_id),
-            gaps=result.coverage_gaps,
+    # 재회수 승격분은 기존 껍데기 항목과 id가 같다 — 옛 버전을 걷어내고 병합.
+    new_ids = {r.id for r in refs}
+    if state.sources and new_ids:
+        state = state.model_copy(
+            update={"sources": [s for s in state.sources if s.id not in new_ids]}
         )
+    return state.add_sources(refs)
 
+
+async def index(state: ProjectState) -> ProjectState:
+    """확정 이후 — 채택된(is_included) 웹 출처만 청킹·임베딩·색인 + RAPTOR.
+
+    확정 게이트에서 사람이 제외한 출처는 is_included=false로 표시돼 load_included에서
+    빠지므로 임베딩 자체를 건너뛴다(비용 절감). RAPTOR도 채택분만 요약해 제외 자료가
+    요약 트리로 새지 않는다.
+    """
+    pid = state.project_id
     emit_phase(pid, "indexing", "started")
     emit_step(pid, "indexing", "청킹·임베딩·색인", "started")
     indexer = _web_indexer_factory()
-    refs: list[SourceRef] = []
+    staged = await indexer.load_included(state.project_id)
     indexed: list[UUID] = []
-    for src in result.sources:
-        indexed_result = await indexer.index(
+    for src in staged:
+        if not has_usable_content(src.content_md):
+            continue  # 배너·잔재뿐인 본문은 임베딩해도 쓰레기 청크만 생긴다
+        result = await indexer.index_existing(
             project_id=state.project_id,
-            content_md=src.content_md or "",
-            url=src.url,
-            title=src.title,
-            reliability=src.reliability,
+            source_id=src.source_id,
+            # 색인 직전에도 보일러플레이트 정리 — 필터 도입 전에 저장된 행(구데이터)도
+            # 임베딩 시점엔 깨끗한 본문을 쓰게 한다.
+            content_md=clean_web_markdown(src.content_md),
         )
-        has_content = bool(indexed_result.chunks_created)
-        # 신호를 SourceRef에 실어 게이트 payload로 흘려보낸다 — 사람이 취사선택할 근거.
-        refs.append(
-            SourceRef(
-                id=indexed_result.source_id,
-                source_type=SourceType.WEB_SEARCH,
-                title=src.title or src.url,
-                url=src.url,
-                reliability=src.reliability,
-                matched_sections=list(src.matched_sections),
-                page_age=src.page_age,
-                preview=_source_preview(src.content_md),
-                has_content=has_content,
-            )
-        )
-        if has_content:
-            indexed.append(indexed_result.source_id)
+        if result.chunks_created:
+            indexed.append(src.source_id)
     logger.info(
-        "research.done",
+        "indexing.done",
         project_id=str(state.project_id),
-        n_sources=len(refs),
+        n_staged=len(staged),
         n_indexed=len(indexed),
     )
     emit_step(pid, "indexing", "청킹·임베딩·색인", "completed")
@@ -150,7 +464,7 @@ async def research(state: ProjectState) -> ProjectState:
             logger.warning("raptor.build_failed", project_id=str(state.project_id), exc_info=True)
             emit_step(pid, "indexing", "RAPTOR 요약 트리", "failed")
     emit_phase(pid, "indexing", "completed")
-    return state.add_sources(refs).mark_indexed(indexed)
+    return state.mark_indexed(indexed)
 
 
 def _ensure_section_plan(state: ProjectState) -> ProjectState:
@@ -169,6 +483,16 @@ def _ensure_section_plan(state: ProjectState) -> ProjectState:
     return state.with_section_plan(plan)
 
 
+def _hyde_enabled_for(state: ProjectState) -> bool:
+    """HyDE on/off — 프로젝트 config가 전역 기본값을 오버라이드한다.
+
+    config.hyde_enabled가 있으면 그 값을, 없으면 settings.hyde_enabled(전역 기본).
+    model_mode와 같은 프로젝트별 품질 노브 패턴을 따른다.
+    """
+    opts = state.options if isinstance(state.options, dict) else {}
+    return bool(opts.get("hyde_enabled", settings.hyde_enabled))
+
+
 def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
     """실검색 retriever — 프로젝트 인덱스 대상 hybrid 검색에 바인딩.
 
@@ -184,7 +508,7 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
 
     embedder = get_embedding_client()
     expander = None
-    if settings.hyde_enabled:
+    if _hyde_enabled_for(state):
         from src.services.retrieval._hyde import make_hyde_expander
 
         expander = make_hyde_expander(
@@ -208,15 +532,60 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
             async_session_maker, embedder, state.project_id, top_k=settings.raptor_top_k
         )
     return make_section_retriever(
-        hybrid, state.project_id, reranker=reranker, summary_fetcher=summary_fetcher
+        hybrid,
+        state.project_id,
+        reranker=reranker,
+        summary_fetcher=summary_fetcher,
+        # 주제 앵커 — 재채점·RAPTOR 검색이 절 제목만으로 표류하지 않게(주제 표류 실측 대응)
+        topic=state.topic,
     )
 
 
-def _default_exporter(state: ProjectState) -> Path:
+def _default_exporter(
+    state: ProjectState, glossary: dict[str, dict[str, str]] | None = None
+) -> Path:
     """조립된 보고서를 HWPX로 렌더. lazy import로 hwpx 의존을 사용 시점으로 미룬다."""
     from src.services.export.report import export_report
 
-    return export_report(state)
+    return export_report(state, glossary=glossary)
+
+
+async def _adopted_source_refs(project_id: UUID) -> list[SourceRef]:
+    """채택(is_included) 자료를 출처 최종장용 SourceRef로 로드.
+
+    조립·재개 시점의 state는 프로젝트 행에서 복원돼 sources가 비어 있다 —
+    렌더 직전에 DB에서 채택분을 실어줘야 출처장이 생긴다(2026-08-05 실측 수정).
+    """
+    from sqlalchemy import select
+
+    from src.db.models.project_source import ProjectSource
+    from src.db.session import async_session_maker
+
+    async with async_session_maker() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(ProjectSource)
+                    .where(
+                        ProjectSource.project_id == project_id,
+                        ProjectSource.is_included.is_(True),
+                    )
+                    .order_by(ProjectSource.created_at)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [
+        SourceRef(
+            id=r.id,
+            source_type=SourceType(r.source_type),
+            title=r.title or r.url or "(제목 없음)",
+            url=r.url,
+            reliability=r.reliability,
+        )
+        for r in rows
+    ]
 
 
 async def _default_section_store(state: ProjectState) -> None:
@@ -230,7 +599,7 @@ async def _default_pm_verifier(state: ProjectState) -> int:
     """PM 검증 리포트 생성·저장(챕터당 1콜). lazy import로 LLM·DB 의존을 미룬다."""
     from src.services.qa.pm_verify import run_pm_verify
 
-    return await run_pm_verify(state)
+    return await run_pm_verify(state, model=_models_for(state)["verify"])
 
 
 # 주입 지점 — 테스트는 이 전역들을 fake로 교체한다.
@@ -240,7 +609,7 @@ _web_indexer_factory: Callable[[], WebSourceIndexer] = build_web_source_indexer
 _raptor_builder_factory: Callable[[], RaptorBuilder] = build_raptor_builder
 _retriever_factory: Callable[[ProjectState], SectionRetriever] = _default_retriever_factory
 _write_client: LLMClient | None = None
-_exporter: Callable[[ProjectState], Path] = _default_exporter
+_exporter: Callable[[ProjectState, dict[str, dict[str, str]] | None], Path] = _default_exporter
 _section_store: Callable[[ProjectState], Awaitable[None]] = _default_section_store
 _pm_verifier: Callable[[ProjectState], Awaitable[int]] = _default_pm_verifier
 
@@ -254,7 +623,7 @@ async def write(state: ProjectState) -> ProjectState:
     retrieve = _retriever_factory(state)
     emit_phase(state.project_id, "writing", "started")
     result = await run_write_loop(
-        state, retrieve=retrieve, client=_write_client, model=app_settings.get_str("write_model")
+        state, retrieve=retrieve, client=_write_client, model=_models_for(state)["write"]
     )
     emit_phase(state.project_id, "writing", "completed")
     # QA_SELECT 게이트(=사람 검토)로 넘어가는 지점 — qa 단계 진입만 알린다.
@@ -273,6 +642,14 @@ async def assemble(state: ProjectState) -> ProjectState:
     emit_phase(pid, "qa", "completed")
     emit_phase(pid, "export", "started")
     emit_step(pid, "export", "통합·교정·HWPX 변환", "started")
+    # 인용 전역 번호화 — 절-로컬 [n]을 출처장 번호로 재작성(저장·검증·렌더 전부
+    # 전역 번호 기준이 되도록 가장 먼저). 실패는 비치명 — 로컬 번호로 계속한다.
+    try:
+        from src.services.sections.renumber import renumber_state
+
+        state = await renumber_state(state)
+    except Exception:
+        logger.warning("assemble.renumber_failed", project_id=str(pid), exc_info=True)
     drafts, result = check_assembled(state)
     logger.info(
         "assemble.done",
@@ -299,7 +676,24 @@ async def assemble(state: ProjectState) -> ProjectState:
             )
             emit_step(pid, "export", "PM 검증 리포트", "failed")
     if result.passed and drafts:
-        path = _exporter(state)
+        # 출처 최종장 — 재개 복원 state는 sources가 비어 있어 렌더 직전 DB에서 채운다.
+        try:
+            refs = await _adopted_source_refs(state.project_id)
+            if refs and not state.sources:
+                state = state.model_copy(update={"sources": refs})
+        except Exception:
+            logger.warning("assemble.sources_load_failed", project_id=str(pid), exc_info=True)
+        # 약어 사전 — 설명 열을 LLM 1콜(최저가)로 채우고 영속화(다운로드 재렌더용).
+        glossary: dict[str, dict[str, str]] | None = None
+        try:
+            from src.services.export.glossary import build_glossary, persist_glossary
+
+            glossary = await build_glossary(state)
+            await persist_glossary(state.project_id, glossary)
+        except Exception:
+            # 설명은 장식 — 실패해도 풀네임만으로 렌더를 계속한다.
+            logger.warning("assemble.glossary_failed", project_id=str(pid), exc_info=True)
+        path = _exporter(state, glossary)
         logger.info("assemble.exported", project_id=str(state.project_id), path=str(path))
     else:
         logger.warning(

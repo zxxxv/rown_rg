@@ -31,6 +31,8 @@ class ProgressResponse(BaseModel):
     # (첫 LLM 콜은 실행 시작 수 초 내라 경과 시간 표시엔 충분) 기록 없으면 None.
     started_at: datetime | None = None
     last_activity_at: datetime | None = None
+    # 전역 동시 실행 상한 대기열 위치(1부터) — 대기 중이 아니면 None
+    queue_position: int | None = None
 
 
 class DecideRequest(BaseModel):

@@ -13,6 +13,7 @@ const STATUS_LABEL: Record<ProjectStatus, string> = {
   reviewing: "검토 대기",
   completed: "완료",
   archived: "보관",
+  cancelled: "취소됨",
 };
 
 const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
@@ -23,6 +24,7 @@ const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
   reviewing: "warning",
   completed: "success",
   archived: "tertiary",
+  cancelled: "danger",
 };
 
 // 단계 기반 근사 진행률 — 백엔드 _STAGE_PERCENT와 동일. ProjectRead에 progress가 없어
@@ -35,6 +37,7 @@ const STATUS_PERCENT: Record<ProjectStatus, number> = {
   reviewing: 85,
   completed: 100,
   archived: 100,
+  cancelled: 0,
 };
 
 export interface ProjectCardProps {

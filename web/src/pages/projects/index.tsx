@@ -2,12 +2,7 @@ import { FilePlus2, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useProjectListInfinite } from "@/api/projects";
-import {
-  type ProjectSort,
-  ProjectSortSchema,
-  type ProjectStatus,
-  ProjectStatusSchema,
-} from "@/api/types";
+import { type ProjectSort, ProjectSortSchema } from "@/api/types";
 import { ProjectCard } from "@/components/data-display/ProjectCard";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
@@ -26,12 +21,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { useDebounce } from "@/hooks/useDebounce";
 import { cn } from "@/lib/utils";
 
-const STATUS_TABS: { value: "all" | ProjectStatus; label: string }[] = [
+// 상태 탭 — 단일 단계 대신 '진행 중'(미완료 단계 묶음)·'완료'로 단순화.
+// 'in_progress'는 백엔드 그룹 필터 토큰(created~reviewing), 'completed'는 실제 단계값.
+type StatusFilter = "all" | "in_progress" | "completed";
+const STATUS_TABS: { value: StatusFilter; label: string }[] = [
   { value: "all", label: "전체" },
-  { value: "writing", label: "작성 중" },
-  { value: "reviewing", label: "검토 대기" },
+  { value: "in_progress", label: "진행 중" },
   { value: "completed", label: "완료" },
-  { value: "archived", label: "보관" },
 ];
 
 const SORT_OPTIONS: { value: ProjectSort; label: string }[] = [
@@ -41,10 +37,9 @@ const SORT_OPTIONS: { value: ProjectSort; label: string }[] = [
 
 const DEFAULT_SORT: ProjectSort = "created_desc";
 
-function parseStatus(raw: string | null): ProjectStatus | "all" {
-  if (!raw || raw === "all") return "all";
-  const result = ProjectStatusSchema.safeParse(raw);
-  return result.success ? result.data : "all";
+function parseStatus(raw: string | null): StatusFilter {
+  if (raw === "in_progress" || raw === "completed") return raw;
+  return "all";
 }
 
 function parseSort(raw: string | null): ProjectSort {

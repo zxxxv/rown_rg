@@ -9,8 +9,12 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.db.models.project_source import ProjectSource
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -190,6 +194,82 @@ class TestLibraryApi:
         me_projects = _find(tree.json()["tree"], "me-projects")
         assert me_projects is not None
         assert "워커의 비밀 프로젝트" not in [c["name"] for c in me_projects["children"]]
+
+    async def test_web_source_size_and_content(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        worker_token: str,
+        super_admin_token: str,
+    ) -> None:
+        """AI 수집 자료: 크기=수집 본문 UTF-8 바이트, content_url로 원문 조회(소유자만)."""
+        created = await test_client.post(
+            "/api/v1/projects",
+            headers=_auth(worker_token),
+            json={
+                "title": "원격근무 보고서",
+                "topic": "원격/하이브리드 근무",
+                "preset": None,
+                "config": {
+                    "outline": {
+                        "chapters": [
+                            {
+                                "title": "1장",
+                                "sections": [
+                                    {
+                                        "title": "개요",
+                                        "direction": "",
+                                        "key_points": [],
+                                        "analysts": [],
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                },
+                "depth_mode": "standard",
+            },
+        )
+        assert created.status_code == 201, created.text
+        project_id = created.json()["id"]
+
+        content_md = "# 원격근무\n\n원격/하이브리드 근무와 조직 내 소통에 관한 수집 원문.\n"
+        source = ProjectSource(
+            project_id=UUID(project_id),
+            source_type="web_search",
+            title="원격근무 동향",
+            url="https://example.com/remote",
+            reliability="medium",
+            metadata_={"content_md": content_md, "matched_sections": ["개요"]},
+        )
+        test_session.add(source)
+        await test_session.commit()
+
+        # 트리의 web 소스 노드: 크기=본문 UTF-8 바이트(>0), content_url 존재.
+        tree = await test_client.get("/api/v1/library/tree", headers=_auth(worker_token))
+        node = _find(tree.json()["tree"], f"ps-{source.id}")
+        assert node is not None, tree.json()
+        assert node["file_meta"]["size_bytes"] == len(content_md.encode("utf-8"))
+        assert node["file_meta"]["size_bytes"] > 0
+        assert node["content_url"] == f"library/sources/{source.id}/content"
+
+        # 소유자는 content_url로 원문을 그대로 받는다(바이트≠글자수: 한글 검증).
+        body = await test_client.get(
+            f"/api/v1/library/sources/{source.id}/content", headers=_auth(worker_token)
+        )
+        assert body.status_code == 200, body.text
+        payload = body.json()
+        assert payload["content_md"] == content_md
+        assert payload["title"] == "원격근무 동향"
+        assert payload["char_count"] == len(content_md)
+        assert payload["byte_count"] == len(content_md.encode("utf-8"))
+        assert payload["byte_count"] > payload["char_count"]
+
+        # 타인(관리자)은 소유자 스코프 밖 → 존재 은닉 404.
+        other = await test_client.get(
+            f"/api/v1/library/sources/{source.id}/content", headers=_auth(super_admin_token)
+        )
+        assert other.status_code == 404
 
     async def test_viewer_cannot_write(self, test_client: AsyncClient, viewer_token: str) -> None:
         resp = await test_client.post(

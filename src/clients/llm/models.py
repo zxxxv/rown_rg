@@ -60,10 +60,16 @@ MODELS: tuple[ModelSpec, ...] = (
         ModelPricing(Decimal("0.30"), Decimal("2.50"), Decimal("0.03")),
     ),
     ModelSpec(
+        "gemini-3.1-flash-lite",
+        "gemini",
+        # 실작동 최저가(2026-08-04 실측: generateContent 200). cached는 입력의 10% 관례.
+        ModelPricing(Decimal("0.25"), Decimal("1.50"), Decimal("0.025")),
+        default=True,
+    ),
+    ModelSpec(
         "gemini-3.5-flash-lite",
         "gemini",
         ModelPricing(Decimal("0.30"), Decimal("2.50"), Decimal("0.03")),
-        default=True,
     ),
     ModelSpec(
         "gemini-3.5-flash",

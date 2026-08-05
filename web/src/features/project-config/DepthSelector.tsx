@@ -5,40 +5,33 @@ import type { ProjectFormValues } from "./schema";
 
 interface DepthInfo {
   label: string;
-  pages: string;
-  cost: string;
-  hours: string;
+  /** 배경 요약(RAPTOR) 트리 층수 — 깊이가 실제로 조절하는 값 */
+  raptor: string;
   hint?: string;
 }
 
+// 예전의 "200~300p" 식 페이지 표기는 제거(2026-08-05) — 분량은 깊이가 아니라
+// 목차 절 수·에이전트 분량 목표가 결정한다. 깊이의 실효 = 배경 요약 트리 층수.
 const DEPTH_INFO: Record<DepthMode, DepthInfo> = {
   outline_only: {
     label: "Outline Only",
-    pages: "10~30p",
-    cost: "1~3만원",
-    hours: "~1시간",
-    hint: "목차·요약 수준의 가벼운 초안.",
+    raptor: "배경 요약 없음",
+    hint: "자료 원문 검색만 사용 — 목차·요약 수준의 가벼운 초안용.",
   },
   standard: {
     label: "Standard",
-    pages: "40~80p",
-    cost: "3~7만원",
-    hours: "1~2시간",
-    hint: "주요 섹션을 본문 형식으로 작성.",
+    raptor: "배경 요약 1층",
+    hint: "자료를 의미별로 묶은 요약 1층을 만들어 작성 시 배경 맥락으로 활용.",
   },
   full_report: {
     label: "Full Report",
-    pages: "200~300p",
-    cost: "10~22만원",
-    hours: "5~10시간",
-    hint: "회사 표준 보고서 분량. 기본값.",
+    raptor: "배경 요약 2층",
+    hint: "요약을 다시 묶은 상위 요약(요약의 요약)까지 쌓아 문서 전체 맥락이 깊어짐 — 회사 표준.",
   },
   deep_dive: {
     label: "Deep Dive",
-    pages: "300~500p",
-    cost: "20~40만원",
-    hours: "10~20시간",
-    hint: "민감 주제에 대한 심층 분석. 비용 큼.",
+    raptor: "배경 요약 3층",
+    hint: "최대 추상화 — 자료가 많고 민감·복잡한 주제의 심층 분석용.",
   },
 };
 
@@ -102,16 +95,19 @@ export function DepthSelector({ disabled }: DepthSelectorProps) {
                       </span>
                     ) : null}
                   </div>
-                  <div className="flex flex-wrap gap-x-3 font-mono text-xs text-fg-secondary">
-                    <span>{info.pages}</span>
-                    <span>{info.cost}</span>
-                    <span>{info.hours}</span>
+                  <div className="font-mono text-xs text-fg-secondary">
+                    <span>{info.raptor}</span>
                   </div>
                   {info.hint ? <p className="text-xs text-fg-tertiary">{info.hint}</p> : null}
                 </div>
               </label>
             );
           })}
+          <p className="text-xs text-fg-tertiary">
+            깊이는 자료를 계층 요약(RAPTOR)해 작성에 곁들이는 <strong>배경 맥락의 층수</strong>를
+            조절합니다. 보고서 분량은 깊이가 아니라 목차의 절 수와 절별 분석 에이전트의 분량 설정에
+            따라 결정됩니다.
+          </p>
         </fieldset>
       )}
     />

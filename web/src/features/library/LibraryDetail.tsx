@@ -20,6 +20,7 @@ import {
   resolveDownloadUrl,
   useDeleteNode,
   useSetNodeVisibility,
+  useSourceContent,
 } from "@/api/library";
 import { useProject } from "@/api/projects";
 import type { LibraryNode, SourceKind, UserRoleType } from "@/api/types";
@@ -45,6 +46,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PromptBody, PromptCreateButton } from "@/features/library/PromptPanel";
+import { MarkdownContent } from "@/features/preview/MarkdownContent";
 
 interface LibraryDetailProps {
   node: LibraryNode | null;
@@ -424,6 +426,10 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
       ? resolveDownloadUrl(node.download_url)
       : null
     : libraryFileDownloadUrl(node.id);
+  // AI 수집 자료는 수집 원문을 라이브러리 안에서 바로 렌더(content_url 있을 때).
+  const collectedUrl = node.content_url ?? null;
+  // 외부 원문 링크(웹 검색)는 다운로드가 아니라 새 탭 이동이므로 버튼 표시를 구분한다.
+  const isExternalLink = downloadHref ? /^https?:\/\//.test(downloadHref) : false;
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -448,13 +454,17 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
 
       {meta.project_id ? <ProjectLinkRow projectId={meta.project_id} /> : null}
 
-      <div
-        role="img"
-        aria-label={`${node.name} 미리보기`}
-        className="flex aspect-[4/3] items-center justify-center rounded border border-dashed border-border bg-bg-secondary text-xs text-fg-tertiary"
-      >
-        미리보기 준비 중 — PDF·HWPX 1페이지 썸네일로 표시됩니다
-      </div>
+      {collectedUrl ? (
+        <SourceContentView contentUrl={collectedUrl} />
+      ) : (
+        <div
+          role="img"
+          aria-label={`${node.name} 미리보기`}
+          className="flex aspect-[4/3] items-center justify-center rounded border border-dashed border-border bg-bg-secondary text-xs text-fg-tertiary"
+        >
+          미리보기 준비 중 — PDF·HWPX 1페이지 썸네일로 표시됩니다
+        </div>
+      )}
 
       <dl className="grid grid-cols-2 gap-3 rounded border border-border bg-bg p-3 text-sm">
         <Stat label="등록자" value={meta.registered_by} />
@@ -494,8 +504,17 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
         ) : null}
         {downloadHref ? (
           <Button variant="outline" onClick={() => downloadFile(downloadHref, node.name)}>
-            <Download className="mr-1 h-4 w-4" />
-            다운로드
+            {isExternalLink ? (
+              <>
+                <ArrowUpRight className="mr-1 h-4 w-4" />
+                원문 링크
+              </>
+            ) : (
+              <>
+                <Download className="mr-1 h-4 w-4" />
+                다운로드
+              </>
+            )}
           </Button>
         ) : null}
         {!node.virtual ? (
@@ -511,6 +530,38 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
         파일 ID: <span className="font-mono">{node.id}</span>
       </p>
     </div>
+  );
+}
+
+function SourceContentView({ contentUrl }: { contentUrl: string }) {
+  const { data, isLoading, isError, error } = useSourceContent(contentUrl);
+  return (
+    <section className="rounded border border-border bg-bg">
+      <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-fg-tertiary">
+          <FileText className="h-3.5 w-3.5" aria-hidden />
+          수집 원문
+        </span>
+        {data ? (
+          <span className="font-mono text-xs text-fg-tertiary">
+            {data.char_count.toLocaleString()}자 · {formatSize(data.byte_count)}
+          </span>
+        ) : null}
+      </header>
+      <div className="max-h-[32rem] overflow-y-auto px-4 py-3">
+        {isLoading ? (
+          <p className="py-8 text-center text-sm text-fg-tertiary">원문을 불러오는 중…</p>
+        ) : isError ? (
+          <p className="py-8 text-center text-sm text-fg-danger">
+            {error instanceof ApiError ? error.message : "원문을 불러오지 못했습니다."}
+          </p>
+        ) : data?.content_md.trim() ? (
+          <MarkdownContent content={data.content_md} />
+        ) : (
+          <p className="py-8 text-center text-sm text-fg-tertiary">표시할 본문이 없습니다.</p>
+        )}
+      </div>
+    </section>
   );
 }
 

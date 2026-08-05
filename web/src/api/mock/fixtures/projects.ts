@@ -128,18 +128,10 @@ const PRESET_POOL: Preset[] = [
 
 const DEFAULT_CONFIG: ProjectConfig = {
   preset: "preliminary_feasibility",
-  sources: { use_library: true, use_upload: true, use_web_search: true },
   model_mode: "standard",
   enabled_analyzers: ["STEEP", "COST_BENEFIT"],
-  enable_pre_reconciliation: true,
-  enable_consistency_graph: true,
-  enable_dual_track_search: true,
-  enable_source_tagging: true,
-  enable_critic_agent: false,
-  enable_glossary: false,
   depth_mode: "full_report",
   output_formats: ["hwpx"],
-  notification_channels: ["email"],
 };
 
 const NOW = new Date("2026-05-27T00:00:00Z");
@@ -165,18 +157,10 @@ const W4_DEMO_PROJECT: Project = {
   preset: "preliminary_feasibility",
   config: {
     preset: "preliminary_feasibility",
-    sources: { use_library: true, use_upload: true, use_web_search: true },
     model_mode: "standard",
     enabled_analyzers: ["STEEP", "COST_BENEFIT", "RISK"],
-    enable_pre_reconciliation: true,
-    enable_consistency_graph: true,
-    enable_dual_track_search: true,
-    enable_source_tagging: true,
-    enable_critic_agent: false,
-    enable_glossary: false,
     depth_mode: "full_report",
     output_formats: ["hwpx"],
-    notification_channels: ["email"],
   },
   status: "writing",
   depth_mode: "full_report",

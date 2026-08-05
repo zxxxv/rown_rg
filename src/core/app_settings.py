@@ -26,19 +26,19 @@ class SettingDef:
     key: str
     label: str
     secret: bool
-    kind: str  # "str" | "number" | "bool"
+    kind: str  # "str" | "number" | "bool" | "enum"
     group: str
     help: str = ""
+    # kind="enum"일 때만 사용 — (값, 표시라벨) 쌍. 프론트가 드롭다운으로 렌더한다.
+    options: tuple[tuple[str, str], ...] = ()
 
 
 SETTING_DEFS: list[SettingDef] = [
-    # LLM
+    # LLM — API 키만 admin에서 관리. 모델 선택은 시스템 설정이 아니라 프로젝트 생성 단계의
+    # 관심사라 여기서 노출하지 않는다(.env가 기본값 공급, 파이프라인은 그대로 소비).
     SettingDef("anthropic_api_key", "Anthropic API 키", True, "str", "LLM"),
     SettingDef("gemini_api_key", "Gemini API 키", True, "str", "LLM"),
     SettingDef("openai_api_key", "OpenAI API 키", True, "str", "LLM"),
-    SettingDef("planner_model", "플래너 모델", False, "str", "LLM"),
-    SettingDef("research_model", "리서치 모델", False, "str", "LLM"),
-    SettingDef("write_model", "작성 모델", False, "str", "LLM"),
     # NAVER WORKS
     SettingDef("nw_client_id", "네이버웍스 Client ID", False, "str", "네이버웍스"),
     SettingDef("nw_client_secret", "네이버웍스 Client Secret", True, "str", "네이버웍스"),

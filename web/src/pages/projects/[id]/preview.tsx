@@ -1,19 +1,25 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Eye, Pencil, Save, Sparkles, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ExternalLink,
+  Eye,
+  Pencil,
+  Save,
+  Sparkles,
+  X,
+} from "lucide-react";
+import { useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useProject } from "@/api/projects";
 import {
-  getSourceRef,
-  sourceRefKeys,
   useProjectSections,
   useRewriteSection,
   useSaveSection,
   useSectionContent,
 } from "@/api/sections";
-import type { ChapterNode, SectionNode, SectionStatus } from "@/api/types";
+import type { ChapterNode, SectionCitation, SectionNode, SectionStatus } from "@/api/types";
 import { useVerifyReport } from "@/api/verify";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -48,14 +54,19 @@ export default function PreviewPage() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const qc = useQueryClient();
 
   const sectionsQuery = useProjectSections(projectId);
   const projectQuery = useProject(projectId);
 
   const tree = sectionsQuery.data?.tree ?? [];
   const selectedId = params.get("section") ?? findFirstCompleted(tree);
-  const contentQuery = useSectionContent(projectId, selectedId);
+  // 선택된 id가 '장'이면 장 통합 뷰(하위 절 이어 보기), 아니면 절 본문.
+  const selectedChapter = useMemo(
+    () => tree.find((c) => c.id === selectedId) ?? null,
+    [tree, selectedId],
+  );
+  // 장 선택 시엔 절 본문 쿼리를 끈다(장 id로는 본문이 없어 헛요청이 됨).
+  const contentQuery = useSectionContent(projectId, selectedChapter ? null : selectedId);
 
   // 선택된 절의 PM 경고만 본문 위에 인라인 표시 — 고칠 대상 옆에 고칠 이유를 둔다.
   const verifyQuery = useVerifyReport(projectId);
@@ -78,34 +89,25 @@ export default function PreviewPage() {
     });
   }, [verifyQuery.data, selectedRef]);
 
-  // Prefetch source refs for hover cards
-  useEffect(() => {
-    const ids = contentQuery.data?.source_ids;
-    if (!ids || ids.length === 0) return;
-    for (const srcId of ids) {
-      void qc.prefetchQuery({
-        queryKey: sourceRefKeys.detail(srcId),
-        queryFn: () => getSourceRef(srcId),
-        staleTime: Number.POSITIVE_INFINITY,
-      });
-    }
-  }, [contentQuery.data?.source_ids, qc]);
-
-  const selectSection = (sectionId: string, status: SectionStatus) => {
-    if (status !== "completed") {
-      toast(`아직 작성 중입니다 — ${sectionId}`, {
-        description: "완료된 섹션만 미리보기 할 수 있습니다.",
-      });
-      return;
-    }
+  const navigateTo = (id: string) =>
     setParams(
       (prev) => {
         const next = new URLSearchParams(prev);
-        next.set("section", sectionId);
+        next.set("section", id);
         return next;
       },
       { replace: true },
     );
+
+  const selectNode = (id: string, status: SectionStatus, isChapter: boolean) => {
+    // 장은 항상 이동(하위 절 통독 뷰가 완료분만 골라 보여줌). 절은 완료된 것만.
+    if (!isChapter && status !== "completed") {
+      toast(`아직 작성 중입니다 — ${id}`, {
+        description: "완료된 섹션만 미리보기 할 수 있습니다.",
+      });
+      return;
+    }
+    navigateTo(id);
   };
 
   return (
@@ -156,7 +158,7 @@ export default function PreviewPage() {
             {/* 트리는 내부 스크롤 없이 아래로 쭉 펼친다 — 목차 전체가 한눈에 보이고
                 페이지 스크롤 하나로 탐색한다(사용자 요청, 2026-08-04) */}
             <aside className="self-start rounded border border-border bg-bg">
-              <SectionTree tree={tree} selectedId={selectedId} onSelect={selectSection} />
+              <SectionTree tree={tree} selectedId={selectedId} onSelect={selectNode} />
             </aside>
 
             <main className="rounded border border-border bg-bg">
@@ -183,7 +185,15 @@ export default function PreviewPage() {
                   </ul>
                 </div>
               ) : null}
-              {selectedId ? (
+              {selectedChapter ? (
+                <ChapterView
+                  key={selectedChapter.id}
+                  projectId={projectId}
+                  chapter={selectedChapter}
+                  chapterIndex={tree.indexOf(selectedChapter)}
+                  onOpenSection={navigateTo}
+                />
+              ) : selectedId ? (
                 <SectionView
                   key={selectedId}
                   projectId={projectId}
@@ -204,6 +214,39 @@ export default function PreviewPage() {
   );
 }
 
+/** 절 하단 출처 목록 — 본문 [N]이 가리키는 자료를 번호순으로 나열한다. */
+function CitationList({ citations }: { citations: SectionCitation[] }) {
+  if (citations.length === 0) return null;
+  return (
+    <footer className="mt-6 border-t border-border pt-3">
+      <h3 className="mb-2 text-xs font-medium text-fg-secondary">
+        이 절의 출처 {citations.length}건
+      </h3>
+      <ol className="flex flex-col gap-1">
+        {citations.map((c, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: 위치가 곧 정체성 — source_ids 순서 고정 읽기 전용 목록(재정렬 없음)
+          <li key={`cite-${i}`} className="flex items-start gap-2 text-xs">
+            <span className="shrink-0 font-mono text-fg-tertiary">[{c.number ?? "–"}]</span>
+            {c.url ? (
+              <a
+                href={c.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-fg-info hover:underline"
+              >
+                {c.title}
+                <ExternalLink className="h-3 w-3 shrink-0" />
+              </a>
+            ) : (
+              <span className="text-fg-secondary">{c.title}</span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </footer>
+  );
+}
+
 function findFirstCompleted(tree: ChapterNode[]): string | null {
   for (const ch of tree) {
     for (const sec of ch.children) {
@@ -217,7 +260,7 @@ function findFirstCompleted(tree: ChapterNode[]): string | null {
 interface SectionTreeProps {
   tree: ChapterNode[];
   selectedId: string | null;
-  onSelect: (id: string, status: SectionStatus) => void;
+  onSelect: (id: string, status: SectionStatus, isChapter: boolean) => void;
 }
 
 function SectionTree({ tree, selectedId, onSelect }: SectionTreeProps) {
@@ -271,13 +314,13 @@ function TreeItem({
   level: 1 | 2;
   status: SectionStatus;
   selected: boolean;
-  onSelect: (id: string, status: SectionStatus) => void;
+  onSelect: (id: string, status: SectionStatus, isChapter: boolean) => void;
 }) {
   const dim = status !== "completed";
   return (
     <button
       type="button"
-      onClick={() => onSelect(id, status)}
+      onClick={() => onSelect(id, status, level === 1)}
       className={cn(
         "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors",
         level === 1 ? "font-medium" : "pl-6 text-xs",
@@ -290,6 +333,95 @@ function TreeItem({
       <span className="line-clamp-1 flex-1">{title}</span>
       <StatusDot kind={STATUS_KIND[status]} />
     </button>
+  );
+}
+
+/** 장 통합 뷰 — 그 장의 완료된 절들을 이어서 표시(읽기 전용). 편집은 개별 절을 연다. */
+function ChapterView({
+  projectId,
+  chapter,
+  chapterIndex,
+  onOpenSection,
+}: {
+  projectId: string;
+  chapter: ChapterNode;
+  chapterIndex: number;
+  onOpenSection: (sectionId: string) => void;
+}) {
+  const completed = chapter.children.filter((s) => s.status === "completed");
+  return (
+    <article className="flex flex-col">
+      <header className="border-b border-border px-6 py-4">
+        <p className="font-mono text-xs text-fg-tertiary">{chapterIndex + 1}장</p>
+        <h2 className="text-lg font-semibold text-fg">{chapter.title}</h2>
+        <p className="mt-1 text-xs text-fg-secondary">
+          완료된 절 {completed.length}/{chapter.children.length}개 — 이어서 표시(읽기 전용). 편집은
+          각 절을 여세요.
+        </p>
+      </header>
+      {completed.length === 0 ? (
+        <div className="p-6">
+          <EmptyState
+            icon={Eye}
+            title="아직 완료된 절이 없습니다"
+            description="이 장의 절이 작성 완료되면 여기 이어서 표시됩니다."
+          />
+        </div>
+      ) : (
+        <div className="flex flex-col divide-y divide-border">
+          {completed.map((section) => (
+            <ChapterSectionBlock
+              key={section.id}
+              projectId={projectId}
+              section={section}
+              refLabel={`${chapterIndex + 1}.${chapter.children.indexOf(section) + 1}`}
+              onOpen={() => onOpenSection(section.id)}
+            />
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+/** 장 통합 뷰의 절 1개 — 본문을 읽기 전용으로 렌더하고 '편집'으로 그 절 편집 화면을 연다. */
+function ChapterSectionBlock({
+  projectId,
+  section,
+  refLabel,
+  onOpen,
+}: {
+  projectId: string;
+  section: SectionNode;
+  refLabel: string;
+  onOpen: () => void;
+}) {
+  const query = useSectionContent(projectId, section.id);
+  return (
+    <section className="px-6 py-5">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h3 className="text-base font-semibold text-fg">
+          <span className="mr-2 font-mono text-xs text-fg-tertiary">{refLabel}</span>
+          {section.title}
+        </h3>
+        <Button variant="ghost" size="sm" onClick={onOpen}>
+          <Pencil className="mr-1 h-4 w-4" />
+          편집
+        </Button>
+      </div>
+      {query.isLoading ? (
+        <LoadingSkeleton variant="row" count={4} />
+      ) : query.error ? (
+        <p className="text-sm text-fg-tertiary">
+          {query.error instanceof ApiError ? query.error.message : "본문을 불러오지 못했습니다."}
+        </p>
+      ) : query.data ? (
+        <>
+          <MarkdownContent content={query.data.content} citations={query.data.citations} />
+          <CitationList citations={query.data.citations} />
+        </>
+      ) : null}
+    </section>
   );
 }
 
@@ -376,12 +508,8 @@ function SectionView({
     <article className="flex flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
         <div className="flex items-center gap-2">
-          <Badge variant="secondary" className="font-mono">
-            Lv {data.level}
-          </Badge>
-          <h2 className="text-lg font-semibold text-fg">
-            <span className="font-mono text-fg-tertiary">{sectionId.slice(0, 8)}</span> {data.title}
-          </h2>
+          {/* Lv 배지·UUID 접두는 개발 잔재라 제거(2026-08-05) — 순번은 트리·본문 헤딩에 이미 있다 */}
+          <h2 className="text-lg font-semibold text-fg">{data.title}</h2>
           {data.qa_status === "passed" ? (
             <Badge variant="default" className="bg-bg-success text-fg-success">
               QA 통과
@@ -434,7 +562,10 @@ function SectionView({
             aria-label="섹션 본문 편집"
           />
         ) : (
-          <MarkdownContent content={data.content} />
+          <>
+            <MarkdownContent content={data.content} citations={data.citations} />
+            <CitationList citations={data.citations} />
+          </>
         )}
       </div>
 

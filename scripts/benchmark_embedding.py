@@ -15,12 +15,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import gc
-import resource
 import time
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
+
+# resource는 Unix 계열 전용 표준 모듈 — Windows에는 없다. RLIMIT_AS 기반 메모리 제한은
+# 벤치마크 실행 시에만 쓰는 optional 기능이므로, 없으면 None으로 두고 사용처에서 skip한다.
+# 이렇게 해야 Windows에서 pytest가 이 모듈을 수집(import)할 때 깨지지 않는다.
+try:
+    import resource
+except ModuleNotFoundError:  # Windows
+    resource = None  # type: ignore[assignment]
 
 import numpy as np
 import psutil
@@ -108,7 +115,14 @@ def apply_memory_limits() -> None:
     The benchmark process is killed by the OS once the system starts thrashing
     swap. Setting ``RLIMIT_AS`` lets Python raise ``MemoryError`` first, which
     is recoverable and gives a stack trace pointing at the offending batch.
+
+    Windows에는 ``resource`` 모듈이 없어 이 가드는 skip된다. 그래도 chunk loop의
+    psutil 기반 RSS watchdog(``check_rss_or_abort``)이 남아 있어 폭주는 잡는다.
     """
+    if resource is None:
+        print("[safety] RLIMIT_AS not available on this platform; skipped")
+        return
+
     # 사용자 셸이 이미 더 엄격한 ulimit -v를 걸어 둔 경우 그 한도를 깨지 않도록 hard는 유지.
     desired = int(_HOST_TOTAL_RAM_BYTES * VIRTUAL_MEM_LIMIT_RATIO)
     try:

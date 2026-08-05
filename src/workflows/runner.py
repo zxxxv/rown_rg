@@ -26,13 +26,14 @@ from src.core import app_settings
 from src.core.clock import now as clock_now
 from src.core.config import settings
 from src.core.state import ProjectState
-from src.core.types import ProjectStage, ReviewGate
+from src.core.types import ProjectStage, ReviewGate, SourceRef, SourceType
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.review_point import ReviewPoint
 from src.db.models.user import User
 from src.db.session import async_session_maker
 from src.infrastructure.naver_works.bot import send_bot_message
+from src.workflows import cancel
 from src.workflows.events import emit_checkpoint, emit_error, gate_level
 from src.workflows.pipeline import Paused, advance
 from src.workflows.write_loop import apply_selection, plan_from_payload, rehydrate_from_payload
@@ -200,9 +201,41 @@ async def _execute(project_id: uuid.UUID) -> None:
                 entered_from_created = True
                 project.status = ProjectStage.RESEARCHING.value
                 await session.commit()
+
+            async def _persist_running_stage(stage: ProjectStage) -> None:
+                """표시용 중간 전이 — 스테퍼가 색인·작성 진행을 실시간 따라오게 한다.
+
+                척추 판단은 이미 만든 in-memory state 기준이라 선점이 아니다.
+                실패는 로그만 남긴다(표시가 실행을 죽이면 안 된다).
+                """
+                try:
+                    async with async_session_maker() as display_session:
+                        await display_session.execute(
+                            update(Project)
+                            .where(Project.id == project_id)
+                            .values(status=stage.value)
+                        )
+                        await display_session.commit()
+                except Exception:
+                    logger.warning("project.stage_display_failed", project_id=str(project_id))
+
             state = await _rehydrate_section_plan(session, project.id, state)
             state = await _rehydrate_qa_selection(session, project.id, state)
-            outcome = await advance(state)
+            if entered_from_created and not state.sources:
+                # 부분 실패 후 재시작: 이전 실행이 스테이징해 둔 출처를 상태로 복원 —
+                # collect가 기존 출처를 제외(중복 스테이징 방지)하고 모자란 만큼만 보충한다.
+                rows = (
+                    (
+                        await session.execute(
+                            select(ProjectSource).where(ProjectSource.project_id == project.id)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if rows:
+                    state = state.add_sources([_source_ref_from_row(r) for r in rows])
+            outcome = await advance(state, on_stage=_persist_running_stage)
             project.status = outcome.state.current_stage.value
 
             if isinstance(outcome, Paused):
@@ -233,7 +266,30 @@ async def _execute(project_id: uuid.UUID) -> None:
                 await session.commit()
                 logger.info("project.completed", project_id=str(project_id))
                 await _notify_safe(owner_id, project_id, "success", page="export")
-    except Exception:
+    except cancel.RunCancelled:
+        # 사용자 취소 — 실패가 아니라 깨끗한 중단으로 CANCELLED 확정(created 복귀 로직 회피).
+        logger.info("project.cancelled", project_id=str(project_id))
+        try:
+            async with async_session_maker() as recovery:
+                await recovery.execute(
+                    update(Project)
+                    .where(Project.id == project_id)
+                    .values(status=ProjectStage.CANCELLED.value)
+                )
+                await recovery.execute(
+                    update(ReviewPoint)
+                    .where(ReviewPoint.project_id == project_id, ReviewPoint.status == "pending")
+                    .values(
+                        status="resolved",
+                        resolved_at=clock_now(),
+                        decision={"outcome": "cancelled"},
+                    )
+                )
+                await recovery.commit()
+        except Exception:
+            logger.warning("project.cancel_persist_failed", project_id=str(project_id))
+        emit_error(project_id, "cancelled", "실행을 취소했습니다")
+    except Exception as exc:
         logger.exception("project.run_failed", project_id=str(project_id))
         if entered_from_created:
             # 첫 구간(research)에서 죽은 실행은 created로 복귀 — 사용자가
@@ -251,7 +307,16 @@ async def _execute(project_id: uuid.UUID) -> None:
                     await recovery.commit()
             except Exception:
                 logger.warning("project.status_rollback_failed", project_id=str(project_id))
-        emit_error(project_id, "run_failed", "실행 중 오류가 발생했습니다")
+        # 한도 초과는 원인이 명확한 실패 — 일반 오류로 뭉개지 말고 그대로 알린다
+        # (진행 중 도달 케이스: 사전 검사는 통과했지만 실행 도중 한도에 닿음).
+        from src.core.exceptions import QuotaExceededError
+
+        if isinstance(exc, QuotaExceededError):
+            emit_error(
+                project_id, "quota_exceeded", f"{exc.message} — 한도 상향 후 다시 시작하세요"
+            )
+        else:
+            emit_error(project_id, "run_failed", "실행 중 오류가 발생했습니다")
         if owner_id is not None:
             await _notify_safe(owner_id, project_id, "failed", page="progress")
 
@@ -279,27 +344,65 @@ async def get_pending_gate(session: AsyncSession, project_id: uuid.UUID) -> dict
 
 _RUNNING: set[uuid.UUID] = set()
 
+# ── 전역 동시 실행 상한 (2026-08-05) ─────────────────────────────────────────
+# 무거운 실행(풀런·게이트 재개·추가 수집)은 슬롯을 얻어야 시작한다 — 초과분은
+# FIFO 대기(asyncio.Semaphore 대기 큐). 색인(임베딩 ONNX)이 CPU·메모리를 지배하므로
+# 운영 스펙(2 vCPU/8GB) 기본값은 1, env MAX_CONCURRENT_RUNS로 조정.
+# 대기열은 인프로세스라 재시작 시 사라진다(_RUNNING과 같은 단일 워커 전제).
+_run_slots = asyncio.Semaphore(max(1, settings.max_concurrent_runs))
+_WAITING: list[uuid.UUID] = []
+
 
 def is_running(project_id: uuid.UUID) -> bool:
-    """해당 프로젝트의 파이프라인 태스크가 이 프로세스에서 실행 중인지 (단일 워커 전제)."""
+    """해당 프로젝트의 파이프라인 태스크가 이 프로세스에서 실행·대기 중인지 (단일 워커 전제)."""
     return project_id in _RUNNING
 
 
-def _spawn_guarded(project_id: uuid.UUID) -> bool:
-    """이미 실행 중이면 False. 아니면 _execute를 spawn하고 True."""
+def queue_status(project_id: uuid.UUID) -> dict[str, int] | None:
+    """실행 대기열에 있으면 {position(1부터), waiting_total}, 실행 중/무관이면 None."""
+    try:
+        idx = _WAITING.index(project_id)
+    except ValueError:
+        return None
+    return {"position": idx + 1, "waiting_total": len(_WAITING)}
+
+
+def _spawn_limited(project_id: uuid.UUID, work: Any, *, clear_cancel_on_exit: bool) -> bool:
+    """중복 가드 + 전역 슬롯 하에 work 코루틴 팩토리를 spawn. 이미 실행/대기 중이면 False.
+
+    슬롯이 없으면 FIFO로 대기하고, 대기 중 취소가 요청되면 실행 없이 빠진다.
+    clear_cancel_on_exit: 풀런은 종료 시 취소 플래그를 정리하지만(다음 실행 보호),
+    보충 수집은 기존 의미(플래그 유지 — 다음 재개에서 관측)를 보존한다.
+    """
     if project_id in _RUNNING:
         logger.warning("project.already_running", project_id=str(project_id))
         return False
     _RUNNING.add(project_id)
 
     async def _run() -> None:
+        _WAITING.append(project_id)
         try:
-            await _execute(project_id)
+            async with _run_slots:
+                _WAITING.remove(project_id)
+                if cancel.is_requested(project_id):
+                    # 대기 중 취소 — 슬롯만 반납하고 실행하지 않는다.
+                    logger.info("run.cancelled_while_queued", project_id=str(project_id))
+                    return
+                await work()
         finally:
+            if project_id in _WAITING:  # 대기 중 태스크가 죽은 비정상 경로 정리
+                _WAITING.remove(project_id)
             _RUNNING.discard(project_id)
+            if clear_cancel_on_exit:
+                cancel.clear(project_id)  # 취소 요청이 남아도 다음 실행이 즉시 취소되지 않게
 
     _spawn(_run())
     return True
+
+
+def _spawn_guarded(project_id: uuid.UUID) -> bool:
+    """이미 실행 중이면 False. 아니면 _execute를 전역 슬롯 하에 spawn하고 True."""
+    return _spawn_limited(project_id, lambda: _execute(project_id), clear_cancel_on_exit=True)
 
 
 async def start_run(project_id: uuid.UUID) -> bool:
@@ -308,7 +411,12 @@ async def start_run(project_id: uuid.UUID) -> bool:
 
 
 async def resume_run(project_id: uuid.UUID, decision: dict[str, Any]) -> None:
-    """대기 중인 게이트를 사용자 결정으로 resolved 처리하고 재개(백그라운드)."""
+    """대기 중인 게이트를 사용자 결정으로 resolved 처리하고 재개(백그라운드).
+
+    SOURCE_POOL에서 action=collect_more면 다음 단계로 가지 않고 보충 수집
+    라운드 1회를 돌린 뒤 게이트를 다시 연다 — 사람이 누를 때마다 1라운드
+    (무한성 캡: 자동 반복 없음).
+    """
     async with async_session_maker() as session:
         review = (
             await session.execute(
@@ -324,10 +432,118 @@ async def resume_run(project_id: uuid.UUID, decision: dict[str, Any]) -> None:
         review.status = "resolved"
         review.decision = decision
         review.resolved_at = clock_now()
+        gate = review.gate
         # 자료 풀 확정: 사람이 제외한 출처를 같은 커밋에서 is_included=false로 반영한다.
-        if review.gate == ReviewGate.SOURCE_POOL.value:
+        if gate == ReviewGate.SOURCE_POOL.value:
             n_excluded = await _apply_source_pool_exclusions(session, project_id, decision)
             if n_excluded:
                 logger.info("source_pool.pruned", project_id=str(project_id), excluded=n_excluded)
         await session.commit()
+    if gate == ReviewGate.SOURCE_POOL.value and decision.get("action") == "collect_more":
+        _spawn_collect_more(project_id)
+        return
     _spawn_guarded(project_id)
+
+
+def _source_ref_from_row(row: ProjectSource) -> SourceRef:
+    """project_sources 행 → 게이트 payload용 SourceRef (metadata_ 신호 복원)."""
+    from src.workflows.stages import _source_preview, has_usable_content, relevance_excerpt
+
+    meta = row.metadata_ or {}
+    content_md = meta.get("content_md") or ""
+    usable = has_usable_content(content_md)
+    matched = list(meta.get("matched_sections") or [])
+    return SourceRef(
+        id=row.id,
+        source_type=SourceType(row.source_type),
+        title=row.title or row.url or "(제목 없음)",
+        url=row.url,
+        reliability=row.reliability,
+        matched_sections=list(meta.get("matched_sections") or []),
+        page_age=meta.get("page_age"),
+        preview=(relevance_excerpt(content_md, matched) or _source_preview(content_md))
+        if usable
+        else None,
+        has_content=usable,
+    )
+
+
+def _spawn_collect_more(project_id: uuid.UUID) -> bool:
+    """보충 수집 라운드를 중복 가드 + 전역 슬롯 하에 spawn."""
+    return _spawn_limited(project_id, lambda: _collect_more(project_id), clear_cancel_on_exit=False)
+
+
+async def _collect_more(project_id: uuid.UUID) -> None:
+    """SOURCE_POOL '추가 조사' — 기존 풀 유지 + research_more_batch건 보충 + 게이트 재개방.
+
+    write로 전진하지 않는다: 새로 모은 출처를 기존 풀에 합쳐(URL 중복 제거)
+    새 SOURCE_POOL 게이트를 만들고 다시 사람 판단을 기다린다. 사람이 누를
+    때마다 한 라운드씩이라 무한성 캡은 사람 손에 있다.
+    """
+    from src.workflows.pipeline import _source_pool_gate
+    from src.workflows.stages import _collect_sources, source_dedup_key
+
+    owner_id: uuid.UUID | None = None
+    try:
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                logger.warning("project.missing", project_id=str(project_id))
+                return
+            owner_id = project.owner_id
+            state = _state_from_project(project)
+            state = await _rehydrate_section_plan(session, project.id, state)
+            rows = (
+                (
+                    await session.execute(
+                        select(ProjectSource).where(ProjectSource.project_id == project_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        existing_refs = [_source_ref_from_row(r) for r in rows]
+        # 본문 있는 출처만 재수집에서 제외 — 본문 없는 껍데기는 다시 회수될 기회를
+        # 준다(성공하면 indexer.stage 업서트로 같은 행이 실자료로 승격, id 유지).
+        exclude = {
+            key
+            for r in existing_refs
+            if r.has_content and (key := source_dedup_key(r.url, r.title))
+        }
+
+        new_refs = await _collect_sources(
+            state,
+            exclude_keys=exclude,
+            target=settings.research_more_batch,
+            ensure_coverage=False,
+        )
+        # 재회수로 승격된 출처는 id가 기존 행과 같다 — 껍데기 버전을 빼고 병합해
+        # 게이트 payload에 같은 자료가 두 번 실리지 않게 한다.
+        new_ids = {r.id for r in new_refs}
+        state = state.add_sources([r for r in existing_refs if r.id not in new_ids] + new_refs)
+        logger.info(
+            "source_pool.collect_more",
+            project_id=str(project_id),
+            n_new=len(new_refs),
+            n_total=len(state.sources),
+        )
+
+        review = _source_pool_gate(state)
+        async with async_session_maker() as session:
+            session.add(
+                ReviewPoint(
+                    id=review.id,
+                    project_id=project_id,
+                    gate=review.gate.value,
+                    payload=review.payload,
+                    status="pending",
+                    created_at=review.created_at,
+                )
+            )
+            await session.commit()
+        emit_checkpoint(project_id, str(review.id), gate_level(review.gate.value))
+        if owner_id is not None:
+            await _notify_safe(owner_id, project_id, "partial", page="progress")
+    except Exception:
+        logger.exception("source_pool.collect_more_failed", project_id=str(project_id))
+        emit_error(project_id, "collect_more_failed", "추가 조사 중 오류가 발생했습니다")

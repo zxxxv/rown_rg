@@ -21,6 +21,11 @@ export const ProjectProgressSchema = z.object({
   percent: z.number().min(0).max(100).default(0),
   tokens_used: z.number().nonnegative().default(0),
   cost_usd: z.number().nonnegative().default(0),
+  // 실행 시작·마지막 활동(ISO) — token_usage 첫/마지막 기록 근사. 기록 없으면 null.
+  started_at: z.string().nullish(),
+  last_activity_at: z.string().nullish(),
+  // 전역 동시 실행 상한 대기열 위치(1부터) — 대기 중이 아니면 null
+  queue_position: z.number().int().positive().nullish(),
 });
 export type ProjectProgress = z.infer<typeof ProjectProgressSchema>;
 
@@ -42,6 +47,16 @@ export interface ProgressSnapshot {
   pending_gate: PendingGate | null;
   /** status=created — 아직 실행이 시작되지 않음(자료조사 진행처럼 그리면 안 됨) */
   not_started: boolean;
+  /** status=cancelled — 사용자가 실행 도중 취소함 */
+  cancelled: boolean;
+  /** 원본 status(취소 등 판정용) */
+  status: string;
+  /** 실행 시작 시각(ISO) — 페이지 재진입에도 경과 시간이 이어지도록 서버 값 사용 */
+  started_at: string | null;
+  /** 마지막 활동 시각(ISO) — 종료된 프로젝트의 경과 시간 고정용 */
+  last_activity_at: string | null;
+  /** 실행 대기열 위치(1부터) — 동시 실행 상한 초과로 대기 중일 때만 값 존재 */
+  queue_position: number | null;
 }
 
 const PHASE_ORDER: PhaseName[] = ["research", "indexing", "writing", "qa", "export"];
@@ -73,6 +88,11 @@ export function toProgressSnapshot(res: ProjectProgress): ProgressSnapshot {
     pending_checkpoint_id: res.pending_gate?.review_point_id ?? null,
     pending_gate: res.pending_gate,
     not_started: res.status === "created",
+    cancelled: res.status === "cancelled",
+    status: res.status,
+    started_at: res.started_at ?? null,
+    last_activity_at: res.last_activity_at ?? null,
+    queue_position: res.queue_position ?? null,
   };
 }
 
@@ -90,11 +110,17 @@ export async function getProgressSnapshot(projectId: string): Promise<ProgressSn
   return toProgressSnapshot(await getProjectProgress(projectId));
 }
 
-export function useProgressSnapshot(projectId: string, enabled = true) {
+export function useProgressSnapshot(
+  projectId: string,
+  enabled = true,
+  opts?: { refetchInterval?: number | false },
+) {
   return useQuery({
     queryKey: progressKeys.snapshot(projectId),
     queryFn: () => getProgressSnapshot(projectId),
     enabled: enabled && Boolean(projectId),
     staleTime: 0,
+    // 개요 스테퍼 등 실행 중 화면이 폴링으로 단계 전이를 따라잡는 용도
+    refetchInterval: opts?.refetchInterval ?? false,
   });
 }

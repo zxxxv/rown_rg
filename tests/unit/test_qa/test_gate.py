@@ -14,6 +14,7 @@ from src.core.types import (
 )
 from src.services.qa.gate import (
     check_bounds,
+    check_citation_markers,
     check_citation_resolves,
     check_numeric_grounded,
     check_renderable,
@@ -217,7 +218,7 @@ class TestRunSectionGate:
             cited_chunk_ids=[chunk.chunk_id],
         )
         report = run_section_gate(draft, [chunk], min_chars=10)
-        assert len(report.results) == 4
+        assert len(report.results) == 5  # citation_markers 추가(2026-08-05)
         assert report.excluded is False
 
     def test_hallucinated_citation_excludes(self):
@@ -295,3 +296,28 @@ class TestStructureComplete:
         result = check_structure_complete(selected, [s1, s2])
         assert result.passed is False
         assert "누락 섹션 1개" in result.detail
+
+
+class TestCitationMarkers:
+    """비표준 인용 마커 검출 — '[배경자료 제공됨]'류 오염 신호(2026-08-05 숏폼 실측)."""
+
+    def test_standard_numeric_citations_pass(self):
+        result = check_citation_markers(_draft("고령화율은 24.1%임 [1]. 상승세임 [12]."))
+        assert result.passed is True
+
+    def test_invented_background_markers_flagged(self):
+        content = "이용률은 70.7%에 달함 [배경자료 제공됨]. 성장 전망임 [배경 맥락]."
+        result = check_citation_markers(_draft(content))
+        assert result.passed is False
+        assert "[배경자료 제공됨]" in result.detail
+        assert result.severity.value == "soft"  # 경고 — 후보 제외는 아님
+
+    def test_markdown_links_and_captions_allowed(self):
+        content = "[출처 링크](https://ex.com) 참고, [그림 1-2] 및 [표 3] 기준 [2]"
+        result = check_citation_markers(_draft(content))
+        assert result.passed is True
+
+    def test_duplicate_markers_counted_once(self):
+        content = "A [배경 맥락] B [배경 맥락] C [배경 맥락]"
+        result = check_citation_markers(_draft(content))
+        assert "1종" in result.detail

@@ -10,6 +10,7 @@ import {
 import { ApiError } from "@/api/client";
 import { ReviewCheckpoint } from "@/components/data-display/ReviewCheckpoint";
 import { Badge } from "@/components/ui/badge";
+import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { cn } from "@/lib/utils";
 
 // 정적검사 체크 이름 → 사람용 라벨 (백엔드 services/qa/gate.py 어휘)
@@ -17,6 +18,7 @@ const WARNING_LABEL: Record<string, string> = {
   bounds: "분량·금칙어",
   numeric_grounded: "수치 근거",
   citation_resolves: "인용 해석",
+  citation_markers: "인용 표기",
   renderable: "렌더 가능",
 };
 
@@ -246,8 +248,9 @@ function CandidateCard({
         </ul>
       ) : null}
 
-      <div className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded border border-border bg-bg-secondary p-3 text-sm leading-relaxed text-fg">
-        {candidate.content}
+      {/* 후보 본문은 미리보기와 같은 마크다운 렌더로 — 원문 MD 노출은 가독성이 나빴다(2026-08-05) */}
+      <div className="max-h-72 overflow-y-auto rounded border border-border bg-bg-secondary p-3 text-sm leading-relaxed text-fg">
+        <MarkdownContent content={candidate.content} />
       </div>
     </button>
   );

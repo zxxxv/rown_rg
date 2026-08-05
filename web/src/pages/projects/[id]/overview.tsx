@@ -2,11 +2,8 @@ import {
   ArrowLeft,
   ArrowRight,
   Download,
-  Eye,
   FileSearch,
-  GitCompare,
   PlayCircle,
-  ScanLine,
   Settings2,
   SquarePen,
   Trash2,
@@ -15,13 +12,20 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
-import { useProjectContradictions } from "@/api/contradictions";
 import { useProgressSnapshot } from "@/api/progress";
-import { useDeleteProject, useProject, useUpdateProjectConfig } from "@/api/projects";
+import {
+  useDeleteProject,
+  useProject,
+  useRunProject,
+  useUpdateProjectConfig,
+} from "@/api/projects";
+import { useProjectSections } from "@/api/sections";
+import { useProjectSources } from "@/api/sources";
 import type { Project, ProjectStatus } from "@/api/types";
+import { useVerifyReport } from "@/api/verify";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
-import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
+import { PageLoading } from "@/components/feedback/PageLoading";
 import { AppShell } from "@/components/layout/AppShell";
 import {
   Accordion,
@@ -40,6 +44,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { env } from "@/env";
+import { useDownload } from "@/features/export/useDownload";
+import { PipelineStepper } from "@/features/progress/PipelineStepper";
 import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
 import { presetLabel } from "@/features/project-config/presets";
 import type { ProjectFormValues } from "@/features/project-config/schema";
@@ -54,6 +61,7 @@ const STATUS_LABEL: Record<ProjectStatus, string> = {
   reviewing: "검토 대기",
   completed: "완료",
   archived: "보관",
+  cancelled: "취소됨",
 };
 
 const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
@@ -64,28 +72,14 @@ const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
   reviewing: "warning",
   completed: "success",
   archived: "tertiary",
+  cancelled: "danger",
 };
 
-// 단계 기반 근사 진행률 — 백엔드 _STAGE_PERCENT와 동일. ProjectRead에 progress가 없어
-// (실백엔드) 상태에서 유도한다. 완료·보관은 100%.
-const STATUS_PERCENT: Record<ProjectStatus, number> = {
-  created: 0,
-  researching: 20,
-  indexing: 40,
-  writing: 60,
-  reviewing: 85,
-  completed: 100,
-  archived: 100,
-};
-
-const NEXT_STEP_HINT: Record<ProjectStatus, string> = {
-  created: "옵션 검토 후 작성을 시작하세요.",
-  researching: "AI가 자료를 수집·평가하고 있습니다.",
-  indexing: "수집한 자료를 청크·임베딩으로 변환 중입니다.",
-  writing: "Level 1~4 본문을 작성 중입니다.",
-  reviewing: "검증·검토 단계입니다. 대기 중인 검토 지점에서 결정을 내려주세요.",
-  completed: "보고서가 완료됐습니다. HWPX·PDF·Markdown으로 다운로드할 수 있습니다.",
-  archived: "보관된 프로젝트입니다.",
+const DEPTH_LABEL: Record<string, string> = {
+  outline_only: "개요만",
+  standard: "표준",
+  full_report: "보고서 전체",
+  deep_dive: "심층 분석",
 };
 
 export default function OverviewPage() {
@@ -115,7 +109,7 @@ export default function OverviewPage() {
         </Button>
 
         {projectQuery.isLoading ? (
-          <LoadingSkeleton variant="block" />
+          <PageLoading label="프로젝트를 불러오는 중…" />
         ) : projectQuery.isError || !project ? (
           <EmptyState
             title="프로젝트를 찾을 수 없습니다"
@@ -154,15 +148,14 @@ interface OverviewBodyProps {
 
 function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) {
   const navigate = useNavigate();
-  // 실측 사용량 — token_usage 테이블 합산(/projects/{id}/progress)
-  const usageQuery = useProgressSnapshot(project.id);
+  // 실측 사용량 + 스테퍼 입력 — /progress 스냅샷. 종결 상태가 아니면 폴링으로
+  // 단계 전이·게이트 개방을 따라잡는다(개요가 실행을 지켜보는 화면이 되도록).
+  const terminal = ["completed", "archived"].includes(project.status);
+  const usageQuery = useProgressSnapshot(project.id, true, {
+    refetchInterval: terminal ? false : 7_000,
+  });
   const tokensUsed = usageQuery.data?.tokens_used ?? 0;
   const costUsed = usageQuery.data?.cost_usd ?? 0;
-  // 진행률: 개요 요약은 프로젝트 상태가 진실(완료=100%). /progress 스냅샷 percent는
-  // 실행 중 진행 페이지가 만든 시나리오 러너 상태를 반영해 완료 프로젝트에서도 낮게
-  // 나올 수 있으므로 여기선 쓰지 않는다(상세 실시간 진행은 진행 패널에서).
-  const progressPct = STATUS_PERCENT[project.status];
-
   const deleteProject = useDeleteProject();
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 삭제는 항상 노출 — 백엔드가 '실행 중인 순간'만 막는다(게이트 대기·실패 잔류 정리 가능).
@@ -206,40 +199,21 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               <Meta label="소유자" value={project.owner_name ?? project.owner_id} />
             </dl>
           </div>
-          <PrimaryAction project={project} onNavigate={navigate} />
+          <PrimaryAction project={project} />
         </div>
       </header>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex flex-col gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>진행 요약</CardTitle>
-              <CardDescription>{NEXT_STEP_HINT[project.status]}</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <div className="flex items-center justify-between text-xs text-fg-tertiary">
-                <span>진행률</span>
-                <span className="font-mono text-fg">{progressPct}%</span>
-              </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-tertiary">
-                <div
-                  className="h-full bg-accent transition-[width]"
-                  style={{ width: `${progressPct}%` }}
-                />
-              </div>
-              <Button
-                variant="outline"
-                className="w-fit"
-                onClick={() => navigate(`/projects/${project.id}/progress`)}
-              >
-                진행 패널에서 자세히 보기
-                <ArrowRight className="ml-1 h-4 w-4" />
-              </Button>
-            </CardContent>
-          </Card>
-
-          <QuickActions project={project} onNavigate={navigate} />
+          {/* 진행 요약(% 바) 카드는 제거됨 — 폴링 없는 project.status 기반이라
+              우측 스테퍼(7초 폴링)와 어긋났고, 스테퍼가 위치·다음 행동을 다 보여준다. */}
+          {/* 완성 후엔 요약 카드가 '숫자 달린 빠른 작업'을 겸한다 — 둘을 같이
+              보여주면 진입점이 겹친다(본문↔미리보기, 채택 자료↔자료 검토). */}
+          {project.status === "completed" ? (
+            <CompletedSummaryCard project={project} onNavigate={navigate} />
+          ) : (
+            <QuickActions project={project} onNavigate={navigate} />
+          )}
 
           <Accordion type="single" collapsible>
             <AccordionItem value="config" className="rounded-lg border border-border bg-bg">
@@ -262,6 +236,8 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
         </div>
 
         <aside className="flex flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
+          <PipelineStepper projectId={project.id} snapshot={usageQuery.data} />
+
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-base">사용량</CardTitle>
@@ -290,24 +266,21 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               <CardTitle className="text-base">옵션 요약</CardTitle>
             </CardHeader>
             <CardContent>
+              {/* 실제 생성에 소비되는 옵션만 표시 — 분석(enabled_analyzers)은 절별
+                  에이전트 배정으로 이관된 레거시(항상 0), 차별화·출력은 미배선 장식. */}
               <div className="flex flex-wrap gap-1.5">
-                <Badge variant="secondary">분석 {project.config.enabled_analyzers.length}개</Badge>
                 <Badge variant="secondary">
-                  차별화{" "}
-                  {
-                    [
-                      project.config.enable_pre_reconciliation,
-                      project.config.enable_consistency_graph,
-                      project.config.enable_dual_track_search,
-                      project.config.enable_source_tagging,
-                      project.config.enable_critic_agent,
-                      project.config.enable_glossary,
-                    ].filter(Boolean).length
-                  }
-                  개
+                  목차 ·{" "}
+                  {project.config.outline
+                    ? `${project.config.outline.chapters.reduce((n, c) => n + c.sections.length, 0)}절`
+                    : "미구성"}
                 </Badge>
-                <Badge variant="secondary">출력 {project.config.output_formats.length}개</Badge>
-                <Badge variant="secondary">깊이 {project.config.depth_mode}</Badge>
+                <Badge variant="secondary">
+                  깊이 · {DEPTH_LABEL[project.config.depth_mode] ?? project.config.depth_mode}
+                </Badge>
+                <Badge variant="secondary">
+                  모델 · {project.config.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
+                </Badge>
               </div>
             </CardContent>
           </Card>
@@ -357,6 +330,102 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
   );
 }
 
+// 완성된 프로젝트의 결과 요약 — 개요 본문이 텅 비지 않게, 산출물의 핵심 숫자를
+// 실데이터로 보여주고 각 타일에서 해당 작업 화면으로 바로 이동한다.
+function CompletedSummaryCard({
+  project,
+  onNavigate,
+}: {
+  project: Project;
+  onNavigate: (to: string) => void;
+}) {
+  const sections = useProjectSections(project.id);
+  const sources = useProjectSources(project.id);
+  const verify = useVerifyReport(project.id);
+
+  const nSections = sections.data?.tree.reduce((n, ch) => n + ch.children.length, 0) ?? null;
+  const nChapters = sections.data?.tree.length ?? null;
+  const nAdopted = sources.data?.items.filter((s) => s.is_included !== false).length ?? null;
+  const findings = verify.data ?? null;
+  const nCritical = findings?.filter((f) => f.severity === "critical").length ?? 0;
+
+  const tiles: { label: string; value: string; hint: string; to?: string; warn?: boolean }[] = [
+    {
+      label: "본문",
+      value: nSections !== null ? `${nChapters}장 ${nSections}절` : "—",
+      hint: "미리보기·편집 열기",
+      to: `/projects/${project.id}/preview`,
+    },
+    {
+      label: "채택 자료",
+      value: nAdopted !== null ? `${nAdopted}건` : "—",
+      hint: "자료 목록 열기",
+      to: `/projects/${project.id}/sources`,
+    },
+    {
+      label: "PM 검증 경고",
+      value: findings !== null ? `${findings.length}건` : "—",
+      hint: nCritical > 0 ? `critical ${nCritical} — 확인 권장` : "납품 전 참고",
+      to: `/projects/${project.id}/preview`,
+      warn: nCritical > 0,
+    },
+    {
+      label: "완료일",
+      value: (project.updated_at ?? project.created_at).slice(0, 10),
+      hint: "회사 표준 양식 (함초롬바탕 11pt)",
+    },
+  ];
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">보고서 요약</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {tiles.map((t) => {
+            const inner = (
+              <>
+                <span className="text-xs text-fg-tertiary">{t.label}</span>
+                <span className="text-lg font-semibold text-fg">{t.value}</span>
+                <span
+                  className={cn(
+                    "flex items-center gap-1 text-xs",
+                    t.warn ? "text-fg-warning" : t.to ? "text-fg-info" : "text-fg-tertiary",
+                  )}
+                >
+                  {t.hint}
+                  {t.to ? <ArrowRight className="h-3 w-3" aria-hidden /> : null}
+                </span>
+              </>
+            );
+            const base = "flex flex-col gap-1 rounded border p-3 text-left";
+            const tone = t.warn ? "border-fg-warning/40 bg-bg-warning" : "border-border bg-bg";
+            return t.to ? (
+              <button
+                key={t.label}
+                type="button"
+                onClick={() => t.to && onNavigate(t.to)}
+                className={cn(
+                  base,
+                  tone,
+                  "transition-colors hover:border-border-strong hover:bg-bg-secondary",
+                )}
+              >
+                {inner}
+              </button>
+            ) : (
+              <div key={t.label} className={cn(base, tone)}>
+                {inner}
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function Meta({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center gap-1">
@@ -366,24 +435,51 @@ function Meta({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PrimaryAction({
-  project,
-  onNavigate,
-}: {
-  project: Project;
-  onNavigate: (to: string) => void;
-}) {
-  if (project.status === "created") {
+function PrimaryAction({ project }: { project: Project }) {
+  // 진행 페이지 폐지 — 시작은 개요에서 바로 실행하고, 진행 관찰은 우측
+  // 진행 단계 스테퍼가 담당한다(7초 폴링으로 researching 전이를 따라잡음).
+  const run = useRunProject();
+  const download = useDownload();
+  const startRun = () => {
+    run.mutate(project.id, {
+      onSuccess: () => toast.success("자료 조사를 시작했습니다."),
+      onError: (err: unknown) => {
+        const msg = err instanceof ApiError ? err.message : "시작에 실패했습니다.";
+        if (msg.includes("이미 실행")) {
+          toast.info("이미 실행 중입니다");
+          return;
+        }
+        toast.error("자료 조사 시작 실패", { description: msg });
+      },
+    });
+  };
+
+  if (project.status === "created" || project.status === "cancelled") {
     return (
-      <Button size="lg" onClick={() => onNavigate(`/projects/${project.id}/progress`)}>
+      <Button size="lg" onClick={startRun} disabled={run.isPending}>
         <PlayCircle className="mr-1 h-4 w-4" />
-        작성 시작
+        {run.isPending
+          ? "시작 중…"
+          : project.status === "cancelled"
+            ? "자료 조사 다시 시작"
+            : "자료 조사 시작"}
       </Button>
     );
   }
   if (project.status === "completed") {
+    // '다운로드' 버튼은 즉시 다운로드해야 한다 — 페이지 이동이면 이름이 거짓말
+    // (출력 상세·검증 배너는 요약 카드의 '완료일' 타일로 진입).
     return (
-      <Button size="lg" onClick={() => onNavigate(`/projects/${project.id}/export`)}>
+      <Button
+        size="lg"
+        onClick={() =>
+          download({
+            url: `${env.VITE_API_BASE_URL.replace(/\/$/, "")}/projects/${project.id}/export`,
+            filename: `${project.title}.hwpx`,
+            label: "HWPX",
+          })
+        }
+      >
         <Download className="mr-1 h-4 w-4" />
         HWPX 다운로드
       </Button>
@@ -396,12 +492,8 @@ function PrimaryAction({
       </Button>
     );
   }
-  return (
-    <Button size="lg" onClick={() => onNavigate(`/projects/${project.id}/progress`)}>
-      진행 패널 보기
-      <ArrowRight className="ml-1 h-4 w-4" />
-    </Button>
-  );
+  // 실행 중 — 별도 CTA 없음(우측 스테퍼가 현재 위치·다음 행동을 안내)
+  return null;
 }
 
 function QuickAction({
@@ -461,10 +553,10 @@ function QuickActions({
   project: Project;
   onNavigate: (to: string) => void;
 }) {
-  const contradictions = useProjectContradictions(project.id);
-  const pendingCount = contradictions.data?.items.filter((c) => c.status === "pending").length ?? 0;
-  const totalCount = contradictions.data?.items.length ?? 0;
-
+  {
+    /* '모순 해결' 카드는 페이지(reconcile)와 함께 제거됨(2026-08-04) —
+       문서 횡단 검증은 PM 검증(verify_findings)이 실물로 수행한다. */
+  }
   return (
     <section>
       <h2 className="mb-3 text-base font-semibold text-fg">빠른 작업</h2>
@@ -475,48 +567,17 @@ function QuickActions({
           description="채택할 자료를 선택하고 추가 업로드"
           onClick={() => onNavigate(`/projects/${project.id}/sources`)}
         />
+        {/* '보고서 편집' 별도 카드는 제거됨 — 편집(직접 수정·AI 재작성)이
+            미리보기 화면에 통합돼 있어 '준비 중' 표기가 낡은 중복이었다. */}
         <QuickAction
-          icon={GitCompare}
-          title="모순 해결"
-          description="자료 간 충돌을 사용자가 결정"
-          disabled={totalCount === 0}
-          badge={
-            pendingCount > 0
-              ? { text: `${pendingCount}건 검토 필요`, tone: "warning" }
-              : totalCount > 0
-                ? { text: "모두 해결됨", tone: "muted" }
-                : undefined
-          }
-          onClick={() => onNavigate(`/projects/${project.id}/reconcile`)}
-        />
-        <QuickAction
-          icon={ScanLine}
-          title="진행 상황"
-          description="실시간 작성 진행을 모니터링"
-          onClick={() => onNavigate(`/projects/${project.id}/progress`)}
-        />
-        <QuickAction
-          icon={Eye}
-          title="섹션 미리보기"
-          description="작성된 본문을 챕터별로 확인"
+          icon={SquarePen}
+          title="미리보기·편집"
+          description="본문 확인, 직접 수정, AI 재작성"
           disabled={project.status === "created"}
           onClick={() => onNavigate(`/projects/${project.id}/preview`)}
         />
-        <QuickAction
-          icon={SquarePen}
-          title="보고서 편집"
-          description="3-패널 편집기 (텍스트 편집 본격 작동 준비 중)"
-          badge={{ text: "준비 중", tone: "muted" }}
-          disabled={project.status === "created"}
-          onClick={() => onNavigate(`/projects/${project.id}/editor`)}
-        />
-        <QuickAction
-          icon={Download}
-          title="HWPX 다운로드"
-          description="회사 표준 양식으로 출력"
-          disabled={project.status !== "completed"}
-          onClick={() => onNavigate(`/projects/${project.id}/export`)}
-        />
+        {/* 'HWPX 다운로드' 카드는 제거됨 — 완료 시 헤더 CTA가 같은 출력 페이지로
+            이동하는 중복 진입점이었다(진입점 정리 원칙). */}
       </div>
     </section>
   );

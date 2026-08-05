@@ -37,6 +37,9 @@ class Project(Base):
     config: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         JSONB, server_default="{}", nullable=False
     )
+    # 조립 시 생성한 약어 사전({약어: {full, desc}}) — 다운로드 재렌더(순수 코드)가
+    # 약어 정리표의 설명을 채우는 원천. LLM 실패 시 None(설명 없이 렌더).
+    glossary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # type: ignore[assignment]
     status: Mapped[str] = mapped_column(
         String(20), server_default="created", nullable=False, index=True
     )

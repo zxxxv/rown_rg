@@ -13,10 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.db import get_async_session
 from src.api.dependencies.permissions import require_role
-from src.api.schemas.settings import SettingItem, SettingsResponse, SettingUpdate
+from src.api.schemas.settings import (
+    SettingItem,
+    SettingOption,
+    SettingsResponse,
+    SettingUpdate,
+)
 from src.core import app_settings
 from src.core.app_settings import DEF_BY_KEY, SETTING_DEFS, SettingDef
-from src.core.exceptions import NotFoundError
+from src.core.exceptions import NotFoundError, ValidationError
 from src.core.secrets import encrypt
 from src.core.types import Role
 from src.db.models.app_setting import AppSetting
@@ -30,6 +35,9 @@ def _item(d: SettingDef) -> SettingItem:
     configured = app_settings.is_configured(d.key)
     source = "db" if overridden else ("env" if configured else "none")
     value = None if d.secret else app_settings.get_str(d.key)
+    options = (
+        [SettingOption(value=v, label=lbl) for v, lbl in d.options] if d.kind == "enum" else None
+    )
     return SettingItem(
         key=d.key,
         label=d.label,
@@ -39,6 +47,7 @@ def _item(d: SettingDef) -> SettingItem:
         configured=configured,
         source=source,
         value=value,
+        options=options,
     )
 
 
@@ -61,6 +70,9 @@ async def set_setting(
         raise NotFoundError(message=f"알 수 없는 설정 키: {key}", code="UNKNOWN_SETTING")
 
     value = data.value.strip()
+    # enum은 카탈로그 밖의 값을 막는다(오타·미지원 모델 방지).
+    if d.kind == "enum" and value != "" and value not in {v for v, _ in d.options}:
+        raise ValidationError(message=f"허용되지 않은 값: {value}", code="INVALID_SETTING_VALUE")
     row = await session.get(AppSetting, key)
 
     if value == "":

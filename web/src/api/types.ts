@@ -41,6 +41,7 @@ export const ProjectStatusSchema = z.enum([
   "reviewing",
   "completed",
   "archived",
+  "cancelled",
 ]);
 export type ProjectStatus = z.infer<typeof ProjectStatusSchema>;
 
@@ -78,43 +79,38 @@ export const OutlineSchema = z.object({
 });
 export type Outline = z.infer<typeof OutlineSchema>;
 
+// 기능 토글(enable_*)·자료 선택(sources)·알림(notification_channels)은 폼에서 제거됨
+// (2026-08-04): 백엔드가 읽지 않는 장식 스위치였다. 출처 태깅·약어집은 파이프라인
+// 기본 동작, 웹 검색은 항상 실행, 라이브러리·업로드는 자료 검토 단계의 행위로 붙는다.
+// zod 객체는 미지 키를 버리므로 옛 프로젝트 config에 남은 키들은 무해하다.
 export const ProjectConfigSchema = z.object({
   // 백엔드 계약: 프리셋은 카탈로그 id/name 문자열 또는 null(자유 주제)
   preset: z.string().nullable(),
-  // 생성 화면에서 직접 확정한 목차 — 없으면(AI 자동 설계) 필드 자체를 생략한다.
+  // 생성 화면에서 직접 확정한 목차 — 백엔드 필수(OUTLINE_REQUIRED), 편집 중엔 미완성일 수 있어 optional.
   outline: OutlineSchema.optional(),
-  sources: z.object({
-    use_library: z.boolean(),
-    use_upload: z.boolean(),
-    use_web_search: z.boolean(),
-  }),
+  // 품질 모드 — economy(Haiku, 저비용)/standard(전역 설정 모델). 백엔드 stages._models_for 소비.
+  model_mode: z.enum(["economy", "standard"]),
+  // HyDE 검색 확장 — 백엔드 stages._hyde_enabled_for 소비(없으면 전역 기본 off).
+  // optional: 이 필드 도입 전 프로젝트 config가 catch로 통째 초기화되지 않게 한다.
+  hyde_enabled: z.boolean().optional(),
+  // 완료 알림 채널 — 발송 기능은 준비 중이지만 선택은 저장해 둔다(구현 시 소급 적용).
+  notification_channels: z.array(z.enum(["email", "naver_works"])).optional(),
+  // 분석 배정은 목차 설계로 일원화 — 레거시(항상 빈 값), 기존 config 호환용
   enabled_analyzers: z.array(AnalyzerSchema),
-  enable_pre_reconciliation: z.boolean(),
-  enable_consistency_graph: z.boolean(),
-  enable_dual_track_search: z.boolean(),
-  enable_source_tagging: z.boolean(),
-  enable_critic_agent: z.boolean(),
-  enable_glossary: z.boolean(),
   depth_mode: DepthModeSchema,
   output_formats: z.array(z.enum(["hwpx", "markdown"])),
-  notification_channels: z.array(z.enum(["email", "naver_works"])),
 });
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 
 // 백엔드 config는 dict[str, Any] — 빈/부분 config가 와도 UI가 죽지 않게 기본값으로 흡수한다.
 export const DEFAULT_PROJECT_CONFIG: ProjectConfig = {
   preset: null,
-  sources: { use_library: true, use_upload: true, use_web_search: true },
+  model_mode: "standard",
+  hyde_enabled: false,
+  notification_channels: [],
   enabled_analyzers: [],
-  enable_pre_reconciliation: false,
-  enable_consistency_graph: false,
-  enable_dual_track_search: false,
-  enable_source_tagging: false,
-  enable_critic_agent: false,
-  enable_glossary: false,
   depth_mode: "full_report",
   output_formats: ["hwpx"],
-  notification_channels: [],
 };
 
 // 백엔드 ProjectRead(schemas/project.py)와 1:1 — progress만 프론트 전용 초과 필드(optional).
@@ -177,47 +173,8 @@ export const SourceListResponseSchema = z.object({
 });
 export type SourceListResponse = z.infer<typeof SourceListResponseSchema>;
 
-export const ContradictionWinnerSchema = z.enum(["A", "B", "defer"]);
-export type ContradictionWinner = z.infer<typeof ContradictionWinnerSchema>;
-
-export const ContradictionSourceSchema = z.object({
-  source_id: z.string(),
-  title: z.string(),
-  source: z.string(),
-  source_kind: SourceKindSchema,
-  published_at: z.string(),
-  organization: z.string(),
-  page_number: z.number().int().nonnegative().optional(),
-  reliability: z.number().min(0).max(1),
-  quote: z.string(),
-});
-export type ContradictionSource = z.infer<typeof ContradictionSourceSchema>;
-
-export const ContradictionResolutionSchema = z.object({
-  winner: ContradictionWinnerSchema,
-  resolved_at: z.string(),
-  resolved_by: z.string(),
-});
-export type ContradictionResolution = z.infer<typeof ContradictionResolutionSchema>;
-
-export const ContradictionSchema = z.object({
-  id: z.string(),
-  project_id: z.string(),
-  subject: z.string(),
-  value_a: z.string(),
-  value_b: z.string(),
-  source_a: ContradictionSourceSchema,
-  source_b: ContradictionSourceSchema,
-  status: z.enum(["pending", "resolved"]),
-  resolution: ContradictionResolutionSchema.optional(),
-  created_at: z.string(),
-});
-export type Contradiction = z.infer<typeof ContradictionSchema>;
-
-export const ContradictionListResponseSchema = z.object({
-  items: z.array(ContradictionSchema),
-});
-export type ContradictionListResponse = z.infer<typeof ContradictionListResponseSchema>;
+// Contradiction* 스키마는 모순 사전 검증 페이지(reconcile)와 함께 제거됨(2026-08-04)
+// — 백엔드 실체가 없던 mock 계약이었다. 문서 횡단 검증은 PM 검증(verify)이 담당.
 
 export const SectionStatusSchema = z.enum(["pending", "writing", "completed", "failed"]);
 export type SectionStatus = z.infer<typeof SectionStatusSchema>;
@@ -245,6 +202,16 @@ export const SectionTreeResponseSchema = z.object({
 });
 export type SectionTreeResponse = z.infer<typeof SectionTreeResponseSchema>;
 
+/** 본문 [N] 인용 번호 ↔ 원본 자료. 편집으로 번호가 어긋난 출처는 number=null. */
+export const SectionCitationSchema = z.object({
+  number: z.number().int().nullable(),
+  title: z.string(),
+  url: z.string().nullable(),
+  source_id: z.string().nullable(),
+  reliability: z.string().nullable(),
+});
+export type SectionCitation = z.infer<typeof SectionCitationSchema>;
+
 export const SectionContentResponseSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -252,6 +219,7 @@ export const SectionContentResponseSchema = z.object({
   source_ids: z.array(z.string()),
   qa_status: z.enum(["passed", "failed", "pending"]),
   level: z.number().int().min(1).max(4),
+  citations: z.array(SectionCitationSchema).default([]),
 });
 export type SectionContentResponse = z.infer<typeof SectionContentResponseSchema>;
 
@@ -301,6 +269,8 @@ export type LibraryNode =
       file_meta: LibraryFileMeta;
       virtual?: boolean;
       download_url?: string | null;
+      // 수집 본문 인라인 뷰어 경로(AI 수집 자료 전용). 있으면 클릭 시 원문을 라이브러리 안에서 표시.
+      content_url?: string | null;
       prompt?: PromptRef | null;
     };
 
@@ -321,6 +291,7 @@ export const LibraryNodeSchema: z.ZodType<LibraryNode> = z.lazy(() =>
       file_meta: LibraryFileMetaSchema,
       virtual: z.boolean().optional(),
       download_url: z.string().nullish(),
+      content_url: z.string().nullish(),
       prompt: PromptRefSchema.nullish(),
     }),
   ]),
@@ -330,6 +301,17 @@ export const LibraryTreeResponseSchema = z.object({
   tree: z.array(LibraryNodeSchema),
 });
 export type LibraryTreeResponse = z.infer<typeof LibraryTreeResponseSchema>;
+
+// AI 수집 자료의 수집 원문(라이브러리 인라인 뷰어용). 백엔드 SourceContentResponse와 1:1.
+export const SourceContentSchema = z.object({
+  title: z.string().nullish(),
+  url: z.string().nullish(),
+  reliability: z.string().nullish(),
+  content_md: z.string(),
+  char_count: z.number().int().nonnegative(),
+  byte_count: z.number().int().nonnegative(),
+});
+export type SourceContent = z.infer<typeof SourceContentSchema>;
 
 export const LoginInputSchema = z.object({
   login_id: z.string().min(1, "이메일 또는 아이디를 입력하세요"),

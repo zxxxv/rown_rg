@@ -7,14 +7,16 @@ stages의 플래너·리서치·인덱서·검색기·LLM·익스포터 전역�
 from __future__ import annotations
 
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from src.clients.llm.base import CompletionRequest, CompletionResponse
+from src.clients.llm.exceptions import LLMAPIError
 from src.core.state import ProjectState
 from src.core.types import ProjectStage, RetrievedChunk, ReviewGate, SectionPlan
 from src.services.indexing.vector import IndexingResult
+from src.services.indexing.web import StagedWebSource
 from src.services.research import CollectedSource, ResearchResult, ResearchSpec
 from src.workflows.pipeline import Done, Paused, advance
 from src.workflows.write_loop import apply_selection, rehydrate_from_payload
@@ -39,7 +41,7 @@ def fake_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
     """assemble의 HWPX 렌더를 tmp로 돌려 실파일이 exports/에 안 쌓이게. 호출 기록 반환."""
     exported: list[Path] = []
 
-    def _export(state: ProjectState) -> Path:
+    def _export(state: ProjectState, glossary: dict | None = None) -> Path:
         path = tmp_path / f"{state.project_id}.hwpx"
         path.write_bytes(b"hwpx")
         exported.append(path)
@@ -77,7 +79,9 @@ class _FakeResearchService:
                 CollectedSource(
                     url="https://example.org/a",
                     title="정부 통계 A",
-                    content_md="# 본문\n고령화율은 17.1%다.",
+                    # 본문 판정 하한(_MIN_CONTENT_CHARS=200자)을 넘는 실본문 모사
+                    content_md="# 본문\n고령화율은 17.1%다. "
+                    + "노인 부양비가 상승하고 생산가능인구는 감소한다. " * 10,
                     reliability="high",
                     matched_sections=spec.outline[:1],
                 ),
@@ -89,25 +93,45 @@ class _FakeResearchService:
 
 
 class _FakeIndexer:
-    """인덱서 fake — 본문 있는 출처만 청크가 생기는 실동작을 흉내."""
+    """스테이지→색인 fake. collect가 stage로 저장한 것을 index가 load_included로 읽는다.
+
+    확정 게이트 전(stage)엔 임베딩하지 않고, 게이트 뒤(index_existing)에서 본문 있는
+    출처만 청크가 생기는 실동작을 흉내. 한 인스턴스를 공유해 stage/load가 상태를 나눈다.
+    """
 
     def __init__(self) -> None:
-        self.calls: list[str] = []
+        self.staged: list[tuple[UUID, str]] = []
 
-    async def index(
+    async def stage(
         self,
         *,
         project_id: object,
         content_md: str,
         url: str | None = None,
         title: str | None = None,
-        track: str = "content",
         reliability: str | None = None,
+        matched_sections: list[str] | None = None,
+        page_age: str | None = None,
+    ) -> UUID:
+        source_id = uuid4()
+        self.staged.append((source_id, content_md))
+        return source_id
+
+    async def load_included(self, project_id: object) -> list[StagedWebSource]:
+        # 실제 구현은 is_included=true만 읽지만, fake는 DB 없이 전량 반환(제외 없음 happy-path).
+        return [StagedWebSource(source_id=sid, content_md=cm) for sid, cm in self.staged]
+
+    async def index_existing(
+        self,
+        *,
+        project_id: object,
+        source_id: UUID,
+        content_md: str,
+        track: str = "content",
     ) -> IndexingResult:
-        self.calls.append(content_md)
         return IndexingResult(
-            source_id=uuid4(),
-            chunks_created=3 if content_md else 0,
+            source_id=source_id,
+            chunks_created=3 if (content_md and content_md.strip()) else 0,
             parse_cached=False,
             elapsed_ms=1.0,
         )
@@ -115,11 +139,16 @@ class _FakeIndexer:
 
 @pytest.fixture
 def fake_research(monkeypatch: pytest.MonkeyPatch) -> _FakeResearchService:
-    """research 스테이지의 플래너 LLM·리서치 서비스·웹 인덱서를 fake로 교체."""
+    """research 스테이지의 플래너 LLM·리서치 서비스·웹 인덱서를 fake로 교체.
+
+    인덱서는 단일 인스턴스를 공유한다 — collect의 stage와 index의 load_included가
+    같은 저장소를 봐야 확정 후 색인이 이어진다.
+    """
     service = _FakeResearchService()
+    indexer = _FakeIndexer()
     monkeypatch.setattr("src.workflows.stages._plan_client", _StubClient(_PLAN_JSON))
     monkeypatch.setattr("src.workflows.stages._research_service_factory", lambda: service)
-    monkeypatch.setattr("src.workflows.stages._web_indexer_factory", lambda: _FakeIndexer())
+    monkeypatch.setattr("src.workflows.stages._web_indexer_factory", lambda: indexer)
     return service
 
 
@@ -138,7 +167,8 @@ def fake_write(monkeypatch: pytest.MonkeyPatch) -> RetrievedChunk:
     return chunk
 
 
-def _state_at_research() -> ProjectState:
+def _state_at_indexing() -> ProjectState:
+    """확정 게이트 직후(INDEXING) 상태 — write 단독 검증용(index는 이 앞 구간)."""
     return ProjectState(
         user_id=uuid4(),
         topic="주제",
@@ -146,26 +176,72 @@ def _state_at_research() -> ProjectState:
             SectionPlan(chapter_number=1, section_number=1, title="개요"),
             SectionPlan(chapter_number=2, section_number=1, title="분석"),
         ],
-        current_stage=ProjectStage.RESEARCHING,
+        current_stage=ProjectStage.INDEXING,
     )
 
 
 class TestResearchPausesAtSourcePool:
-    async def test_research_plans_collects_indexes(self, fake_research: _FakeResearchService):
+    async def test_collect_plans_and_stages_before_gate(self, fake_research: _FakeResearchService):
         state = ProjectState(user_id=uuid4(), topic="인구 고령화 대응")  # CREATED
         outcome = await advance(state)
 
         assert isinstance(outcome, Paused)
         assert outcome.review.gate is ReviewGate.SOURCE_POOL
         assert outcome.state.current_stage is ProjectStage.RESEARCHING
-        # 플래너가 만든 목차가 수집 spec으로 전달됨
-        assert fake_research.specs[0].outline == ["고령화 추이", "비용편익 분석"]
-        # 게이트 payload에 목차+자료 풀이 함께 실림 (resume 복원원)
+        # 챕터 단위 분할 수집 — 1차 패스는 챕터마다 해당 절 제목만 spec으로 전달.
+        # fake가 매번 같은 URL 2건이라 목표(research_min_sources=20) 미달 →
+        # 보충 패스가 정확히 1회 더 돌고, 같은 출처는 전부 중복 제거된다(총 2건 유지).
+        outlines = [s.outline for s in fake_research.specs]
+        assert outlines == [["고령화 추이"], ["비용편익 분석"]] * 2
+        assert all("—" in s.topic for s in fake_research.specs)  # topic에 챕터 라벨 결합
+        assert all("추가 심화" in s.topic for s in fake_research.specs[2:])  # 보충 패스 질의 변형
+        # 게이트 payload에 목차+자료 풀이 함께 실림 (resume 복원원).
+        # 본문 없는 출처 B는 풀에 실리지 않는다(2026-08-03 정책: 껍데기 미스테이징).
         assert len(outcome.review.payload["section_plan"]) == 2
-        assert len(outcome.review.payload["sources"]) == 2
-        # 자료 2건 모두 풀에 남고, 본문 있는 1건만 인덱싱됨
-        assert len(outcome.state.sources) == 2
-        assert len(outcome.state.indexed_source_ids) == 1
+        assert len(outcome.review.payload["sources"]) == 1
+        # 게이트 시점엔 아직 임베딩 전 — 스테이징만 됨.
+        # (색인은 확정 뒤 index 단계에서 채택된 자료만 수행)
+        assert len(outcome.state.sources) == 1
+        assert len(outcome.state.indexed_source_ids) == 0
+
+    async def test_chapter_failure_is_isolated(self, monkeypatch: pytest.MonkeyPatch):
+        """챕터 하나의 수집 실패(prompt too long 등)가 실행 전체를 죽이지 않는다."""
+
+        class _Flaky(_FakeResearchService):
+            def __init__(self) -> None:
+                super().__init__()
+                self.calls = 0
+
+            async def collect(self, spec: ResearchSpec, **kwargs: object) -> ResearchResult:
+                self.calls += 1
+                if self.calls == 1:
+                    raise LLMAPIError("prompt is too long (모의)")
+                return await super().collect(spec, **kwargs)
+
+        service = _Flaky()
+        monkeypatch.setattr("src.workflows.stages._plan_client", _StubClient(_PLAN_JSON))
+        monkeypatch.setattr("src.workflows.stages._research_service_factory", lambda: service)
+        monkeypatch.setattr("src.workflows.stages._web_indexer_factory", lambda: _FakeIndexer())
+
+        outcome = await advance(ProjectState(user_id=uuid4(), topic="인구 고령화 대응"))
+        assert isinstance(outcome, Paused)
+        assert outcome.review.gate is ReviewGate.SOURCE_POOL
+        # 1장(첫 콜) 실패에도 2장 자료(본문 있는 1건)로 게이트가 열린다
+        assert len(outcome.state.sources) == 1
+
+    async def test_all_chapters_failed_raises(self, monkeypatch: pytest.MonkeyPatch):
+        """성공한 수집 콜이 0이면(키·네트워크 등 시스템 문제) 빈 게이트 대신 실행 실패."""
+
+        class _AlwaysFail(_FakeResearchService):
+            async def collect(self, spec: ResearchSpec, **kwargs: object) -> ResearchResult:
+                raise LLMAPIError("api down (모의)")
+
+        monkeypatch.setattr("src.workflows.stages._plan_client", _StubClient(_PLAN_JSON))
+        monkeypatch.setattr("src.workflows.stages._research_service_factory", _AlwaysFail)
+        monkeypatch.setattr("src.workflows.stages._web_indexer_factory", lambda: _FakeIndexer())
+
+        with pytest.raises(LLMAPIError):
+            await advance(ProjectState(user_id=uuid4(), topic="인구 고령화 대응"))
 
     async def test_gate_payload_carries_source_signals(self, fake_research: _FakeResearchService):
         """자료 확정 게이트 payload에 사람이 취사선택할 신호가 실려 나온다."""
@@ -180,12 +256,25 @@ class TestResearchPausesAtSourcePool:
         assert a["has_content"] is True
         assert a["preview"] and "17.1%" in a["preview"]
 
-        # 본문 없는 출처: 검색에 안 잡힘(has_content=False), 미리보기 없음
-        b = by_url["https://example.org/b"]
-        assert b["has_content"] is False
-        assert b["preview"] is None
-        assert b["reliability"] is None
-        assert b["matched_sections"] == []
+        # 본문 없는 출처 B는 풀에 아예 실리지 않는다(껍데기 미스테이징 정책)
+        assert "https://example.org/b" not in by_url
+
+
+class TestStageDisplayHook:
+    async def test_on_stage_reports_running_phase(self, fake_write: RetrievedChunk):
+        """advance 훅이 '지금 실행 중인 단계'를 알린다 — 표시용 상태 영속화의 근거.
+
+        INDEXING에서 출발하면 write가 도는 동안 WRITING이 통지돼야 한다(척추가
+        구간 끝에만 상태를 저장해 UI가 옛 위치를 가리키던 문제의 해법).
+        """
+        seen: list[ProjectStage] = []
+
+        async def hook(stage: ProjectStage) -> None:
+            seen.append(stage)
+
+        outcome = await advance(_state_at_indexing(), on_stage=hook)
+        assert isinstance(outcome, Paused)
+        assert seen == [ProjectStage.WRITING]
 
 
 class TestFullPipelineChain:
@@ -200,11 +289,13 @@ class TestFullPipelineChain:
         assert isinstance(paused_sources, Paused)
         assert paused_sources.review.gate is ReviewGate.SOURCE_POOL
 
-        # 2) 승인 후 재개 — write는 research가 만든 목차를 그대로 쓴다
+        # 2) 승인 후 재개 — 확정 뒤 index(임베딩)가 돌고 write는 목차를 그대로 쓴다
         resumed = paused_sources.state.resolve_review(paused_sources.review)
         paused_qa = await advance(resumed)
         assert isinstance(paused_qa, Paused)
         assert paused_qa.review.gate is ReviewGate.QA_SELECT
+        # 확정 이후 index 단계에서 본문 있는 1건이 임베딩됨(게이트 전엔 0이었음)
+        assert len(paused_qa.state.indexed_source_ids) == 1
         plan_ids = {str(s.section_id) for s in paused_sources.state.section_plan}
         assert {sec["section_id"] for sec in paused_qa.review.payload["sections"]} == plan_ids
 
@@ -222,7 +313,7 @@ class TestFullPipelineChain:
 
 class TestWritePausesAtQaSelect:
     async def test_write_produces_candidates_and_pauses(self, fake_write: RetrievedChunk):
-        outcome = await advance(_state_at_research())
+        outcome = await advance(_state_at_indexing())
         assert isinstance(outcome, Paused)
         assert outcome.review.gate is ReviewGate.QA_SELECT
         assert outcome.state.current_stage is ProjectStage.REVIEWING
@@ -237,7 +328,7 @@ class TestWritePausesAtQaSelect:
 class TestResumeThroughAssemble:
     async def test_full_round_trip_completes(self, fake_write: RetrievedChunk):
         # 1) write → QA_SELECT 정지
-        paused = await advance(_state_at_research())
+        paused = await advance(_state_at_indexing())
         assert isinstance(paused, Paused)
         payload = paused.review.payload
 
@@ -263,7 +354,7 @@ class TestResumeThroughAssemble:
         self, fake_write: RetrievedChunk
     ):
         # 한 섹션만 선택 → assemble은 진행하되 selected_drafts는 1개 (structure 미완)
-        paused = await advance(_state_at_research())
+        paused = await advance(_state_at_indexing())
         assert isinstance(paused, Paused)
         payload = paused.review.payload
         first = payload["sections"][0]

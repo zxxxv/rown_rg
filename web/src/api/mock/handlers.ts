@@ -1,7 +1,6 @@
 import { adminHandlers } from "./handlers/admin";
 import { authHandlers } from "./handlers/auth";
 import { checkpointsHandlers } from "./handlers/checkpoints";
-import { contradictionsHandlers } from "./handlers/contradictions";
 import { ipWhitelistHandlers } from "./handlers/ip-whitelist";
 import { libraryHandlers } from "./handlers/library";
 import { presetsHandlers } from "./handlers/presets";
@@ -20,7 +19,6 @@ export const handlers = [
   ...presetsHandlers,
   ...sourcesHandlers,
   ...sectionsHandlers,
-  ...contradictionsHandlers,
   ...progressHandlers,
   ...checkpointsHandlers,
   ...adminHandlers,

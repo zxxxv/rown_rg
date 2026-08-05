@@ -34,6 +34,7 @@ from src.services.qa.gate import (
     gate_candidates,
 )
 from src.services.retrieval.section import SectionRetriever
+from src.workflows import cancel
 from src.workflows.events import emit_step
 
 
@@ -55,6 +56,8 @@ async def run_write_loop(
     pid = state.project_id
     candidate_sets: list[SectionCandidateSet] = []
     for section in state.section_plan:
+        # 절 단위 취소 지점 — 긴 작성 단계 도중에도 다음 절로 넘어가기 전에 멈춘다.
+        cancel.raise_if_cancelled(pid)
         label = f"본문 작성 · {section.chapter_number}.{section.section_number} {section.title}"
         emit_step(pid, "writing", label, "started")
         ctx = build_writer_context(section)

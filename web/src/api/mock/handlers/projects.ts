@@ -30,12 +30,18 @@ export const projectsHandlers = [
     const statusRaw = u.searchParams.get("status");
     const q = u.searchParams.get("q")?.trim().toLowerCase() ?? "";
 
-    if (statusRaw !== null && !ProjectStatusSchema.safeParse(statusRaw).success) {
+    // 'in_progress'는 단계값이 아니라 그룹 필터(created~reviewing) — 백엔드와 동일.
+    const inProgressStatuses = ["created", "researching", "indexing", "writing", "reviewing"];
+    if (
+      statusRaw !== null &&
+      statusRaw !== "in_progress" &&
+      !ProjectStatusSchema.safeParse(statusRaw).success
+    ) {
       return HttpResponse.json(
         {
           error: {
             code: "INVALID_STATUS_FILTER",
-            message: `알 수 없는 status: ${statusRaw} (가능: ${ProjectStatusSchema.options.join(", ")})`,
+            message: `알 수 없는 status: ${statusRaw} (가능: in_progress, ${ProjectStatusSchema.options.join(", ")})`,
           },
         },
         { status: 422 },
@@ -43,7 +49,11 @@ export const projectsHandlers = [
     }
 
     let result: Project[] = [...DEMO_PROJECTS];
-    if (statusRaw !== null) result = result.filter((p) => p.status === statusRaw);
+    if (statusRaw === "in_progress") {
+      result = result.filter((p) => inProgressStatuses.includes(p.status));
+    } else if (statusRaw !== null) {
+      result = result.filter((p) => p.status === statusRaw);
+    }
     if (q) {
       result = result.filter(
         (p) => p.title.toLowerCase().includes(q) || p.topic.toLowerCase().includes(q),
@@ -145,6 +155,41 @@ export const projectsHandlers = [
     project.updated_at = new Date().toISOString();
     return HttpResponse.json(
       { data: { project_id: project.id, status: "researching" } },
+      { status: 202 },
+    );
+  }),
+
+  // POST /projects/{id}/cancel — 진행 중 실행 취소(협조적). 목에선 즉시 cancelled.
+  http.post(url("projects/:id/cancel"), ({ params }) => {
+    const id = String(params.id);
+    const project = DEMO_PROJECTS.find((p) => p.id === id);
+    if (!project) {
+      return HttpResponse.json(
+        { error: { code: "PROJECT_NOT_FOUND", message: "프로젝트를 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    if (["completed", "archived", "cancelled"].includes(project.status)) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: "PROJECT_NOT_CANCELLABLE",
+            message: `이미 종료된 프로젝트입니다(현재: ${project.status})`,
+          },
+        },
+        { status: 422 },
+      );
+    }
+    if (project.status === "created") {
+      return HttpResponse.json(
+        { error: { code: "PROJECT_NOT_RUNNING", message: "아직 시작하지 않은 프로젝트입니다" } },
+        { status: 422 },
+      );
+    }
+    project.status = "cancelled";
+    project.updated_at = new Date().toISOString();
+    return HttpResponse.json(
+      { data: { project_id: project.id, status: "cancelled" } },
       { status: 202 },
     );
   }),

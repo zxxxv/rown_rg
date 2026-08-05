@@ -1,23 +1,21 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { ReactNode } from "react";
-import { useEffect, useRef } from "react";
-import { FormProvider, useForm, useFormContext } from "react-hook-form";
+import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { mergeKeepDirty } from "./_merge";
 import { DepthSelector } from "./DepthSelector";
-import { DifferentiatorToggle } from "./DifferentiatorToggle";
 import { ModelModePicker } from "./ModelModePicker";
 import { OutlineDesigner } from "./OutlineDesigner";
-import { OutputAndNotification } from "./OutputAndNotification";
 import { PresetSelect } from "./PresetSelect";
 import { defaultsForPreset, presetLabel } from "./presets";
-import { SourceTypeCheckboxes } from "./SourceTypeCheckboxes";
+import { SourceChannels } from "./SourceChannels";
 import { ProjectFormSchema, type ProjectFormValues } from "./schema";
 
 export type ProjectConfigFormMode = "create" | "edit";
@@ -60,7 +58,6 @@ export function ProjectConfigForm({
     handleSubmit,
     getValues,
     reset,
-    setValue,
     watch,
     formState: { dirtyFields, isSubmitting },
   } = form;
@@ -79,21 +76,6 @@ export function ProjectConfigForm({
 
   const watchedConfig = watch("config");
 
-  // Critic Agent ON → 일관성 그래프 자동 ON (의존성 검증)
-  const autoToggleNotified = useRef(false);
-  useEffect(() => {
-    if (watchedConfig.enable_critic_agent && !watchedConfig.enable_consistency_graph) {
-      setValue("config.enable_consistency_graph", true, { shouldDirty: true });
-      if (!autoToggleNotified.current) {
-        toast("Critic Agent 활성화로 일관성 그래프도 자동 활성화됨", {
-          description: "Critic Agent는 일관성 그래프 결과를 기반으로 검토합니다.",
-        });
-        autoToggleNotified.current = true;
-      }
-    }
-    if (!watchedConfig.enable_critic_agent) autoToggleNotified.current = false;
-  }, [watchedConfig.enable_critic_agent, watchedConfig.enable_consistency_graph, setValue]);
-
   const onClickSubmit = handleSubmit(async (values) => {
     // 목차는 필수(AI 설계 없음) — 유효한 절이 없으면 생성 자체를 막는다.
     if (!isEdit) {
@@ -107,15 +89,6 @@ export function ProjectConfigForm({
     }
     await onSubmit?.(values);
   });
-
-  const activeDiffCount = [
-    watchedConfig.enable_pre_reconciliation,
-    watchedConfig.enable_consistency_graph,
-    watchedConfig.enable_dual_track_search,
-    watchedConfig.enable_source_tagging,
-    watchedConfig.enable_critic_agent,
-    watchedConfig.enable_glossary,
-  ].filter(Boolean).length;
 
   return (
     <FormProvider {...form}>
@@ -144,8 +117,12 @@ export function ProjectConfigForm({
               </div>
             </div>
           </Section>
+          <Section number={5} title="알림">
+            <NotificationChannels />
+          </Section>
 
-          {/* 필수 결정은 위 4개로 끝 — 나머지는 기본값으로 충분해 접어둔다. */}
+          {/* 필수 결정은 위 5개로 끝. 기능 토글 6종은 제거됨(2026-08-04) —
+              출처 태깅·약어집은 파이프라인 기본 동작. 남은 실스위치는 HyDE뿐. */}
           <details className="group rounded border border-border bg-bg">
             <summary className="flex cursor-pointer select-none items-center gap-2 p-4">
               <span className="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-bg-tertiary font-mono text-xs text-fg-secondary">
@@ -153,21 +130,17 @@ export function ProjectConfigForm({
               </span>
               <span className="text-base font-semibold text-fg">고급 옵션</span>
               <span className="text-xs text-fg-tertiary">
-                자료 선택 · 기능 · 알림 — 기본값으로 충분합니다
+                자료 출처 안내 · 검색 확장(HyDE) — 기본값으로 충분합니다
               </span>
             </summary>
             <div className="flex flex-col gap-6 border-t border-border p-4">
               <div className="flex flex-col gap-3">
-                <h3 className="text-sm font-semibold text-fg">자료 선택</h3>
-                <SourceTypeCheckboxes />
+                <h3 className="text-sm font-semibold text-fg">자료 출처</h3>
+                <SourceChannels />
               </div>
               <div className="flex flex-col gap-3">
-                <h3 className="text-sm font-semibold text-fg">기능</h3>
-                <DifferentiatorToggle />
-              </div>
-              <div className="flex flex-col gap-3">
-                <h3 className="text-sm font-semibold text-fg">알림</h3>
-                <OutputAndNotification />
+                <h3 className="text-sm font-semibold text-fg">검색 품질</h3>
+                <HydeToggle />
               </div>
             </div>
           </details>
@@ -181,9 +154,6 @@ export function ProjectConfigForm({
               <Badge variant="secondary">
                 모델 · {watchedConfig.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
               </Badge>
-              {activeDiffCount > 0 ? (
-                <Badge variant="secondary">기능 {activeDiffCount}개</Badge>
-              ) : null}
             </div>
             <div className="flex items-center gap-2">
               {onCancel ? (
@@ -216,9 +186,6 @@ export function ProjectConfigForm({
                 <Badge variant="secondary">
                   모델 · {watchedConfig.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
                 </Badge>
-                {activeDiffCount > 0 ? (
-                  <Badge variant="secondary">기능 {activeDiffCount}개</Badge>
-                ) : null}
               </div>
             </div>
             <div className="flex flex-col gap-2">
@@ -276,6 +243,79 @@ function Section({
       </header>
       {children}
     </section>
+  );
+}
+
+/** 완료 알림 채널 — 발송은 준비 중이지만 선택은 config에 저장된다(구현 시 소급 적용). */
+function NotificationChannels() {
+  const { control } = useFormContext<ProjectFormValues>();
+  return (
+    <Controller
+      name="config.notification_channels"
+      control={control}
+      render={({ field }) => {
+        const checked = (field.value ?? []).includes("naver_works");
+        return (
+          <label
+            htmlFor="notify-naver-works"
+            className="flex w-full cursor-pointer items-center gap-3 rounded border border-border bg-bg p-3 transition-colors hover:bg-bg-secondary sm:max-w-md"
+          >
+            <Checkbox
+              id="notify-naver-works"
+              checked={checked}
+              onCheckedChange={(v) => field.onChange(v === true ? ["naver_works"] : [])}
+            />
+            <div className="flex flex-col gap-0.5">
+              <Label
+                htmlFor="notify-naver-works"
+                className="cursor-pointer text-sm font-medium text-fg"
+              >
+                네이버 웍스
+              </Label>
+              <span className="text-xs text-fg-tertiary">
+                보고서 완성 시 네이버 웍스로 알림을 받습니다.
+              </span>
+            </div>
+            <span className="ml-auto shrink-0 rounded-sm border border-border bg-bg-secondary px-1.5 py-0.5 text-[10px] text-fg-tertiary">
+              준비 중
+            </span>
+          </label>
+        );
+      }}
+    />
+  );
+}
+
+/** HyDE 검색 확장 토글 — 실스위치(백엔드 stages._hyde_enabled_for가 소비). */
+function HydeToggle() {
+  const { control } = useFormContext<ProjectFormValues>();
+  return (
+    <Controller
+      name="config.hyde_enabled"
+      control={control}
+      render={({ field }) => (
+        <label
+          htmlFor="hyde-toggle"
+          className="flex cursor-pointer items-start gap-3 rounded border border-border bg-bg p-3 transition-colors hover:bg-bg-secondary"
+        >
+          <Checkbox
+            id="hyde-toggle"
+            checked={field.value ?? false}
+            onCheckedChange={(checked) => field.onChange(checked === true)}
+            aria-describedby="hyde-toggle-desc"
+          />
+          <div className="flex flex-col gap-0.5">
+            <Label htmlFor="hyde-toggle" className="cursor-pointer text-sm font-medium text-fg">
+              HyDE 검색 확장 (실험적)
+            </Label>
+            <span id="hyde-toggle-desc" className="text-xs text-fg-tertiary">
+              작성 근거 검색 시 질문을 가상 답변 문서로 확장해 의미 검색 재현율을 높입니다. 절마다
+              소형 모델 호출이 추가됩니다(비용 소폭 증가).
+            </span>
+          </div>
+        </label>
+      )}
+    />
   );
 }
 
