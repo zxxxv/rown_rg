@@ -35,8 +35,10 @@ export interface QuotaRequest {
   status: "pending" | "approved" | "rejected";
 }
 
+export type AdminDashboardPeriod = "this_month" | "last_month" | "last_7_days" | "last_30_days";
+
 export interface AdminDashboardData {
-  period: { type: "this_month"; label: string };
+  period: { type: AdminDashboardPeriod; label: string };
   kpis: AdminKPI;
   daily_costs: DailyCostPoint[];
   user_usage: UserUsageRow[];
@@ -61,13 +63,35 @@ const DAILY_USERS = [
   13, 13, 12,
 ];
 
-const DAILY_COSTS: DailyCostPoint[] = DAILY_BASE.map((cost, i) => ({
-  date: dailyDate(29 - i),
-  cost_usd: cost,
-  users: DAILY_USERS[i] ?? 10,
-}));
+// offset = NOW으로부터 며칠 전인지(0 = 오늘). 각 period가 덮는 [oldest, newest] offset 구간을 반환.
+function offsetRangeForPeriod(period: AdminDashboardPeriod): { oldest: number; newest: number } {
+  const thisMonthStartOffset = NOW.getUTCDate() - 1;
+  if (period === "this_month") return { oldest: thisMonthStartOffset, newest: 0 };
+  if (period === "last_7_days") return { oldest: 6, newest: 0 };
+  if (period === "last_30_days") return { oldest: 29, newest: 0 };
+  // last_month: 이번 달 1일 바로 전날(저번 달 마지막날)부터 저번 달 1일까지
+  const daysInLastMonth = new Date(
+    Date.UTC(NOW.getUTCFullYear(), NOW.getUTCMonth(), 0),
+  ).getUTCDate();
+  return {
+    oldest: thisMonthStartOffset + daysInLastMonth,
+    newest: thisMonthStartOffset + 1,
+  };
+}
 
-const TOTAL_COST = DAILY_BASE.reduce((s, v) => s + v, 0);
+function dailyCostsForPeriod(period: AdminDashboardPeriod): DailyCostPoint[] {
+  const { oldest, newest } = offsetRangeForPeriod(period);
+  const points: DailyCostPoint[] = [];
+  for (let offset = oldest; offset >= newest; offset--) {
+    const idx = offset % DAILY_BASE.length;
+    points.push({
+      date: dailyDate(offset),
+      cost_usd: DAILY_BASE[idx] ?? 50,
+      users: DAILY_USERS[idx] ?? 10,
+    });
+  }
+  return points;
+}
 
 export const ADMIN_USAGE: UserUsageRow[] = [
   {
@@ -173,19 +197,27 @@ export const QUOTA_REQUESTS: QuotaRequest[] = [
   },
 ];
 
-export const ADMIN_DASHBOARD: AdminDashboardData = {
-  period: { type: "this_month", label: "2026-05" },
-  kpis: {
-    total_cost_usd: TOTAL_COST,
-    cost_limit_usd: 3_000,
-    active_users: 13,
-    active_projects: 7,
-    completed_reports: 4,
-  },
-  daily_costs: DAILY_COSTS,
-  user_usage: ADMIN_USAGE,
-  quota_requests: QUOTA_REQUESTS,
-};
+export function buildAdminDashboardFixture(period: AdminDashboardPeriod): AdminDashboardData {
+  const daily_costs = dailyCostsForPeriod(period);
+  const { oldest, newest } = offsetRangeForPeriod(period);
+  const total_cost_usd = daily_costs.reduce((sum, p) => sum + p.cost_usd, 0);
+
+  return {
+    period: { type: period, label: `${dailyDate(oldest)} ~ ${dailyDate(newest)}` },
+    kpis: {
+      total_cost_usd,
+      cost_limit_usd: 3_000,
+      active_users: 13,
+      active_projects: 7,
+      completed_reports: 4,
+    },
+    daily_costs,
+    user_usage: ADMIN_USAGE,
+    quota_requests: QUOTA_REQUESTS,
+  };
+}
+
+export const ADMIN_DASHBOARD: AdminDashboardData = buildAdminDashboardFixture("this_month");
 
 export function decideQuotaRequest(
   id: string,

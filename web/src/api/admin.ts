@@ -1,20 +1,34 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/api/client";
-import type { AdminDashboardData, QuotaRequest } from "@/api/mock/fixtures/admin";
+import type {
+  AdminDashboardData,
+  AdminDashboardPeriod,
+  QuotaRequest,
+} from "@/api/mock/fixtures/admin";
+
+export interface AdminDashboardParams {
+  period?: AdminDashboardPeriod;
+}
 
 export const adminKeys = {
   all: ["admin"] as const,
-  dashboard: () => [...adminKeys.all, "dashboard"] as const,
+  dashboard: (params: AdminDashboardParams = {}) =>
+    [...adminKeys.all, "dashboard", params] as const,
 };
 
-export async function getAdminDashboard(): Promise<AdminDashboardData> {
-  return apiClient.get<AdminDashboardData>("admin/dashboard");
+export async function getAdminDashboard(
+  params: AdminDashboardParams = {},
+): Promise<AdminDashboardData> {
+  const searchParams: Record<string, string> = {};
+  if (params.period) searchParams.period = params.period;
+  return apiClient.get<AdminDashboardData>("admin/dashboard", { searchParams });
 }
 
-export function useAdminDashboard() {
+export function useAdminDashboard(params: AdminDashboardParams = {}) {
   return useQuery({
-    queryKey: adminKeys.dashboard(),
-    queryFn: getAdminDashboard,
+    queryKey: adminKeys.dashboard(params),
+    queryFn: () => getAdminDashboard(params),
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -33,7 +47,7 @@ export function useApproveQuotaExtension() {
       });
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: adminKeys.dashboard() });
+      void qc.invalidateQueries({ queryKey: adminKeys.all });
     },
   });
 }

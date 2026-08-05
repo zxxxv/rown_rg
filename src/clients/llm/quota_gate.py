@@ -20,11 +20,9 @@ import structlog
 from sqlalchemy import func, select
 
 from src.clients.llm import token_tracker
-from src.core import app_settings
 from src.core.clock import now
 from src.core.config import settings
 from src.core.exceptions import QuotaExceededError
-from src.core.limit import default_limit_for
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from src.db.models.user_limit import UserLimit
@@ -58,16 +56,27 @@ def check_limits(
 
 async def _fetch_usage(
     user_id: UUID | None,
-) -> tuple[Decimal, Decimal | None, Decimal | None]:
-    """(조직 당월 누적, 사용자 당월 누적, 사용자 한도)를 조회.
+) -> tuple[Decimal, Decimal, Decimal | None, Decimal | None]:
+    """(조직 당월 누적, 조직 한도, 사용자 당월 누적, 사용자 한도)를 조회.
 
-    사용자 한도는 user_quotas 행 → 없으면 역할 기본값. 사용자 행 자체가 없으면
-    (None, None)으로 사용자 검사를 건너뛴다.
+    한도값은 quota_settings(관리자 편집·감사)를 단일 소스로 읽는다 — 조직 한도는
+    ORG_MONTHLY_COST_LIMIT_USD, 역할 기본 한도는 get_role_default_limit_usd(둘 다
+    quota_settings 미시딩 시 config/core.limit 폴백). 사용자 한도는 user_quotas 행 →
+    없으면 역할 기본값. 사용자 행 자체가 없으면 사용자 검사를 건너뛴다(None).
     """
+    from src.core.quota_settings import QuotaSettingKey
     from src.db.session import async_session_maker
+    from src.services.quota_settings import get_quota_setting_int, get_role_default_limit_usd
 
     month_start = now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     async with async_session_maker() as session:
+        org_limit = Decimal(
+            await get_quota_setting_int(
+                session,
+                QuotaSettingKey.ORG_MONTHLY_COST_LIMIT_USD,
+                default=int(settings.org_monthly_cost_limit_usd),
+            )
+        )
         org_cost: Decimal = (
             await session.execute(
                 select(func.coalesce(func.sum(TokenUsage.cost_usd), 0)).where(
@@ -76,7 +85,7 @@ async def _fetch_usage(
             )
         ).scalar_one()
         if user_id is None:
-            return org_cost, None, None
+            return org_cost, org_limit, None, None
 
         row = (
             await session.execute(
@@ -86,9 +95,13 @@ async def _fetch_usage(
             )
         ).first()
         if row is None:
-            return org_cost, None, None
+            return org_cost, org_limit, None, None
         role, custom_limit = row
-        user_limit = custom_limit if custom_limit is not None else default_limit_for(role)
+        user_limit = (
+            custom_limit
+            if custom_limit is not None
+            else await get_role_default_limit_usd(session, role)
+        )
 
         user_cost: Decimal = (
             await session.execute(
@@ -98,7 +111,7 @@ async def _fetch_usage(
                 )
             )
         ).scalar_one()
-        return org_cost, user_cost, user_limit
+        return org_cost, org_limit, user_cost, user_limit
 
 
 async def enforce() -> None:
@@ -109,10 +122,10 @@ async def enforce() -> None:
     if not settings.quota_enforcement_enabled:
         return
     user_id, _project_id, _operation = token_tracker.get_context()
-    org_cost, user_cost, user_limit = await _fetch_usage(user_id)
+    org_cost, org_limit, user_cost, user_limit = await _fetch_usage(user_id)
     check_limits(
         org_cost=org_cost,
-        org_limit=app_settings.get_decimal("org_monthly_cost_limit_usd"),
+        org_limit=org_limit,
         user_cost=user_cost,
         user_limit=user_limit,
     )

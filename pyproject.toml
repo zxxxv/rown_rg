@@ -48,6 +48,7 @@ dependencies = [
     # SSO
     "python3-saml>=1.16.0",
     "pyjwt[crypto]>=2.13.0",
+    "greenlet>=3.5.2",
 ]
 
 [project.optional-dependencies]
@@ -66,6 +67,9 @@ dev = [
     "pytest-cov>=6.0",
     "pre-commit>=4.0",
 ]
+
+[tool.uv]
+no-binary-package = ["lxml", "xmlsec"]
 
 [tool.ruff]
 line-length = 100

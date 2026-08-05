@@ -67,8 +67,11 @@ class TestEnforce:
         await quota_gate.enforce()
 
     async def test_enabled_blocks_on_exceeded(self, monkeypatch: pytest.MonkeyPatch):
-        async def _fetch(user_id: object) -> tuple[Decimal, Decimal | None, Decimal | None]:
-            return Decimal("50"), Decimal("200"), Decimal("200")
+        async def _fetch(
+            user_id: object,
+        ) -> tuple[Decimal, Decimal, Decimal | None, Decimal | None]:
+            # (org_cost, org_limit, user_cost, user_limit) — 사용자 한도 초과로 차단
+            return Decimal("50"), Decimal("3000"), Decimal("200"), Decimal("200")
 
         monkeypatch.setattr(settings, "quota_enforcement_enabled", True)
         monkeypatch.setattr(quota_gate, "_fetch_usage", _fetch)
@@ -76,8 +79,11 @@ class TestEnforce:
             await quota_gate.enforce()
 
     async def test_enabled_passes_under_limit(self, monkeypatch: pytest.MonkeyPatch):
-        async def _fetch(user_id: object) -> tuple[Decimal, Decimal | None, Decimal | None]:
-            return Decimal("50"), Decimal("10"), Decimal("200")
+        async def _fetch(
+            user_id: object,
+        ) -> tuple[Decimal, Decimal, Decimal | None, Decimal | None]:
+            # (org_cost, org_limit, user_cost, user_limit) — 조직·사용자 모두 한도 미만
+            return Decimal("50"), Decimal("3000"), Decimal("10"), Decimal("200")
 
         monkeypatch.setattr(settings, "quota_enforcement_enabled", True)
         monkeypatch.setattr(quota_gate, "_fetch_usage", _fetch)
@@ -183,9 +189,12 @@ class TestUserQuotaFallback:
         seen: list[object] = []
         user_id = uuid4()
 
-        async def _fetch(uid: object) -> tuple[Decimal, Decimal | None, Decimal | None]:
+        async def _fetch(
+            uid: object,
+        ) -> tuple[Decimal, Decimal, Decimal | None, Decimal | None]:
             seen.append(uid)
-            return Decimal("0"), Decimal("0"), Decimal("100")
+            # (org_cost, org_limit, user_cost, user_limit)
+            return Decimal("0"), Decimal("3000"), Decimal("0"), Decimal("100")
 
         monkeypatch.setattr(settings, "quota_enforcement_enabled", True)
         monkeypatch.setattr(quota_gate, "_fetch_usage", _fetch)

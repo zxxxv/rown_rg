@@ -6,6 +6,7 @@ from src.core.exceptions import (
     AuthenticationError,
     AuthorizationError,
     BaseError,
+    CostLimitExceededError,
     DatabaseError,
     LLMError,
     NotFoundError,
@@ -53,6 +54,13 @@ def register_error_handlers(app: FastAPI) -> None:
     async def _quota(_: Request, exc: QuotaExceededError) -> JSONResponse:
         logger.warning("quota.exceeded", code=exc.code, message=exc.message)
         return _response(429, _code(exc, "QUOTA_EXCEEDED"), exc.message)
+
+    # cost_limit 게이트는 옵션 B에서 엔드포인트에 배선하지 않지만(집행은 quota_gate 단일),
+    # 예외/핸들러는 무해하게 유지 — 향후 특정 엔드포인트 사전 차단용으로 재사용 가능.
+    @app.exception_handler(CostLimitExceededError)
+    async def _cost_limit(_: Request, exc: CostLimitExceededError) -> JSONResponse:
+        logger.warning("cost_limit.blocked", code=exc.code, message=exc.message)
+        return _response(429, _code(exc, "COST_LIMIT_EXCEEDED"), exc.message)
 
     @app.exception_handler(DatabaseError)
     async def _db(_: Request, exc: DatabaseError) -> JSONResponse:

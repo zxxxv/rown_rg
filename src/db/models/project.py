@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    event,
+    func,
+    inspect,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.engine import Connection
+from sqlalchemy.orm import Mapped, Mapper, mapped_column, relationship
 
 from src.core.types import ProjectStage
 from src.db.base import Base
@@ -53,7 +64,13 @@ class Project(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
     )
 
     @property
@@ -88,3 +105,23 @@ class Project(Base):
         ),
         Index("ix_projects_config", "config", postgresql_using="gin"),
     )
+
+
+def _sync_completed_at(mapper: Mapper, connection: Connection, target: Project) -> None:
+    history = inspect(target).attrs.status.history
+    if not history.has_changes():
+        return
+
+    previous_status = history.deleted[0] if history.deleted else None
+    current_status = target.status
+    if current_status == previous_status:
+        return
+
+    if current_status == ProjectStage.COMPLETED.value:
+        target.completed_at = datetime.now(UTC)
+    elif previous_status == ProjectStage.COMPLETED.value:
+        target.completed_at = None
+
+
+event.listen(Project, "before_insert", _sync_completed_at)
+event.listen(Project, "before_update", _sync_completed_at)

@@ -72,7 +72,9 @@ class Settings(BaseSettings):
     saml_base_url: str = ""  # 운영 공개 베이스 URL (비면 요청 헤더로 추론)
     react_frontend_url: str = "http://localhost:5173"
 
-    # 관리자 — 조직 월 비용 한도(USD). 관리자 대시보드 KPI 표시·예산 경고용.
+    # 관리자 — 조직 월 비용 한도(USD). quota_settings(ORG_MONTHLY_COST_LIMIT_USD) 행이
+    # 아직 없을 때(마이그레이션 미실행 등)의 폴백 하한값 — 정상 운영 중에는 DB 값을
+    # 우선한다(src.services.quota_settings.get_quota_setting_int).
     # (사용자별 한도는 user_quotas 테이블, 역할별 기본값은 src.core.limit)
     org_monthly_cost_limit_usd: Decimal = Decimal("3000")
     # 한도 enforcement — 실호출(live/record) 전 당월 누적 비용 vs 한도 검사. 끄면 표시만.
