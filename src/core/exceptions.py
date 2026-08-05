@@ -31,3 +31,7 @@ class QuotaExceededError(BaseError):
 
 class DatabaseError(BaseError):
     pass
+
+
+class CostLimitExceededError(BaseError):
+    pass

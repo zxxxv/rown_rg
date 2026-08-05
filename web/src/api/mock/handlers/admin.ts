@@ -1,5 +1,6 @@
 import { HttpResponse, http } from "msw";
-import { ADMIN_DASHBOARD, decideQuotaRequest } from "@/api/mock/fixtures/admin";
+import type { AdminDashboardPeriod } from "@/api/mock/fixtures/admin";
+import { buildAdminDashboardFixture, decideQuotaRequest } from "@/api/mock/fixtures/admin";
 import { env } from "@/env";
 
 function url(path: string): string {
@@ -11,9 +12,22 @@ interface ApproveBody {
   decision: "approved" | "rejected";
 }
 
+const VALID_PERIODS: readonly AdminDashboardPeriod[] = [
+  "this_month",
+  "last_month",
+  "last_7_days",
+  "last_30_days",
+];
+
+function isValidPeriod(value: string): value is AdminDashboardPeriod {
+  return (VALID_PERIODS as readonly string[]).includes(value);
+}
+
 export const adminHandlers = [
-  http.get(url("admin/dashboard"), () => {
-    return HttpResponse.json({ data: ADMIN_DASHBOARD }, { status: 200 });
+  http.get(url("admin/dashboard"), ({ request }) => {
+    const raw = new URL(request.url).searchParams.get("period") ?? "this_month";
+    const period = isValidPeriod(raw) ? raw : "this_month";
+    return HttpResponse.json({ data: buildAdminDashboardFixture(period) }, { status: 200 });
   }),
 
   http.post(url("admin/quota-requests/:rid/decide"), async ({ params, request }) => {

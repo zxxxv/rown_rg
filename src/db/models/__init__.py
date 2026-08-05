@@ -6,6 +6,8 @@ from src.db.models.library_node import LibraryNode
 from src.db.models.limit_request import LimitRequest
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
+from src.db.models.quota_setting import QuotaSettings
+from src.db.models.quota_setting_history import QuotaSettingsHistory
 from src.db.models.raptor_node import RaptorNode
 from src.db.models.refresh_token import RefreshToken
 from src.db.models.review_point import ReviewPoint
@@ -25,6 +27,8 @@ __all__ = [
     "LimitRequest",
     "Project",
     "ProjectSource",
+    "QuotaSettings",
+    "QuotaSettingsHistory",
     "RaptorNode",
     "RefreshToken",
     "ReviewPoint",

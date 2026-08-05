@@ -48,3 +48,8 @@ class UserRead(UserBase):
     password_changed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class UserListResponse(BaseModel):
+    items: list[UserRead]
+    total: int

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
@@ -45,10 +46,22 @@ class LimitRequestRead(BaseModel):
     reason: str
     requested_at: datetime
     status: Literal["pending", "approved", "rejected"]
+    # pending 상태에서는 아직 처리되지 않았으므로 둘 다 None — 필수로 Optional 처리.
+    decided_at: datetime | None = None
+    decided_by: UUID | None = None
+
+
+class DashboardPeriod(StrEnum):
+    """대시보드 조회 기간 옵션."""
+
+    THIS_MONTH = "this_month"
+    LAST_MONTH = "last_month"
+    LAST_7_DAYS = "last_7_days"
+    LAST_30_DAYS = "last_30_days"
 
 
 class AdminDashboardPeriod(BaseModel):
-    type: Literal["this_month"] = "this_month"
+    type: DashboardPeriod
     label: str
 
 
@@ -126,3 +139,18 @@ class IpWhitelistRead(BaseModel):
     created_by: UUID | None
     created_at: datetime
     updated_at: datetime
+class QuotaSettingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    value: str
+    updated_at: datetime
+    updated_by: UUID | None = None
+
+
+class QuotaSettingUpdateItem(BaseModel):
+    key: str = Field(..., min_length=1, max_length=100)
+    value: str = Field(..., min_length=1, max_length=255)
+
+
+QuotaSettingsPatchBody = dict[str, str] | list[QuotaSettingUpdateItem]

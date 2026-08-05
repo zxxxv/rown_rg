@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuotaSettingsCard } from "@/features/admin/QuotaSettingsCard";
 import { useAuth } from "@/hooks/useAuth";
 
 // 알림용 자격증명 그룹 — 로그인(SSO)엔 불필요라 기본 접어둔다.
@@ -77,6 +78,8 @@ export default function AdminSettingsPage() {
         ) : (
           groups.map((group) => <GroupCard key={group} group={group} items={grouped[group]} />)
         )}
+
+        <QuotaSettingsCard />
       </div>
     </AppShell>
   );

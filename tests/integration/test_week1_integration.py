@@ -223,7 +223,8 @@ class TestPermissions:
     ) -> None:
         response = await test_client.get("/api/v1/users", headers=_auth(admin_token))
         assert response.status_code == 200
-        emails = [u["email"] for u in response.json()]
+        body = response.json()
+        emails = [u["email"] for u in body["items"]]
         assert admin_user.email in emails
 
     async def test_only_super_admin_can_delete(
@@ -262,6 +263,124 @@ class TestPermissions:
             f"/api/v1/users/{viewer_user.id}", headers=_auth(worker_token)
         )
         assert response.status_code == 403
+
+
+# ═══════════════════════════════════════════
+class TestUserSearchAndFilter:
+    """GET /users 검색·필터·정렬 검증."""
+
+    async def test_search_by_email_or_name_case_insensitive(
+        self, test_client: AsyncClient, test_session: AsyncSession, admin_token: str
+    ) -> None:
+        await _make_user(test_session, "alice@example.com", "worker", "Alice Kim")
+        await _make_user(test_session, "bob@example.com", "worker", "Bob Lee")
+
+        response = await test_client.get(
+            "/api/v1/users", params={"q": "ALICE"}, headers=_auth(admin_token)
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert [u["email"] for u in body["items"]] == ["alice@example.com"]
+        assert body["total"] == 1
+
+    async def test_filter_by_role(
+        self,
+        test_client: AsyncClient,
+        admin_token: str,
+        admin_user: User,
+        worker_user: User,
+        viewer_user: User,
+    ) -> None:
+        response = await test_client.get(
+            "/api/v1/users", params={"role": "worker"}, headers=_auth(admin_token)
+        )
+        assert response.status_code == 200
+        body = response.json()
+        emails = [u["email"] for u in body["items"]]
+        assert all(u["role"] == "worker" for u in body["items"])
+        assert worker_user.email in emails
+        assert admin_user.email not in emails
+        assert viewer_user.email not in emails
+
+    async def test_filter_by_is_active(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        admin_token: str,
+        worker_user: User,
+    ) -> None:
+        inactive = await _make_user(test_session, "inactive@example.com", "worker", "Inactive")
+        inactive.is_active = False
+        await test_session.commit()
+
+        response = await test_client.get(
+            "/api/v1/users", params={"is_active": "false"}, headers=_auth(admin_token)
+        )
+        assert response.status_code == 200
+        body = response.json()
+        emails = [u["email"] for u in body["items"]]
+        assert inactive.email in emails
+        assert worker_user.email not in emails
+        assert all(not u["is_active"] for u in body["items"])
+
+    async def test_search_and_filter_combined(
+        self, test_client: AsyncClient, test_session: AsyncSession, admin_token: str
+    ) -> None:
+        await _make_user(test_session, "carol.worker@example.com", "worker", "Carol Park")
+        await _make_user(test_session, "carol.viewer@example.com", "viewer", "Carol Choi")
+
+        response = await test_client.get(
+            "/api/v1/users",
+            params={"q": "carol", "role": "worker"},
+            headers=_auth(admin_token),
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert [u["email"] for u in body["items"]] == ["carol.worker@example.com"]
+        assert body["total"] == 1
+
+    async def test_list_without_filters_returns_all_with_total(
+        self,
+        test_client: AsyncClient,
+        admin_token: str,
+        admin_user: User,
+        worker_user: User,
+        viewer_user: User,
+    ) -> None:
+        response = await test_client.get("/api/v1/users", headers=_auth(admin_token))
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == len(body["items"])
+        emails = [u["email"] for u in body["items"]]
+        assert admin_user.email in emails
+        assert worker_user.email in emails
+        assert viewer_user.email in emails
+
+    async def test_search_with_no_match_returns_empty(
+        self, test_client: AsyncClient, admin_token: str, admin_user: User
+    ) -> None:
+        response = await test_client.get(
+            "/api/v1/users", params={"q": "no-such-user-xyz"}, headers=_auth(admin_token)
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["items"] == []
+        assert body["total"] == 0
+
+    async def test_sort_by_email_ascending(
+        self, test_client: AsyncClient, test_session: AsyncSession, admin_token: str
+    ) -> None:
+        await _make_user(test_session, "zeta@example.com", "worker", "Zeta")
+        await _make_user(test_session, "alpha@example.com", "worker", "Alpha")
+
+        response = await test_client.get(
+            "/api/v1/users",
+            params={"sort_by": "email", "order": "asc", "role": "worker"},
+            headers=_auth(admin_token),
+        )
+        assert response.status_code == 200
+        emails = [u["email"] for u in response.json()["items"]]
+        assert emails == sorted(emails)
 
 
 # ═══════════════════════════════════════════
