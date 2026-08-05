@@ -9,6 +9,7 @@ import { profileHandlers } from "./handlers/profile";
 import { progressHandlers } from "./handlers/progress";
 import { projectsHandlers } from "./handlers/projects";
 import { promptsHandlers } from "./handlers/prompts";
+import { quotaSettingsHandlers } from "./handlers/quota-settings";
 import { sectionsHandlers } from "./handlers/sections";
 import { sourcesHandlers } from "./handlers/sources";
 import { usersHandlers } from "./handlers/users";
@@ -24,6 +25,7 @@ export const handlers = [
   ...progressHandlers,
   ...checkpointsHandlers,
   ...adminHandlers,
+  ...quotaSettingsHandlers,
   ...libraryHandlers,
   ...promptsHandlers,
   // profileHandlers(users/me/*)가 usersHandlers(users/:id)보다 먼저 매칭되어야 한다
