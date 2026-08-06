@@ -44,7 +44,11 @@ DEPTH_LEVELS: dict[str, int] = {
 }
 
 CLUSTER_TARGET_SIZE = 6  # 클러스터당 목표 노드 수 — k = ceil(n / TARGET)
-MAX_CLUSTERS_PER_LEVEL = 12  # 레벨당 LLM 요약 호출 상한 (비용 캡)
+# 레벨당 LLM 요약 호출 상한(비용 캡). 12였을 때 500청크가 12덩어리(클러스터당 42개,
+# 목표의 7배)로 뭉개져 요약이 전부 일반론으로 수렴했다(2026-08-06 실측 — 게다가
+# 입력 12k자 컷에 걸려 절반은 읽지도 못함). 64면 실측 규모(~500청크)에서 목표 6개가
+# 유지되고, 비용은 최저가 모델 기준 레벨당 ~$0.15 수준이라 캡의 의미는 폭주 방지뿐.
+MAX_CLUSTERS_PER_LEVEL = 64
 MIN_NODES_TO_CLUSTER = 4  # 이보다 적으면 요약할 의미가 없어 트리 성장 중단
 SUMMARY_MAX_TOKENS = 700
 _KMEANS_ITERS = 25
