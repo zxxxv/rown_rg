@@ -51,7 +51,10 @@ class CompletionResponse(BaseModel):
     content: str
     input_tokens: int
     output_tokens: int
-    cached_input_tokens: int = 0
+    cached_input_tokens: int = 0  # 캐시에서 읽은 입력(0.1배 과금) — input_tokens에 미포함
+    # 캐시에 새로 쓴 입력(Anthropic 1.25배 과금) — input_tokens에 미포함이라 이 필드를
+    # 버리면 캐싱 활성화 순간 비용·한도 계정이 과소계상된다. 타 provider는 0.
+    cache_write_input_tokens: int = 0
     model: str
     stop_reason: str
     # web_search 사용 시 어댑터가 provider 응답을 정규화해 채운다.

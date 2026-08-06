@@ -16,6 +16,10 @@ PRICING: dict[str, dict[str, Decimal]] = {
 PER_MILLION = Decimal("1000000")
 COST_QUANTUM = Decimal("0.000001")
 
+# 캐시 쓰기 프리미엄 — Anthropic 5분 TTL 기준 입력 단가의 1.25배.
+# 캐시 쓰기 토큰을 보고하는 provider는 현재 Anthropic뿐(타 어댑터는 0으로 옴).
+CACHE_WRITE_MULTIPLIER = Decimal("1.25")
+
 
 def _resolve_pricing(model: str) -> dict[str, Decimal] | None:
     """단가 조회 — 정확 일치 우선, 없으면 접두사 매칭.
@@ -39,6 +43,7 @@ class CostCalculator:
         input_tokens: int,
         output_tokens: int,
         cached_input_tokens: int = 0,
+        cache_write_input_tokens: int = 0,
     ) -> Decimal:
         prices = _resolve_pricing(model)
         if prices is None:
@@ -46,6 +51,7 @@ class CostCalculator:
         cost = (
             (Decimal(input_tokens) * prices["input"])
             + (Decimal(cached_input_tokens) * prices["cached_input"])
+            + (Decimal(cache_write_input_tokens) * prices["input"] * CACHE_WRITE_MULTIPLIER)
             + (Decimal(output_tokens) * prices["output"])
         ) / PER_MILLION
         return cost.quantize(COST_QUANTUM)

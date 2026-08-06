@@ -1,0 +1,159 @@
+"""Anthropic 어댑터의 프롬프트 캐싱 배선 검증.
+
+실 API 없이 가짜 클라이언트로 요청 kwargs와 usage 집계를 확인한다:
+- 단발 경로: system 블록 리스트 + cache_control, cache_creation 토큰 포착
+- 웹검색(pause_turn) 경로: top-level cache_control + 요청 메시지 브레이크포인트,
+  턴 누적 캐시쓰기 집계
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from src.clients.llm.adapters.anthropic import AnthropicAdapter
+from src.clients.llm.base import CompletionRequest, Message, WebSearchConfig
+from src.clients.llm.cassette import CassetteManager
+
+
+def _make_adapter(tmp_path: Path) -> AnthropicAdapter:
+    # mode="replay" -> 실 클라이언트 미생성. 테스트가 가짜를 주입한다.
+    return AnthropicAdapter(
+        api_key="",
+        mode="replay",
+        cassette_manager=CassetteManager(tmp_path / "cassettes"),
+    )
+
+
+def _usage(**kw: int) -> SimpleNamespace:
+    base = {
+        "input_tokens": 100,
+        "output_tokens": 10,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def _text_block(text: str) -> SimpleNamespace:
+    return SimpleNamespace(type="text", text=text)
+
+
+class _FakeMessages:
+    def __init__(self, results: list[Any]) -> None:
+        self._results = results
+        self.calls: list[dict[str, Any]] = []
+
+    async def create(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        return self._results[len(self.calls) - 1]
+
+
+class _FakeClient:
+    def __init__(self, results: list[Any]) -> None:
+        self.messages = _FakeMessages(results)
+
+
+class TestCallProviderCaching:
+    @pytest.mark.asyncio
+    async def test_system_sent_as_cacheable_block(self, tmp_path: Path) -> None:
+        adapter = _make_adapter(tmp_path)
+        fake = _FakeClient(
+            [
+                SimpleNamespace(
+                    content=[_text_block("답변")],
+                    usage=_usage(cache_read_input_tokens=40, cache_creation_input_tokens=60),
+                    model="claude-sonnet-4-6",
+                    stop_reason="end_turn",
+                )
+            ]
+        )
+        adapter._client = fake
+
+        request = CompletionRequest(
+            messages=[Message(role="user", content="질문")],
+            model="claude-sonnet-4-6",
+            system="페르소나 시스템 프롬프트",
+        )
+        response = await adapter._call_provider(request)
+
+        kwargs = fake.messages.calls[0]
+        assert kwargs["system"] == [
+            {
+                "type": "text",
+                "text": "페르소나 시스템 프롬프트",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        # 단발 경로는 top-level 자동 캐싱을 쓰지 않는다 — 후보 2개가 병렬이라
+        # 전체 프롬프트 캐싱은 읽기 없이 쓰기 프리미엄만 내는 손해 경로다.
+        assert "cache_control" not in kwargs
+        assert response.cached_input_tokens == 40
+        assert response.cache_write_input_tokens == 60
+
+    @pytest.mark.asyncio
+    async def test_no_system_no_block(self, tmp_path: Path) -> None:
+        adapter = _make_adapter(tmp_path)
+        fake = _FakeClient(
+            [
+                SimpleNamespace(
+                    content=[_text_block("답변")],
+                    usage=_usage(),
+                    model="claude-haiku-4-5",
+                    stop_reason="end_turn",
+                )
+            ]
+        )
+        adapter._client = fake
+
+        request = CompletionRequest(
+            messages=[Message(role="user", content="질문")], model="claude-haiku-4-5"
+        )
+        await adapter._call_provider(request)
+        assert "system" not in fake.messages.calls[0]
+
+
+class TestWebSearchCaching:
+    @pytest.mark.asyncio
+    async def test_pause_turn_loop_caches_and_accumulates_writes(self, tmp_path: Path) -> None:
+        adapter = _make_adapter(tmp_path)
+        paused = SimpleNamespace(
+            content=[_text_block("중간")],
+            usage=_usage(cache_creation_input_tokens=1000),
+            model="claude-sonnet-4-6",
+            stop_reason="pause_turn",
+        )
+        done = SimpleNamespace(
+            content=[_text_block("최종")],
+            usage=_usage(cache_read_input_tokens=900, cache_creation_input_tokens=500),
+            model="claude-sonnet-4-6",
+            stop_reason="end_turn",
+        )
+        fake = _FakeClient([paused, done])
+        adapter._client = fake
+
+        request = CompletionRequest(
+            messages=[Message(role="user", content="수집 스펙")],
+            model="claude-sonnet-4-6",
+            system="리서치 시스템",
+            web_search=WebSearchConfig(max_uses=3),
+        )
+        response = await adapter._call_provider(request)
+
+        assert len(fake.messages.calls) == 2
+        for kwargs in fake.messages.calls:
+            # top-level 자동 캐싱 — pause_turn 재전송 프리픽스를 턴마다 재사용
+            assert kwargs["cache_control"] == {"type": "ephemeral"}
+            assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+            # 요청 메시지 끝 고정 브레이크포인트(20블록 조회 한도 안전망)
+            first_user = kwargs["messages"][0]
+            assert first_user["content"][0]["cache_control"] == {"type": "ephemeral"}
+            assert first_user["content"][0]["text"] == "수집 스펙"
+
+        assert response.cached_input_tokens == 900
+        assert response.cache_write_input_tokens == 1500  # 턴 누적(1000+500)
+        assert response.stop_reason == "end_turn"

@@ -99,7 +99,11 @@ class BaseLLMAdapter(ABC):
         asyncio.create_task(
             token_tracker.record_usage_safe(
                 model=response.model,
-                input_tokens=response.input_tokens,
+                # Anthropic usage의 input_tokens는 캐시 쓰기/읽기 분을 제외한 잔여분이다.
+                # 캐시에 쓴 토큰도 실제로 처리(과금)된 입력이므로 원장에는 합산해 기록
+                # — 별도 컬럼 없이 토큰 총량 대시보드가 진실을 유지한다. 정확한 단가
+                # 분리는 cost_usd가 담당(_safe_cost가 1.25배 프리미엄 반영).
+                input_tokens=response.input_tokens + response.cache_write_input_tokens,
                 output_tokens=response.output_tokens,
                 cached_input_tokens=response.cached_input_tokens,
                 cost_usd=cost,
@@ -124,6 +128,7 @@ class BaseLLMAdapter(ABC):
                 input_tokens=response.input_tokens,
                 output_tokens=response.output_tokens,
                 cached_input_tokens=response.cached_input_tokens,
+                cache_write_input_tokens=response.cache_write_input_tokens,
             )
         except Exception:
             logger.warning(

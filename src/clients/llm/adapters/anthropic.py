@@ -80,7 +80,7 @@ class AnthropicAdapter(BaseLLMAdapter):
             "temperature": request.temperature,
         }
         if request.system:
-            kwargs["system"] = request.system
+            kwargs["system"] = self._cacheable_system(request.system)
 
         result = await self._client.messages.create(**kwargs)
         text_blocks = [getattr(b, "text", "") for b in result.content]
@@ -89,9 +89,21 @@ class AnthropicAdapter(BaseLLMAdapter):
             input_tokens=result.usage.input_tokens,
             output_tokens=result.usage.output_tokens,
             cached_input_tokens=getattr(result.usage, "cache_read_input_tokens", 0) or 0,
+            cache_write_input_tokens=getattr(result.usage, "cache_creation_input_tokens", 0) or 0,
             model=result.model,
             stop_reason=result.stop_reason or "end_turn",
         )
+
+    @staticmethod
+    def _cacheable_system(system: str) -> list[dict[str, Any]]:
+        """system을 블록 리스트로 감싸 끝에 캐시 브레이크포인트를 찍는다.
+
+        문자열 system엔 브레이크포인트를 둘 수 없어 같은 페르소나를 쓰는 후속 호출
+        (동일 절 후보 2개, 재작성, pm_verify 반복)이 매번 전액을 낸다. 모델별 최소
+        캐시 길이(Sonnet 1,024·Haiku 4,096토큰) 미만이면 API가 조용히 무시하므로
+        짧은 system에 붙여도 손해는 없다.
+        """
+        return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
 
     # web_search(server tool) 경로
     async def _call_with_web_search(self, request: CompletionRequest) -> CompletionResponse:
@@ -103,9 +115,23 @@ class AnthropicAdapter(BaseLLMAdapter):
         anth_messages: list[dict[str, Any]] = [
             {"role": m.role, "content": m.content} for m in request.messages if m.role != "system"
         ]
+        # 프롬프트 캐싱 브레이크포인트 2단: ① 마지막 요청 메시지 끝(고정 프리픽스),
+        # ② top-level 자동 배치(매 턴 마지막 블록). pause_turn 재전송은 이전 턴까지의
+        # 대화(회수 본문 포함)를 통째로 다시 보내는데, 캐싱이 없으면 그 전부를 매 턴
+        # 전액 재과금당한다 — 수집 비용 지배 구간(2026-08-06 실측 런당 ~$2.4-2.6).
+        # ①은 한 턴의 블록 수가 캐시 조회 한도(20블록)를 넘어 ②의 체인이 끊겨도
+        # 시스템+도구+요청 프리픽스만은 항상 재사용되게 하는 안전망이다.
+        if anth_messages and isinstance(anth_messages[-1]["content"], str):
+            anth_messages[-1]["content"] = [
+                {
+                    "type": "text",
+                    "text": anth_messages[-1]["content"],
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
         sources: dict[str, dict[str, Any]] = {}  # url -> WebSource 필드(부분 누적)
         text_parts: list[str] = []
-        in_tok = out_tok = cached_tok = 0
+        in_tok = out_tok = cached_tok = cache_write_tok = 0
         stop_reason = "end_turn"
         model = request.model
 
@@ -115,15 +141,17 @@ class AnthropicAdapter(BaseLLMAdapter):
                 "messages": anth_messages,
                 "max_tokens": request.max_tokens,
                 "tools": tools,
+                "cache_control": {"type": "ephemeral"},
             }
             if request.system:
-                kwargs["system"] = request.system
+                kwargs["system"] = self._cacheable_system(request.system)
             # temperature는 의도적으로 생략: Opus 4.8/4.7 등은 temperature를 400으로 거부한다.
 
             result = await self._client.messages.create(**kwargs)
             in_tok += result.usage.input_tokens
             out_tok += result.usage.output_tokens
             cached_tok += getattr(result.usage, "cache_read_input_tokens", 0) or 0
+            cache_write_tok += getattr(result.usage, "cache_creation_input_tokens", 0) or 0
             self._collect_sources(result.content, sources)
             text_parts += [
                 getattr(b, "text", "") for b in result.content if getattr(b, "type", "") == "text"
@@ -155,6 +183,7 @@ class AnthropicAdapter(BaseLLMAdapter):
             input_tokens=in_tok,
             output_tokens=out_tok,
             cached_input_tokens=cached_tok,
+            cache_write_input_tokens=cache_write_tok,
             model=model,
             stop_reason=stop_reason,
             web_sources=web_sources,
