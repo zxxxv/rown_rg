@@ -14,13 +14,13 @@ const MODES: {
     value: "standard",
     label: "표준 (품질 우선)",
     model: "Claude Sonnet",
-    hint: "납품용 보고서 — 페르소나·분량 목표를 온전히 실현합니다.",
+    hint: "납품용 보고서 - 페르소나·분량 목표를 온전히 실현합니다.",
   },
   {
     value: "economy",
     label: "절약 (저비용)",
     model: "Claude Haiku",
-    hint: "테스트·초안용 — 비용이 수 분의 1, 품질은 다소 낮습니다.",
+    hint: "테스트·초안용 - 비용이 수 분의 1, 품질은 다소 낮습니다.",
   },
 ];
 

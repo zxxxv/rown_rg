@@ -1,12 +1,12 @@
 import { useMutation } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, FolderInput, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { decideSourcePool, parseSourcePoolPayload, useDecideCollectMore } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
 import { useProgressSnapshot } from "@/api/progress";
-import { usePatchSource, useProjectSources } from "@/api/sources";
+import { usePatchSource, useProjectSources, useUploadProjectSource } from "@/api/sources";
 import type { Source } from "@/api/types";
 import { SourceCard } from "@/components/data-display/SourceCard";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -15,6 +15,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { LibraryPickerDialog } from "@/features/source-review/LibraryPickerDialog";
 import { SourceDetailDialog } from "@/features/source-review/SourceDetailDialog";
 import { UploadDropzone, type UploadingFile } from "@/features/source-review/UploadDropzone";
 import { useAuth } from "@/hooks/useAuth";
@@ -56,7 +57,7 @@ export default function SourcesPage() {
       onSuccess: () => {
         setCollectBaseline(baseline);
         toast.success("추가 검색을 시작했습니다 (+10건 목표)", {
-          description: "기존 자료는 유지됩니다 — 수집되는 대로 목록에 추가됩니다.",
+          description: "기존 자료는 유지됩니다 - 수집되는 대로 목록에 추가됩니다.",
         });
       },
       onError: (err: unknown) => {
@@ -64,7 +65,7 @@ export default function SourcesPage() {
         toast.error("추가 검색 실패", {
           description:
             msg.includes("게이트") || msg.includes("대기")
-              ? "자료 검토 대기 상태가 아닙니다 — 개요의 진행 단계를 확인하세요."
+              ? "자료 검토 대기 상태가 아닙니다 - 개요의 진행 단계를 확인하세요."
               : msg,
         });
       },
@@ -72,7 +73,9 @@ export default function SourcesPage() {
   };
 
   const [activeSource, setActiveSource] = useState<Source | null>(null);
-  const [uploading] = useState<UploadingFile[]>([]);
+  const [uploading, setUploading] = useState<UploadingFile[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const uploadSource = useUploadProjectSource(projectId);
 
   // 필터 사이드바 제거됨 — 실데이터에 의미 있는 분류축이 없어(전부 웹 수집)
   // 분류가 실제로 동작하지 않았다. 목록은 수집 순서 그대로.
@@ -85,7 +88,7 @@ export default function SourcesPage() {
     if (!collecting) return;
     if (newCount >= 10) {
       setCollectBaseline(null);
-      toast.success(`추가 검색 완료 — 새 자료 ${newCount}건이 도착했습니다.`);
+      toast.success(`추가 검색 완료 - 새 자료 ${newCount}건이 도착했습니다.`);
       return;
     }
     const timer = setTimeout(() => setCollectBaseline(null), 4 * 60_000);
@@ -103,11 +106,26 @@ export default function SourcesPage() {
     return { included, excluded };
   }, [items]);
 
-  // 업로드 → 인덱싱 합류는 라이브러리 연동과 함께 배선 예정(백엔드 미구현).
-  const handleFiles = (_files: File[]) => {
-    toast.info("자료 업로드는 준비 중입니다", {
-      description: "라이브러리 연동 후 활성화됩니다 — 지금은 웹 수집 자료만 검토할 수 있습니다.",
-    });
+  // 직접 업로드 → 저장 + 즉시 색인(백엔드). 진행 표시는 근사(전송·색인 단일 단계).
+  // PDF·HWPX만 색인되며, 그 외 형식은 백엔드가 명확한 오류로 알려준다.
+  const handleFiles = (files: File[]) => {
+    for (const file of files) {
+      const rowId = `${file.name}-${file.size}-${file.lastModified}`;
+      setUploading((u) =>
+        u.some((f) => f.id === rowId) ? u : [...u, { id: rowId, name: file.name, progress: 50 }],
+      );
+      uploadSource.mutate(file, {
+        onSuccess: () => {
+          setUploading((u) => u.filter((f) => f.id !== rowId));
+          toast.success(`"${file.name}" 업로드·색인 완료`);
+        },
+        onError: (err: unknown) => {
+          setUploading((u) => u.filter((f) => f.id !== rowId));
+          const msg = err instanceof ApiError ? err.message : "업로드에 실패했습니다.";
+          toast.error("업로드 실패", { description: msg });
+        },
+      });
+    }
   };
 
   const setIncluded = (sid: string, is_included: boolean) => {
@@ -127,7 +145,7 @@ export default function SourcesPage() {
   const handleFinalize = useMutation({
     mutationFn: () => decideSourcePool({ projectId, excludedSourceIds: [], action: "approve" }),
     onSuccess: () => {
-      toast.success("자료 검토 완료 — 작성을 이어갑니다.");
+      toast.success("자료 검토 완료 - 작성을 이어갑니다.");
       navigate(`/projects/${projectId}/overview`);
     },
     onError: (err: unknown) => {
@@ -135,7 +153,7 @@ export default function SourcesPage() {
       toast.error("검토 완료 실패", {
         description:
           msg.includes("게이트") || msg.includes("대기")
-            ? "자료 검토 대기 상태가 아닙니다 — 개요의 진행 단계를 확인하세요."
+            ? "자료 검토 대기 상태가 아닙니다 - 개요의 진행 단계를 확인하세요."
             : msg,
       });
     },
@@ -181,20 +199,37 @@ export default function SourcesPage() {
           </div>
           <p className="text-sm text-fg-secondary">
             {gathering
-              ? "AI가 자료를 검색하고 있습니다 — 수집이 끝나면 여기서 검토를 시작할 수 있습니다."
+              ? "AI가 자료를 검색하고 있습니다 - 수집이 끝나면 여기서 검토를 시작할 수 있습니다."
               : reviewOpen
                 ? "AI가 수집한 자료를 검토하고 채택할 자료를 결정해 주세요. 추가 자료는 아래 드롭존에 끌어다 놓으면 됩니다."
-                : "검토가 완료된 자료 목록입니다 (읽기 전용) — 채택된 자료만 본문 작성의 검색 근거로 사용됐습니다."}
+                : "검토가 완료된 자료 목록입니다 (읽기 전용) - 채택된 자료만 본문 작성의 검색 근거로 사용됐습니다."}
           </p>
         </header>
 
-        {reviewOpen ? <UploadDropzone onFiles={handleFiles} uploading={uploading} /> : null}
+        {reviewOpen ? (
+          <section className="flex flex-col gap-3 rounded-lg border border-border bg-bg-secondary/40 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-semibold text-fg">자료 추가</h2>
+                <p className="text-xs text-fg-tertiary">
+                  직접 업로드 · 라이브러리 불러오기 · 인터넷 추가 검색(하단) 3가지로 근거를 모을 수
+                  있습니다. 업로드·불러오기는 PDF·HWPX·DOCX·MD·TXT가 색인됩니다.
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setPickerOpen(true)}>
+                <FolderInput className="mr-1 h-4 w-4" />
+                라이브러리에서 불러오기
+              </Button>
+            </div>
+            <UploadDropzone onFiles={handleFiles} uploading={uploading} />
+          </section>
+        ) : null}
 
         {gathering ? (
           <div className="flex items-center gap-3 rounded-md border border-fg-info/30 bg-bg-info px-4 py-3 text-sm">
             <Loader2 className="h-4 w-4 shrink-0 animate-spin text-fg-info" aria-hidden />
             <p className="text-fg-secondary">
-              자료 검색이 진행 중입니다 — 수집되는 대로 목록에 추가되고, 끝나면 검토 지점이
+              자료 검색이 진행 중입니다 - 수집되는 대로 목록에 추가되고, 끝나면 검토 지점이
               열립니다.
               {items.length > 0 ? (
                 <span className="ml-1 font-medium text-fg">현재 {items.length}건</span>
@@ -207,7 +242,7 @@ export default function SourcesPage() {
           <div className="flex items-center gap-3 rounded-md border border-fg-info/30 bg-bg-info px-4 py-3 text-sm">
             <Loader2 className="h-4 w-4 shrink-0 animate-spin text-fg-info" aria-hidden />
             <p className="text-fg-secondary">
-              추가 검색이 백그라운드에서 진행 중입니다 — 새 자료가 도착하는 대로 목록에 추가됩니다.
+              추가 검색이 백그라운드에서 진행 중입니다 - 새 자료가 도착하는 대로 목록에 추가됩니다.
               {newCount > 0 ? (
                 <span className="ml-1 font-medium text-fg">+{newCount}건 수집됨</span>
               ) : null}
@@ -221,7 +256,7 @@ export default function SourcesPage() {
             {!coverage.sufficient ? (
               <p className="flex items-center gap-2 text-fg">
                 <AlertTriangle className="h-4 w-4 shrink-0 text-fg-warning" aria-hidden />
-                본문 있는 자료가 부족합니다 ({coverage.n_sources}/{coverage.min_required}건) — 추가
+                본문 있는 자료가 부족합니다 ({coverage.n_sources}/{coverage.min_required}건) - 추가
                 검색을 권장합니다.
               </p>
             ) : null}
@@ -232,7 +267,7 @@ export default function SourcesPage() {
                   {coverage.uncovered_sections.slice(0, 6).join(" · ")}
                   {coverage.uncovered_sections.length > 6 ? " 외" : ""}
                 </span>{" "}
-                — 이 절들은 근거 부족으로 빈약하게 작성될 수 있습니다.
+                - 이 절들은 근거 부족으로 빈약하게 작성될 수 있습니다.
               </p>
             ) : null}
           </div>
@@ -256,7 +291,7 @@ export default function SourcesPage() {
               title={gathering ? "자료를 검색하고 있습니다" : "아직 수집된 자료가 없습니다"}
               description={
                 gathering
-                  ? "AI가 목차 기반으로 자료를 수집 중입니다 — 도착하는 대로 자동 표시됩니다."
+                  ? "AI가 목차 기반으로 자료를 수집 중입니다 - 도착하는 대로 자동 표시됩니다."
                   : "AI 자동 검색이 진행되거나 파일을 직접 업로드하면 표시됩니다."
               }
             />
@@ -340,6 +375,8 @@ export default function SourcesPage() {
           collectPending={collectMore.isPending || collecting}
         />
       ) : null}
+
+      <LibraryPickerDialog projectId={projectId} open={pickerOpen} onOpenChange={setPickerOpen} />
 
       <SourceDetailDialog
         source={activeSource}

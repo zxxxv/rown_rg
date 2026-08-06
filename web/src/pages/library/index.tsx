@@ -248,7 +248,7 @@ export default function LibraryPage() {
           <DialogHeader>
             <DialogTitle>폴더 추가</DialogTitle>
             <DialogDescription>
-              위치: {targetName || "—"}
+              위치: {targetName || "-"}
               {targetIsPersonal ? " (개인)" : canWrite ? " (회사 공유)" : ""}
             </DialogDescription>
           </DialogHeader>

@@ -25,7 +25,7 @@ export function EditorBody({ components, editMode, selectedId, onSelect }: Edito
       openRewrite(compId);
       return;
     }
-    toast(`${ACTION_LABEL[kind]} — ${compId}`, {
+    toast(`${ACTION_LABEL[kind]} - ${compId}`, {
       description: "본격 작동은 구현 예정입니다.",
     });
   };

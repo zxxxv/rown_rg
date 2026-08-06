@@ -9,13 +9,20 @@ from src.clients.parser.base import (
     ParseResult,
     UnsupportedFormatError,
 )
+from src.clients.parser.docx import DocxParser
 from src.clients.parser.hwpx import HwpxParser
 from src.clients.parser.pdf import PdfParser
+from src.clients.parser.text import TextParser
 
 
 class ParserRegistry:
     def __init__(self, parsers: list[ParserClient] | None = None) -> None:
-        self._parsers: list[ParserClient] = parsers or [HwpxParser(), PdfParser()]
+        self._parsers: list[ParserClient] = parsers or [
+            HwpxParser(),
+            PdfParser(),
+            DocxParser(),
+            TextParser(),
+        ]
 
     def register(self, parser: ParserClient) -> None:
         self._parsers.append(parser)

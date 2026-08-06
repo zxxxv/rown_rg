@@ -130,7 +130,7 @@ export function ProjectConfigForm({
               </span>
               <span className="text-base font-semibold text-fg">고급 옵션</span>
               <span className="text-xs text-fg-tertiary">
-                자료 출처 안내 · 검색 확장(HyDE) — 기본값으로 충분합니다
+                자료 출처 안내 · 검색 확장(HyDE) - 기본값으로 충분합니다
               </span>
             </summary>
             <div className="flex flex-col gap-6 border-t border-border p-4">
@@ -246,7 +246,7 @@ function Section({
   );
 }
 
-/** 완료 알림 채널 — 발송은 준비 중이지만 선택은 config에 저장된다(구현 시 소급 적용). */
+/** 완료 알림 채널 — 켜면 보고서 완료·검토대기·실패 시 소유자에게 네이버웍스 봇 알림(기본 off). */
 function NotificationChannels() {
   const { control } = useFormContext<ProjectFormValues>();
   return (
@@ -276,9 +276,6 @@ function NotificationChannels() {
                 보고서 완성 시 네이버 웍스로 알림을 받습니다.
               </span>
             </div>
-            <span className="ml-auto shrink-0 rounded-sm border border-border bg-bg-secondary px-1.5 py-0.5 text-[10px] text-fg-tertiary">
-              준비 중
-            </span>
           </label>
         );
       }}
@@ -339,7 +336,7 @@ function BasicInfo({ readOnly }: { readOnly?: boolean }) {
         />
         {!readOnly ? (
           <p className="text-xs text-fg-tertiary">
-            완성된 보고서의 표지 제목이자 프로젝트 이름입니다 — 보고서에 그대로 실립니다.
+            완성된 보고서의 표지 제목이자 프로젝트 이름입니다 - 보고서에 그대로 실립니다.
           </p>
         ) : null}
         {errors.title ? <p className="text-xs text-fg-danger">{errors.title.message}</p> : null}

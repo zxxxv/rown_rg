@@ -3,7 +3,6 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
-  FilePlus2,
   FileText,
   Folder,
   FolderOpen,
@@ -45,7 +44,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { PromptBody, PromptCreateButton } from "@/features/library/PromptPanel";
+import { PromptBody } from "@/features/library/PromptPanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 
 interface LibraryDetailProps {
@@ -185,8 +184,9 @@ function FolderBody({
   onNavigate?: (id: string) => void;
   onRequestUpload?: () => void;
 }) {
+  const navigate = useNavigate();
   const stats = countDescendants(node);
-  // '내 에이전트'/'내 작성 규칙' 폴더는 새 프롬프트 생성 진입점.
+  // '내 에이전트'/'내 작성 규칙' 폴더 — 라이브러리에선 읽기 전용, 편집은 프롬프트 관리 페이지.
   const isPromptContainer = node.id === "me-agents" || node.id === "me-rules";
 
   const [sortKey, setSortKey] = useState<SortKey>("name");
@@ -253,28 +253,20 @@ function FolderBody({
       </p>
 
       {isPromptContainer ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <PromptCreateButton folderId={node.id} />
+        <div className="flex flex-wrap items-center gap-2 rounded border border-dashed border-border bg-bg-secondary px-3 py-2">
           <span className="text-xs text-fg-tertiary">
-            내 것을 만들면 보고서 생성 시 시스템 기본값보다 우선 적용됩니다.
+            라이브러리에선 읽기 전용입니다 - 편집·추가는 프롬프트 관리 페이지에서 하세요.
           </span>
+          <Button variant="outline" size="sm" onClick={() => navigate("/prompts")}>
+            프롬프트 관리로 가기
+          </Button>
         </div>
       ) : node.virtual ? (
         <p className="rounded border border-dashed border-border bg-bg-secondary px-3 py-2 text-xs text-fg-tertiary">
-          읽기 전용 폴더입니다 — 프로젝트·완성본 등 시스템이 구성한 뷰라 직접 편집할 수 없습니다.
+          읽기 전용 폴더입니다 - 프로젝트·완성본 등 시스템이 구성한 뷰라 직접 편집할 수 없습니다.
         </p>
       ) : (
         <div className="flex flex-wrap gap-2">
-          <Button
-            onClick={() =>
-              toast("이 폴더 전체를 현재 프로젝트에 추가 — 구현 예정", {
-                description: `${stats.files}개 파일이 후보로 추가됩니다.`,
-              })
-            }
-          >
-            <FilePlus2 className="mr-1 h-4 w-4" />
-            현재 프로젝트에 추가
-          </Button>
           <DeleteNodeButton node={node} />
         </div>
       )}
@@ -351,13 +343,13 @@ function FolderBody({
                     {formatSize(row.sizeBytes)}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-right font-mono text-xs text-fg-tertiary">
-                    {row.pages !== null ? `${row.pages}p` : "—"}
+                    {row.pages !== null ? `${row.pages}p` : "-"}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-fg-secondary">
-                    {row.registrant ?? "—"}
+                    {row.registrant ?? "-"}
                   </TableCell>
                   <TableCell className="whitespace-nowrap font-mono text-xs text-fg-tertiary">
-                    {row.date ? row.date.slice(0, 10) : "—"}
+                    {row.date ? row.date.slice(0, 10) : "-"}
                   </TableCell>
                 </TableRow>
               ))}
@@ -462,7 +454,7 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
           aria-label={`${node.name} 미리보기`}
           className="flex aspect-[4/3] items-center justify-center rounded border border-dashed border-border bg-bg-secondary text-xs text-fg-tertiary"
         >
-          미리보기 준비 중 — PDF·HWPX 1페이지 썸네일로 표시됩니다
+          미리보기 준비 중 - PDF·HWPX 1페이지 썸네일로 표시됩니다
         </div>
       )}
 
@@ -490,18 +482,6 @@ function FileBody({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
       </section>
 
       <footer className="flex flex-wrap gap-2 border-t border-border pt-3">
-        {!node.virtual ? (
-          <Button
-            onClick={() =>
-              toast(`현재 프로젝트에 추가 — 구현 예정 (${node.name})`, {
-                description: "자료 검토 단계에서 자동 후보로 등록됩니다.",
-              })
-            }
-          >
-            <FilePlus2 className="mr-1 h-4 w-4" />
-            현재 프로젝트에 추가
-          </Button>
-        ) : null}
         {downloadHref ? (
           <Button variant="outline" onClick={() => downloadFile(downloadHref, node.name)}>
             {isExternalLink ? (

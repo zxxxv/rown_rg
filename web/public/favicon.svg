@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="로운 리포트">
+  <!-- 브랜드 블루 타일 (어떤 탭 배경에서도 또렷하게 자기 배경을 가짐) -->
+  <rect width="32" height="32" rx="7" fill="#2C6CB8"/>
+  <!-- 보고서 문서 (접힌 모서리) -->
+  <path d="M9 7.5A2.5 2.5 0 0 1 11.5 5H18l5 5v14.5A2.5 2.5 0 0 1 20.5 27h-9A2.5 2.5 0 0 1 9 24.5Z" fill="#FFFFFF"/>
+  <path d="M18 5l5 5h-3.5A1.5 1.5 0 0 1 18 8.5Z" fill="#CFE0F4"/>
+  <!-- 본문 줄 -->
+  <rect x="12" y="11.6" width="8" height="1.7" rx="0.85" fill="#A9C4E7"/>
+  <rect x="12" y="14.8" width="5.6" height="1.7" rx="0.85" fill="#A9C4E7"/>
+  <!-- 상승 막대 — 분석/리포트 -->
+  <rect x="12"    y="20.4" width="2.3" height="3.1" rx="0.6" fill="#2C6CB8"/>
+  <rect x="15.15" y="18.4" width="2.3" height="5.1" rx="0.6" fill="#2C6CB8"/>
+  <rect x="18.3"  y="16.4" width="2.3" height="7.1" rx="0.6" fill="#2C6CB8"/>
+</svg>

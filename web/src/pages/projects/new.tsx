@@ -25,20 +25,21 @@ export default function NewProjectPage() {
       } catch (runErr) {
         const msg = runErr instanceof ApiError ? runErr.message : "실행 시작에 실패했습니다.";
         toast.error("실행 시작 실패", {
-          description: `${msg} — 개요 화면에서 다시 시작할 수 있습니다.`,
+          description: `${msg} - 개요 화면에서 다시 시작할 수 있습니다.`,
         });
       }
       // 개요의 진행 단계 스테퍼가 실행을 지켜보는 화면이다(진행 페이지는 폐지됨).
       navigate(`/projects/${project.id}/overview`, { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
-        if (err.status === 422) {
-          toast.error("입력값을 다시 확인해 주세요.", { description: err.message });
-        } else {
-          toast.error("프로젝트 생성 실패", {
-            description: `${err.code} · ${err.message}`,
-          });
-        }
+        // 에러코드는 개발자용 — 사용자에겐 백엔드가 준 사람이 읽을 이유(message)만 보여준다.
+        const title =
+          err.status === 422
+            ? "입력값을 다시 확인해 주세요."
+            : err.status === 429
+              ? "한도 초과 - 프로젝트를 만들 수 없습니다"
+              : "프로젝트 생성 실패";
+        toast.error(title, { description: err.message });
       } else {
         toast.error("프로젝트 생성 중 알 수 없는 오류가 발생했습니다.");
       }

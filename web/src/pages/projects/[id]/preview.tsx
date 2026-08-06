@@ -102,7 +102,7 @@ export default function PreviewPage() {
   const selectNode = (id: string, status: SectionStatus, isChapter: boolean) => {
     // 장은 항상 이동(하위 절 통독 뷰가 완료분만 골라 보여줌). 절은 완료된 것만.
     if (!isChapter && status !== "completed") {
-      toast(`아직 작성 중입니다 — ${id}`, {
+      toast(`아직 작성 중입니다 - ${id}`, {
         description: "완료된 섹션만 미리보기 할 수 있습니다.",
       });
       return;
@@ -355,7 +355,7 @@ function ChapterView({
         <p className="font-mono text-xs text-fg-tertiary">{chapterIndex + 1}장</p>
         <h2 className="text-lg font-semibold text-fg">{chapter.title}</h2>
         <p className="mt-1 text-xs text-fg-secondary">
-          완료된 절 {completed.length}/{chapter.children.length}개 — 이어서 표시(읽기 전용). 편집은
+          완료된 절 {completed.length}/{chapter.children.length}개 - 이어서 표시(읽기 전용). 편집은
           각 절을 여세요.
         </p>
       </header>

@@ -67,7 +67,7 @@ const PASSWORD_POLICY_HINT =
   "12자 이상, 대문자·소문자·숫자·특수문자를 각각 1자 이상 포함해야 합니다.";
 
 function fmtDateTime(iso?: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   return new Date(iso).toLocaleString("ko-KR", {
     timeZone: "Asia/Seoul",
     dateStyle: "medium",
@@ -405,7 +405,7 @@ function ResetPasswordDialog({
     <Dialog open={target !== null} onOpenChange={(open) => (!open ? close() : undefined)}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>비밀번호 리셋 — {target?.name}</DialogTitle>
+          <DialogTitle>비밀번호 리셋 - {target?.name}</DialogTitle>
           <DialogDescription>
             새 비밀번호를 설정하면 기존 세션이 전부 종료되고 잠금도 함께 해제됩니다.
           </DialogDescription>

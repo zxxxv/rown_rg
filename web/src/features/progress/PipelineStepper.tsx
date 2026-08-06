@@ -202,14 +202,14 @@ export function PipelineStepper({ projectId, snapshot }: PipelineStepperProps) {
         {snapshot?.queue_position ? (
           <p className="flex items-center gap-1.5 rounded border border-fg-info/30 bg-bg-info px-2.5 py-2 text-xs text-fg-secondary">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-fg-info" aria-hidden />
-            실행 대기열 {snapshot.queue_position}번째 — 앞선 실행이 끝나면 자동으로 시작됩니다.
+            실행 대기열 {snapshot.queue_position}번째 - 앞선 실행이 끝나면 자동으로 시작됩니다.
           </p>
         ) : null}
 
         {cancelled ? (
           <p className="flex items-center gap-1.5 rounded border border-dashed border-border bg-bg-secondary px-2.5 py-2 text-xs text-fg-tertiary">
             <Ban className="h-3.5 w-3.5" aria-hidden />
-            사용자가 실행을 취소했습니다 — 다시 시작하거나 삭제할 수 있습니다.
+            사용자가 실행을 취소했습니다 - 다시 시작하거나 삭제할 수 있습니다.
           </p>
         ) : null}
 

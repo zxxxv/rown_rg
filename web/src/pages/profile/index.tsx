@@ -63,7 +63,7 @@ const ROLE_LABEL: Record<string, string> = {
 const PASSWORD_ROTATION_DAYS = 90;
 
 function fmtDateTime(iso?: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   return new Date(iso).toLocaleString("ko-KR", {
     timeZone: "Asia/Seoul",
     dateStyle: "medium",
@@ -72,7 +72,7 @@ function fmtDateTime(iso?: string | null): string {
 }
 
 function fmtDate(iso?: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   return new Date(iso).toLocaleDateString("ko-KR", {
     timeZone: "Asia/Seoul",
     dateStyle: "medium",

@@ -7,6 +7,7 @@ import {
   KeyRound,
   Library,
   Loader2,
+  ScrollText,
   Settings2,
   ShieldCheck,
   SquareStack,
@@ -15,6 +16,7 @@ import {
 import { NavLink } from "react-router-dom";
 import { useProjectList } from "@/api/projects";
 import type { UserRole } from "@/components/auth/RequireAuth";
+import { BrandMark } from "@/components/BrandMark";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
@@ -29,12 +31,13 @@ interface NavItem {
 const MAIN_NAV: NavItem[] = [
   { to: "/projects", label: "프로젝트", icon: FolderTree },
   { to: "/library", label: "라이브러리", icon: Library },
+  { to: "/prompts", label: "프롬프트", icon: ScrollText, minRole: "worker" },
 ];
 
 const ADMIN_NAV: NavItem[] = [
   { to: "/admin/dashboard", label: "대시보드", icon: ShieldCheck, minRole: "admin" },
   { to: "/admin/users", label: "사용자", icon: Users, minRole: "admin" },
-  { to: "/admin/tokens", label: "토큰 한도", icon: Activity, minRole: "admin" },
+  { to: "/admin/tokens", label: "조직 한도", icon: Activity, minRole: "admin" },
   { to: "/admin/ip", label: "IP 관리", icon: Globe, minRole: "super_admin" },
   { to: "/admin/settings", label: "시스템 설정", icon: Settings2, minRole: "super_admin" },
   {
@@ -84,7 +87,12 @@ export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
           collapsed ? "justify-center" : "justify-between",
         )}
       >
-        {!collapsed && <span className="text-sm font-semibold text-fg">로운 리포트</span>}
+        {!collapsed && (
+          <span className="flex items-center gap-2 text-sm font-semibold text-fg">
+            <BrandMark className="h-6 w-6 shrink-0" />
+            로운 리포트
+          </span>
+        )}
         <button
           type="button"
           onClick={onToggleCollapsed}

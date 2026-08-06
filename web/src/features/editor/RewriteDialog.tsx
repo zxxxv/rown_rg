@@ -185,7 +185,7 @@ export function RewriteDialog() {
               size="sm"
               className="w-fit"
               onClick={() =>
-                toast("자료실 선택 다이얼로그 — 구현 예정", {
+                toast("자료실 선택 다이얼로그 - 구현 예정", {
                   description: "자료 라이브러리·검색·업로드 자료에서 선택 가능합니다.",
                 })
               }

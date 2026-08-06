@@ -16,7 +16,7 @@ export function AuthDemo() {
     setBusy(true);
     try {
       const u = await login({ login_id: loginId, password });
-      toast.success(`로그인 성공 — ${u.name}`);
+      toast.success(`로그인 성공 - ${u.name}`);
     } catch (err) {
       if (err instanceof ApiError) {
         toast.error(`로그인 실패 (${err.status ?? "?"})`, { description: err.message });

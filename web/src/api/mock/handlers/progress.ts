@@ -83,7 +83,7 @@ const QA_SELECT_PAYLOAD = {
           content:
             "□ 인구·고령화 현황\n ㅇ 고령화율 24.1%, 전국 평균 대비 높은 수준 [1]\n ㅇ 청년층 순유출 지속으로 중장기 수요 하방 압력 존재 [2]\n\n□ 시사점\n ㅇ 수요 추정 시 인구 감소 시나리오를 기본안으로 채택할 필요 [2]",
           cited_chunk_ids: ["c1", "c2"],
-          warnings: [{ check: "bounds", detail: "본문 812자 — 권장 최소 1,000자 미달" }],
+          warnings: [{ check: "bounds", detail: "본문 812자 - 권장 최소 1,000자 미달" }],
         },
       ],
     },

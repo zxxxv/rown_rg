@@ -45,14 +45,14 @@ export function VerifyReportCard({
       return (
         <div className="flex items-center gap-2 rounded border border-border bg-bg p-3 text-sm text-fg-secondary">
           <Loader2 className="h-4 w-4 shrink-0 animate-spin text-fg-tertiary" aria-hidden />
-          PM 검증 대기 중 — 보고서 조립·검증이 끝나면 결과가 여기에 표시됩니다
+          PM 검증 대기 중 - 보고서 조립·검증이 끝나면 결과가 여기에 표시됩니다
         </div>
       );
     }
     return (
       <div className="flex items-center gap-2 rounded border border-border bg-bg p-3 text-sm text-fg-secondary">
         <ShieldCheck className="h-4 w-4 shrink-0 text-fg-success" aria-hidden />
-        PM 검증 경고 없음 — 절 간 수치·용어·법령 시점 교차검사 통과
+        PM 검증 경고 없음 - 절 간 수치·용어·법령 시점 교차검사 통과
       </div>
     );
   }
@@ -81,7 +81,7 @@ export function VerifyReportCard({
           PM 검증 경고 {findings.length}건{criticalCount > 0 ? ` (critical ${criticalCount})` : ""}
         </span>
         <span className="text-xs text-fg-tertiary">
-          절을 선택하면 해당 경고가 본문 위에 표시됩니다 — 전체 목록 펼치기
+          절을 선택하면 해당 경고가 본문 위에 표시됩니다 - 전체 목록 펼치기
         </span>
         <ChevronDown className="ml-auto h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
       </button>
@@ -141,7 +141,7 @@ export function VerifyReportCard({
         <h2 className="text-sm font-semibold text-fg">
           PM 검증 경고 {findings.length}건{criticalCount > 0 ? ` (critical ${criticalCount})` : ""}
         </h2>
-        <span className="text-xs text-fg-tertiary">납품 전 확인 권장 — 편집기에서 수정 가능</span>
+        <span className="text-xs text-fg-tertiary">납품 전 확인 권장 - 편집기에서 수정 가능</span>
         {collapsible ? (
           <Button
             size="sm"

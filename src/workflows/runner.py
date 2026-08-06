@@ -22,7 +22,6 @@ import structlog
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core import app_settings
 from src.core.clock import now as clock_now
 from src.core.config import settings
 from src.core.state import ProjectState
@@ -49,14 +48,18 @@ async def _notify_safe(
 ) -> None:
     """소유자에게 네이버웍스 봇 알림 — 실패는 로깅만, 파이프라인을 절대 막지 않는다.
 
-    result_type은 봇 템플릿 키(success=완료, partial=검토 대기, failed=실패).
+    프로젝트별 옵트인: config.notification_channels에 'naver_works'가 있을 때만 발송한다
+    (전역 기본은 off — 사용자가 프로젝트에서 알림을 켜야 온다). result_type은 봇 템플릿
+    키(success=완료, partial=검토 대기, failed=실패).
     """
-    if not app_settings.get_bool("notify_enabled"):
-        return
     try:
         async with async_session_maker() as session:
             owner = await session.get(User, owner_id)
-        if owner is None or not owner.is_active:
+            project = await session.get(Project, project_id)
+        if owner is None or not owner.is_active or project is None:
+            return
+        channels = (project.config or {}).get("notification_channels") or []
+        if "naver_works" not in channels:
             return
         await send_bot_message(
             target_email=owner.email,
@@ -313,7 +316,7 @@ async def _execute(project_id: uuid.UUID) -> None:
 
         if isinstance(exc, QuotaExceededError):
             emit_error(
-                project_id, "quota_exceeded", f"{exc.message} — 한도 상향 후 다시 시작하세요"
+                project_id, "quota_exceeded", f"{exc.message} - 한도 상향 후 다시 시작하세요"
             )
         else:
             emit_error(project_id, "run_failed", "실행 중 오류가 발생했습니다")

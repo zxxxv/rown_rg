@@ -3,11 +3,11 @@ import { z } from "zod";
 import { apiClient } from "@/api/client";
 import type { Source, SourceListResponse } from "@/api/types";
 
-// ─── 실계약: GET/PATCH /projects/{id}/sources ───────────────────────────
-// project_sources 행 + metadata 신호(수집 시 web indexer가 영속화).
+// ─── 실계약: /projects/{id}/sources ──────────────────────────────────────
+// project_sources 행 + metadata 신호(웹 수집은 indexer가, 파일 소스는 업로드/불러오기가 영속화).
 // is_included는 2-상태(bool) — 기본 채택, 사람은 제외만 고른다.
-// (업로드·finalize 엔드포인트는 없음: 업로드는 라이브러리 연동 후속,
-//  확정은 진행 게이트의 POST /decide가 담당)
+// 자료 추가 3경로: 인터넷 검색(수집) · 직접 업로드(POST /sources/upload) ·
+//   라이브러리 불러오기(POST /sources/library). 확정은 진행 게이트의 POST /decide.
 export const SourceItemSchema = z.object({
   id: z.string(),
   source_type: z.enum(["library", "upload", "web_search"]),
@@ -45,7 +45,7 @@ function toLegacySource(projectId: string, s: SourceItem): Source {
     url: s.url ?? undefined,
     published_at: s.page_age ?? undefined,
     reliability: s.reliability ? (RELIABILITY_NUM[s.reliability] ?? 0.5) : 0.5,
-    summary: s.preview ?? (s.has_content ? "" : "본문 회수 실패 — 검색 근거로 쓰이지 않습니다."),
+    summary: s.preview ?? (s.has_content ? "" : "본문 회수 실패 - 검색 근거로 쓰이지 않습니다."),
     is_included: s.is_included,
     preview: s.preview ?? undefined,
     matched_sections: s.matched_sections,
@@ -104,6 +104,40 @@ export function usePatchSource(projectId: string) {
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: key });
+    },
+  });
+}
+
+// 직접 업로드 자료 — 파일 저장 + 즉시 색인(백엔드). 성공 시 자료 목록 갱신.
+export function useUploadProjectSource(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const data = await apiClient.post<unknown>(`projects/${projectId}/sources/upload`, {
+        body: fd,
+      });
+      return toLegacySource(projectId, SourceItemSchema.parse(data));
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: sourceKeys.list(projectId) });
+    },
+  });
+}
+
+// 라이브러리 파일 불러오기 — 원본 파일을 색인해 근거로 편입. 성공 시 자료 목록 갱신.
+export function useAttachLibrarySource(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (libraryNodeId: string) => {
+      const data = await apiClient.post<unknown>(`projects/${projectId}/sources/library`, {
+        json: { library_node_id: libraryNodeId },
+      });
+      return toLegacySource(projectId, SourceItemSchema.parse(data));
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: sourceKeys.list(projectId) });
     },
   });
 }

@@ -35,6 +35,9 @@ class TestBuildWriterContext:
         ctx = build_writer_context(_section())
         assert ctx.system.startswith(BASE_SYSTEM)
         assert _STYLE in ctx.system
+        # 회사 표준 규칙(출처·시각자료)도 writer 시스템에 결합된다(2026-08-05 배선).
+        assert load_component("agent_source_rules") in ctx.system
+        assert load_component("agent_visual_rules") in ctx.system
         assert ctx.guidance == ""
         assert ctx.max_tokens == DEFAULT_MAX_TOKENS
         assert ctx.min_chars is None

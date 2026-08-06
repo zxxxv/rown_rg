@@ -59,7 +59,7 @@ export default function QaSelectPage() {
           </div>
           {project ? (
             <p className="text-sm text-fg-secondary">
-              {project.title} — 섹션별 초안 후보 중 보고서에 실을 것을 하나씩 골라 제출하면 조립이
+              {project.title} - 섹션별 초안 후보 중 보고서에 실을 것을 하나씩 골라 제출하면 조립이
               재개됩니다.
             </p>
           ) : null}

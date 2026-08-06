@@ -37,7 +37,7 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 
 function fmtDateTime(iso?: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   return new Date(iso).toLocaleString("ko-KR", {
     timeZone: "Asia/Seoul",
     dateStyle: "medium",
@@ -261,7 +261,7 @@ function EntryRow({ entry, onDelete }: { entry: IpWhitelistEntry; onDelete: () =
     <TableRow>
       <TableCell className="font-mono text-sm text-fg">{entry.ip_cidr}</TableCell>
       <TableCell className="max-w-64 truncate text-sm text-fg-secondary">
-        {entry.description ?? "—"}
+        {entry.description ?? "-"}
       </TableCell>
       <TableCell>
         <Switch
@@ -282,7 +282,7 @@ function EntryRow({ entry, onDelete }: { entry: IpWhitelistEntry; onDelete: () =
         )}
       </TableCell>
       <TableCell className="font-mono text-xs text-fg-tertiary">
-        {entry.created_by ?? "—"}
+        {entry.created_by ?? "-"}
       </TableCell>
       <TableCell className="font-mono text-xs text-fg-tertiary">
         {fmtDateTime(entry.created_at)}

@@ -16,12 +16,13 @@ export interface UploadDropzoneProps {
   disabled?: boolean;
 }
 
+// 백엔드 색인 파서가 실제 지원하는 형식만 — PDF·HWPX·DOCX(문서), MD·TXT(플레인 텍스트).
 const ACCEPT = {
   "application/pdf": [".pdf"],
   "application/x-hwpx": [".hwpx"],
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
-  "text/html": [".html", ".htm"],
-  "text/markdown": [".md"],
+  "text/markdown": [".md", ".markdown"],
+  "text/plain": [".txt"],
 };
 
 export function UploadDropzone({ onFiles, uploading, disabled }: UploadDropzoneProps) {
@@ -56,7 +57,7 @@ export function UploadDropzone({ onFiles, uploading, disabled }: UploadDropzoneP
         <p className="text-sm font-medium text-fg">
           {isDragActive ? "파일을 놓아주세요" : "자료를 끌어다 놓거나 버튼을 눌러 업로드"}
         </p>
-        <p className="font-mono text-xs text-fg-tertiary">PDF · HWPX · DOCX · HTML · MD</p>
+        <p className="font-mono text-xs text-fg-tertiary">PDF · HWPX · DOCX · MD · TXT</p>
         <Button type="button" variant="outline" size="sm" onClick={open} disabled={disabled}>
           파일 선택
         </Button>

@@ -30,7 +30,7 @@ export default function ComponentsGalleryPage() {
         <header>
           <h1 className="text-3xl font-semibold text-fg">컴포넌트 갤러리</h1>
           <p className="mt-1 text-sm text-fg-secondary">
-            §8 공통 컴포넌트의 시각 확인용 페이지 — DEV 빌드에서만 노출됩니다.
+            §8 공통 컴포넌트의 시각 확인용 페이지 - DEV 빌드에서만 노출됩니다.
           </p>
         </header>
 
@@ -44,7 +44,7 @@ export default function ComponentsGalleryPage() {
         <Section title="2. RequireAuth + useAuth">
           <p className="text-sm text-fg-secondary">
             라우팅 가드 컴포넌트 자체는 시각 요소가 없습니다. 아래는 <code>useAuth</code> 훅의 실제
-            동작 데모 — MSW가 <code>/auth/*</code>를 가로채 응답합니다.
+            동작 데모 - MSW가 <code>/auth/*</code>를 가로채 응답합니다.
           </p>
           <AuthDemo />
         </Section>
@@ -175,11 +175,11 @@ export default function ComponentsGalleryPage() {
           </ErrorBoundary>
         </Section>
 
-        <Section title="12. ProjectConfigForm — mode=create (영역 1~7 + sticky 견적 사이드바)">
+        <Section title="12. ProjectConfigForm - mode=create (영역 1~7 + sticky 견적 사이드바)">
           <ProjectConfigCreateDemo />
         </Section>
 
-        <Section title="13. ProjectConfigForm — mode=edit (제목·주제·작성 깊이 readonly + 프리셋 잠금)">
+        <Section title="13. ProjectConfigForm - mode=edit (제목·주제·작성 깊이 readonly + 프리셋 잠금)">
           <ProjectConfigEditDemo />
         </Section>
 
@@ -187,7 +187,7 @@ export default function ComponentsGalleryPage() {
           <WebSocketDemo />
         </Section>
 
-        <Section title="기타 — Lucide 아이콘 토큰 확인">
+        <Section title="기타 - Lucide 아이콘 토큰 확인">
           <div className="flex items-center gap-4 text-fg-secondary">
             <FolderOpen className="h-5 w-5" />
             <FileText className="h-5 w-5" />
@@ -213,7 +213,7 @@ function BoomDemo() {
     <Button
       variant="destructive"
       onClick={() => {
-        throw new Error("의도적 에러 — ErrorBoundary 동작 확인");
+        throw new Error("의도적 에러 - ErrorBoundary 동작 확인");
       }}
     >
       에러 던지기

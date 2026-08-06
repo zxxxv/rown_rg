@@ -216,7 +216,7 @@ export const projectsHandlers = [
             severity: "warning",
             category: "통계 중복",
             section_ref: "3.1",
-            detail: "고령화율 24.1% 통계가 1.2절과 동일 출처로 중복 인용됨 — 한쪽은 요약 처리 권장",
+            detail: "고령화율 24.1% 통계가 1.2절과 동일 출처로 중복 인용됨 - 한쪽은 요약 처리 권장",
             created_at: "2026-07-24T02:00:00Z",
           },
         ],

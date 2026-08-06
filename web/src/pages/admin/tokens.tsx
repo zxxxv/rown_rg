@@ -20,7 +20,7 @@ export default function AdminTokensPage() {
         <header>
           <h1 className="flex items-center gap-2 text-3xl font-semibold text-fg">
             <Activity className="h-7 w-7 text-fg-secondary" aria-hidden />
-            토큰 한도
+            조직 한도
           </h1>
           <p className="text-sm text-fg-secondary">
             조직 월 비용 상한과 역할별 기본 한도(정책)를 설정합니다. 개별 사용자 한도는 대시보드에서

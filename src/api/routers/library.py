@@ -63,9 +63,9 @@ def _is_admin(user: User) -> bool:
 
 
 def _can_view(node: LibraryNode, user: User) -> bool:
-    # 개인 노드는 소유자 본인만 — 관리자도 타인의 개인 자료는 못 본다("개인=나만").
+    # 개인 노드는 소유자 본인 + 관리자(감사·지원용). 관리자는 '사용자별 자료'로 열람한다.
     if node.is_personal:
-        return node.created_by == user.id
+        return node.created_by == user.id or _is_admin(user)
     if _is_admin(user):
         return True
     if not node.visible_to_roles and not node.visible_to_users:
@@ -195,20 +195,23 @@ def _project_folder(
     return LibraryTreeFolder(id=base, name=title, virtual=True, children=children)
 
 
-async def _build_projects_folder(session: AsyncSession, current_user: User) -> LibraryTreeFolder:
-    """개인 루트의 '프로젝트' 가상 폴더 — 내 프로젝트만(소유자 스코프).
+async def _build_projects_folder(
+    session: AsyncSession, user_id: UUID, user_name: str, *, prefix: str = "me"
+) -> LibraryTreeFolder:
+    """개인 루트의 '프로젝트' 가상 폴더 — 해당 사용자 소유 프로젝트만(소유자 스코프).
 
     관리자도 라이브러리에선 자기 프로젝트만 본다(전체 조회는 admin 대시보드/scope=all).
-    이로써 라이브러리와 프로젝트 목록(기본 scope=mine)의 가시성이 일치한다.
+    이로써 라이브러리와 프로젝트 목록(기본 scope=mine)의 가시성이 일치한다. prefix로 폴더
+    id를 네임스페이스한다(관리자 '사용자별 자료' 뷰에서 사용자 간 id 중복 방지).
     """
     projs = (
         await session.execute(
             select(Project.id, Project.title, Project.updated_at)
-            .where(Project.owner_id == current_user.id)
+            .where(Project.owner_id == user_id)
             .order_by(Project.created_at.desc())
         )
     ).all()
-    empty = LibraryTreeFolder(id="me-projects", name="프로젝트", virtual=True, children=[])
+    empty = LibraryTreeFolder(id=f"{prefix}-projects", name="프로젝트", virtual=True, children=[])
     if not projs:
         return empty
 
@@ -229,7 +232,7 @@ async def _build_projects_folder(session: AsyncSession, current_user: User) -> L
         by_proj[s.project_id].append(s)
 
     empty.children = [
-        _project_folder(pid, title, updated_at, by_proj[pid], current_user.name)
+        _project_folder(pid, title, updated_at, by_proj[pid], user_name)
         for pid, title, updated_at in projs
     ]
     return empty
@@ -258,16 +261,22 @@ def _prompt_file(
     )
 
 
-async def _build_prompts_folder(session: AsyncSession, current_user: User) -> LibraryTreeFolder:
-    """개인 루트의 '프롬프트' 폴더 — 내 에이전트/내 작성 규칙(개인 DB, 편집 가능)."""
-    personals = await list_personal(session, current_user.id)
+async def _build_prompts_folder(
+    session: AsyncSession, user_id: UUID, user_name: str, *, prefix: str = "me"
+) -> LibraryTreeFolder:
+    """개인 루트의 '프롬프트' 폴더 — 해당 사용자의 에이전트/작성 규칙(개인 DB).
+
+    prefix로 폴더 id를 네임스페이스한다(사용자별 자료 뷰 중복 방지). 프롬프트 파일 id는
+    개인 프롬프트 UUID라 사용자 간 충돌하지 않는다.
+    """
+    personals = await list_personal(session, user_id)
 
     def node(p: object) -> LibraryTreeFile:
         return _prompt_file(
             f"uprompt-{p.id}",  # type: ignore[attr-defined]
             p.name,  # type: ignore[attr-defined]
             PromptRef(scope="personal", kind=p.kind, ref=str(p.id), editable=True),  # type: ignore[attr-defined]
-            current_user.name,
+            user_name,
             p.updated_at,  # type: ignore[attr-defined]
         )
 
@@ -278,12 +287,16 @@ async def _build_prompts_folder(session: AsyncSession, current_user: User) -> Li
         node(p) for p in personals if p.kind == "rule"
     ]
     return LibraryTreeFolder(
-        id="me-prompts",
+        id=f"{prefix}-prompts",
         name="프롬프트",
         virtual=True,
         children=[
-            LibraryTreeFolder(id="me-agents", name="내 에이전트", virtual=True, children=agents),
-            LibraryTreeFolder(id="me-rules", name="내 작성 규칙", virtual=True, children=rules),
+            LibraryTreeFolder(
+                id=f"{prefix}-agents", name="내 에이전트", virtual=True, children=agents
+            ),
+            LibraryTreeFolder(
+                id=f"{prefix}-rules", name="내 작성 규칙", virtual=True, children=rules
+            ),
         ],
     )
 
@@ -373,8 +386,51 @@ async def get_tree(
         if n.is_personal and n.created_by == current_user.id and (built := build(n)) is not None
     ]
 
-    projects_folder = await _build_projects_folder(session, current_user)
-    prompts_folder = await _build_prompts_folder(session, current_user)
+    # 관리자 전용 — 본인 제외 모든 가입 사용자를 폴더로 나열한다. 각 사용자 폴더는 개인 루트와
+    # 같은 구조(프로젝트·프롬프트·내 자료)를 그대로 미러링해 감사·지원 시 한 곳에서 열람한다.
+    # 자료가 없어도 폴더는 항상 나타난다(사용자별 진입점). prefix로 사용자 간 id 중복을 막는다.
+    admin_users_group: LibraryTreeFolder | None = None
+    if _is_admin(current_user):
+        nodes_by_user: dict[UUID, list[LibraryNode]] = defaultdict(list)
+        for n in children_map[None]:
+            if n.is_personal and n.created_by is not None and n.created_by != current_user.id:
+                nodes_by_user[n.created_by].append(n)
+        user_rows = (
+            await session.execute(
+                select(User.id, User.name, User.is_active)
+                .where(User.id != current_user.id)
+                .order_by(User.name)
+            )
+        ).all()
+        if user_rows:
+            user_folders: list[LibraryTreeFolder | LibraryTreeFile] = []
+            for uid, name, is_active in user_rows:
+                prefix = f"u{uid}"
+                projects_f = await _build_projects_folder(session, uid, name, prefix=prefix)
+                prompts_f = await _build_prompts_folder(session, uid, name, prefix=prefix)
+                files_f = LibraryTreeFolder(
+                    id=f"{prefix}-files",
+                    name="내 자료",
+                    virtual=True,
+                    children=[b for n in nodes_by_user.get(uid, []) if (b := build(n)) is not None],
+                )
+                user_folders.append(
+                    LibraryTreeFolder(
+                        id=f"admin-user-{uid}",
+                        name=f"{name}{'' if is_active else ' (비활성)'}",
+                        virtual=True,
+                        children=[projects_f, prompts_f, files_f],
+                    )
+                )
+            admin_users_group = LibraryTreeFolder(
+                id="admin-users",
+                name="사용자별 자료 (관리자)",
+                virtual=True,
+                children=user_folders,
+            )
+
+    projects_folder = await _build_projects_folder(session, current_user.id, current_user.name)
+    prompts_folder = await _build_prompts_folder(session, current_user.id, current_user.name)
 
     me_root = LibraryTreeFolder(
         id="me",
@@ -401,7 +457,10 @@ async def get_tree(
         children=[*company_roots, _system_prompts_folder()],
     )
 
-    return LibraryTreeResponse(tree=[me_root, company_root])
+    tree: list[LibraryTreeFolder | LibraryTreeFile] = [me_root, company_root]
+    if admin_users_group is not None:
+        tree.append(admin_users_group)
+    return LibraryTreeResponse(tree=tree)
 
 
 @router.post(

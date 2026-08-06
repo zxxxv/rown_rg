@@ -1,10 +1,11 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { AlertCircle, LockKeyhole } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { type KeyboardEvent, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ApiError } from "@/api/client";
 import { type LoginInput, LoginInputSchema } from "@/api/types";
+import { BrandMark } from "@/components/BrandMark";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -89,12 +90,7 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-bg-secondary px-4 py-10">
       <Card className="w-full max-w-[400px]">
         <CardHeader className="space-y-3 text-center">
-          <div
-            aria-hidden
-            className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-md bg-accent text-accent-foreground"
-          >
-            <LockKeyhole className="h-6 w-6" />
-          </div>
+          <BrandMark className="mx-auto h-12 w-12" aria-hidden />
           <CardTitle className="text-xl">로운 리포트</CardTitle>
           <CardDescription>로운인사이트 계정으로 로그인하세요.</CardDescription>
         </CardHeader>

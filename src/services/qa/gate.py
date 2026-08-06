@@ -147,7 +147,7 @@ def check_citation_markers(draft: SectionDraft) -> GateResult:
     detail = None
     if not passed:
         preview = ", ".join(f"[{t}]" for t in found[:3])
-        detail = f"비표준 인용 마커 {len(found)}종: {preview} — 인용은 [숫자]만 허용"
+        detail = f"비표준 인용 마커 {len(found)}종: {preview} - 인용은 [숫자]만 허용"
     return GateResult(
         check="citation_markers",
         severity=CheckSeverity.SOFT,

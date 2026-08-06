@@ -33,13 +33,13 @@ export function QuotaSettingsCard() {
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           <Coins className="h-4 w-4 text-fg-secondary" aria-hidden />
-          쿼터 한도 (USD)
+          조직 한도 (USD)
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {!canEdit ? (
           <p className="text-xs text-fg-tertiary">
-            수정은 최고관리자(super_admin) 전용 — 현재 읽기 전용입니다.
+            수정은 최고관리자(super_admin) 전용 - 현재 읽기 전용입니다.
           </p>
         ) : null}
         {query.isLoading ? (

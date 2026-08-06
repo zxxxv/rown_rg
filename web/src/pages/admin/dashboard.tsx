@@ -496,7 +496,7 @@ function UsageTable({
     <Card>
       <CardHeader>
         <CardTitle className="text-base">사용자별 사용량</CardTitle>
-        <CardDescription>{periodLabel} 토큰·비용 누적 — 행을 클릭하면 상세</CardDescription>
+        <CardDescription>{periodLabel} 토큰·비용 누적 - 행을 클릭하면 상세</CardDescription>
       </CardHeader>
       <CardContent className="p-0">
         <Table>

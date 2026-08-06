@@ -17,7 +17,7 @@ export const QUOTA_META = [
   {
     key: "ORG_MONTHLY_COST_LIMIT_USD",
     label: "조직 전체 월 한도",
-    hint: "회사 전체 월 비용 천장 — 초과 시 전원 차단",
+    hint: "회사 전체 월 비용 천장 - 초과 시 전원 차단",
     min: 1,
     max: 1_000_000,
   },

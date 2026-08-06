@@ -132,7 +132,7 @@ export function SourceDetailDialog({
                   </div>
                 </dl>
                 <p className="rounded border border-dashed border-border bg-bg-secondary px-3 py-2.5 text-sm text-fg-secondary">
-                  본문을 회수하지 못한 출처입니다 — 검색 근거로 쓰이지 않습니다. 필요한 자료면
+                  본문을 회수하지 못한 출처입니다 - 검색 근거로 쓰이지 않습니다. 필요한 자료면
                   원본을 확인한 뒤 직접 업로드하거나 추가 검색을 이용하세요.
                 </p>
               </section>

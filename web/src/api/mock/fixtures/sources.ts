@@ -19,7 +19,7 @@ const POOL: SourceTemplate[] = [
     quotes: ["승용 전기차 국비 보조금 상한은 차량가 5,300만원 미만 기준 최대 650만원."],
   },
   {
-    title: "전기차 보조금 2026 — 차종별 지원금 총정리",
+    title: "전기차 보조금 2026 - 차종별 지원금 총정리",
     source: "news.example.co.kr",
     source_kind: "web_search",
     url: "https://news.example.co.kr/ev-subsidy-2026",
@@ -38,12 +38,12 @@ const POOL: SourceTemplate[] = [
     published_at: "2025-12-20",
     reliability: 0.48,
     summary:
-      "개인 블로그가 정리한 지자체 추가 보조금 표. 신뢰도 낮고 갱신 누락 가능 — 교차검증 권장. 웹 검색으로 수집.",
+      "개인 블로그가 정리한 지자체 추가 보조금 표. 신뢰도 낮고 갱신 누락 가능 - 교차검증 권장. 웹 검색으로 수집.",
     is_included: null,
     quotes: ["서울시 추가 보조금은 예산 소진 시 조기 마감될 수 있다."],
   },
   {
-    title: "2026년도 환경부 예산안 — 무공해차 보급",
+    title: "2026년도 환경부 예산안 - 무공해차 보급",
     source: "me.go.kr",
     source_kind: "web_search",
     url: "https://me.go.kr/budget/2026",
@@ -195,7 +195,7 @@ const POOL: SourceTemplate[] = [
     quotes: ["본 양식은 2023년 6월 개정판이며 모든 예타 보고서에 적용한다."],
   },
   {
-    title: "이전 예타 보고서 — 지방 공항 활성화",
+    title: "이전 예타 보고서 - 지방 공항 활성화",
     source: "로운인사이트 라이브러리",
     source_kind: "library",
     published_at: "2023-11-15",
@@ -229,7 +229,7 @@ const POOL: SourceTemplate[] = [
     quotes: ["B/C가 0.8 미만인 사업이 14건으로 분류됐다."],
   },
   {
-    title: "스마트시티 정책 동향 — 한겨레",
+    title: "스마트시티 정책 동향 - 한겨레",
     source: "한겨레",
     source_kind: "media",
     published_at: "2024-08-22",
@@ -252,7 +252,7 @@ const POOL: SourceTemplate[] = [
     quotes: ["2025년 노인일자리 사업 예산은 2.1조원으로 확정됐다."],
   },
   {
-    title: "재무 분석 자료 — 사업 후보지 5곳 비교",
+    title: "재무 분석 자료 - 사업 후보지 5곳 비교",
     source: "사용자 업로드",
     source_kind: "upload",
     published_at: "2025-01-12",
@@ -285,7 +285,7 @@ const POOL: SourceTemplate[] = [
     quotes: ["고령자의 디지털 정보화 수준은 일반인 대비 78.5%로 측정됐다."],
   },
   {
-    title: "이전 보고서 — 재생에너지 사업 검토",
+    title: "이전 보고서 - 재생에너지 사업 검토",
     source: "로운인사이트 라이브러리",
     source_kind: "library",
     published_at: "2024-02-28",
@@ -332,7 +332,7 @@ const POOL: SourceTemplate[] = [
     quotes: ["농어촌 공공의료 의사 부족률은 41.2%로 추정됐다."],
   },
   {
-    title: "신규 보고서용 자료 — PDF 업로드",
+    title: "신규 보고서용 자료 - PDF 업로드",
     source: "사용자 업로드",
     source_kind: "upload",
     published_at: "2025-02-04",
@@ -343,7 +343,7 @@ const POOL: SourceTemplate[] = [
     quotes: ["환경 영향 평가 결과 후보지 5곳 중 1곳이 부적합 판정됐다."],
   },
   {
-    title: "수자원 재이용 인프라 동향 — 환경부",
+    title: "수자원 재이용 인프라 동향 - 환경부",
     source: "환경부",
     source_kind: "gov",
     published_at: "2024-07-19",

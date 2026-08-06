@@ -76,18 +76,18 @@ export default function EditorPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => toast("HWPX 미리보기 — 구현 예정")}
+                onClick={() => toast("HWPX 미리보기 - 구현 예정")}
               >
                 <FileText className="mr-1 h-4 w-4" /> HWPX 미리보기
               </Button>
-              <Button size="sm" onClick={() => toast("저장 — 본격 작동은 구현 예정")}>
+              <Button size="sm" onClick={() => toast("저장 - 본격 작동은 구현 예정")}>
                 <Save className="mr-1 h-4 w-4" /> 저장
               </Button>
             </div>
           </header>
 
           <div className="rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
-            현재는 모킹 단계입니다. 텍스트 편집기 본격 작동은 추후 구현 예정 — 입력·재작성·저장은
+            현재는 모킹 단계입니다. 텍스트 편집기 본격 작동은 추후 구현 예정 - 입력·재작성·저장은
             지금은 안내 토스트로만 동작합니다.
           </div>
 
@@ -102,13 +102,13 @@ export default function EditorPage() {
                 onSelect={(id) => {
                   const status = findSectionStatus(tree, id);
                   if (status && status !== "completed") {
-                    toast(`아직 작성 중입니다 — ${id}`, {
+                    toast(`아직 작성 중입니다 - ${id}`, {
                       description: "완료된 섹션만 편집기에 표시됩니다.",
                     });
                     return;
                   }
                   setSectionId(EDITOR_SAMPLE.section_id);
-                  toast(`섹션 이동 — 구현 예정 (${id})`, {
+                  toast(`섹션 이동 - 구현 예정 (${id})`, {
                     description: "현재는 데모 섹션(2.3) 한 개만 렌더됩니다.",
                   });
                 }}

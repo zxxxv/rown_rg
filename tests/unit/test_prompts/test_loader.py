@@ -14,12 +14,9 @@ from src.prompts import (
 )
 
 COMPONENTS = [
-    "layer0_global",
-    "layer0_style",
     "agent_source_rules",
     "agent_writing_style",
     "agent_visual_rules",
-    "search_guidelines",
 ]
 
 WORKFLOW_ROLES = [

@@ -110,7 +110,7 @@ function Body({ component }: { component: EditorComponent }) {
           size="sm"
           variant="ghost"
           className="w-full"
-          onClick={() => toast("출처 추가 — 구현 예정")}
+          onClick={() => toast("출처 추가 - 구현 예정")}
         >
           <Plus className="mr-1 h-3.5 w-3.5" />
           출처 추가
@@ -176,7 +176,7 @@ function SourceItem({ srcId }: { srcId: string }) {
       </div>
       <button
         type="button"
-        onClick={() => toast(`원본 보기 — ${source.title} (구현 예정)`)}
+        onClick={() => toast(`원본 보기 - ${source.title} (구현 예정)`)}
         className="inline-flex items-center gap-1 self-start text-[11px] text-fg-info hover:underline"
       >
         원본 보기 <ExternalLink className="h-2.5 w-2.5" />

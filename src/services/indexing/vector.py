@@ -263,3 +263,24 @@ class VectorIndexingService:
                 )
             )
             return result.first() is not None
+
+
+def build_vector_indexing_service() -> VectorIndexingService:
+    """파일 소스(upload·library) 색인기를 공유 임베딩 모델로 조립.
+
+    검색·인덱싱이 같은 BGE-M3 싱글턴(get_embedding_client)을 공유한다. 파서 레지스트리는
+    기본값(HWPX·PDF)을 쓴다. 최초 호출 시 임베딩 모델이 로드된다(무거움) — 요청 처리 중
+    호출하므로 lazy import로 모듈 로드를 가볍게 유지한다.
+    """
+    from src.clients.embedding_factory import get_embedding_client
+    from src.clients.parser import ParserRegistry
+    from src.db.session import async_session_maker
+    from src.services.indexing._chunking import ChunkingService
+
+    embedder = get_embedding_client()
+    return VectorIndexingService(
+        parser_registry=ParserRegistry(),
+        chunking_service=ChunkingService(embedder),
+        embedding_client=embedder,
+        session_maker=async_session_maker,
+    )

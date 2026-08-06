@@ -58,9 +58,8 @@ const baseClient = ky.create({
         } else if (response.status === 403 && !suppressAuth) {
           onForbidden?.();
         } else if (response.status >= 500) {
-          toast.error("서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.", {
-            description: `HTTP ${response.status}`,
-          });
+          // 에러코드(HTTP 5xx)는 개발자용이라 노출하지 않는다 — 제목만으로 이유 전달.
+          toast.error("서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
         }
         return response;
       },
@@ -139,7 +138,16 @@ async function request<T>(method: string, path: string, init?: Options): Promise
           envelope.error.details,
         );
       }
-      throw new ApiError("http_error", `HTTP ${err.response.status}`, err.response.status);
+      // 에러 봉투가 없는 원시 HTTP 오류 — 코드("HTTP 500") 대신 사람이 읽을 이유를 메시지로.
+      // status는 보존해 호출부가 분기(예: 423 잠금)할 수 있게 한다.
+      const status = err.response.status;
+      throw new ApiError(
+        "http_error",
+        status >= 500
+          ? "서버에 문제가 발생했습니다. 잠시 후 다시 시도해 주세요."
+          : "요청을 처리할 수 없습니다. 입력을 확인해 주세요.",
+        status,
+      );
     }
     throw err;
   }

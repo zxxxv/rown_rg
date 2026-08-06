@@ -1,10 +1,10 @@
 import re
 from pathlib import Path
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import structlog
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import delete, func, or_, select, update
@@ -17,6 +17,7 @@ from src.api.schemas.execution import DecideRequest, ProgressResponse, RunRespon
 from src.api.schemas.project import (
     AnalystRead,
     ConfigUpdateRequest,
+    LibraryAttachRequest,
     OutlineIn,
     PresetChapterRead,
     PresetDetailRead,
@@ -50,6 +51,7 @@ from src.core.types import (
     SourceRef,
     SourceType,
 )
+from src.db.models.library_node import LibraryNode
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.review_point import ReviewPoint
@@ -59,6 +61,7 @@ from src.db.models.user import User
 from src.db.models.verify_finding import VerifyFinding
 from src.prompts import list_presets, load_preset
 from src.services.generation.planner import MAX_SECTIONS
+from src.services.indexing.vector import SourceInput
 from src.services.prompts import resolve_analysts
 from src.workflows import cancel
 from src.workflows.events import emit_error
@@ -249,10 +252,15 @@ async def create_project(
     # outline 없는 생성은 거부한다 — 실행 시점이 아니라 생성 시점에 막는다.
     if data.config.get("outline") is None:
         raise ValidationError(
-            message="목차가 필요합니다 — 생성 화면에서 장·절을 구성하세요 (config.outline)",
+            message="목차가 필요합니다 - 생성 화면에서 장·절을 구성하세요 (config.outline)",
             code="OUTLINE_REQUIRED",
         )
     _validate_outline_config(data.config, await _known_analyst_names(session, current_user.id))
+    # 한도 사전 검사 — 초과 상태면 생성 자체를 429로 막는다(만들어놓고 실행 못 하는 orphan·
+    # '생성됨'+'실행 실패' 겹침 방지). 메시지는 사람이 읽을 수 있는 사유를 그대로 전달한다.
+    from src.clients.llm.quota_gate import check_user_quota
+
+    await check_user_quota(current_user.id)
     project = Project(
         title=data.title,
         topic=data.topic,
@@ -478,7 +486,7 @@ async def delete_project(
     project = await _get_authorized_project(project_id, session, current_user)
     if is_running(project.id):
         raise ValidationError(
-            message="실행 중인 프로젝트는 삭제할 수 없습니다 — 게이트 도달 후 다시 시도하세요",
+            message="실행 중인 프로젝트는 삭제할 수 없습니다 - 게이트 도달 후 다시 시도하세요",
             code="PROJECT_RUNNING",
         )
     # ORM 관계는 lazy="raise"라 session.delete()의 관계 로딩을 피하고
@@ -492,6 +500,56 @@ async def delete_project(
         logger.warning("project.export_cleanup_failed", project_id=str(project.id))
 
 
+MAX_SOURCE_UPLOAD_BYTES = 50 * 1024 * 1024  # 50MB — 직접 업로드 자료 상한
+_FILE_SOURCE_LABEL = {"upload": "업로드 파일", "library": "라이브러리 자료"}
+
+
+def _to_source_item(row: ProjectSource) -> SourceItemRead:
+    """project_sources 행 → 자료 검토 페이지용 항목.
+
+    web_search는 수집 원문(metadata.content_md) 발췌를 미리보기로, 파일 소스(upload·library)는
+    색인된 조각 수를 근거(has_content)로 삼는다 — 파일은 파싱·청킹돼 chunks에만 저장되고
+    metadata엔 원문을 두지 않는다.
+    """
+    from src.workflows.stages import _source_preview, has_usable_content, relevance_excerpt
+
+    meta = row.metadata_ or {}
+    if row.source_type in _FILE_SOURCE_LABEL:
+        chunks = int(meta.get("chunks") or 0)
+        label = _FILE_SOURCE_LABEL[row.source_type]
+        preview = f"{label} · {chunks}개 조각으로 색인됨" if chunks else f"{label} · 색인 대기"
+        return SourceItemRead(
+            id=row.id,
+            source_type=row.source_type,
+            title=row.title,
+            url=row.url,
+            reliability=row.reliability,
+            is_included=row.is_included,
+            preview=preview,
+            has_content=chunks > 0,
+            created_at=row.created_at,
+        )
+    content_md = meta.get("content_md") or ""
+    usable = has_usable_content(content_md)
+    matched = list(meta.get("matched_sections") or [])
+    return SourceItemRead(
+        id=row.id,
+        source_type=row.source_type,
+        title=row.title,
+        url=row.url,
+        reliability=row.reliability,
+        is_included=row.is_included,
+        matched_sections=matched,
+        page_age=meta.get("page_age"),
+        # 관련 절 키워드 주변 발췌 우선(관련성 근거), 없으면 본문 앞부분
+        preview=(relevance_excerpt(content_md, matched) or _source_preview(content_md))
+        if usable
+        else None,
+        has_content=usable,
+        created_at=row.created_at,
+    )
+
+
 @router.get("/{project_id}/sources", response_model=list[SourceItemRead])
 async def list_project_sources(
     project_id: UUID,
@@ -500,7 +558,8 @@ async def list_project_sources(
 ) -> list[SourceItemRead]:
     """자료 검토 페이지용 자료 풀 — project_sources 행 + metadata 신호.
 
-    수집(collect)이 스테이징한 전 출처를 돌려준다(제외분 포함 — is_included로 구분).
+    수집(collect)이 스테이징한 전 출처 + 사용자가 추가한 파일 소스를 돌려준다
+    (제외분 포함 — is_included로 구분).
     """
     project = await _get_authorized_project(project_id, session, current_user)
     rows = (
@@ -514,33 +573,7 @@ async def list_project_sources(
         .scalars()
         .all()
     )
-    from src.workflows.stages import _source_preview, has_usable_content, relevance_excerpt
-
-    items: list[SourceItemRead] = []
-    for row in rows:
-        meta = row.metadata_ or {}
-        content_md = meta.get("content_md") or ""
-        usable = has_usable_content(content_md)
-        matched = list(meta.get("matched_sections") or [])
-        items.append(
-            SourceItemRead(
-                id=row.id,
-                source_type=row.source_type,
-                title=row.title,
-                url=row.url,
-                reliability=row.reliability,
-                is_included=row.is_included,
-                matched_sections=matched,
-                page_age=meta.get("page_age"),
-                # 관련 절 키워드 주변 발췌 우선(관련성 근거), 없으면 본문 앞부분
-                preview=(relevance_excerpt(content_md, matched) or _source_preview(content_md))
-                if usable
-                else None,
-                has_content=usable,
-                created_at=row.created_at,
-            )
-        )
-    return items
+    return [_to_source_item(row) for row in rows]
 
 
 @router.patch("/{project_id}/sources/{source_id}", response_model=SourceItemRead)
@@ -564,27 +597,135 @@ async def update_project_source(
         raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
     row.is_included = data.is_included
     await session.flush()
-    from src.workflows.stages import _source_preview, has_usable_content, relevance_excerpt
+    return _to_source_item(row)
 
-    meta = row.metadata_ or {}
-    content_md = meta.get("content_md") or ""
-    usable = has_usable_content(content_md)
-    matched = list(meta.get("matched_sections") or [])
-    return SourceItemRead(
-        id=row.id,
-        source_type=row.source_type,
-        title=row.title,
-        url=row.url,
-        reliability=row.reliability,
-        is_included=row.is_included,
-        matched_sections=matched,
-        page_age=meta.get("page_age"),
-        preview=(relevance_excerpt(content_md, matched) or _source_preview(content_md))
-        if usable
-        else None,
-        has_content=usable,
-        created_at=row.created_at,
+
+async def _index_file_source(
+    session: AsyncSession,
+    source: SourceInput,
+    *,
+    error_context: str,
+) -> ProjectSource:
+    """파일 소스 1건을 색인하고 project_sources 행을 반환한다.
+
+    색인기(index_source)는 자체 세션에서 UPSERT+chunks를 커밋하므로, 커밋된 행을 이 요청
+    세션에서 재조회해 metadata(원산지·조각 수)를 채운다. 지원하지 않는 형식이면 명확한
+    한국어 오류로 변환한다.
+    """
+    from src.clients.parser import UnsupportedFormatError
+    from src.services.indexing.vector import build_vector_indexing_service
+
+    service = build_vector_indexing_service()
+    try:
+        result = await service.index_source(source)
+    except UnsupportedFormatError as exc:
+        raise ValidationError(
+            message="지원하지 않는 파일 형식입니다(PDF·HWPX·DOCX·MD·TXT만 색인할 수 있습니다).",
+            code="UNSUPPORTED_SOURCE_FORMAT",
+        ) from exc
+    except Exception as exc:  # 파싱·임베딩 실패 — 원인 코드 노출 없이 명확한 메시지
+        logger.warning("source.index_failed", context=error_context, exc_info=True)
+        raise ValidationError(
+            message="자료를 색인하지 못했습니다. 파일이 손상되지 않았는지 확인해 주세요.",
+            code="SOURCE_INDEX_FAILED",
+        ) from exc
+    row = (
+        await session.execute(select(ProjectSource).where(ProjectSource.id == result.source_id))
+    ).scalar_one()
+    row.metadata_ = {
+        **(row.metadata_ or {}),
+        "origin": source.source_type,
+        "chunks": result.chunks_created,
+    }
+    await session.flush()
+    return row
+
+
+@router.post(
+    "/{project_id}/sources/upload",
+    response_model=SourceItemRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_project_source(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    file: Annotated[UploadFile, File()],
+) -> SourceItemRead:
+    """직접 업로드 자료 — 파일 저장 후 즉시 색인(청킹·임베딩).
+
+    채택(is_included) 기본 참. 나중에 제외하면 검색 시점에 자동으로 근거에서 빠진다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    content = await file.read()
+    if not content:
+        raise ValidationError(message="빈 파일입니다.", code="EMPTY_UPLOAD")
+    if len(content) > MAX_SOURCE_UPLOAD_BYTES:
+        raise ValidationError(
+            message=f"파일이 너무 큽니다(최대 {MAX_SOURCE_UPLOAD_BYTES // (1024 * 1024)}MB).",
+            code="UPLOAD_TOO_LARGE",
+        )
+    safe_name = Path(file.filename or "untitled").name
+    dest_dir = Path(settings.library_dir) / "project_sources" / str(project.id)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{uuid4()}_{safe_name}"
+    dest.write_bytes(content)
+    row = await _index_file_source(
+        session,
+        SourceInput(
+            project_id=project.id,
+            source_type="upload",
+            file_path=dest,
+            upload_path=str(dest),
+            title=safe_name,
+        ),
+        error_context=f"upload:{project.id}:{safe_name}",
     )
+    return _to_source_item(row)
+
+
+@router.post(
+    "/{project_id}/sources/library",
+    response_model=SourceItemRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def attach_library_source(
+    project_id: UUID,
+    data: LibraryAttachRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SourceItemRead:
+    """라이브러리 파일을 프로젝트 자료로 불러오기 — 원본 파일을 색인해 근거로 편입.
+
+    개인 자료는 소유자·관리자만, 회사 공유 자료는 누구나 불러올 수 있다. 같은 파일을
+    다시 불러오면 재색인된다(부분 UNIQUE 키로 중복 행이 생기지 않음).
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    node = await session.get(LibraryNode, data.library_node_id)
+    if node is None or node.type != "file":
+        raise NotFoundError(
+            message="라이브러리 파일을 찾을 수 없습니다.", code="LIBRARY_FILE_NOT_FOUND"
+        )
+    is_admin = current_user.role in ("super_admin", "admin")
+    if node.is_personal and node.created_by != current_user.id and not is_admin:
+        raise AuthorizationError(message="이 자료에 접근할 수 없습니다.", code="FORBIDDEN")
+    if not node.file_path or not Path(node.file_path).is_file():
+        raise ValidationError(
+            message="원본 파일이 없어 불러올 수 없습니다(수집 원문만 있는 자료일 수 있습니다).",
+            code="LIBRARY_FILE_MISSING",
+        )
+    row = await _index_file_source(
+        session,
+        SourceInput(
+            project_id=project.id,
+            source_type="library",
+            file_path=Path(node.file_path),
+            library_node_id=node.id,
+            title=node.name,
+        ),
+        error_context=f"library:{project.id}:{node.id}",
+    )
+    return _to_source_item(row)
 
 
 @router.get("/{project_id}/verify-report", response_model=list[VerifyFindingRead])
@@ -839,7 +980,7 @@ def _citations_from_numbers(
                 )
             )
         else:
-            citations.append(SectionCitation(number=n, title="(출처 불명 — 번호 범위 밖)"))
+            citations.append(SectionCitation(number=n, title="(출처 불명 - 번호 범위 밖)"))
     return citations
 
 

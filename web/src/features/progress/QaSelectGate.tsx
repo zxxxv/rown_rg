@@ -99,7 +99,7 @@ export function QaSelectGate({ projectId, payload, onResumed }: QaSelectGateProp
   return (
     <ReviewCheckpoint
       number={3}
-      title="본문 후보 선택 — QA 검토"
+      title="본문 후보 선택 - QA 검토"
       description={
         payload.message ||
         "섹션별로 생성된 후보 초안 중 채택할 하나를 고르세요. 정적검사(HARD)를 통과한 후보만 표시됩니다."
@@ -166,12 +166,12 @@ function SectionBlock({
         ) : null}
       </header>
       {row.plan?.direction ? (
-        <p className="text-xs text-fg-secondary">작성 방향 — {row.plan.direction}</p>
+        <p className="text-xs text-fg-secondary">작성 방향 - {row.plan.direction}</p>
       ) : null}
 
       {row.allExcluded ? (
         <div className="rounded border border-dashed border-border bg-bg-secondary p-4 text-sm text-fg-tertiary">
-          정적검사를 통과한 후보가 없습니다 — 이 섹션은 선택 없이 넘어갑니다.
+          정적검사를 통과한 후보가 없습니다 - 이 섹션은 선택 없이 넘어갑니다.
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">

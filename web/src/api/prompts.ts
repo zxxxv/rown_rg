@@ -31,8 +31,36 @@ export type SystemPrompt = z.infer<typeof SystemPromptSchema>;
 export const promptKeys = {
   all: ["prompts"] as const,
   personal: (id: string) => [...promptKeys.all, "personal", id] as const,
+  personalList: (kind: string) => [...promptKeys.all, "personal-list", kind] as const,
   system: (kind: string, ref: string) => [...promptKeys.all, "system", kind, ref] as const,
+  systemList: (kind: string) => [...promptKeys.all, "system-list", kind] as const,
 };
+
+// ─── 목록 (전용 관리 페이지용) ───────────────────────────────────────────────
+
+export function useListPersonalPrompts(kind?: PromptKind) {
+  return useQuery({
+    queryKey: promptKeys.personalList(kind ?? "all"),
+    queryFn: async () => {
+      const data = await apiClient.get<unknown>("prompts/personal", {
+        searchParams: kind ? { kind } : {},
+      });
+      return z.array(PersonalPromptSchema).parse(data);
+    },
+  });
+}
+
+export function useListSystemPrompts(kind?: PromptKind) {
+  return useQuery({
+    queryKey: promptKeys.systemList(kind ?? "all"),
+    queryFn: async () => {
+      const data = await apiClient.get<unknown>("prompts/system", {
+        searchParams: kind ? { kind } : {},
+      });
+      return z.array(SystemPromptSchema).parse(data);
+    },
+  });
+}
 
 // ─── 개인 프롬프트 (편집 가능) ───────────────────────────────────────────────
 

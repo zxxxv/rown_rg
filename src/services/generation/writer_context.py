@@ -26,12 +26,18 @@ from src.prompts import AnalystSpec, load_analyst, load_component
 
 logger = structlog.get_logger(__name__)
 
-# 기본 작성 규칙 — 인용 계약([번호])과 근거 제한.
+# 기본 작성 규칙 — 정체성 + 무관용 사실 원칙(agent_global_system의 핵심을 흡수).
+# ※ Tier 1/2/3 멀티에이전트 프레이밍은 현재 아키텍처(config-driven)와 안 맞아 배선하지 않고,
+#    출처 강제·환각 금지 원칙만 여기 인라인으로 반영한다.
 BASE_SYSTEM = (
-    "너는 정부·공공 보고서의 한 섹션을 작성하는 전문 작성자다. "
-    "반드시 제공된 근거 자료만 사용하고, 각 주장 끝에 근거를 [번호]로 인용하라. "
-    "근거에 없는 수치·고유명사·주장은 절대 쓰지 마라."
+    "너는 (주)로운인사이트의 정부·공공·R&D 기획 보고서의 한 섹션을 작성하는 전문 작성자다. "
+    "무관용 사실 원칙을 지켜라: 반드시 제공된 근거 자료만 사용하고, 모든 데이터·수치·고유명사·"
+    "주장의 끝에 근거를 [번호]로 인용하라. 근거에 없는 내용은 절대 지어내지 마라(환각 금지). "
+    "신뢰할 근거를 찾을 수 없으면 그럴듯하게 채우지 말고, 해당 항목을 생략하거나 한계를 명시하라."
 )
+
+# writer 시스템에 결합할 회사 표준 규칙 조각(순서 고정): 출처 사용 → 시각자료 → 개조식 문체.
+_RULE_COMPONENTS = ("agent_source_rules", "agent_visual_rules", "agent_writing_style")
 
 DEFAULT_MAX_TOKENS = 2048
 
@@ -49,8 +55,9 @@ class WriterContext:
 
 
 @lru_cache(maxsize=1)
-def _style_rules() -> str:
-    return load_component("agent_writing_style")
+def _rule_block() -> str:
+    """회사 표준 규칙 조각을 순서대로 결합 — 출처·시각자료·개조식 문체."""
+    return "\n\n".join(load_component(name) for name in _RULE_COMPONENTS)
 
 
 @lru_cache(maxsize=64)
@@ -70,7 +77,7 @@ def build_writer_context(section: SectionPlan) -> WriterContext:
     parts = [BASE_SYSTEM]
     if spec is not None:
         parts.append(spec.prompt)
-    parts.append(_style_rules())
+    parts.append(_rule_block())
     system = "\n\n".join(parts)
 
     guidance_lines: list[str] = []

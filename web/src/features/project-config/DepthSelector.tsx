@@ -16,7 +16,7 @@ const DEPTH_INFO: Record<DepthMode, DepthInfo> = {
   outline_only: {
     label: "Outline Only",
     raptor: "배경 요약 없음",
-    hint: "자료 원문 검색만 사용 — 목차·요약 수준의 가벼운 초안용.",
+    hint: "자료 원문 검색만 사용 - 목차·요약 수준의 가벼운 초안용.",
   },
   standard: {
     label: "Standard",
@@ -26,12 +26,12 @@ const DEPTH_INFO: Record<DepthMode, DepthInfo> = {
   full_report: {
     label: "Full Report",
     raptor: "배경 요약 2층",
-    hint: "요약을 다시 묶은 상위 요약(요약의 요약)까지 쌓아 문서 전체 맥락이 깊어짐 — 회사 표준.",
+    hint: "요약을 다시 묶은 상위 요약(요약의 요약)까지 쌓아 문서 전체 맥락이 깊어짐 - 회사 표준.",
   },
   deep_dive: {
     label: "Deep Dive",
     raptor: "배경 요약 3층",
-    hint: "최대 추상화 — 자료가 많고 민감·복잡한 주제의 심층 분석용.",
+    hint: "최대 추상화 - 자료가 많고 민감·복잡한 주제의 심층 분석용.",
   },
 };
 

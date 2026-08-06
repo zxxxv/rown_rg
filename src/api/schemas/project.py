@@ -129,6 +129,12 @@ class SourceIncludeUpdate(BaseModel):
     is_included: bool
 
 
+class LibraryAttachRequest(BaseModel):
+    """라이브러리 파일을 프로젝트 자료로 불러오기 — 대상 노드 id."""
+
+    library_node_id: UUID
+
+
 class VerifyFindingRead(BaseModel):
     """PM 검증 경고 항목 — assemble 직후 pm_verify가 저장한 문서 횡단 일관성 경고."""
 

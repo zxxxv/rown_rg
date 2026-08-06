@@ -299,31 +299,39 @@ class TestLibraryApi:
         admin_tree = await test_client.get("/api/v1/library/tree", headers=_auth(super_admin_token))
         assert secret["id"] in _all_file_ids(admin_tree.json()["tree"])
 
-    async def test_personal_upload_is_private(
+    async def test_personal_upload_visible_to_owner_and_admin(
         self,
         test_client: AsyncClient,
         worker_token: str,
+        viewer_token: str,
         super_admin_token: str,
     ) -> None:
-        """is_personal 업로드는 내 자료에만 들어가고, 관리자도 볼 수 없다("개인=나만")."""
+        """개인 업로드는 소유자 본인과 관리자만 본다 — 다른 비관리자(뷰어)에겐 안 보인다."""
         personal = await _upload(test_client, worker_token, "개인메모.txt", is_personal=True)
 
+        # 소유자: 내 자료에 보인다.
         worker_tree = await test_client.get("/api/v1/library/tree", headers=_auth(worker_token))
         me_files = _find(worker_tree.json()["tree"], "me-files")
         assert me_files is not None
         assert personal["id"] in [c["id"] for c in me_files["children"]]
 
-        # 관리자 트리에는 타인의 개인 자료가 아예 없다.
-        admin_tree = await test_client.get("/api/v1/library/tree", headers=_auth(super_admin_token))
-        assert personal["id"] not in _all_file_ids(admin_tree.json()["tree"])
+        # 다른 비관리자(뷰어): 트리에 아예 없다.
+        viewer_tree = await test_client.get("/api/v1/library/tree", headers=_auth(viewer_token))
+        assert personal["id"] not in _all_file_ids(viewer_tree.json()["tree"])
 
-    async def test_personal_download_denied_for_others(
+        # 관리자: '사용자별 자료' 그룹으로 열람할 수 있다.
+        admin_tree = await test_client.get("/api/v1/library/tree", headers=_auth(super_admin_token))
+        assert personal["id"] in _all_file_ids(admin_tree.json()["tree"])
+        assert _find(admin_tree.json()["tree"], "admin-users") is not None
+
+    async def test_personal_download_owner_and_admin_only(
         self,
         test_client: AsyncClient,
         worker_token: str,
+        viewer_token: str,
         super_admin_token: str,
     ) -> None:
-        """개인 파일은 소유자만 다운로드 가능(관리자도 404)."""
+        """개인 파일 다운로드는 소유자 본인 + 관리자만 — 다른 비관리자는 404."""
         personal = await _upload(test_client, worker_token, "내파일.txt", is_personal=True)
 
         owner = await test_client.get(
@@ -332,10 +340,17 @@ class TestLibraryApi:
         assert owner.status_code == 200
         assert owner.content == b"hello library"
 
-        other = await test_client.get(
+        # 다른 비관리자(뷰어) → 404
+        viewer = await test_client.get(
+            f"/api/v1/library/files/{personal['id']}/download", headers=_auth(viewer_token)
+        )
+        assert viewer.status_code == 404
+
+        # 관리자 → 200 (감사·지원)
+        admin = await test_client.get(
             f"/api/v1/library/files/{personal['id']}/download", headers=_auth(super_admin_token)
         )
-        assert other.status_code == 404
+        assert admin.status_code == 200
 
     async def test_download_roundtrip(self, test_client: AsyncClient, worker_token: str) -> None:
         uploaded = await _upload(test_client, worker_token, "본문.txt")

@@ -381,7 +381,7 @@ function SectionEditor({
       />
       <Textarea
         value={section.key_points.join("\n")}
-        placeholder="핵심 포인트 — 줄마다 하나 (선택)"
+        placeholder="핵심 포인트 - 줄마다 하나 (선택)"
         rows={2}
         onChange={(e) => onChange({ ...section, key_points: e.target.value.split("\n") })}
         className="bg-bg text-sm"
@@ -470,7 +470,7 @@ function AnalystPicker({
             <span className="ml-1 text-fg-tertiary">(첫 번째가 대표)</span>
           </span>
         ) : (
-          <span className="text-fg-tertiary">미배정 — 기본 작성 규칙만 적용</span>
+          <span className="text-fg-tertiary">미배정 - 기본 작성 규칙만 적용</span>
         )}
       </summary>
       <div className="flex flex-wrap gap-1.5 border-t border-border p-3">

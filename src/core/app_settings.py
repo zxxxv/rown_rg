@@ -45,9 +45,8 @@ SETTING_DEFS: list[SettingDef] = [
     SettingDef("nw_service_account", "네이버웍스 Service Account", False, "str", "네이버웍스"),
     SettingDef("nw_private_key", "네이버웍스 Private Key", True, "str", "네이버웍스"),
     SettingDef("nw_bot_id", "네이버웍스 Bot ID", False, "str", "네이버웍스"),
-    # 운영
-    SettingDef("org_monthly_cost_limit_usd", "조직 월 비용 상한(USD)", False, "number", "운영"),
-    SettingDef("notify_enabled", "네이버웍스 알림 사용", False, "bool", "운영"),
+    # 조직 월 한도 → 조직 한도 페이지(quota_settings)로 이관.
+    # 알림 사용(notify_enabled) → 프로젝트별 config.notification_channels로 이관(전역 off).
 ]
 
 DEF_BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTING_DEFS}

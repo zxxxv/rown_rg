@@ -352,20 +352,20 @@ function CompletedSummaryCard({
   const tiles: { label: string; value: string; hint: string; to?: string; warn?: boolean }[] = [
     {
       label: "본문",
-      value: nSections !== null ? `${nChapters}장 ${nSections}절` : "—",
+      value: nSections !== null ? `${nChapters}장 ${nSections}절` : "-",
       hint: "미리보기·편집 열기",
       to: `/projects/${project.id}/preview`,
     },
     {
       label: "채택 자료",
-      value: nAdopted !== null ? `${nAdopted}건` : "—",
+      value: nAdopted !== null ? `${nAdopted}건` : "-",
       hint: "자료 목록 열기",
       to: `/projects/${project.id}/sources`,
     },
     {
       label: "PM 검증 경고",
-      value: findings !== null ? `${findings.length}건` : "—",
-      hint: nCritical > 0 ? `critical ${nCritical} — 확인 권장` : "납품 전 참고",
+      value: findings !== null ? `${findings.length}건` : "-",
+      hint: nCritical > 0 ? `critical ${nCritical} - 확인 권장` : "납품 전 참고",
       to: `/projects/${project.id}/preview`,
       warn: nCritical > 0,
     },

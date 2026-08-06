@@ -23,14 +23,14 @@ import { useAuth } from "@/hooks/useAuth";
 // 알림용 자격증명 그룹 — 로그인(SSO)엔 불필요라 기본 접어둔다.
 const COLLAPSED_BY_DEFAULT = new Set(["네이버웍스"]);
 const GROUP_HINT: Record<string, string> = {
-  네이버웍스: "알림 봇 전용 — 로그인(SSO)엔 불필요합니다. 알림을 쓸 때만 채우세요.",
+  네이버웍스: "알림 봇 전용 - 로그인(SSO)엔 불필요합니다. 알림을 쓸 때만 채우세요.",
 };
 
 function errMsg(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
 }
 
-const GROUP_ORDER = ["LLM", "네이버웍스", "운영"];
+const GROUP_ORDER = ["LLM", "네이버웍스"];
 
 export default function AdminSettingsPage() {
   const { user, logout } = useAuth();
@@ -57,8 +57,9 @@ export default function AdminSettingsPage() {
             시스템 설정
           </h1>
           <p className="text-sm text-fg-secondary">
-            API 키·네이버웍스 자격증명·운영 설정을 입력합니다. .env보다 우선 적용되며, 시크릿은
-            암호화 저장되어 다시 조회할 수 없습니다. (최고관리자 전용)
+            API 키·네이버웍스 자격증명을 입력합니다. .env보다 우선 적용되며, 시크릿은 암호화
+            저장되어 다시 조회할 수 없습니다. (최고관리자 전용) 조직 한도는 별도 '조직 한도' 페이지,
+            알림은 프로젝트별 설정에서 관리합니다.
           </p>
         </header>
 
