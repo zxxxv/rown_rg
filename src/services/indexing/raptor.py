@@ -44,11 +44,12 @@ DEPTH_LEVELS: dict[str, int] = {
 }
 
 CLUSTER_TARGET_SIZE = 6  # 클러스터당 목표 노드 수 — k = ceil(n / TARGET)
-# 레벨당 LLM 요약 호출 상한(비용 캡). 12였을 때 500청크가 12덩어리(클러스터당 42개,
-# 목표의 7배)로 뭉개져 요약이 전부 일반론으로 수렴했다(2026-08-06 실측 — 게다가
-# 입력 12k자 컷에 걸려 절반은 읽지도 못함). 64면 실측 규모(~500청크)에서 목표 6개가
-# 유지되고, 비용은 최저가 모델 기준 레벨당 ~$0.15 수준이라 캡의 의미는 폭주 방지뿐.
-MAX_CLUSTERS_PER_LEVEL = 64
+# 레벨당 LLM 요약 호출 상한 — 순수 폭주 방지용. k = ceil(N/6) 공식이 지배해야
+# 클러스터가 소주제 단위(목표 6청크)로 분화된다: 12였을 때 500청크가 12덩어리
+# (클러스터당 42개)로 뭉개져 요약이 전부 일반론으로 수렴했다(2026-08-06 실측).
+# 192면 ~1,150청크(자료 ~60건)까지 목표 6이 유지되고, 비용 상한은 레벨당
+# ~$0.4(3.1-flash-lite) — 캡이 물리는 규모가 되면 값이 아니라 트리 전략을 재검토할 것.
+MAX_CLUSTERS_PER_LEVEL = 192
 MIN_NODES_TO_CLUSTER = 4  # 이보다 적으면 요약할 의미가 없어 트리 성장 중단
 SUMMARY_MAX_TOKENS = 700
 _KMEANS_ITERS = 25
@@ -174,11 +175,16 @@ class RaptorBuilder:
                 node = await self._summarize_cluster(project_id, level, members, user_id=user_id)
                 next_nodes.append(node)
                 created += 1
+            # 굵기 자가 보고 — 클러스터당 평균이 목표(6)를 크게 넘으면 캡이 물려
+            # 요약이 일반론으로 뭉개지고 있다는 신호다(2026-08-06 캡 12 실측 사고).
+            avg_size = round(sum(len(g) for g in groups) / max(1, len(groups)), 1)
             logger.info(
                 "raptor.level_built",
                 project_id=str(project_id),
                 level=level,
                 n_clusters=len(next_nodes),
+                avg_cluster_size=avg_size,
+                capped=k >= MAX_CLUSTERS_PER_LEVEL,
             )
             current = next_nodes
         return created
