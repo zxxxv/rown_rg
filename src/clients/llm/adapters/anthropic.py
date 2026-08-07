@@ -112,9 +112,23 @@ class AnthropicAdapter(BaseLLMAdapter):
             return await self._call_with_web_search(request)
 
         # Anthropic Messages API: system은 messages가 아니라 별도 파라미터
-        anth_messages = [
+        anth_messages: list[dict[str, Any]] = [
             {"role": m.role, "content": m.content} for m in request.messages if m.role != "system"
         ]
+        # 공유 프리픽스 브레이크포인트 — 분할 생성처럼 [프리픽스, 가변 tail] 메시지로
+        # 나눠 보내는 호출은 프리픽스 경계에 캐시를 찍어 2번째 호출부터 0.1배로 읽는다.
+        # 최소 캐시 길이(Sonnet 1,024·Haiku 4,096토큰) 미만이면 API가 조용히 무시.
+        if request.cache_prefix_messages > 0 and anth_messages:
+            idx = min(request.cache_prefix_messages, len(anth_messages)) - 1
+            boundary = anth_messages[idx]
+            if isinstance(boundary["content"], str):
+                boundary["content"] = [
+                    {
+                        "type": "text",
+                        "text": boundary["content"],
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
         kwargs: dict[str, Any] = {
             "model": request.model,
             "messages": anth_messages,

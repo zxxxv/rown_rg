@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # n=1에서 정적 게이트 HARD 전멸 시 절 단위 1회 재생성. 없으면 그 절이 비고
     # 조립의 structure_complete가 렌더를 통째로 스킵한다.
     write_retry_on_empty: bool = True
+    # 분할 생성 — 단일 LLM 호출은 재료·캡과 무관하게 4~8천자에서 멈춘다(2026-08-07
+    # top_k 곡선 실측). volume_target min이 그 한계를 넘는 절은 소주제 파트로 나눠
+    # 순차 생성 후 결합한다(프로토타입: 분량 7배·무근거 밀도 flat 이하, exp_split2).
+    # 파트 수 = clamp(ceil(min_chars / chars_per_part), 1, max_parts).
+    write_split_enabled: bool = True
+    write_split_chars_per_part: int = 4500
+    write_split_max_parts: int = 6
     research_max_uses: int = 5
     # 회수(web_fetch) 전용 횟수 — 검색과 분리한다.
     # 5 = 검색과 동수(2026-08-07 복원). PDF는 이제 web_fetch를 타지 않고 우리가 직접

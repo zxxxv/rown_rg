@@ -13,8 +13,9 @@ _SLUG_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 def compute_input_hash(request: CompletionRequest) -> str:
     # web_search는 live 모드 전용(외부 실시간 데이터, 캐셋 미사용)이므로 해시에서 제외해
-    # 기존 단발 호출 캐셋이 무효화되지 않게 한다.
-    payload = request.model_dump_json(exclude={"cache_key", "web_search"})
+    # 기존 단발 호출 캐셋이 무효화되지 않게 한다. cache_prefix_messages는 전송 내용을
+    # 바꾸지 않는 프롬프트 캐싱 힌트라 같은 이유로 제외한다(같은 내용 = 같은 카세트).
+    payload = request.model_dump_json(exclude={"cache_key", "web_search", "cache_prefix_messages"})
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

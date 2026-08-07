@@ -96,6 +96,43 @@ class TestCallProviderCaching:
         assert response.cache_write_input_tokens == 60
 
     @pytest.mark.asyncio
+    async def test_cache_prefix_messages_marks_boundary(self, tmp_path: Path) -> None:
+        """분할 생성 계약: [프리픽스, tail] 2메시지 + cache_prefix_messages=1이면
+        프리픽스 끝에 브레이크포인트가 찍히고 tail은 문자열 그대로 남는다."""
+        adapter = _make_adapter(tmp_path)
+        fake = _FakeClient(
+            [
+                SimpleNamespace(
+                    content=[_text_block("파트")],
+                    usage=_usage(),
+                    model="claude-sonnet-4-6",
+                    stop_reason="end_turn",
+                )
+            ]
+        )
+        adapter._client = fake
+
+        request = CompletionRequest(
+            messages=[
+                Message(role="user", content="공유 프리픽스(근거)"),
+                Message(role="user", content="파트 지시"),
+            ],
+            model="claude-sonnet-4-6",
+            cache_prefix_messages=1,
+        )
+        await adapter._call_provider(request)
+
+        sent = fake.messages.calls[0]["messages"]
+        assert sent[0]["content"] == [
+            {
+                "type": "text",
+                "text": "공유 프리픽스(근거)",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        assert sent[1]["content"] == "파트 지시"
+
+    @pytest.mark.asyncio
     async def test_no_system_no_block(self, tmp_path: Path) -> None:
         adapter = _make_adapter(tmp_path)
         fake = _FakeClient(
@@ -115,6 +152,23 @@ class TestCallProviderCaching:
         )
         await adapter._call_provider(request)
         assert "system" not in fake.messages.calls[0]
+
+
+class TestCassetteHashStability:
+    def test_cache_prefix_hint_does_not_change_hash(self) -> None:
+        """cache_prefix_messages는 전송 내용을 바꾸지 않는 힌트 — 해시에서 제외돼
+        기존 카세트가 무효화되지 않아야 한다(같은 내용 = 같은 카세트)."""
+        from src.clients.llm.cassette import compute_input_hash
+
+        base = CompletionRequest(
+            messages=[
+                Message(role="user", content="프리픽스"),
+                Message(role="user", content="tail"),
+            ],
+            model="claude-haiku-4-5",
+        )
+        hinted = base.model_copy(update={"cache_prefix_messages": 1})
+        assert compute_input_hash(base) == compute_input_hash(hinted)
 
 
 class TestWebSearchCaching:

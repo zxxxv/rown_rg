@@ -51,6 +51,11 @@ class CompletionRequest(BaseModel):
         default=None,
         description="녹화·재생 시 캐셋 식별자. None이면 input_hash에서 자동 생성",
     )
+    # 프롬프트 캐싱 힌트: 앞에서부터 N개 메시지가 연속 호출 간 공유되는 프리픽스임을
+    # 어댑터에 알린다(분할 생성의 파트 순차 호출 등). Anthropic 어댑터가 그 경계에
+    # 캐시 브레이크포인트를 찍어 두 번째 호출부터 프리픽스를 0.1배로 읽는다.
+    # 전송 내용 자체는 동일하므로 카세트 input_hash에서는 제외된다(cassette.py).
+    cache_prefix_messages: int = 0
 
 
 class CompletionResponse(BaseModel):

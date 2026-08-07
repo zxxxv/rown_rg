@@ -26,6 +26,10 @@ from src.services.generation.candidates import (
     DEFAULT_MODEL,
     generate_section_candidates,
 )
+from src.services.generation.split_writer import (
+    generate_section_split,
+    plan_part_count,
+)
 from src.services.generation.writer_context import build_writer_context
 from src.services.qa.gate import (
     DEFAULT_MAX_CHARS,
@@ -66,16 +70,38 @@ async def run_write_loop(
         emit_step(pid, "writing", label, "started")
         ctx = build_writer_context(section)
         chunks = await retrieve(section)
-        drafts = await generate_section_candidates(
-            section,
-            chunks,
-            n=n,
-            model=model,
-            client=client,
-            context=ctx,
-            user_id=state.user_id,
-            project_id=state.project_id,
-        )
+
+        async def _generate(base_temperature: float = 0.7) -> list[SectionDraft]:
+            # volume_target이 단일 호출 출력 한계(4~8천자 실측)를 넘으면 분할 생성.
+            # 분할 실패(계획·배정 무너짐, 풀 빈약)는 비치명 — 단일 호출로 폴백한다.
+            n_parts = plan_part_count(ctx.min_chars)
+            if n_parts > 1:
+                split_draft = await generate_section_split(
+                    section,
+                    chunks,
+                    n_parts=n_parts,
+                    model=model,
+                    client=client,
+                    context=ctx,
+                    base_temperature=base_temperature,
+                    user_id=state.user_id,
+                    project_id=state.project_id,
+                )
+                if split_draft is not None:
+                    return [split_draft]
+            return await generate_section_candidates(
+                section,
+                chunks,
+                n=n,
+                model=model,
+                client=client,
+                context=ctx,
+                base_temperature=base_temperature,
+                user_id=state.user_id,
+                project_id=state.project_id,
+            )
+
+        drafts = await _generate()
         min_chars = ctx.min_chars if ctx.min_chars is not None else DEFAULT_MIN_CHARS
         max_chars = ctx.max_chars if ctx.max_chars is not None else DEFAULT_MAX_CHARS
         cset = gate_candidates(
@@ -85,17 +111,7 @@ async def run_write_loop(
         # 유지하고, 재시도도 실패하면 그대로 넘겨 게이트가 all_excluded로 표면화한다.
         if not cset.survivors and settings.write_retry_on_empty:
             emit_step(pid, "writing", f"{label} (재생성)", "started")
-            retry_drafts = await generate_section_candidates(
-                section,
-                chunks,
-                n=n,
-                model=model,
-                client=client,
-                context=ctx,
-                base_temperature=RETRY_TEMPERATURE,
-                user_id=state.user_id,
-                project_id=state.project_id,
-            )
+            retry_drafts = await _generate(base_temperature=RETRY_TEMPERATURE)
             retry_set = gate_candidates(
                 section.section_id, retry_drafts, chunks, min_chars=min_chars, max_chars=max_chars
             )
