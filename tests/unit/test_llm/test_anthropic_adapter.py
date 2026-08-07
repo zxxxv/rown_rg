@@ -43,6 +43,22 @@ def _text_block(text: str) -> SimpleNamespace:
     return SimpleNamespace(type="text", text=text)
 
 
+class _FakeStream:
+    """messages.stream()의 async 컨텍스트 매니저 계약만 흉내낸다."""
+
+    def __init__(self, result: Any) -> None:
+        self._result = result
+
+    async def __aenter__(self) -> _FakeStream:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def get_final_message(self) -> Any:
+        return self._result
+
+
 class _FakeMessages:
     def __init__(self, results: list[Any]) -> None:
         self._results = results
@@ -51,6 +67,12 @@ class _FakeMessages:
     async def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         return self._results[len(self.calls) - 1]
+
+    def stream(self, **kwargs: Any) -> _FakeStream:
+        # 웹검색 경로는 스트리밍을 쓴다(비스트리밍 10분 상한 회피) — sync 호출로
+        # 컨텍스트 매니저를 돌려주는 SDK 계약 그대로.
+        self.calls.append(kwargs)
+        return _FakeStream(self._results[len(self.calls) - 1])
 
 
 class _FakeClient:
@@ -211,3 +233,71 @@ class TestWebSearchCaching:
         assert response.cached_input_tokens == 900
         assert response.cache_write_input_tokens == 1500  # 턴 누적(1000+500)
         assert response.stop_reason == "end_turn"
+
+    @pytest.mark.asyncio
+    async def test_pause_turn_resend_carries_container_id(self, tmp_path: Path) -> None:
+        """동적 필터링 웹도구(비-Haiku)는 서버가 code_execution 컨테이너에서 돈다.
+
+        재전송에 컨테이너 id를 안 실으면 400 "container_id is required when there
+        are pending tool uses"로 챕터 수집이 통째로 죽는다(2026-08-07 Sonnet 실측).
+        """
+        adapter = _make_adapter(tmp_path)
+        paused = SimpleNamespace(
+            content=[_text_block("중간")],
+            usage=_usage(),
+            model="claude-sonnet-4-6",
+            stop_reason="pause_turn",
+            container=SimpleNamespace(id="container_abc"),
+        )
+        done = SimpleNamespace(
+            content=[_text_block("최종")],
+            usage=_usage(),
+            model="claude-sonnet-4-6",
+            stop_reason="end_turn",
+            container=SimpleNamespace(id="container_abc"),
+        )
+        fake = _FakeClient([paused, done])
+        adapter._client = fake
+
+        request = CompletionRequest(
+            messages=[Message(role="user", content="수집 스펙")],
+            model="claude-sonnet-4-6",
+            web_search=WebSearchConfig(max_uses=3),
+        )
+        await adapter._call_provider(request)
+
+        # 첫 턴은 컨테이너가 없고(신규 생성), 재전송부터 같은 컨테이너를 승계한다
+        assert "container" not in fake.messages.calls[0]
+        assert fake.messages.calls[1]["container"] == "container_abc"
+
+    @pytest.mark.asyncio
+    async def test_web_search_uses_streaming(self, tmp_path: Path) -> None:
+        """웹검색 경로는 스트리밍이어야 한다 — 비스트리밍 10분 상한을 넘기면
+        APITimeoutError로 죽고 재시도 3회가 챕터당 30분을 태운다(2026-08-07 실측)."""
+        adapter = _make_adapter(tmp_path)
+        fake = _FakeClient(
+            [
+                SimpleNamespace(
+                    content=[_text_block("최종")],
+                    usage=_usage(),
+                    model="claude-sonnet-4-6",
+                    stop_reason="end_turn",
+                    container=None,
+                )
+            ]
+        )
+
+        async def _boom(**_kwargs: Any) -> Any:
+            raise AssertionError("웹검색 경로가 비스트리밍 create를 썼다")
+
+        fake.messages.create = _boom  # type: ignore[method-assign]
+        adapter._client = fake
+
+        response = await adapter._call_provider(
+            CompletionRequest(
+                messages=[Message(role="user", content="수집 스펙")],
+                model="claude-sonnet-4-6",
+                web_search=WebSearchConfig(max_uses=3),
+            )
+        )
+        assert response.content == "최종"

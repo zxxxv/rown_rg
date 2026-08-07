@@ -190,6 +190,7 @@ class AnthropicAdapter(BaseLLMAdapter):
         in_tok = out_tok = cached_tok = cache_write_tok = 0
         stop_reason = "end_turn"
         model = request.model
+        container_id: str | None = None
 
         for _ in range(_MAX_TOOL_TURNS):
             kwargs: dict[str, Any] = {
@@ -201,9 +202,21 @@ class AnthropicAdapter(BaseLLMAdapter):
             }
             if request.system:
                 kwargs["system"] = self._cacheable_system(request.system)
+            # 동적 필터링 웹도구(비-Haiku)는 서버가 code_execution 컨테이너 안에서
+            # 검색을 돌린다. pause_turn 재전송에는 그 컨테이너 id를 함께 보내야
+            # 한다 — 없으면 400 "container_id is required when there are pending
+            # tool uses"로 챕터 수집이 통째로 죽는다(2026-08-07 Sonnet 첫 런 실측).
+            if container_id is not None:
+                kwargs["container"] = container_id
             # temperature는 의도적으로 생략: Opus 4.8/4.7 등은 temperature를 400으로 거부한다.
 
-            result = await self._client.messages.create(**kwargs)
+            # 스트리밍 필수 — 서버 도구를 많이 쓰는 턴은 비스트리밍 요청의 10분
+            # 상한을 넘겨 APITimeoutError로 죽는다(재시도 3회 = 챕터당 30분 낭비).
+            async with self._client.messages.stream(**kwargs) as stream:
+                result = await stream.get_final_message()
+            container = getattr(result, "container", None)
+            if container is not None and getattr(container, "id", None):
+                container_id = container.id
             in_tok += result.usage.input_tokens
             out_tok += result.usage.output_tokens
             cached_tok += getattr(result.usage, "cache_read_input_tokens", 0) or 0
