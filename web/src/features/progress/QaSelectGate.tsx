@@ -1,5 +1,5 @@
-import { AlertTriangle, CheckCircle2, Circle, Quote } from "lucide-react";
-import { useMemo, useState } from "react";
+import { AlertTriangle, Quote } from "lucide-react";
+import { useMemo } from "react";
 import { toast } from "sonner";
 import {
   type QaSelectCandidate,
@@ -11,7 +11,6 @@ import { ApiError } from "@/api/client";
 import { ReviewCheckpoint } from "@/components/data-display/ReviewCheckpoint";
 import { Badge } from "@/components/ui/badge";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
-import { cn } from "@/lib/utils";
 
 // 정적검사 체크 이름 → 사람용 라벨 (백엔드 services/qa/gate.py 어휘)
 const WARNING_LABEL: Record<string, string> = {
@@ -37,7 +36,11 @@ interface SectionRow {
   allExcluded: boolean;
 }
 
-/** QA_SELECT 게이트 — 섹션별 후보 초안 중 사람이 하나씩 골라 제출한다. */
+/** QA_SELECT 게이트 — 절당 생성 초안(n=1)을 검토하고 일괄 승인해 조립을 재개한다.
+
+후보 n=1 전환(2026-08-07)으로 '고르기'는 사라졌다 — 선택 UI 없이 검토·승인만
+남긴다(2026-08-08 사용자 결정). 레거시 payload(전환 전 재개 프로젝트)에 후보가
+2개 이상 남아 있으면 첫 번째를 자동 채택하고 카드에 표기한다. */
 export function QaSelectGate({ projectId, payload, onResumed }: QaSelectGateProps) {
   const rows = useMemo<SectionRow[]>(() => {
     const planById = new Map(payload.section_plan.map((p) => [p.section_id, p]));
@@ -63,43 +66,31 @@ export function QaSelectGate({ projectId, payload, onResumed }: QaSelectGateProp
     });
   }, [payload]);
 
-  const selectable = useMemo(() => rows.filter((r) => !r.allExcluded), [rows]);
-  const excludedCount = rows.length - selectable.length;
+  const reviewable = useMemo(() => rows.filter((r) => !r.allExcluded), [rows]);
+  const excludedCount = rows.length - reviewable.length;
 
-  // 단일 후보 섹션은 자동 선택 — n=1 전환(후보 1개+재생성 폴백) 후 유일 후보를
-  // 절마다 클릭하는 무의미한 동선 제거. 사람의 몫은 '고르기'가 아니라 검토·제출이 된다.
-  // 후보가 2개 이상인 섹션(재생성 등)만 명시적 선택을 요구한다.
-  const [selections, setSelections] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      payload.sections
-        .filter((sec) => !sec.all_excluded && sec.candidates.length === 1)
-        .map((sec) => [sec.section_id, sec.candidates[0].candidate_id]),
-    ),
+  // 절당 채택본 = 첫 번째(유일) 후보 — all_excluded 섹션은 제출에서 빠지고
+  // 조립 단계 structure 검사가 누락을 표시한다.
+  const picked = useMemo(
+    () => Object.fromEntries(reviewable.map((r) => [r.sectionId, r.candidates[0].candidate_id])),
+    [reviewable],
   );
-  const selectedCount = selectable.filter((r) => selections[r.sectionId]).length;
-  // 선택 가능한 섹션이 0개(전부 all_excluded)여도 제출은 가능해야 한다 —
-  // 빈 선택으로 재개하면 조립 단계 structure 검사가 누락을 표시한다.
-  const complete = selectable.length === 0 || selectedCount === selectable.length;
 
   const decide = useDecideQaSelect();
   const onSubmit = () => {
-    if (!complete || decide.isPending) return;
-    // all_excluded 섹션은 제출에서 빠진다 — 조립 단계 structure 검사가 누락을 표시한다.
-    const picked = Object.fromEntries(
-      selectable.map((r) => [r.sectionId, selections[r.sectionId]]),
-    );
+    if (decide.isPending) return;
     decide.mutate(
       { projectId, selections: picked },
       {
         onSuccess: () => {
-          toast.success("후보 선택이 제출됐습니다.", {
-            description: "선택한 초안으로 보고서 조립을 재개합니다.",
+          toast.success("검토가 완료됐습니다.", {
+            description: "검토한 초안으로 보고서 조립을 재개합니다.",
           });
           onResumed();
         },
         onError: (err) => {
           const msg = err instanceof ApiError ? err.message : "제출에 실패했습니다.";
-          toast.error("선택 제출 실패", { description: msg });
+          toast.error("검토 제출 실패", { description: msg });
         },
       },
     );
@@ -108,21 +99,21 @@ export function QaSelectGate({ projectId, payload, onResumed }: QaSelectGateProp
   return (
     <ReviewCheckpoint
       number={3}
-      title="본문 후보 선택 - QA 검토"
+      title="본문 검토 - QA"
       description={
         payload.message ||
-        "섹션별로 생성된 후보 초안 중 채택할 하나를 고르세요. 정적검사(HARD)를 통과한 후보만 표시됩니다."
+        "절별 생성 초안을 검토하세요. 정적검사(HARD) 통과분만 표시되며, 승인하면 보고서 조립이 시작됩니다."
       }
       decisions={[
         {
           label: decide.isPending
             ? "제출 중…"
-            : selectable.length === 0
-              ? "선택 없이 진행"
-              : `선택 제출 (${selectedCount}/${selectable.length})`,
+            : reviewable.length === 0
+              ? "검토 없이 진행"
+              : `검토 완료 · 조립 시작 (${reviewable.length}절)`,
           intent: "primary",
           onClick: onSubmit,
-          disabled: !complete || decide.isPending,
+          disabled: decide.isPending,
         },
       ]}
     >
@@ -134,36 +125,21 @@ export function QaSelectGate({ projectId, payload, onResumed }: QaSelectGateProp
           >
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-fg-warning" aria-hidden />
             <p className="text-fg-secondary">
-              통과 후보가 없는 섹션 {excludedCount}개는 이번 제출에서 제외됩니다. 조립 후 편집
+              통과 초안이 없는 섹션 {excludedCount}개는 이번 제출에서 제외됩니다. 조립 후 편집
               화면에서 직접 작성하거나 AI 재작성으로 채울 수 있습니다.
             </p>
           </div>
         ) : null}
 
         {rows.map((row) => (
-          <SectionBlock
-            key={row.sectionId}
-            row={row}
-            selected={selections[row.sectionId]}
-            onSelect={(candidateId) =>
-              setSelections((prev) => ({ ...prev, [row.sectionId]: candidateId }))
-            }
-          />
+          <SectionBlock key={row.sectionId} row={row} />
         ))}
       </div>
     </ReviewCheckpoint>
   );
 }
 
-function SectionBlock({
-  row,
-  selected,
-  onSelect,
-}: {
-  row: SectionRow;
-  selected: string | undefined;
-  onSelect: (candidateId: string) => void;
-}) {
+function SectionBlock({ row }: { row: SectionRow }) {
   return (
     <section aria-label={`섹션 ${row.label}`} className="flex flex-col gap-2">
       <header className="flex flex-wrap items-baseline gap-2">
@@ -180,58 +156,28 @@ function SectionBlock({
 
       {row.allExcluded ? (
         <div className="rounded border border-dashed border-border bg-bg-secondary p-4 text-sm text-fg-tertiary">
-          정적검사를 통과한 후보가 없습니다 - 이 섹션은 선택 없이 넘어갑니다.
+          정적검사를 통과한 초안이 없습니다 - 이 섹션은 비운 채 조립으로 넘어갑니다.
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {row.candidates.map((cand, i) => (
-            <CandidateCard
-              key={cand.candidate_id}
-              candidate={cand}
-              label={`후보 ${String.fromCharCode(65 + i)}`}
-              selected={selected === cand.candidate_id}
-              onSelect={() => onSelect(cand.candidate_id)}
-            />
-          ))}
-        </div>
+        <DraftCard candidate={row.candidates[0]} legacyCount={row.candidates.length} />
       )}
     </section>
   );
 }
 
-function CandidateCard({
+function DraftCard({
   candidate,
-  label,
-  selected,
-  onSelect,
+  legacyCount,
 }: {
   candidate: QaSelectCandidate;
-  label: string;
-  selected: boolean;
-  onSelect: () => void;
+  legacyCount: number;
 }) {
   return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={onSelect}
-      className={cn(
-        "flex flex-col gap-2 rounded border p-3 text-left transition-colors",
-        selected
-          ? "border-accent bg-bg ring-2 ring-accent"
-          : "border-border bg-bg hover:border-fg-tertiary",
-      )}
-    >
+    <div className="flex flex-col gap-2 rounded border border-border bg-bg p-3">
       <header className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 text-sm font-medium text-fg">
-          {selected ? (
-            <CheckCircle2 className="h-4 w-4 text-accent" aria-hidden />
-          ) : (
-            <Circle className="h-4 w-4 text-fg-tertiary" aria-hidden />
-          )}
-          {label}
-        </span>
+        <span className="text-sm font-medium text-fg">생성 초안</span>
         <span className="flex items-center gap-2 text-xs text-fg-tertiary">
+          {legacyCount > 1 ? <span>레거시 후보 {legacyCount}개 중 1번 자동 채택</span> : null}
           <span className="flex items-center gap-1">
             <Quote className="h-3 w-3" aria-hidden />
             인용 {candidate.cited_chunk_ids.length}건
@@ -257,10 +203,10 @@ function CandidateCard({
         </ul>
       ) : null}
 
-      {/* 후보 본문은 미리보기와 같은 마크다운 렌더로 — 원문 MD 노출은 가독성이 나빴다(2026-08-05) */}
+      {/* 본문은 미리보기와 같은 마크다운 렌더로 — 원문 MD 노출은 가독성이 나빴다(2026-08-05) */}
       <div className="max-h-72 overflow-y-auto rounded border border-border bg-bg-secondary p-3 text-sm leading-relaxed text-fg">
         <MarkdownContent content={candidate.content} />
       </div>
-    </button>
+    </div>
   );
 }

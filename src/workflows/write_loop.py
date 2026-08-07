@@ -194,7 +194,7 @@ def qa_select_payload(state: ProjectState) -> dict[str, object]:
             }
         )
     return {
-        "message": "섹션별로 후보를 하나씩 고르세요. (정적검사 통과분만 표시)",
+        "message": "절별 생성 초안을 검토하세요. (정적검사 통과분만 표시 — 승인하면 조립 시작)",
         "section_plan": section_plan_payload(state.section_plan),
         "sections": sections,
     }
