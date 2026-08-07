@@ -25,10 +25,14 @@ _MAX_ABBRS = 40  # 프롬프트·표 크기 캡 — 문서에 이 이상이면 �
 DEFAULT_MAX_TOKENS = 2000
 
 _SYSTEM = (
-    "너는 보고서 편집자다. 약어 목록을 받아 각 약어가 이 보고서 맥락에서 무엇을"
-    " 뜻하는지 한 줄(40자 이내) 한국어 설명을 쓴다. 사실만 간결하게 쓰고, 모르는"
-    " 약어는 빈 문자열로 둔다. 마지막에 JSON만 출력한다:"
-    ' ```json\n{"glossary": {"약어": "설명", ...}}\n```'
+    "너는 보고서 편집자다. 약어 목록을 받아 각 약어에 대해 두 가지를 쓴다.\n"
+    "1) full — **영문 전체 명칭**(예: UX → User Experience, CAGR → Compound Annual"
+    " Growth Rate). 한국 기관·법령이면 공식 영문명(예: KCC → Korea Communications"
+    " Commission). 영문 명칭이 없는 순수 한글 약어만 한국어로 쓴다.\n"
+    "2) desc — 이 보고서 맥락에서의 한국어 설명 한 줄(40자 이내).\n"
+    "사실만 간결하게 쓰고, 모르는 값은 빈 문자열로 둔다. 마지막에 JSON만 출력한다:"
+    ' ```json\n{"glossary": {"UX": {"full": "User Experience", "desc": "사용자가 제품을'
+    ' 이용하며 느끼는 경험"}}}\n```'
 )
 
 
@@ -62,7 +66,10 @@ async def build_glossary(
             Message(
                 role="user",
                 content=(
-                    f"보고서 주제: {state.topic}\n\n약어 목록(약어: 본문 병기 풀네임):\n{listing}"
+                    f"보고서 주제: {state.topic}\n\n"
+                    "약어 목록(괄호 안은 본문에서 기계 추출한 표기 — 부정확할 수 있으니"
+                    " 참고만 하고, 약어 자체를 기준으로 판단하라):\n"
+                    f"{listing}"
                 ),
             )
         ],
@@ -77,11 +84,23 @@ async def build_glossary(
     ):
         response = await client.complete(request)
     manifest: dict[str, Any] = _parse_manifest(response.content)
-    descs = manifest.get("glossary") if isinstance(manifest.get("glossary"), dict) else {}
-    return {
-        abbr: {"full": full, "desc": str(descs.get(abbr) or "").strip()[:60]}
-        for abbr, full in abbrs.items()
-    }
+    entries = manifest.get("glossary") if isinstance(manifest.get("glossary"), dict) else {}
+    return {abbr: _entry(entries.get(abbr), extracted) for abbr, extracted in abbrs.items()}
+
+
+def _entry(raw: Any, extracted_full: str) -> dict[str, str]:
+    """모델 응답 1건 → {full, desc}.
+
+    full은 영문 전체 명칭을 우선한다 — 결정적 추출은 괄호 앞 한글을 긁어와 자주
+    어긋난다(2026-08-07 실측: UX→"콘텐츠 차별성과 이용자 경험", CAGR→"성장률").
+    모델이 모르면 추출값으로 폴백한다. 구버전 응답(값이 설명 문자열)도 받아준다.
+    """
+    if isinstance(raw, dict):
+        full = str(raw.get("full") or "").strip()
+        desc = str(raw.get("desc") or "").strip()
+    else:
+        full, desc = "", str(raw or "").strip()
+    return {"full": (full or extracted_full)[:80], "desc": desc[:60]}
 
 
 async def persist_glossary(project_id: UUID, glossary: dict[str, dict[str, str]] | None) -> None:

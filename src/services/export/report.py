@@ -10,8 +10,8 @@
   각 장 끝에 "약어 정리"표로 정리한다.
 - 표가 없는 절에는 추천 시각자료(그림) 자리표시자를 넣는다(2페이지당 시각자료 1개 규칙).
 - 표 셀의 인라인 마크다운(**강조**·링크)은 벗기고, 표 폭은 본문 폭에 맞춰 긴 셀이 줄바꿈된다.
-- 인용 마커 [n]은 **전역 번호**(조립 시 renumber로 출처장 번호에 재매핑됨)라 본문에
-  그대로 남긴다 — 독자가 본문 [n] ↔ 출처 최종장 [n]을 맞춰 검증할 수 있다(2026-08-05).
+- 인용 마커 [n]은 **전역 번호**(조립 시 renumber로 참고문헌장 번호에 재매핑됨)라 본문에
+  그대로 남긴다 — 독자가 본문 [n] ↔ 참고문헌 최종장 [n]을 맞춰 검증할 수 있다(2026-08-05).
 - 번호는 텍스트에 직접 넣는다("제1장", "1.1 …"). 헤딩에 개요 자동번호를 부여하지 않아
   한컴이 제목·목차 앞에 "1.", "2." 같은 개요 번호를 붙이지 않는다.
 """
@@ -264,8 +264,12 @@ _SOURCE_TYPE_LABEL: dict[SourceType, str] = {
 }
 
 
+# 최종장 제목 — 목차 항목과 장 헤딩이 같은 문자열을 쓰도록 한곳에서 고정한다.
+REFERENCES_HEADING = "참고문헌"
+
+
 def _source_entry(index: int, src: SourceRef) -> str:
-    """출처 목록 한 줄 — '[n] 제목 (유형) URL'."""
+    """참고문헌 목록 한 줄 — '[n] 제목 (유형) URL'."""
     line = f"[{index}] {src.title.strip() or '(제목 없음)'}"
     label = _SOURCE_TYPE_LABEL.get(src.source_type)
     if label:
@@ -278,14 +282,14 @@ def _source_entry(index: int, src: SourceRef) -> str:
 def report_blocks(
     state: ProjectState, glossary: dict[str, dict[str, str]] | None = None
 ) -> list[Block]:
-    """보고서 전체 블록을 실제 순서(표지 → 목차 → 본문 → 출처)로 조립한다.
+    """보고서 전체 블록을 실제 순서(표지 → 목차 → 본문 → 참고문헌)로 조립한다.
 
     - 1장: 표지(제목·기관·날짜).
     - 2장: 목차 — 렌더되는 장·절을 텍스트 번호로 나열(본문과 항상 일치).
     - 본문: 챕터 경계마다 쪽 나눔 + 장 헤딩, 섹션마다 [제목(2) + 개조식 본문].
       각 장 끝에는 그 장의 약어 정리를 **별도 페이지**(쪽 나눔 후)로 붙인다.
       glossary(조립 시 생성한 약어 사전)가 있으면 설명 열을 채운다.
-    - 최종장: 출처 — state.sources(채택 자료)를 번호 목록으로.
+    - 최종장: 참고문헌 — state.sources(채택 자료)를 번호 목록으로.
     선택 초안이 없는 섹션은 목차·본문 모두에서 건너뛴다.
     """
     drafts = {d.section_id: d for d in state.selected_drafts()}
@@ -296,7 +300,7 @@ def report_blocks(
         return blocks
 
     ch_titles = _chapter_titles(state)
-    # 인용 [n]은 전역 번호(출처장과 일치)라 본문에 유지한다 — 제거하지 않는다(2026-08-05).
+    # 인용 [n]은 전역 번호(참고문헌장과 일치)라 본문에 유지한다 — 제거하지 않는다(2026-08-05).
     contents = {plan.section_id: drafts[plan.section_id].content for plan in rendered}
 
     # 목차(2장) — 장 제목(indent 0) 아래 절(indent 1)을 계층으로 나열한다.
@@ -309,6 +313,9 @@ def report_blocks(
             toc_chapter = plan.chapter_number
         entry = f"{plan.chapter_number}.{plan.section_number}  {plan.title}"
         blocks.append(Paragraph(text=entry, indent=1))
+    # 참고문헌은 계획에 없는 최종장이라 목차에도 따로 실어야 본문과 어긋나지 않는다.
+    if state.sources:
+        blocks.append(Paragraph(text=REFERENCES_HEADING))
 
     # 본문 — 챕터마다 쪽 나눔 + 장 헤딩. 각 장의 약어는 그 장 끝에 "약어 정리"로 모으고,
     # 표가 없는 절에는 추천 시각자료(그림) 자리표시자를 넣어 페이지에 시각자료가 있게 한다.
@@ -347,10 +354,10 @@ def report_blocks(
         _collect_abbreviations(contents[plan.section_id], chapter_abbrs)
     flush_glossary()  # 마지막 장
 
-    # 최종장: 출처 — 프로젝트 자료 풀을 번호 목록으로 정리한다(자료 없으면 생략).
+    # 최종장: 참고문헌 — 프로젝트 자료 풀을 번호 목록으로 정리한다(자료 없으면 생략).
     if state.sources:
         blocks.append(PageBreak())
-        blocks.append(Heading(level=1, text="출처"))
+        blocks.append(Heading(level=1, text=REFERENCES_HEADING))
         for i, src in enumerate(state.sources, start=1):
             blocks.append(Paragraph(text=_source_entry(i, src), indent=1))
     return blocks

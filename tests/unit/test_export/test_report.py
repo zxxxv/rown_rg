@@ -23,7 +23,12 @@ from src.export.hwpx_writer import (
     Table,
     _is_group_start,
 )
-from src.services.export.report import export_report, markdown_to_blocks, report_blocks
+from src.services.export.report import (
+    REFERENCES_HEADING,
+    export_report,
+    markdown_to_blocks,
+    report_blocks,
+)
 
 
 class TestGroupStartSpacing:
@@ -352,9 +357,11 @@ class TestReportBlocks:
         state = _state_with_selected_drafts().model_copy(update={"sources": sources})
         blocks = report_blocks(state)
         src_idx = next(
-            i for i, b in enumerate(blocks) if isinstance(b, Heading) and b.text == "출처"
+            i
+            for i, b in enumerate(blocks)
+            if isinstance(b, Heading) and b.text == REFERENCES_HEADING
         )
-        # 출처는 마지막 장 — 뒤에 다른 장/절 헤딩이 없다.
+        # 참고문헌은 마지막 장 — 뒤에 다른 장/절 헤딩이 없다.
         assert [b for b in blocks[src_idx + 1 :] if isinstance(b, Heading)] == []
         entries = [b.text for b in blocks[src_idx + 1 :] if isinstance(b, Paragraph)]
         assert any("웹 자료 제목" in t and "https://ex.com/a" in t for t in entries)
@@ -362,7 +369,7 @@ class TestReportBlocks:
 
     def test_no_sources_chapter_when_pool_empty(self):
         blocks = report_blocks(_state_with_selected_drafts())  # sources 없음
-        assert not any(isinstance(b, Heading) and b.text == "출처" for b in blocks)
+        assert not any(isinstance(b, Heading) and b.text == REFERENCES_HEADING for b in blocks)
 
 
 class TestExportReport:
