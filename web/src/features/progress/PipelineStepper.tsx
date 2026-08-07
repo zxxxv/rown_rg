@@ -24,7 +24,8 @@ const STEPS = [
   { key: "review", label: "자료 검토 · 확정" },
   { key: "index", label: "색인 (임베딩)" },
   { key: "write", label: "본문 작성" },
-  { key: "qa", label: "QA 후보 선택" },
+  // n=1 전환으로 후보 '선택'은 사라졌다 — 게이트는 검토·승인만 한다(2026-08-08)
+  { key: "qa", label: "본문 검토 (QA)" },
   { key: "done", label: "완성" },
 ] as const;
 
@@ -57,7 +58,7 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
   } else if (gate === "qa_select") {
     current = 4;
     currentPhase = "action";
-    actionLabel = "후보 선택으로 이동";
+    actionLabel = "본문 검토로 이동";
     actionTo = `/projects/${projectId}/qa-select`;
   } else {
     switch (status) {
@@ -185,6 +186,11 @@ export function PipelineStepper({ projectId, snapshot }: PipelineStepperProps) {
                   </span>
                 ) : null}
               </div>
+              {/* 실행 중 세부 단계 — 색인·RAPTOR처럼 수 분짜리 단계의 내부 진행
+                  (예: "청킹·임베딩 5/17", "배경 요약 1층 · 40/152") */}
+              {step.phase === "active" && snapshot?.active_step ? (
+                <p className="ml-6 text-xs text-fg-tertiary">{snapshot.active_step}</p>
+              ) : null}
               {step.phase === "action" && step.actionTo ? (
                 <Button
                   size="sm"

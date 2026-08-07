@@ -26,6 +26,9 @@ export const ProjectProgressSchema = z.object({
   last_activity_at: z.string().nullish(),
   // 전역 동시 실행 상한 대기열 위치(1부터) — 대기 중이 아니면 null
   queue_position: z.number().int().positive().nullish(),
+  // 실행 중 세부 단계 라벨(예: "청킹·임베딩 5/17", "배경 요약 1층 · 40/152") —
+  // 색인·RAPTOR 같은 수 분짜리 단계의 내부 진행. 없으면 null.
+  active_step: z.string().nullish(),
 });
 export type ProjectProgress = z.infer<typeof ProjectProgressSchema>;
 
@@ -82,6 +85,7 @@ export function toProgressSnapshot(res: ProjectProgress): ProgressSnapshot {
     phase,
     phase_status: finished ? "completed" : "started",
     completed_phases,
+    active_step: res.active_step ?? undefined,
     percent: res.percent,
     tokens_used: res.tokens_used,
     cost_usd: res.cost_usd,

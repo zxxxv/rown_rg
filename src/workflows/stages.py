@@ -479,10 +479,13 @@ async def index(state: ProjectState) -> ProjectState:
     emit_step(pid, "indexing", "청킹·임베딩·색인", "started")
     indexer = _web_indexer_factory()
     staged = await indexer.load_included(state.project_id)
+    # 색인·RAPTOR는 수 분짜리 단계다 — 자료별/클러스터별 진행을 세부 단계로 발행해
+    # 스테퍼가 "멈춘 것처럼" 보이지 않게 한다(2026-08-07 실사용 보고).
+    usable = [s for s in staged if has_usable_content(s.content_md)]
     indexed: list[UUID] = []
-    for src in staged:
-        if not has_usable_content(src.content_md):
-            continue  # 배너·잔재뿐인 본문은 임베딩해도 쓰레기 청크만 생긴다
+    for i, src in enumerate(usable, start=1):
+        title = f" · {src.title[:24]}" if src.title else ""
+        emit_step(pid, "indexing", f"청킹·임베딩 {i}/{len(usable)}{title}", "started")
         result = await indexer.index_existing(
             project_id=state.project_id,
             source_id=src.source_id,
@@ -500,17 +503,20 @@ async def index(state: ProjectState) -> ProjectState:
     )
     emit_step(pid, "indexing", "청킹·임베딩·색인", "completed")
     if settings.raptor_enabled and indexed:
-        emit_step(pid, "indexing", "RAPTOR 요약 트리", "started")
+        emit_step(pid, "indexing", "배경 요약 트리(RAPTOR)", "started")
         try:
             n_nodes = await _raptor_builder_factory().build(
-                state.project_id, depth_mode=state.depth_mode, user_id=state.user_id
+                state.project_id,
+                depth_mode=state.depth_mode,
+                user_id=state.user_id,
+                on_progress=lambda msg: emit_step(pid, "indexing", msg, "started"),
             )
             logger.info("raptor.done", project_id=str(state.project_id), n_nodes=n_nodes)
-            emit_step(pid, "indexing", "RAPTOR 요약 트리", "completed")
+            emit_step(pid, "indexing", "배경 요약 트리(RAPTOR)", "completed")
         except Exception:
             # RAPTOR는 품질 부스터지 필수 경로가 아니다 — 실패해도 파이프라인은 계속 간다.
             logger.warning("raptor.build_failed", project_id=str(state.project_id), exc_info=True)
-            emit_step(pid, "indexing", "RAPTOR 요약 트리", "failed")
+            emit_step(pid, "indexing", "배경 요약 트리(RAPTOR)", "failed")
     emit_phase(pid, "indexing", "completed")
     return state.mark_indexed(indexed)
 

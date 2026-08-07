@@ -76,6 +76,15 @@ class ProgressBroker:
 # 프로세스 전역 싱글턴
 progress_broker = ProgressBroker()
 
+# 프로젝트별 최근 세부 단계(단일 워커 전제) — WS 미구독 화면(개요 스테퍼의 HTTP 폴링)도
+# 색인·RAPTOR 같은 수 분짜리 단계의 내부 진행을 보게 하는 용도. 진행 API가 읽어 노출한다.
+_last_steps: dict[uuid.UUID, dict] = {}
+
+
+def last_step(project_id: uuid.UUID) -> dict | None:
+    """최근 emit_step 메시지({phase, step, status}) — 없으면 None."""
+    return _last_steps.get(project_id)
+
 
 # ── emit 헬퍼(no-op safe: 구독자가 없으면 그냥 버려진다) ─────────────────────
 
@@ -83,6 +92,9 @@ progress_broker = ProgressBroker()
 def emit_phase(project_id: uuid.UUID | None, phase: str, status: str) -> None:
     if project_id is None:
         return
+    if status == "completed":
+        # 단계 종료 시 세부 단계 잔재 정리 — 다음 단계의 첫 emit_step이 다시 채운다.
+        _last_steps.pop(project_id, None)
     progress_broker.publish(project_id, {"type": "phase", "phase": phase, "status": status})
 
 
@@ -99,6 +111,7 @@ def emit_step(
     msg: dict = {"type": "step", "phase": phase, "step": step, "status": status}
     if eta_seconds is not None:
         msg["eta_seconds"] = eta_seconds
+    _last_steps[project_id] = msg
     progress_broker.publish(project_id, msg)
 
 

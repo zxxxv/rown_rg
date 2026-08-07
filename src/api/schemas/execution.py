@@ -33,6 +33,10 @@ class ProgressResponse(BaseModel):
     last_activity_at: datetime | None = None
     # 전역 동시 실행 상한 대기열 위치(1부터) — 대기 중이 아니면 None
     queue_position: int | None = None
+    # 실행 중인 세부 단계 라벨(예: "청킹·임베딩 5/17", "배경 요약 1층 · 40/152") —
+    # 색인·RAPTOR처럼 수 분짜리 단계의 내부 진행을 스테퍼 서브라벨로 보여준다.
+    # 실행 중이 아니거나 세부 단계가 없으면 None.
+    active_step: str | None = None
 
 
 class DecideRequest(BaseModel):

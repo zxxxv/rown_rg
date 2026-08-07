@@ -64,7 +64,7 @@ from src.services.generation.planner import MAX_SECTIONS
 from src.services.indexing.vector import SourceInput
 from src.services.prompts import resolve_analysts
 from src.workflows import cancel
-from src.workflows.events import emit_error
+from src.workflows.events import emit_error, last_step
 from src.workflows.runner import get_pending_gate, is_running, queue_status, resume_run, start_run
 
 # 단계 기반 근사 진행률 — 섹션 단위 세밀화는 추후 진행 이벤트로
@@ -445,7 +445,18 @@ async def get_progress(
         started_at=usage[2] or (project.updated_at if project.status != "created" else None),
         last_activity_at=usage[3],
         queue_position=(queue_status(project.id) or {}).get("position"),
+        active_step=_active_step_label(project.status, project.id),
     )
+
+
+def _active_step_label(status: str, project_id: UUID) -> str | None:
+    """실행 중 프로젝트의 최근 세부 단계 라벨 — 스테퍼 서브라벨용(인메모리, 단일 워커)."""
+    if status not in ("researching", "indexing", "writing", "reviewing"):
+        return None
+    event = last_step(project_id)
+    if event is None or event.get("status") != "started":
+        return None
+    return str(event.get("step") or "") or None
 
 
 @router.patch("/{project_id}/config", response_model=ProjectRead)

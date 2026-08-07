@@ -15,6 +15,7 @@ scikit-learn 의존을 새로 들이지 않기 위한 자체 구현이며, 시�
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -143,8 +144,13 @@ class RaptorBuilder:
         *,
         depth_mode: str,
         user_id: UUID | None = None,
+        on_progress: Callable[[str], None] | None = None,
     ) -> int:
-        """트리를 빌드하고 생성한 요약 노드 수를 돌려준다 (0 = 스킵/불충분)."""
+        """트리를 빌드하고 생성한 요약 노드 수를 돌려준다 (0 = 스킵/불충분).
+
+        on_progress는 층·클러스터 단위 진행 라벨을 받는 콜백(진행 UI용) — 수 분짜리
+        요약 루프가 밖에서 멈춘 것처럼 보이지 않게 한다. 예외는 던지지 않는 함수여야 한다.
+        """
         levels = DEPTH_LEVELS.get(depth_mode, 1)
         if levels <= 0:
             logger.info("raptor.skipped", project_id=str(project_id), depth_mode=depth_mode)
@@ -169,12 +175,16 @@ class RaptorBuilder:
             if k <= 1 and level > 1:
                 break  # 더 묶어봐야 요약 1개 — 직전 레벨이 이미 그 역할을 한다
             groups = group_by_label(kmeans_cosine(vectors, k))
+            if on_progress:
+                on_progress(f"배경 요약 {level}층 · 클러스터 {len(groups)}개 요약 시작")
             next_nodes: list[_Node] = []
-            for member_idxs in groups:
+            for gi, member_idxs in enumerate(groups, start=1):
                 members = [current[i] for i in member_idxs]
                 node = await self._summarize_cluster(project_id, level, members, user_id=user_id)
                 next_nodes.append(node)
                 created += 1
+                if on_progress and (gi % 10 == 0 or gi == len(groups)):
+                    on_progress(f"배경 요약 {level}층 · {gi}/{len(groups)} 클러스터")
             # 굵기 자가 보고 — 클러스터당 평균이 목표(6)를 크게 넘으면 캡이 물려
             # 요약이 일반론으로 뭉개지고 있다는 신호다(2026-08-06 캡 12 실측 사고).
             avg_size = round(sum(len(g) for g in groups) / max(1, len(groups)), 1)
