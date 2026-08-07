@@ -200,6 +200,8 @@ export default function PreviewPage() {
 
         {sectionsQuery.isLoading ? (
           <LoadingSkeleton variant="block" />
+        ) : tree.length === 0 && qaPayload ? (
+          <PayloadDraftList payload={qaPayload} />
         ) : tree.length === 0 && isGenerating ? (
           <EmptyState
             icon={Eye}
@@ -331,6 +333,38 @@ function QaApproveBar({ projectId, payload }: { projectId: string; payload: QaSe
       <Button onClick={onSubmit} disabled={decide.isPending}>
         {decide.isPending ? "제출 중…" : `검토 완료 · 조립 시작 (${reviewable.length}절)`}
       </Button>
+    </div>
+  );
+}
+
+/** 게이트 payload 폴백 — sections 행이 아직 없는 검토(증분 저장 배선 전 백엔드로
+ * 작성된 런)에서 초안을 읽기 전용으로 나열한다. 블록 편집은 행이 생긴 뒤부터. */
+function PayloadDraftList({ payload }: { payload: QaSelectPayload }) {
+  const planById = new Map(payload.section_plan.map((p) => [p.section_id, p]));
+  return (
+    <div className="flex flex-col gap-4">
+      {payload.sections.map((sec) => {
+        const plan = planById.get(sec.section_id);
+        const cand = sec.candidates[0];
+        return (
+          <section key={sec.section_id} className="rounded border border-border bg-bg p-4">
+            <h3 className="mb-2 text-base font-semibold text-fg">
+              {plan
+                ? `${plan.chapter_number}.${plan.section_number} ${plan.title}`
+                : sec.section_id}
+            </h3>
+            {cand ? (
+              <div className="max-h-80 overflow-y-auto rounded border border-border bg-bg-secondary p-3 text-sm leading-relaxed">
+                <MarkdownContent content={cand.content} />
+              </div>
+            ) : (
+              <p className="text-sm text-fg-tertiary">
+                정적검사를 통과한 초안이 없습니다 - 비운 채 조립됩니다.
+              </p>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }
