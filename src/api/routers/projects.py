@@ -600,6 +600,53 @@ async def update_project_source(
     return _to_source_item(row)
 
 
+@router.delete(
+    "/{project_id}/sources/{source_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_project_source(
+    project_id: UUID,
+    source_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> None:
+    """업로드·라이브러리 자료 삭제 — 행과 색인 청크(FK CASCADE)를 함께 제거한다.
+
+    웹 수집 자료는 수집 이력이 검토 감사 근거라 삭제 대신 제외(is_included)로만
+    다룬다. 본문 작성이 시작된 뒤에는 인용([n]→chunk)이 청크를 참조하므로 삭제를
+    금지한다 — 색인 중(indexing)도 청크 생성과 경합하므로 잠근다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    if project.status not in ("created", "researching"):
+        raise ValidationError(
+            message="본문 작성 단계 이후에는 자료를 삭제할 수 없습니다 - 제외로 전환해 주세요.",
+            code="SOURCE_DELETE_LOCKED",
+        )
+    row = (
+        await session.execute(
+            select(ProjectSource).where(
+                ProjectSource.id == source_id, ProjectSource.project_id == project.id
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
+    if row.source_type not in ("upload", "library"):
+        raise ValidationError(
+            message="웹 수집 자료는 삭제할 수 없습니다 - 제외로 처리해 주세요.",
+            code="SOURCE_NOT_DELETABLE",
+        )
+    # 업로드 원본 파일 정리(라이브러리 원본은 라이브러리 소유 — 건드리지 않는다).
+    # 파일 정리 실패는 삭제를 막지 않는다 — 행·청크 제거가 본질이고 파일은 흔적일 뿐.
+    if row.source_type == "upload" and row.upload_path:
+        try:
+            Path(row.upload_path).unlink(missing_ok=True)
+        except OSError:
+            logger.warning("source.upload_file_cleanup_failed", path=row.upload_path)
+    await session.delete(row)
+    await session.flush()
+
+
 async def _index_file_source(
     session: AsyncSession,
     source: SourceInput,

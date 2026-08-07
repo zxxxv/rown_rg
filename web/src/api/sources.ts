@@ -108,6 +108,20 @@ export function usePatchSource(projectId: string) {
   });
 }
 
+// 파일 자료(업로드·라이브러리) 삭제 — 행과 색인 청크가 함께 제거된다.
+// 웹 수집 자료는 제외 토글만 가능(백엔드가 거부), 작성 시작 후에도 백엔드가 잠근다.
+export function useDeleteSource(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (sid: string) => {
+      await apiClient.delete(`projects/${projectId}/sources/${sid}`);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: sourceKeys.list(projectId) });
+    },
+  });
+}
+
 // 직접 업로드 자료 — 파일 저장 + 즉시 색인(백엔드). 성공 시 자료 목록 갱신.
 export function useUploadProjectSource(projectId: string) {
   const qc = useQueryClient();

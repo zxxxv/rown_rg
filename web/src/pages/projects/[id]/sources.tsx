@@ -1,12 +1,17 @@
 import { useMutation } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, FileText, Loader2, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { decideSourcePool, parseSourcePoolPayload, useDecideCollectMore } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
 import { useProgressSnapshot } from "@/api/progress";
-import { usePatchSource, useProjectSources, useUploadProjectSource } from "@/api/sources";
+import {
+  useDeleteSource,
+  usePatchSource,
+  useProjectSources,
+  useUploadProjectSource,
+} from "@/api/sources";
 import type { Source } from "@/api/types";
 import { SourceCard } from "@/components/data-display/SourceCard";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -79,6 +84,10 @@ export default function SourcesPage() {
   // 필터 사이드바 제거됨 — 실데이터에 의미 있는 분류축이 없어(전부 웹 수집)
   // 분류가 실제로 동작하지 않았다. 목록은 수집 순서 그대로.
   const items = sourcesQuery.data?.items ?? [];
+  // 파일 자료(업로드·라이브러리)는 카드 목록이 아니라 업로드 공간 아래 나열
+  // (2026-08-08 사용자 결정) — 카드 목록은 웹 수집 자료 전용이 된다.
+  const fileItems = useMemo(() => items.filter((s) => s.source_kind !== "web_search"), [items]);
+  const webItems = useMemo(() => items.filter((s) => s.source_kind === "web_search"), [items]);
 
   // 백그라운드 수집 종료 판정: 배치 목표(+10건) 도달 시 즉시, 아니면 4분 타임아웃.
   // (수집 완료를 직접 알리는 신호가 이 페이지엔 없어 보수적으로 마감한다)
@@ -125,6 +134,21 @@ export default function SourcesPage() {
         },
       });
     }
+  };
+
+  // 파일 자료 삭제 — 마음이 바뀐 업로드/불러오기 자료를 색인 청크째 제거.
+  // 작성 시작 후엔 백엔드가 잠근다(인용이 청크를 참조) — 그땐 제외 토글의 몫.
+  const deleteSource = useDeleteSource(projectId);
+  const handleDelete = (s: Source) => {
+    if (deleteSource.isPending) return;
+    if (!window.confirm(`"${s.title}"을(를) 삭제할까요? 색인된 조각도 함께 제거됩니다.`)) return;
+    deleteSource.mutate(s.id, {
+      onSuccess: () => toast.success(`"${s.title}" 삭제 완료`),
+      onError: (err: unknown) => {
+        const msg = err instanceof ApiError ? err.message : "삭제에 실패했습니다.";
+        toast.error("삭제 실패", { description: msg });
+      },
+    });
   };
 
   const setIncluded = (sid: string, is_included: boolean) => {
@@ -214,11 +238,23 @@ export default function SourcesPage() {
                 검색은 하단에 있습니다. 불러오기·업로드는 PDF·HWPX·DOCX·MD·TXT가 색인됩니다.
               </p>
             </div>
-            {/* 좌: 라이브러리 트리(체크 다중 선택) · 우: 업로드 — 2026-08-08 사용자 결정 배치 */}
+            {/* 좌: 라이브러리 트리(체크 다중 선택) · 우: 업로드 + 추가된 파일 나열
+                — 파일 자료는 하단 카드가 아니라 여기 나열된다(2026-08-08 사용자 결정) */}
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <LibraryTreePanel projectId={projectId} />
-              <UploadDropzone onFiles={handleFiles} uploading={uploading} />
+              <div className="flex flex-col gap-2">
+                <UploadDropzone onFiles={handleFiles} uploading={uploading} />
+                <FileSourceRows items={fileItems} onDelete={handleDelete} />
+              </div>
             </div>
+          </section>
+        ) : null}
+
+        {/* 검토 종료 후에도 파일 자료는 보여야 한다 — 추가 섹션이 접히면 여기로 */}
+        {!reviewOpen && fileItems.length > 0 ? (
+          <section className="flex flex-col gap-2 rounded-lg border border-border bg-bg-secondary/40 p-4">
+            <h2 className="text-sm font-semibold text-fg">추가된 파일 자료</h2>
+            <FileSourceRows items={fileItems} />
           </section>
         ) : null}
 
@@ -292,9 +328,13 @@ export default function SourcesPage() {
                   : "AI 자동 검색이 진행되거나 파일을 직접 업로드하면 표시됩니다."
               }
             />
+          ) : webItems.length === 0 ? (
+            <p className="rounded border border-dashed border-border bg-bg-secondary p-4 text-sm text-fg-tertiary">
+              웹 수집 자료가 없습니다 - 추가된 파일 자료는 위 목록에 있습니다.
+            </p>
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {items.map((s) => (
+              {webItems.map((s) => (
                 <SourceCard
                   key={s.id}
                   title={s.title}
@@ -438,5 +478,40 @@ function FinalizeBar({
         </div>
       </div>
     </div>
+  );
+}
+
+/** 파일 자료(업로드·라이브러리) 컴팩트 나열 — 카드 목록 대신 업로드 공간 아래.
+
+onDelete가 있으면(검토 중) 삭제 버튼을 붙인다 — 삭제는 색인 청크까지 제거되며,
+작성 시작 후엔 백엔드가 거부한다. 검토 종료 후엔 읽기 전용 나열. */
+function FileSourceRows({ items, onDelete }: { items: Source[]; onDelete?: (s: Source) => void }) {
+  if (items.length === 0) return null;
+  return (
+    <ul className="flex flex-col gap-1">
+      {items.map((s) => (
+        <li
+          key={s.id}
+          className="flex items-center gap-2 rounded border border-border bg-bg px-2.5 py-1.5"
+        >
+          <FileText className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
+          <span className="flex-1 truncate text-sm text-fg">{s.title}</span>
+          <Badge variant="outline" className="shrink-0 text-xs font-normal">
+            {s.source_kind === "library" ? "라이브러리" : "업로드"}
+          </Badge>
+          {onDelete ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0"
+              onClick={() => onDelete(s)}
+              aria-label={`${s.title} 삭제`}
+            >
+              <Trash2 className="h-4 w-4 text-fg-danger" aria-hidden />
+            </Button>
+          ) : null}
+        </li>
+      ))}
+    </ul>
   );
 }

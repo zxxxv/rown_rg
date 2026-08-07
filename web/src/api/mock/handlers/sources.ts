@@ -4,6 +4,7 @@ import {
   getSourcesForProject,
   patchSourceInStore,
   pushSourceToStore,
+  removeSourceFromStore,
 } from "@/api/mock/fixtures/sources";
 import { env } from "@/env";
 
@@ -37,6 +38,32 @@ export const sourcesHandlers = [
       );
     }
     return HttpResponse.json({ data: updated }, { status: 200 });
+  }),
+
+  // 실계약 미러: 파일 자료(업로드·라이브러리)만 삭제 가능, 웹 수집은 400.
+  http.delete(url("projects/:id/sources/:sid"), async ({ params }) => {
+    const projectId = String(params.id);
+    const sourceId = String(params.sid);
+    const target = getSourcesForProject(projectId).find((s) => s.id === sourceId);
+    if (!target) {
+      return HttpResponse.json(
+        { error: { code: "SOURCE_NOT_FOUND", message: "자료를 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    if (target.source_kind === "web_search") {
+      return HttpResponse.json(
+        {
+          error: {
+            code: "SOURCE_NOT_DELETABLE",
+            message: "웹 수집 자료는 삭제할 수 없습니다 - 제외로 처리해 주세요.",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    removeSourceFromStore(projectId, sourceId);
+    return new HttpResponse(null, { status: 204 });
   }),
 
   http.post(url("projects/:id/sources/upload"), async ({ params, request }) => {
