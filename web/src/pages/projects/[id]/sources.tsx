@@ -1,11 +1,11 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, ArrowRight, FileText, Loader2, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { decideSourcePool, parseSourcePoolPayload, useDecideCollectMore } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
-import { useProgressSnapshot } from "@/api/progress";
+import { progressKeys, useProgressSnapshot } from "@/api/progress";
 import {
   useDeleteSource,
   usePatchSource,
@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 export default function SourcesPage() {
   const { id: projectId = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { user, logout } = useAuth();
 
   // 검토는 SOURCE_POOL 게이트가 열려 있을 때만 유효 — 확정 후(작성·완료)에는
@@ -168,7 +169,11 @@ export default function SourcesPage() {
   const handleFinalize = useMutation({
     mutationFn: () => decideSourcePool({ projectId, excludedSourceIds: [], action: "approve" }),
     onSuccess: () => {
-      toast.success("자료 검토 완료 - 작성을 이어갑니다.");
+      // 승인 직후 스냅샷 캐시를 즉시 무효화 — 7초 폴링을 기다리면 이 화면의
+      // 검토 완료 바와 개요 CTA가 승인 후에도 잠깐 남아 "안 눌린 것처럼" 보인다
+      // (2026-08-07 실사용 보고). 게이트 해소는 백엔드에서 이미 끝난 상태다.
+      void queryClient.invalidateQueries({ queryKey: progressKeys.snapshot(projectId) });
+      toast.success("자료 검토 완료 - 색인을 시작합니다.");
       navigate(`/projects/${projectId}/overview`);
     },
     onError: (err: unknown) => {
