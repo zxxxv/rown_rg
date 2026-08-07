@@ -214,6 +214,28 @@ class TestGenerateSectionSplit:
         draft, _ = await self._run(monkeypatch, fake)
         assert draft is None
 
+    async def test_plan_model_routes_only_plan_call(self, monkeypatch):
+        """구조 품질용 손잡이 — 계획 1콜만 상위 모델, 본문 파트는 저가 모델 유지."""
+        fake = FakeLLM(['["axis0 소주제", "axis1 소주제"]', "□ p1 [1]", "□ p2 [4]"])
+        chunks = [_chunk(f"axis0 근거 {i}" if i < 3 else f"axis1 근거 {i}") for i in range(6)]
+
+        async def fake_vectors(citable):
+            return [[1.0, 0.0] if "axis0" in c.content else [0.0, 1.0] for c in citable]
+
+        monkeypatch.setattr(split_writer, "_load_chunk_vectors", fake_vectors)
+        await generate_section_split(
+            _plan(),
+            chunks,
+            n_parts=2,
+            context=_ctx(),
+            model="claude-haiku-4-5",
+            plan_model="claude-sonnet-4-6",
+            client=fake,
+            embedder=FakeEmbedder(),
+        )
+        assert fake.requests[0].model == "claude-sonnet-4-6"  # 계획
+        assert [r.model for r in fake.requests[1:]] == ["claude-haiku-4-5"] * 2  # 본문
+
     async def test_small_pool_falls_back(self, monkeypatch):
         fake = FakeLLM(['["a", "b"]'])
         draft, _ = await self._run(monkeypatch, fake, n_chunks=4)  # < 3*2

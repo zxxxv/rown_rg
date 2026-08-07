@@ -255,6 +255,7 @@ async def generate_section_split(
     n_parts: int,
     context: WriterContext,
     model: str,
+    plan_model: str | None = None,
     client: LLMClient | None = None,
     base_temperature: float = 0.7,
     user_id: UUID | None = None,
@@ -266,6 +267,10 @@ async def generate_section_split(
     파트 호출은 순차다 — 부정 목록이 앞 파트에 의존하고, 프롬프트 캐시도 첫 응답
     이후에야 읽을 수 있다(병렬이면 캐시 미적중). 결합본의 [n]은 전체 근거 풀 번호
     그대로라 기존 게이트·인용 전역 번호화 경로가 무수정으로 동작한다.
+
+    plan_model: 파트 소주제 계획(절당 1콜·600토큰)만 다른 모델로 돌린다. 문서 구조는
+    이 계획이 좌우하는 반면 비용은 무시할 수준이라, 본문은 저가 모델로 쓰면서 구조만
+    상위 모델로 잡는 조합이 가능하다. None이면 model과 동일.
     """
     citable = [c for c in chunks if not c.is_summary]
     if len(citable) < MIN_CHUNKS_PER_PART * 2:
@@ -277,7 +282,9 @@ async def generate_section_split(
 
     operation = f"section_write:{section.chapter_number}.{section.section_number}"
     with token_context(user_id=user_id, project_id=project_id, operation=operation):
-        part_titles = await _plan_subtopics(client, section, citable, n_parts=n_parts, model=model)
+        part_titles = await _plan_subtopics(
+            client, section, citable, n_parts=n_parts, model=plan_model or model
+        )
     if len(part_titles) < 2:
         logger.warning(
             "split_writer.plan_failed",
