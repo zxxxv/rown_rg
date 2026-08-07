@@ -65,7 +65,7 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
   policy_research: {
     preset: "policy_research",
     enabled_analyzers: [],
-    depth_mode: "standard",
+    depth_mode: "full_report",
     model_mode: "standard",
     hyde_enabled: false,
     notification_channels: [],
@@ -74,7 +74,8 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
   blank: {
     preset: "blank",
     enabled_analyzers: [],
-    depth_mode: "outline_only",
+    // 깊이 UI 제거(2026-08-07) — 신규 생성은 항상 full_report(분할 생성이 분량을 감당)
+    depth_mode: "full_report",
     model_mode: "economy",
     hyde_enabled: false,
     notification_channels: [],

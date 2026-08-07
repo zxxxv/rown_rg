@@ -10,7 +10,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { mergeKeepDirty } from "./_merge";
-import { DepthSelector } from "./DepthSelector";
 import { ModelModePicker } from "./ModelModePicker";
 import { OutlineDesigner } from "./OutlineDesigner";
 import { PresetSelect } from "./PresetSelect";
@@ -34,13 +33,6 @@ const EMPTY_DEFAULTS: ProjectFormValues = {
   // 기본 프리셋은 백엔드 카탈로그 id 기준(생성 시 그대로 전송 가능한 값)
   config: defaultsForPreset("예비타당성조사"),
 };
-
-const DEPTH_LABEL = {
-  outline_only: "개요만",
-  standard: "표준",
-  full_report: "보고서 전체",
-  deep_dive: "심층 분석",
-} as const;
 
 export function ProjectConfigForm({
   mode,
@@ -108,14 +100,9 @@ export function ProjectConfigForm({
           <Section number={3} title="목차 설계">
             <OutlineDesigner />
           </Section>
-          <Section number={4} title="작성 깊이·모델" badge={isEdit ? "수정 불가" : undefined}>
-            <div className="flex flex-col gap-4">
-              <DepthSelector disabled={isEdit} />
-              <div className="flex flex-col gap-2">
-                <p className="text-xs font-medium text-fg-secondary">모델 품질</p>
-                <ModelModePicker disabled={isEdit} />
-              </div>
-            </div>
+          <Section number={4} title="모델 품질" badge={isEdit ? "수정 불가" : undefined}>
+            {/* 작성 깊이 UI는 제거 — 분할 생성 배선 이후 깊이는 항상 full_report(2026-08-07) */}
+            <ModelModePicker disabled={isEdit} />
           </Section>
           <Section number={5} title="알림">
             <NotificationChannels />
@@ -150,7 +137,6 @@ export function ProjectConfigForm({
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
             <div className="flex flex-wrap gap-1.5">
               <Badge variant="secondary">프리셋 · {presetLabel(watchedConfig.preset)}</Badge>
-              <Badge variant="secondary">깊이 · {DEPTH_LABEL[watchedConfig.depth_mode]}</Badge>
               <Badge variant="secondary">
                 모델 · {watchedConfig.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
               </Badge>
@@ -182,7 +168,6 @@ export function ProjectConfigForm({
                     ? `${watchedConfig.outline.chapters.reduce((n, c) => n + c.sections.length, 0)}절 확정`
                     : "미구성 (필수)"}
                 </Badge>
-                <Badge variant="secondary">깊이 · {DEPTH_LABEL[watchedConfig.depth_mode]}</Badge>
                 <Badge variant="secondary">
                   모델 · {watchedConfig.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
                 </Badge>
