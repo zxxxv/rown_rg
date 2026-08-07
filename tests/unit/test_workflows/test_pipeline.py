@@ -1,7 +1,8 @@
-"""파이프라인 관통 검증 — research→SOURCE_POOL→write→QA_SELECT→assemble→완료 (인메모리).
+"""파이프라인 관통 검증 — research→SOURCE_POOL→index→write(자동 채택)→assemble→완료.
 
 stages의 플래너·리서치·인덱서·검색기·LLM·익스포터 전역을 fake로 교체해
-실검색/실LLM/DB 없이 척추 배선을 검증한다.
+실검색/실LLM/DB 없이 척추 배선을 검증한다. QA 게이트는 제거됨(2026-08-07) —
+레거시 pending 게이트의 payload 재수화 경로만 별도 검증한다.
 """
 
 from __future__ import annotations
@@ -15,12 +16,20 @@ from src.clients.llm.base import CompletionRequest, CompletionResponse
 from src.clients.llm.exceptions import LLMAPIError
 from src.core.config import settings
 from src.core.state import ProjectState
-from src.core.types import ProjectStage, RetrievedChunk, ReviewGate, SectionPlan
+from src.core.types import (
+    ProjectStage,
+    RetrievedChunk,
+    ReviewGate,
+    SectionCandidate,
+    SectionCandidateSet,
+    SectionDraft,
+    SectionPlan,
+)
 from src.services.indexing.vector import IndexingResult
 from src.services.indexing.web import StagedWebSource
 from src.services.research import CollectedSource, ResearchResult, ResearchSpec
 from src.workflows.pipeline import Done, Paused, advance
-from src.workflows.write_loop import apply_selection, rehydrate_from_payload
+from src.workflows.write_loop import apply_selection, qa_select_payload, rehydrate_from_payload
 
 
 class _StubClient:
@@ -288,8 +297,9 @@ class TestStageDisplayHook:
             seen.append(stage)
 
         outcome = await advance(_state_at_indexing(), on_stage=hook)
-        assert isinstance(outcome, Paused)
-        assert seen == [ProjectStage.WRITING]
+        # QA 게이트 제거 — write 뒤 정지 없이 assemble(REVIEWING 표시)까지 이어진다
+        assert isinstance(outcome, Done)
+        assert seen == [ProjectStage.WRITING, ProjectStage.REVIEWING]
 
 
 class TestFullPipelineChain:
@@ -304,63 +314,85 @@ class TestFullPipelineChain:
         assert isinstance(paused_sources, Paused)
         assert paused_sources.review.gate is ReviewGate.SOURCE_POOL
 
-        # 2) 승인 후 재개 — 확정 뒤 index(임베딩)가 돌고 write는 목차를 그대로 쓴다
+        # 2) 승인 후 재개 — index(임베딩)→write(자동 채택)→assemble까지 정지 없이 완주
+        #    (QA 게이트 제거, 2026-08-07 — 검토는 완성 후 통합 화면에서)
         resumed = paused_sources.state.resolve_review(paused_sources.review)
-        paused_qa = await advance(resumed)
-        assert isinstance(paused_qa, Paused)
-        assert paused_qa.review.gate is ReviewGate.QA_SELECT
-        # 확정 이후 index 단계에서 본문 있는 1건이 임베딩됨(게이트 전엔 0이었음)
-        assert len(paused_qa.state.indexed_source_ids) == 1
-        plan_ids = {str(s.section_id) for s in paused_sources.state.section_plan}
-        assert {sec["section_id"] for sec in paused_qa.review.payload["sections"]} == plan_ids
-
-        # 3) 사람이 후보 선택 → assemble → 완료 + HWPX 렌더 1회
-        selections = {
-            sec["section_id"]: sec["candidates"][0]["candidate_id"]
-            for sec in paused_qa.review.payload["sections"]
-        }
-        final_state = apply_selection(paused_qa.state.resolve_review(paused_qa.review), selections)
-        done = await advance(final_state)
+        done = await advance(resumed)
         assert isinstance(done, Done)
         assert done.state.current_stage is ProjectStage.COMPLETED
+        # 확정 이후 index 단계에서 본문 있는 1건이 임베딩됨(게이트 전엔 0이었음)
+        assert len(done.state.indexed_source_ids) == 1
+        # 자동 채택 — 모든 절이 선택돼 조립됐고 HWPX 렌더 1회
+        assert len(done.state.selected_drafts()) == 2
         assert len(fake_export) == 1
 
 
-class TestWritePausesAtQaSelect:
-    async def test_write_produces_candidates_and_pauses(self, fake_write: RetrievedChunk):
+class TestWriteAutoSelectsAndAssembles:
+    async def test_write_runs_straight_to_completed(
+        self, fake_write: RetrievedChunk, fake_export: list[Path]
+    ):
         outcome = await advance(_state_at_indexing())
-        assert isinstance(outcome, Paused)
-        assert outcome.review.gate is ReviewGate.QA_SELECT
-        assert outcome.state.current_stage is ProjectStage.REVIEWING
-        sections = outcome.review.payload["sections"]
-        assert len(sections) == 2
-        # 각 섹션에 survivors 존재 (게이트 통과). 후보 수는 settings.write_candidates_n을
-        # 따르므로 값에 결합하지 않는다 — 기본은 1(2026-08-07 n=1 확정).
-        for sec in sections:
-            assert len(sec["candidates"]) == settings.write_candidates_n
-            assert sec["all_excluded"] is False
+        assert isinstance(outcome, Done)
+        assert outcome.state.current_stage is ProjectStage.COMPLETED
+        assert len(outcome.state.section_candidates) == 2
+        # 각 섹션에 survivors 존재 + 첫 생존 후보 자동 채택. 후보 수는
+        # settings.write_candidates_n을 따른다 — 기본은 1(2026-08-07 n=1 확정).
+        for cset in outcome.state.section_candidates:
+            assert len(cset.candidates) == settings.write_candidates_n
+            assert cset.survivors
+            assert (
+                outcome.state.section_selections[cset.section_id] == cset.survivors[0].candidate_id
+            )
+        assert len(outcome.state.selected_drafts()) == 2
+        assert len(fake_export) == 1
 
 
-class TestResumeThroughAssemble:
+class TestLegacyResumeThroughAssemble:
+    """게이트 제거 전 백엔드가 남긴 pending QA_SELECT의 재개 경로(payload 재수화)."""
+
+    def _paused_payload_and_state(self, chunk: RetrievedChunk):
+        """레거시 payload를 write_loop 산출물로 합성 — 후보 2절, 각 1개 생존."""
+        plan = [
+            SectionPlan(chapter_number=1, section_number=1, title="고령화 추이"),
+            SectionPlan(chapter_number=2, section_number=1, title="비용편익 분석"),
+        ]
+        candidate_sets = [
+            SectionCandidateSet(
+                section_id=p.section_id,
+                candidates=[
+                    SectionCandidate(
+                        draft=SectionDraft(
+                            section_id=p.section_id,
+                            content="이 섹션 본문입니다. [1] " * 30,
+                            cited_chunk_ids=[chunk.chunk_id],
+                        )
+                    )
+                ],
+            )
+            for p in plan
+        ]
+        state = ProjectState(
+            user_id=uuid4(),
+            topic="주제",
+            section_plan=plan,
+            section_candidates=candidate_sets,
+            current_stage=ProjectStage.REVIEWING,
+        )
+        return qa_select_payload(state), state
+
     async def test_full_round_trip_completes(self, fake_write: RetrievedChunk):
-        # 1) write → QA_SELECT 정지
-        paused = await advance(_state_at_indexing())
-        assert isinstance(paused, Paused)
-        payload = paused.review.payload
-
-        # 2) 사람이 각 섹션 첫 후보 선택 (decision)
+        payload, state = self._paused_payload_and_state(fake_write)
         selections = {
             sec["section_id"]: sec["candidates"][0]["candidate_id"] for sec in payload["sections"]
         }
 
-        # 3) resume — 새 프로세스처럼 빈 state에서 payload로 재수화 + 선택 반영
+        # resume — 새 프로세스처럼 빈 state에서 payload로 재수화 + 선택 반영
         fresh = ProjectState(
-            user_id=paused.state.user_id, topic="주제", current_stage=ProjectStage.REVIEWING
+            user_id=state.user_id, topic="주제", current_stage=ProjectStage.REVIEWING
         )
         fresh = rehydrate_from_payload(fresh, payload)
         fresh = apply_selection(fresh, selections)
 
-        # 4) assemble → 완료
         done = await advance(fresh)
         assert isinstance(done, Done)
         assert done.state.current_stage is ProjectStage.COMPLETED
@@ -370,14 +402,12 @@ class TestResumeThroughAssemble:
         self, fake_write: RetrievedChunk
     ):
         # 한 섹션만 선택 → assemble은 진행하되 selected_drafts는 1개 (structure 미완)
-        paused = await advance(_state_at_indexing())
-        assert isinstance(paused, Paused)
-        payload = paused.review.payload
+        payload, state = self._paused_payload_and_state(fake_write)
         first = payload["sections"][0]
         selections = {first["section_id"]: first["candidates"][0]["candidate_id"]}
 
         fresh = ProjectState(
-            user_id=paused.state.user_id, topic="주제", current_stage=ProjectStage.REVIEWING
+            user_id=state.user_id, topic="주제", current_stage=ProjectStage.REVIEWING
         )
         fresh = rehydrate_from_payload(fresh, payload)
         fresh = apply_selection(fresh, selections)

@@ -17,15 +17,15 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
-// 파이프라인 순서 — 사람 결정이 필요한 단계(자료 검토·QA 선택)는 도달 시
-// 강조되고 해당 작업 화면으로 가는 버튼이 붙는다.
+// 파이프라인 순서 — 사람 결정이 필요한 단계(자료 검토)는 도달 시 강조되고 해당
+// 작업 화면으로 가는 버튼이 붙는다. 본문 검토(QA) 게이트는 제거됨(2026-08-07) —
+// 작성이 끝나면 곧장 조립·검증되고, 검토·편집은 보고서 화면에서 사후에 한다.
 const STEPS = [
   { key: "collect", label: "자료 수집" },
   { key: "review", label: "자료 검토 · 확정" },
   { key: "index", label: "색인 (임베딩)" },
   { key: "write", label: "본문 작성" },
-  // n=1 전환으로 후보 '선택'은 사라졌다 — 게이트는 검토·승인만 한다(2026-08-08)
-  { key: "qa", label: "본문 검토 (QA)" },
+  { key: "assemble", label: "조립 · PM 검증" },
   { key: "done", label: "완성" },
 ] as const;
 
@@ -56,10 +56,10 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
     actionLabel = "자료 검토로 이동";
     actionTo = `/projects/${projectId}/sources`;
   } else if (gate === "qa_select") {
+    // 레거시 — 게이트 제거 전 백엔드로 작성돼 아직 pending인 프로젝트만 도달한다.
     current = 4;
     currentPhase = "action";
     actionLabel = "본문 검토로 이동";
-    // 본문 검토는 보고서 화면으로 통합(2026-08-07) — 블록 편집·재작성 후 그 자리에서 승인
     actionTo = `/projects/${projectId}/preview`;
   } else {
     switch (status) {

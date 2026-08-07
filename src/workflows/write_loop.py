@@ -235,29 +235,45 @@ def rehydrate_from_payload(state: ProjectState, payload: dict[str, Any]) -> Proj
     return state.with_section_plan(plan).with_section_candidates(candidate_sets)
 
 
+def auto_select_survivors(state: ProjectState) -> ProjectState:
+    """절마다 첫 생존 후보를 자동 채택한다 — QA 게이트 제거(2026-08-07) 후의 기본 경로.
+
+    n=1이라 '고르기'가 없고, 검토·수정은 통합 화면에서 완성 후에 한다. 전멸 절은
+    선택 없이 남아 assemble의 structure 검사가 누락으로 표면화한다(기존 계약 유지).
+    """
+    updated = state
+    for cset in state.section_candidates:
+        if cset.survivors:
+            updated = updated.record_selection(cset.section_id, cset.survivors[0].candidate_id)
+    return updated
+
+
 def overlay_working_copy(
     state: ProjectState, working: dict[UUID, tuple[str, list[UUID]]]
 ) -> ProjectState:
-    """검토 중 편집된 sections 행(작업 사본)을 후보 draft 위에 덮어쓴다.
+    """sections 행(작업 사본)을 후보 draft 위에 덮어쓴다 — 행 내용이 항상 우선.
 
-    통합 검토 화면(2026-08-07)에서 사람은 QA 게이트 대기 중에도 직접 편집·AI
-    재작성으로 절을 고친다 — 그 결과는 sections 테이블에만 있고 게이트 payload엔
-    없다. resume 시 행 내용이 payload 후보보다 우선해야 편집이 조립에 살아남는다.
-    편집이 없었으면 행 내용 == payload 내용이라 덮어써도 무해(멱등)하다.
-    전멸(all_excluded) 섹션을 사람이 직접 채운 경우엔 합성 후보로 승격해
-    선택까지 기록한다 — 조립 structure 검사의 누락 경고가 사라진다.
+    통합 검토 화면(2026-08-07)에서 사람은 직접 편집·AI 재작성으로 절을 고친다 —
+    그 결과는 sections 테이블에만 있다. resume 시 행 내용이 인메모리/payload 후보보다
+    우선해야 편집이 조립에 살아남는다. 편집이 없었으면 행 == 후보라 멱등이다.
+    후보가 없는 절(전멸, 또는 QA 게이트 제거 후 크래시 복구로 후보 자체가 소실)에
+    행 내용이 있으면 합성 후보로 승격+선택 기록해 조립에 포함시킨다 — plan 기준
+    순회라 sections 행만으로도 조립 가능한 상태를 재구성할 수 있다.
     """
-    if not working:
+    if not working and not state.section_candidates:
         return state
+    by_sec = {cs.section_id: cs for cs in state.section_candidates}
     updated = state
     new_sets: list[SectionCandidateSet] = []
-    for cset in state.section_candidates:
-        row = working.get(cset.section_id)
+    for plan in state.section_plan:
+        cset = by_sec.pop(plan.section_id, None)
+        row = working.get(plan.section_id)
         if row is None or not row[0].strip():
-            new_sets.append(cset)
+            if cset is not None:
+                new_sets.append(cset)
             continue
         content, cited = row
-        if cset.candidates:
+        if cset is not None and cset.candidates:
             new_sets.append(
                 cset.model_copy(
                     update={
@@ -277,11 +293,13 @@ def overlay_working_copy(
         else:
             cand = SectionCandidate(
                 draft=SectionDraft(
-                    section_id=cset.section_id, content=content, cited_chunk_ids=cited
+                    section_id=plan.section_id, content=content, cited_chunk_ids=cited
                 )
             )
-            new_sets.append(SectionCandidateSet(section_id=cset.section_id, candidates=[cand]))
-            updated = updated.record_selection(cset.section_id, cand.candidate_id)
+            new_sets.append(SectionCandidateSet(section_id=plan.section_id, candidates=[cand]))
+            updated = updated.record_selection(plan.section_id, cand.candidate_id)
+    # plan 밖 후보는 그대로 유지(방어 — 정상 흐름에선 발생하지 않는다)
+    new_sets.extend(by_sec.values())
     return updated.with_section_candidates(new_sets)
 
 

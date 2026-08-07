@@ -1,7 +1,7 @@
 """파이프라인 단계 함수 — research / write / assemble.
 
 - research: 목차 설계(플래너) → 웹 수집 → 청킹·임베딩 인덱싱. SOURCE_POOL 게이트 직전까지.
-- write:    섹션별 검색→후보 생성→정적 게이트. run_write_loop 위임 + QA_SELECT 게이트에서 정지.
+- write:    섹션별 검색→후보 생성→정적 게이트→자동 채택. run_write_loop 위임 후 곧장 조립.
 - assemble: 사람이 고른 후보를 조립하고 보고서 레벨 정적검사(structure_complete) 후 HWPX 렌더.
 
 의존성은 모듈 전역 주입식(_plan_client·_research_service_factory·_web_indexer_factory·
@@ -31,7 +31,7 @@ from src.services.indexing.web import WebSourceIndexer, build_web_source_indexer
 from src.services.research import ResearchResult, ResearchSpec, WebResearchService
 from src.services.retrieval.section import SectionRetriever
 from src.workflows.events import emit_phase, emit_step
-from src.workflows.write_loop import check_assembled, run_write_loop
+from src.workflows.write_loop import auto_select_survivors, check_assembled, run_write_loop
 
 logger = structlog.get_logger(__name__)
 
@@ -687,11 +687,11 @@ _pm_verifier: Callable[[ProjectState], Awaitable[int]] = _default_pm_verifier
 
 
 async def write(state: ProjectState) -> ProjectState:
-    """섹션별 후보 생성 + 정적 게이트. 결과를 state.section_candidates에 적재.
+    """섹션별 후보 생성 + 정적 게이트 + 생존 후보 자동 채택.
 
-    이후 파이프라인이 QA_SELECT 게이트에서 정지하고 사람이 고른다.
-    절이 완성될 때마다 초안을 sections에 증분 저장해(_draft_store) 편집기
-    미리보기가 작성 중에도 완성분부터 보여준다 — 확정은 여전히 assemble 몫.
+    QA 게이트 제거(2026-08-07) — 사람 검토는 완성 후 통합 화면(편집·재작성)에서
+    한다. 절이 완성될 때마다 초안을 sections에 증분 저장해(_draft_store) 그 화면이
+    작성 중에도 완성분부터 보여준다 — 확정본 전량 교체는 여전히 assemble 몫.
     """
     state = _ensure_section_plan(state)
     retrieve = _retriever_factory(state)
@@ -705,20 +705,16 @@ async def write(state: ProjectState) -> ProjectState:
         draft_store=_draft_store,
     )
     emit_phase(state.project_id, "writing", "completed")
-    # QA_SELECT 게이트(=사람 검토)로 넘어가는 지점 — qa 단계 진입만 알린다.
-    emit_phase(state.project_id, "qa", "started")
-    return result
+    return auto_select_survivors(result)
 
 
 async def assemble(state: ProjectState) -> ProjectState:
-    """사람이 고른 후보를 조립·정적검사 후 HWPX 파일로 렌더.
+    """자동 채택된 후보를 조립·정적검사 후 HWPX 파일로 렌더.
 
     structure_complete 실패(누락 섹션)면 렌더를 건너뛰고 로깅한다 — 미완성 보고서를
     산출물로 내보내지 않는다(향후 FINAL 게이트로 사람에게 되돌릴 지점).
     """
     pid = state.project_id
-    # write 뒤 열어둔 qa 단계를 닫고(사람 검토 완료) export 단계로 진입.
-    emit_phase(pid, "qa", "completed")
     emit_phase(pid, "export", "started")
     emit_step(pid, "export", "통합·교정·HWPX 변환", "started")
     # 인용 전역 번호화 — 절-로컬 [n]을 출처장 번호로 재작성(저장·검증·렌더 전부

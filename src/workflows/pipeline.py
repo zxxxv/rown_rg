@@ -22,7 +22,7 @@ from src.core.state import ProjectState
 from src.core.types import ProjectStage, ReviewGate, UserReviewPoint
 from src.workflows import cancel
 from src.workflows.stages import assemble, collect, index, write
-from src.workflows.write_loop import qa_select_payload, section_plan_payload
+from src.workflows.write_loop import section_plan_payload
 
 
 @dataclass(frozen=True)
@@ -81,11 +81,6 @@ def _source_pool_gate(state: ProjectState) -> UserReviewPoint:
     )
 
 
-def _qa_select_gate(state: ProjectState) -> UserReviewPoint:
-    """write가 적재한 섹션별 후보 중 사람이 하나씩 고르는 게이트."""
-    return UserReviewPoint(gate=ReviewGate.QA_SELECT, payload=qa_select_payload(state))
-
-
 @dataclass(frozen=True)
 class Phase:
     """단계 1개: current_stage == when일 때 run을 실행하고 advance_to로 전이한다.
@@ -101,8 +96,11 @@ class Phase:
     gate: Callable[[ProjectState], UserReviewPoint] | None = None
 
 
-# 척추 단계 정의. collect→(자료 승인)→index→write→(QA 후보 선택)→assemble→완료.
+# 척추 단계 정의. collect→(자료 승인)→index→write→assemble→완료.
 # 임베딩(index)은 자료 승인 게이트 '뒤'에 온다 — 채택된 자료만 임베딩해 비용을 아낀다.
+# QA 게이트는 제거됨(2026-08-07 사용자 결정): n=1 전환으로 '고르기'가 사라졌고 통합
+# 검토 화면이 완성 후 편집·재작성을 다 하므로, 검토는 사후·게이트는 무의미했다.
+# write가 생존 후보를 자동 채택하고 곧장 조립한다(레거시 pending 게이트는 runner가 소화).
 PHASES: list[Phase] = [
     Phase(
         ProjectStage.CREATED,
@@ -123,7 +121,7 @@ PHASES: list[Phase] = [
         write,
         ProjectStage.REVIEWING,
         running=ProjectStage.WRITING,
-        gate=_qa_select_gate,
+        gate=None,
     ),
     Phase(
         ProjectStage.REVIEWING,

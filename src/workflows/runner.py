@@ -135,8 +135,11 @@ async def _rehydrate_section_plan(
     구간(RESEARCHING→index, INDEXING→write)에서 재개될 때 복원하며, 이미 plan이 있거나
     해당 구간이 아니면 그대로 둔다(멱등).
     """
+    # REVIEWING 포함: QA 게이트 제거 후 조립 중 크래시 복구는 sections 행+plan으로
+    # 재구성한다(_rehydrate_qa_selection의 overlay가 행을 후보로 승격).
     if (
-        state.current_stage not in (ProjectStage.RESEARCHING, ProjectStage.INDEXING)
+        state.current_stage
+        not in (ProjectStage.RESEARCHING, ProjectStage.INDEXING, ProjectStage.REVIEWING)
         or state.section_plan
     ):
         return state
@@ -160,11 +163,12 @@ async def _rehydrate_section_plan(
 async def _rehydrate_qa_selection(
     session: AsyncSession, project_id: uuid.UUID, state: ProjectState
 ) -> ProjectState:
-    """resume 시 QA_SELECT review의 payload(후보·plan)+decision(선택)을 state에 되살린다.
+    """resume 시 REVIEWING 단계의 조립 입력(후보·선택)을 state에 되살린다.
 
-    section_plan·section_candidates는 projects 테이블에 없어 재구성 못 하므로, 게이트가
-    payload에 실어둔 값에서 복원한다. REVIEWING 단계가 아니거나 해결된 QA_SELECT review가
-    없으면 그대로 둔다(멱등).
+    QA 게이트 제거(2026-08-07) 후 정상 흐름은 write→assemble 인메모리 직결이라 이
+    경로는 크래시 복구·레거시 재개용이다: ① 레거시 resolved QA_SELECT review가 있으면
+    payload+선택 복원 ② sections 행(작업 사본)을 overlay — 행 내용이 항상 우선이고,
+    후보가 없으면 행을 합성 후보로 승격해 sections만으로도 조립을 재구성한다.
     """
     if state.current_stage is not ProjectStage.REVIEWING:
         return state
@@ -180,14 +184,11 @@ async def _rehydrate_qa_selection(
             .limit(1)
         )
     ).scalar_one_or_none()
-    if review is None:
-        return state
-    state = rehydrate_from_payload(state, review.payload)
-    selections = (review.decision or {}).get("selections", {})
-    if selections:
-        state = apply_selection(state, selections)
-    # 검토 중 사람이 고친 내용(sections 행 = 작업 사본)이 payload 후보보다 우선 —
-    # 통합 검토 화면의 직접 편집·AI 재작성이 조립에 반영되는 유일한 경로.
+    if review is not None:
+        state = rehydrate_from_payload(state, review.payload)
+        selections = (review.decision or {}).get("selections", {})
+        if selections:
+            state = apply_selection(state, selections)
     rows = (
         (await session.execute(select(Section).where(Section.project_id == project_id)))
         .scalars()
