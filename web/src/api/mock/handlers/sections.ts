@@ -99,6 +99,39 @@ export const sectionsHandlers = [
     return HttpResponse.json({ data: content }, { status: 200 });
   }),
 
+  http.post(url("projects/:id/sections/:sec/rewrite-block"), async ({ params, request }) => {
+    const sectionId = String(params.sec);
+    const title = findSectionTitle(sectionId);
+    if (!title) {
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "섹션을 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    const body = (await request.json()) as { block?: string; instruction?: string };
+    const base = buildSectionContent(sectionId, title);
+    if (!base) {
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "섹션을 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    const current = CONTENT_OVERRIDES.get(sectionId) ?? base.content;
+    const block = body.block ?? "";
+    if (!block || !current.includes(block)) {
+      // 실백엔드 BLOCK_NOT_FOUND 미러 — 본문이 갱신돼 블록이 사라진 경우
+      return HttpResponse.json(
+        { error: { code: "BLOCK_NOT_FOUND", message: "지정한 블록을 본문에서 찾을 수 없습니다." } },
+        { status: 400 },
+      );
+    }
+    const note = body.instruction?.trim() ? ` (지시: ${body.instruction.trim()})` : "";
+    const updated = current.replace(block, `(블록 재작성 결과${note})`);
+    CONTENT_OVERRIDES.set(sectionId, updated);
+    base.content = updated;
+    return HttpResponse.json({ data: base }, { status: 200 });
+  }),
+
   http.get(url("sources/:srcId"), ({ params }) => {
     const srcId = String(params.srcId);
     const source = findSourceRef(srcId);

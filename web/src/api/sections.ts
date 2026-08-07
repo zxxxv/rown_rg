@@ -25,11 +25,13 @@ export async function getProjectSections(projectId: string): Promise<SectionTree
   return SectionTreeResponseSchema.parse(data);
 }
 
-export function useProjectSections(projectId: string) {
+export function useProjectSections(projectId: string, refetchInterval?: number) {
   return useQuery({
     queryKey: sectionKeys.tree(projectId),
     queryFn: () => getProjectSections(projectId),
     enabled: Boolean(projectId),
+    // 작성 진행 중 증분 표시 — 완성된 절이 트리에 순차 반영되도록 폴링
+    refetchInterval,
   });
 }
 
@@ -103,6 +105,30 @@ export function useRewriteSection(projectId: string, sectionId: string) {
   return useMutation({
     mutationKey: [...sectionKeys.content(projectId, sectionId), "rewrite"],
     mutationFn: (instruction: string) => rewriteSection(projectId, sectionId, instruction),
+    onSuccess: () => invalidateSection(qc, projectId, sectionId),
+  });
+}
+
+/** 블록 국소 재작성 — 검색 없이 지정 블록만 고쳐 치환 저장(기존 인용 범위 유지). */
+export async function rewriteSectionBlock(
+  projectId: string,
+  sectionId: string,
+  block: string,
+  instruction: string,
+): Promise<SectionContentResponse> {
+  const data = await apiClient.post<unknown>(
+    `projects/${projectId}/sections/${sectionId}/rewrite-block`,
+    { json: { block, instruction } },
+  );
+  return SectionContentResponseSchema.parse(data);
+}
+
+export function useRewriteBlock(projectId: string, sectionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...sectionKeys.content(projectId, sectionId), "rewrite-block"],
+    mutationFn: (input: { block: string; instruction: string }) =>
+      rewriteSectionBlock(projectId, sectionId, input.block, input.instruction),
     onSuccess: () => invalidateSection(qc, projectId, sectionId),
   });
 }

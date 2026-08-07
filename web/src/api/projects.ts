@@ -174,11 +174,12 @@ export async function getProject(id: string): Promise<Project> {
   return ProjectSchema.parse(data);
 }
 
-export function useProject(id: string) {
+export function useProject(id: string, refetchInterval?: number) {
   return useQuery({
     queryKey: projectKeys.detail(id),
     queryFn: () => getProject(id),
     enabled: Boolean(id),
+    refetchInterval,
   });
 }
 

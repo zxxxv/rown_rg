@@ -59,7 +59,8 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
     current = 4;
     currentPhase = "action";
     actionLabel = "본문 검토로 이동";
-    actionTo = `/projects/${projectId}/qa-select`;
+    // 본문 검토는 보고서 화면으로 통합(2026-08-07) — 블록 편집·재작성 후 그 자리에서 승인
+    actionTo = `/projects/${projectId}/preview`;
   } else {
     switch (status) {
       case "researching":

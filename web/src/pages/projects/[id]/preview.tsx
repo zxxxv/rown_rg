@@ -1,8 +1,11 @@
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowLeft,
+  CheckCircle2,
   ExternalLink,
   Eye,
+  Loader2,
   Pencil,
   Save,
   Sparkles,
@@ -11,10 +14,18 @@ import {
 import { useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import {
+  parseQaSelectPayload,
+  type QaSelectPayload,
+  type QaSelectWarning,
+  useDecideQaSelect,
+} from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
+import { progressKeys, useProgressSnapshot } from "@/api/progress";
 import { useProject } from "@/api/projects";
 import {
   useProjectSections,
+  useRewriteBlock,
   useRewriteSection,
   useSaveSection,
   useSectionContent,
@@ -27,14 +38,6 @@ import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
@@ -49,17 +52,54 @@ const STATUS_KIND: Record<SectionStatus, StatusKind> = {
   failed: "danger",
 };
 
+/** 본문이 존재해 열람 가능한 상태 — writing은 작성 중 증분 초안. */
+const VIEWABLE: SectionStatus[] = ["completed", "writing"];
+
+// 정적검사 체크 이름 → 사람용 라벨 (백엔드 services/qa/gate.py 어휘)
+const WARNING_LABEL: Record<string, string> = {
+  bounds: "분량·금칙어",
+  numeric_grounded: "수치 근거",
+  citation_resolves: "인용 해석",
+  citation_markers: "인용 표기",
+  renderable: "렌더 가능",
+};
+
+/** 보고서 통합 작업공간 — 미리보기·본문 검토(QA)·편집을 한 화면으로(2026-08-07).
+ *
+ * 작성이 진행되는 대로 완성된 절부터 표시되고, 그 자리에서 블록 단위 직접
+ * 편집·AI 재작성이 가능하다. QA 게이트가 열려 있으면 상단 승인 바에서 바로
+ * 조립을 시작한다 — 검토 중 편집은 resume 시 overlay_working_copy가 반영한다.
+ */
 export default function PreviewPage() {
   const { id: projectId = "" } = useParams<{ id: string }>();
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
 
-  const sectionsQuery = useProjectSections(projectId);
-  const projectQuery = useProject(projectId);
+  const projectQuery = useProject(projectId, 7000);
+  const projectStatus = projectQuery.data?.status;
+  // 생성 진행 중이면 트리를 폴링 — 절이 완성되는 대로 순차 표시(증분 미리보기)
+  const isGenerating =
+    projectStatus === "researching" ||
+    projectStatus === "indexing" ||
+    projectStatus === "writing" ||
+    projectStatus === "reviewing";
+  const sectionsQuery = useProjectSections(projectId, isGenerating ? 5000 : undefined);
+
+  // QA 게이트 대기 감지 — 열려 있으면 상단 승인 바 + 절별 정적검사 경고 표시
+  const snapshotQuery = useProgressSnapshot(projectId, true, {
+    refetchInterval: isGenerating ? 7000 : false,
+  });
+  const qaPayload = useMemo(
+    () =>
+      snapshotQuery.data?.pending_gate?.gate === "qa_select"
+        ? parseQaSelectPayload(snapshotQuery.data.pending_gate.payload)
+        : null,
+    [snapshotQuery.data],
+  );
 
   const tree = sectionsQuery.data?.tree ?? [];
-  const selectedId = params.get("section") ?? findFirstCompleted(tree);
+  const selectedId = params.get("section") ?? findFirstViewable(tree);
   // 선택된 id가 '장'이면 장 통합 뷰(하위 절 이어 보기), 아니면 절 본문.
   const selectedChapter = useMemo(
     () => tree.find((c) => c.id === selectedId) ?? null,
@@ -67,6 +107,13 @@ export default function PreviewPage() {
   );
   // 장 선택 시엔 절 본문 쿼리를 끈다(장 id로는 본문이 없어 헛요청이 됨).
   const contentQuery = useSectionContent(projectId, selectedChapter ? null : selectedId);
+
+  // 선택된 절의 QA 정적검사 경고(게이트 payload) — 검토 중에만 존재한다.
+  const qaWarnings = useMemo<QaSelectWarning[]>(() => {
+    if (!qaPayload || !selectedId) return [];
+    const sec = qaPayload.sections.find((s) => s.section_id === selectedId);
+    return sec?.candidates[0]?.warnings ?? [];
+  }, [qaPayload, selectedId]);
 
   // 선택된 절의 PM 경고만 본문 위에 인라인 표시 — 고칠 대상 옆에 고칠 이유를 둔다.
   const verifyQuery = useVerifyReport(projectId);
@@ -100,10 +147,10 @@ export default function PreviewPage() {
     );
 
   const selectNode = (id: string, status: SectionStatus, isChapter: boolean) => {
-    // 장은 항상 이동(하위 절 통독 뷰가 완료분만 골라 보여줌). 절은 완료된 것만.
-    if (!isChapter && status !== "completed") {
-      toast(`아직 작성 중입니다 - ${id}`, {
-        description: "완료된 섹션만 미리보기 할 수 있습니다.",
+    // 장은 항상 이동(하위 절 통독 뷰가 완성분만 골라 보여줌). 절은 본문 있는 것만.
+    if (!isChapter && !VIEWABLE.includes(status)) {
+      toast("아직 작성되지 않은 절입니다", {
+        description: "작성이 완료되는 대로 순서대로 표시됩니다.",
       });
       return;
     }
@@ -129,7 +176,7 @@ export default function PreviewPage() {
           </Button>
           <div className="flex items-center justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-semibold text-fg">섹션 미리보기·편집</h1>
+              <h1 className="text-3xl font-semibold text-fg">보고서 검토·편집</h1>
               {projectQuery.data ? (
                 <p className="mt-1 text-sm text-fg-secondary">{projectQuery.data.title}</p>
               ) : null}
@@ -137,12 +184,28 @@ export default function PreviewPage() {
           </div>
         </header>
 
+        {qaPayload ? (
+          <QaApproveBar projectId={projectId} payload={qaPayload} />
+        ) : isGenerating ? (
+          <div className="flex items-center gap-2 rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+            보고서 작성이 진행 중입니다 - 완성된 절부터 순서대로 표시되며, 그 자리에서 바로 편집할
+            수 있습니다.
+          </div>
+        ) : null}
+
         {/* PM 검증 경고 — 고칠 수 있는 화면에 두되 접힌 한 줄로 시작(편집을 가리지 않게).
             절을 선택하면 그 절의 경고만 본문 위에 인라인 표시된다. */}
         <VerifyReportCard projectId={projectId} collapsible />
 
         {sectionsQuery.isLoading ? (
           <LoadingSkeleton variant="block" />
+        ) : tree.length === 0 && isGenerating ? (
+          <EmptyState
+            icon={Eye}
+            title="아직 완성된 절이 없습니다"
+            description="본문 작성이 시작되면 완성된 절부터 여기에 순서대로 표시됩니다."
+          />
         ) : sectionsQuery.isError || tree.length === 0 ? (
           <EmptyState
             title="섹션 트리를 불러올 수 없습니다"
@@ -199,11 +262,12 @@ export default function PreviewPage() {
                   projectId={projectId}
                   sectionId={selectedId}
                   contentQuery={contentQuery}
+                  qaWarnings={qaWarnings}
                 />
               ) : (
                 <EmptyState
                   title="섹션을 선택하세요"
-                  description="좌측 트리에서 완료된 섹션을 클릭하면 본문이 표시됩니다."
+                  description="좌측 트리에서 완성된 섹션을 클릭하면 본문이 표시됩니다."
                 />
               )}
             </main>
@@ -211,6 +275,63 @@ export default function PreviewPage() {
         )}
       </div>
     </AppShell>
+  );
+}
+
+/** QA 승인 바 — 게이트가 열려 있는 동안만 표시. 별도 검토 페이지를 대체한다.
+ *
+ * n=1 전환으로 '후보 고르기'는 없다 — 절당 유일 초안을 자동 채택해 제출한다.
+ * 검토 중 화면에서 고친 내용은 백엔드가 조립 시 payload보다 우선 반영한다. */
+function QaApproveBar({ projectId, payload }: { projectId: string; payload: QaSelectPayload }) {
+  const qc = useQueryClient();
+  const decide = useDecideQaSelect();
+
+  const reviewable = useMemo(
+    () => payload.sections.filter((s) => !s.all_excluded && s.candidates.length > 0),
+    [payload],
+  );
+  const excludedCount = payload.sections.length - reviewable.length;
+
+  const onSubmit = () => {
+    if (decide.isPending) return;
+    const picked = Object.fromEntries(
+      reviewable.map((s) => [s.section_id, s.candidates[0].candidate_id]),
+    );
+    decide.mutate(
+      { projectId, selections: picked },
+      {
+        onSuccess: () => {
+          toast.success("검토가 완료됐습니다.", {
+            description: "검토한 본문으로 보고서 조립을 시작합니다.",
+          });
+          void qc.invalidateQueries({ queryKey: progressKeys.snapshot(projectId) });
+        },
+        onError: (err) => {
+          const msg = err instanceof ApiError ? err.message : "제출에 실패했습니다.";
+          toast.error("검토 제출 실패", { description: msg });
+        },
+      },
+    );
+  };
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-accent bg-bg-info px-4 py-3">
+      <div className="flex flex-col gap-0.5">
+        <p className="flex items-center gap-1.5 text-sm font-medium text-fg">
+          <CheckCircle2 className="h-4 w-4 text-fg-info" aria-hidden />
+          본문 검토 대기 - 절을 열어 확인·수정한 뒤 승인하면 조립이 시작됩니다.
+        </p>
+        <p className="text-xs text-fg-secondary">
+          완성 {reviewable.length}절
+          {excludedCount > 0
+            ? ` · 빈 절 ${excludedCount}개 (여기서 직접 작성해 채우거나, 비운 채 조립할 수 있습니다)`
+            : ""}
+        </p>
+      </div>
+      <Button onClick={onSubmit} disabled={decide.isPending}>
+        {decide.isPending ? "제출 중…" : `검토 완료 · 조립 시작 (${reviewable.length}절)`}
+      </Button>
+    </div>
   );
 }
 
@@ -247,12 +368,12 @@ function CitationList({ citations }: { citations: SectionCitation[] }) {
   );
 }
 
-function findFirstCompleted(tree: ChapterNode[]): string | null {
+function findFirstViewable(tree: ChapterNode[]): string | null {
   for (const ch of tree) {
     for (const sec of ch.children) {
-      if (sec.status === "completed") return sec.id;
+      if (VIEWABLE.includes(sec.status)) return sec.id;
     }
-    if (ch.status === "completed") return ch.id;
+    if (VIEWABLE.includes(ch.status)) return ch.id;
   }
   return null;
 }
@@ -316,7 +437,7 @@ function TreeItem({
   selected: boolean;
   onSelect: (id: string, status: SectionStatus, isChapter: boolean) => void;
 }) {
-  const dim = status !== "completed";
+  const dim = !VIEWABLE.includes(status);
   return (
     <button
       type="button"
@@ -336,7 +457,7 @@ function TreeItem({
   );
 }
 
-/** 장 통합 뷰 — 그 장의 완료된 절들을 이어서 표시(읽기 전용). 편집은 개별 절을 연다. */
+/** 장 통합 뷰 — 그 장의 완성된 절들을 이어서 표시(읽기 전용). 편집은 개별 절을 연다. */
 function ChapterView({
   projectId,
   chapter,
@@ -348,14 +469,14 @@ function ChapterView({
   chapterIndex: number;
   onOpenSection: (sectionId: string) => void;
 }) {
-  const completed = chapter.children.filter((s) => s.status === "completed");
+  const completed = chapter.children.filter((s) => VIEWABLE.includes(s.status));
   return (
     <article className="flex flex-col">
       <header className="border-b border-border px-6 py-4">
         <p className="font-mono text-xs text-fg-tertiary">{chapterIndex + 1}장</p>
         <h2 className="text-lg font-semibold text-fg">{chapter.title}</h2>
         <p className="mt-1 text-xs text-fg-secondary">
-          완료된 절 {completed.length}/{chapter.children.length}개 - 이어서 표시(읽기 전용). 편집은
+          완성된 절 {completed.length}/{chapter.children.length}개 - 이어서 표시(읽기 전용). 편집은
           각 절을 여세요.
         </p>
       </header>
@@ -363,7 +484,7 @@ function ChapterView({
         <div className="p-6">
           <EmptyState
             icon={Eye}
-            title="아직 완료된 절이 없습니다"
+            title="아직 완성된 절이 없습니다"
             description="이 장의 절이 작성 완료되면 여기 이어서 표시됩니다."
           />
         </div>
@@ -425,24 +546,41 @@ function ChapterSectionBlock({
   );
 }
 
+/** 마크다운 본문 → 블록 목록. 빈 줄 경계로 나누되 각 블록은 원문의 정확한
+ * 부분 문자열로 유지한다 — 블록 치환(직접 편집·AI 재작성)의 전제 조건. */
+function splitBlocks(content: string): string[] {
+  return content.split(/\n{2,}/).filter((b) => b.trim().length > 0);
+}
+
 function SectionView({
   projectId,
   sectionId,
   contentQuery,
+  qaWarnings,
 }: {
   projectId: string;
   sectionId: string;
   contentQuery: ReturnType<typeof useSectionContent>;
+  qaWarnings: QaSelectWarning[];
 }) {
   const data = contentQuery.data;
   const error = contentQuery.error;
 
   const save = useSaveSection(projectId, sectionId);
   const rewrite = useRewriteSection(projectId, sectionId);
+  const rewriteBlock = useRewriteBlock(projectId, sectionId);
+
+  // 절 전체 직접 편집(기존 동작)
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [aiOpen, setAiOpen] = useState(false);
+  // 블록 선택·편집 — 중앙 본문에서 블록을 클릭하면 우측 패널이 그 블록을 다룬다
+  const [blockIdx, setBlockIdx] = useState<number | null>(null);
+  const [blockDraft, setBlockDraft] = useState("");
+  const [blockEditing, setBlockEditing] = useState(false);
   const [instruction, setInstruction] = useState("");
+
+  const blocks = useMemo(() => (data ? splitBlocks(data.content) : []), [data]);
+  const selectedBlock = blockIdx !== null && blockIdx < blocks.length ? blocks[blockIdx] : null;
 
   if (contentQuery.isLoading) {
     return (
@@ -461,7 +599,7 @@ function SectionView({
           title={isNotReady ? "아직 작성되지 않은 섹션입니다" : "본문을 불러오지 못했습니다"}
           description={
             isNotReady
-              ? "이 섹션은 진행 패널에서 작성이 완료된 후 표시됩니다."
+              ? "이 섹션은 작성이 완료되는 대로 표시됩니다."
               : error instanceof ApiError
                 ? error.message
                 : "잠시 후 다시 시도해 주세요."
@@ -473,9 +611,19 @@ function SectionView({
 
   if (!data) return null;
 
+  const busy = save.isPending || rewrite.isPending || rewriteBlock.isPending;
+
+  const clearBlockSelection = () => {
+    setBlockIdx(null);
+    setBlockEditing(false);
+    setBlockDraft("");
+    setInstruction("");
+  };
+
   const startEdit = () => {
     setDraft(data.content);
     setEditing(true);
+    clearBlockSelection();
   };
 
   const onSave = async () => {
@@ -489,12 +637,49 @@ function SectionView({
     }
   };
 
-  const onRewrite = async () => {
+  const selectBlock = (idx: number) => {
+    if (editing) return;
+    if (blockIdx === idx) {
+      clearBlockSelection();
+      return;
+    }
+    setBlockIdx(idx);
+    setBlockDraft(blocks[idx]);
+    setBlockEditing(false);
+    setInstruction("");
+  };
+
+  const onSaveBlock = async () => {
+    if (selectedBlock === null) return;
+    // 선택 블록만 원문에서 치환 — replace의 $패턴 해석을 피하려고 함수 치환을 쓴다
+    const next = data.content.replace(selectedBlock, () => blockDraft);
+    try {
+      await save.mutateAsync(next);
+      toast.success("블록이 저장됐습니다.");
+      clearBlockSelection();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "저장에 실패했습니다.";
+      toast.error("저장 실패", { description: msg });
+    }
+  };
+
+  const onRewriteBlock = async () => {
+    if (selectedBlock === null) return;
+    try {
+      await rewriteBlock.mutateAsync({ block: selectedBlock, instruction: instruction.trim() });
+      toast.success("블록을 다시 작성했습니다.");
+      clearBlockSelection();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "재작성에 실패했습니다.";
+      toast.error("블록 재작성 실패", { description: msg });
+    }
+  };
+
+  const onRewriteSection = async () => {
     try {
       await rewrite.mutateAsync(instruction.trim());
       toast.success("AI가 이 섹션을 다시 작성했습니다.");
-      setAiOpen(false);
-      setInstruction("");
+      clearBlockSelection();
       setEditing(false);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "재작성에 실패했습니다.";
@@ -502,13 +687,10 @@ function SectionView({
     }
   };
 
-  const busy = save.isPending || rewrite.isPending;
-
   return (
     <article className="flex flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
         <div className="flex items-center gap-2">
-          {/* Lv 배지·UUID 접두는 개발 잔재라 제거(2026-08-05) — 순번은 트리·본문 헤딩에 이미 있다 */}
           <h2 className="text-lg font-semibold text-fg">{data.title}</h2>
           {data.qa_status === "passed" ? (
             <Badge variant="default" className="bg-bg-success text-fg-success">
@@ -533,72 +715,189 @@ function SectionView({
               </Button>
             </>
           ) : (
-            <>
-              <Button variant="outline" size="sm" onClick={() => setAiOpen(true)} disabled={busy}>
-                <Sparkles className="mr-1 h-4 w-4" />
-                AI 재작성
-              </Button>
-              <Button size="sm" onClick={startEdit} disabled={busy}>
-                <Pencil className="mr-1 h-4 w-4" />
-                직접 편집
-              </Button>
-            </>
+            <Button variant="outline" size="sm" onClick={startEdit} disabled={busy}>
+              <Pencil className="mr-1 h-4 w-4" />
+              전체 직접 편집
+            </Button>
           )}
         </div>
       </header>
 
-      <div className="px-6 py-4">
-        {rewrite.isPending ? (
-          <div className="mb-3 flex items-center gap-2 rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
-            <Sparkles className="h-4 w-4 animate-pulse" />
-            AI가 근거를 검색해 이 섹션을 다시 작성하고 있습니다…
-          </div>
-        ) : null}
-        {editing ? (
+      {qaWarnings.length > 0 ? (
+        <div className="flex flex-col gap-1.5 border-b border-fg-warning/30 bg-bg-warning px-6 py-3">
+          <p className="text-xs font-medium text-fg">정적검사 경고 {qaWarnings.length}건</p>
+          <ul className="flex flex-col gap-1">
+            {/* 정적검사는 check당 결과 1건 — check 이름이 곧 고유 키다 */}
+            {qaWarnings.map((w) => (
+              <li key={w.check} className="flex items-start gap-1.5 text-xs text-fg-secondary">
+                <Badge
+                  variant="outline"
+                  className="shrink-0 border-fg-warning/40 bg-bg-warning font-normal"
+                >
+                  {WARNING_LABEL[w.check] ?? w.check}
+                </Badge>
+                {w.detail ? <span className="pt-0.5">{w.detail}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {editing ? (
+        <div className="px-6 py-4">
           <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             className="min-h-[420px] font-mono text-sm"
             aria-label="섹션 본문 편집"
           />
-        ) : (
-          <>
-            <MarkdownContent content={data.content} citations={data.citations} />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px]">
+          {/* 중앙: 블록 본문 — 클릭해 선택하면 우측 패널에서 편집·재작성 */}
+          <div className="min-w-0 px-6 py-4">
+            {(rewrite.isPending || rewriteBlock.isPending) && (
+              <div className="mb-3 flex items-center gap-2 rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
+                <Sparkles className="h-4 w-4 animate-pulse" />
+                AI가 {rewriteBlock.isPending ? "선택한 블록을" : "이 섹션을"} 다시 작성하고
+                있습니다…
+              </div>
+            )}
+            <div className="flex flex-col gap-1">
+              {blocks.map((block, idx) => (
+                // biome-ignore lint/a11y/useSemanticElements: 블록 안에 인용 링크(<a>)가 렌더돼 <button> 중첩은 invalid HTML — div+role/키핸들러로 대체
+                <div
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 블록 정체성 = 본문 내 위치(내용 중복 가능·재정렬 없음)
+                  key={`block-${idx}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={blockIdx === idx}
+                  aria-label={`블록 ${idx + 1} 선택`}
+                  onClick={() => selectBlock(idx)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      selectBlock(idx);
+                    }
+                  }}
+                  className={cn(
+                    "cursor-pointer rounded border px-3 py-1.5 transition-colors",
+                    blockIdx === idx
+                      ? "border-accent bg-bg-info"
+                      : "border-transparent hover:border-border hover:bg-bg-secondary",
+                  )}
+                >
+                  <MarkdownContent content={block} citations={data.citations} />
+                </div>
+              ))}
+            </div>
             <CitationList citations={data.citations} />
-          </>
-        )}
-      </div>
-
-      <Dialog open={aiOpen} onOpenChange={setAiOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>AI 재작성</DialogTitle>
-            <DialogDescription>
-              프로젝트 자료에서 근거를 다시 검색해 이 섹션을 새로 작성합니다. 원하는 방향을
-              적어주세요(비워두면 근거 기반으로 자연스럽게 다시 씁니다).
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ai-instruction">재작성 지시 (선택)</Label>
-            <Textarea
-              id="ai-instruction"
-              value={instruction}
-              onChange={(e) => setInstruction(e.target.value)}
-              placeholder="예: 더 간결하게, 정책 시사점을 강조해서"
-              className="min-h-[100px]"
-            />
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAiOpen(false)} disabled={rewrite.isPending}>
-              취소
-            </Button>
-            <Button onClick={() => void onRewrite()} disabled={rewrite.isPending}>
-              <Sparkles className="mr-1 h-4 w-4" />
-              {rewrite.isPending ? "작성 중…" : "재작성"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+
+          {/* 우측: 검토·재작성 패널 */}
+          <aside className="border-t border-border bg-bg-secondary px-4 py-4 xl:border-l xl:border-t-0">
+            {selectedBlock !== null ? (
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-medium text-fg">블록 {(blockIdx ?? 0) + 1} 선택됨</p>
+                  <Button variant="ghost" size="sm" onClick={clearBlockSelection} disabled={busy}>
+                    <X className="h-3.5 w-3.5" />
+                    선택 해제
+                  </Button>
+                </div>
+
+                {blockEditing ? (
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="block-draft">블록 직접 편집</Label>
+                    <Textarea
+                      id="block-draft"
+                      value={blockDraft}
+                      onChange={(e) => setBlockDraft(e.target.value)}
+                      className="min-h-[180px] font-mono text-xs"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" onClick={() => void onSaveBlock()} disabled={busy}>
+                        <Save className="mr-1 h-3.5 w-3.5" />
+                        {save.isPending ? "저장 중…" : "블록 저장"}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setBlockEditing(false)}
+                        disabled={busy}
+                      >
+                        취소
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setBlockDraft(selectedBlock);
+                      setBlockEditing(true);
+                    }}
+                    disabled={busy}
+                  >
+                    <Pencil className="mr-1 h-3.5 w-3.5" />
+                    블록 직접 편집
+                  </Button>
+                )}
+
+                <div className="flex flex-col gap-2 border-t border-border pt-3">
+                  <Label htmlFor="block-instruction">AI 재작성 지시</Label>
+                  <Textarea
+                    id="block-instruction"
+                    value={instruction}
+                    onChange={(e) => setInstruction(e.target.value)}
+                    placeholder="예: 더 간결하게, 수치를 앞세워서"
+                    className="min-h-[80px] text-xs"
+                  />
+                  <Button size="sm" onClick={() => void onRewriteBlock()} disabled={busy}>
+                    <Sparkles className="mr-1 h-3.5 w-3.5" />
+                    {rewriteBlock.isPending ? "작성 중…" : "이 블록만 재작성"}
+                  </Button>
+                  <p className="text-[11px] leading-relaxed text-fg-tertiary">
+                    블록 재작성은 이 절이 이미 인용한 근거 안에서만 고칩니다 - 인용 번호·출처가
+                    유지됩니다.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                <p className="text-xs font-medium text-fg">검토·재작성</p>
+                <p className="text-xs leading-relaxed text-fg-secondary">
+                  본문에서 블록(문단)을 클릭하면 그 블록만 직접 수정하거나 AI에 재작성을 지시할 수
+                  있습니다.
+                </p>
+                <div className="flex flex-col gap-2 border-t border-border pt-3">
+                  <Label htmlFor="section-instruction">절 전체 AI 재작성</Label>
+                  <Textarea
+                    id="section-instruction"
+                    value={instruction}
+                    onChange={(e) => setInstruction(e.target.value)}
+                    placeholder="예: 정책 시사점을 강조해서 다시 작성"
+                    className="min-h-[80px] text-xs"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void onRewriteSection()}
+                    disabled={busy}
+                  >
+                    <Sparkles className="mr-1 h-3.5 w-3.5" />
+                    {rewrite.isPending ? "작성 중…" : "절 전체 재작성"}
+                  </Button>
+                  <p className="text-[11px] leading-relaxed text-fg-tertiary">
+                    절 전체 재작성은 프로젝트 자료에서 근거를 다시 검색해 처음부터 새로 씁니다.
+                  </p>
+                </div>
+              </div>
+            )}
+          </aside>
+        </div>
+      )}
     </article>
   );
 }
