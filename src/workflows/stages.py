@@ -181,12 +181,20 @@ def _source_preview(content_md: str | None) -> str | None:
 
 
 _ECONOMY_MODEL = "claude-haiku-4-5"
+# 절약 모드의 본문 작성 모델 — 4파전 실측(2026-08-08): 절당 $0.039로 Sonnet의 1/5인데
+# 인용 분산·개조식 준수는 공동 1위. 대신 서술이 얕아 납품용은 standard를 쓴다.
+_ECONOMY_WRITE_MODEL = "gpt-5.4-mini-2026-03-17"
+# 파트 소주제 계획 전용 — 문서 구조(분석 틀 축 준수·소제목 위계)를 좌우하는데 절당
+# 1콜·600토큰이라 비용이 무시할 수준이라, 절약 모드에서도 상위 모델을 쓴다.
+# (Sonnet 5는 같은 역할에서 계획 실패 1/2회 관측 — 안정성 때문에 4.6 유지)
+_PLAN_MODEL = "claude-sonnet-4-6"
 
 
 def _models_for(state: ProjectState) -> dict[str, str]:
     """프로젝트 품질 모드(config.model_mode) → 역할별 모델.
 
-    economy면 전 역할 Haiku(비용 우선), 아니면 전역 설정(DB 오버라이드→env).
+    economy: 수집·검증은 Haiku, 본문은 gpt-5.4-mini(비용 우선). standard: 전역 설정
+    (DB 오버라이드→env, 기본 Sonnet 4.6). 두 모드 모두 파트 계획만 _PLAN_MODEL.
     RAPTOR(gemini)·임베딩은 모드와 무관.
     """
     mode = state.options.get("model_mode") if isinstance(state.options, dict) else None
@@ -194,13 +202,15 @@ def _models_for(state: ProjectState) -> dict[str, str]:
         return {
             "planner": _ECONOMY_MODEL,
             "research": _ECONOMY_MODEL,
-            "write": _ECONOMY_MODEL,
+            "write": _ECONOMY_WRITE_MODEL,
+            "write_plan": _PLAN_MODEL,
             "verify": _ECONOMY_MODEL,
         }
     return {
         "planner": app_settings.get_str("planner_model"),
         "research": app_settings.get_str("research_model"),
         "write": app_settings.get_str("write_model"),
+        "write_plan": _PLAN_MODEL,
         "verify": app_settings.get_str("verify_model"),
     }
 
@@ -697,11 +707,13 @@ async def write(state: ProjectState) -> ProjectState:
     retrieve = _retriever_factory(state)
     emit_phase(state.project_id, "writing", "started")
     await _sections_cleaner(state.project_id)  # 이전 런 잔재 제거(증분 초안과 혼재 방지)
+    models = _models_for(state)
     result = await run_write_loop(
         state,
         retrieve=retrieve,
         client=_write_client,
-        model=_models_for(state)["write"],
+        model=models["write"],
+        plan_model=models["write_plan"],
         draft_store=_draft_store,
     )
     emit_phase(state.project_id, "writing", "completed")

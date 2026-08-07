@@ -60,9 +60,13 @@ class Settings(BaseSettings):
     # top_k 곡선 실측). volume_target min이 그 한계를 넘는 절은 소주제 파트로 나눠
     # 순차 생성 후 결합한다(프로토타입: 분량 7배·무근거 밀도 flat 이하, exp_split2).
     # 파트 수 = clamp(ceil(min_chars / chars_per_part), 1, max_parts).
+    # 2250·10 = 파트 배수 실험(2026-08-08) 반영: 파트를 2배로 잘게 쪼개면 분량이
+    # 52% 늘고(7,602→11,564자) 인용 분산·무근거도 개선된다. 분석 틀(STEEP·SWOT)이
+    # 있는 절은 파트 수가 축 수보다 적으면 축이 잘리므로 여유가 필요하다(실측: 3파트에
+    # STEEP 5축 불가 → 6파트에서 전축 커버). 상한 10 = min 20,000자 절의 9파트 수용.
     write_split_enabled: bool = True
-    write_split_chars_per_part: int = 4500
-    write_split_max_parts: int = 6
+    write_split_chars_per_part: int = 2250
+    write_split_max_parts: int = 10
     research_max_uses: int = 5
     # 회수(web_fetch) 전용 횟수 — 검색과 분리한다.
     # 5 = 검색과 동수(2026-08-07 복원). PDF는 이제 web_fetch를 타지 않고 우리가 직접
@@ -77,9 +81,11 @@ class Settings(BaseSettings):
     research_min_sources: int = 40
     # '추가 조사' 한 라운드의 신규 출처 목표 — 사람이 누를 때마다 이만큼씩 보충
     research_more_batch: int = 10
-    # 절당 검색 근거 청크 수(리랭크 후 top-k) — 분량 레버: 10→16(2026-08-06 숏폼 실측:
-    # 절당 근거 ~5천자로는 목표 분량의 7~15%만 나옴 — 근거가 늘어야 본문이 는다)
-    retrieval_top_k: int = 16
+    # 절당 검색 근거 청크 수(리랭크 후 top-k).
+    # 16→32(2026-08-08): 단일 호출 시절엔 재료 증량이 역효과였지만(top_k 곡선: 2.2배→
+    # 분량 -17%), 파트마다 근거를 배타 배정하는 분할 생성에서는 비로소 소화된다 —
+    # 실측 분량 +10%, 고유 출처 5→8, 무근거 0.17→0.08. 리랭커 시간이 절당 ~50초 든다.
+    retrieval_top_k: int = 32
     # 전역 동시 파이프라인 실행 상한 — 초과분은 FIFO 대기열(runner._run_slots).
     # 색인(임베딩 ONNX)이 CPU·메모리를 지배해 운영 스펙(2 vCPU/8GB) 기준 1이 안전선.
     max_concurrent_runs: int = 1

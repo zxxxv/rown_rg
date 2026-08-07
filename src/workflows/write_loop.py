@@ -56,6 +56,7 @@ async def run_write_loop(
     client: LLMClient | None = None,
     n: int | None = None,
     model: str = DEFAULT_MODEL,
+    plan_model: str | None = None,
     draft_store: DraftStore | None = None,
 ) -> ProjectState:
     """section_plan의 각 섹션을 검색→후보 생성→정적 게이트로 처리해 state에 적재.
@@ -86,6 +87,7 @@ async def run_write_loop(
                     chunks,
                     n_parts=n_parts,
                     model=model,
+                    plan_model=plan_model,
                     client=client,
                     context=ctx,
                     base_temperature=base_temperature,

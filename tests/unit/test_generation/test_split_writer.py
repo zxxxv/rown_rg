@@ -79,13 +79,14 @@ class TestPlanPartCount:
         assert plan_part_count(0) == 1
 
     def test_scales_with_min_chars(self):
-        assert plan_part_count(4500) == 1
-        assert plan_part_count(12000) == 3
-        assert plan_part_count(22500) == 5
+        # 파트당 2,250자 기준(2026-08-08 파트 배수 상향)
+        assert plan_part_count(2250) == 1
+        assert plan_part_count(12000) == 6
+        assert plan_part_count(20000) == 9
 
     def test_capped_at_max_parts(self):
-        assert plan_part_count(45000) == 6
-        assert plan_part_count(999999) == 6
+        assert plan_part_count(45000) == 10
+        assert plan_part_count(999999) == 10
 
     def test_disabled_switch(self, monkeypatch):
         from src.core.config import settings
