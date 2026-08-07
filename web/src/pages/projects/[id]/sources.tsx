@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, ArrowRight, FolderInput, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -15,7 +15,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { LibraryPickerDialog } from "@/features/source-review/LibraryPickerDialog";
+import { LibraryTreePanel } from "@/features/source-review/LibraryTreePanel";
 import { SourceDetailDialog } from "@/features/source-review/SourceDetailDialog";
 import { UploadDropzone, type UploadingFile } from "@/features/source-review/UploadDropzone";
 import { useAuth } from "@/hooks/useAuth";
@@ -74,7 +74,6 @@ export default function SourcesPage() {
 
   const [activeSource, setActiveSource] = useState<Source | null>(null);
   const [uploading, setUploading] = useState<UploadingFile[]>([]);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const uploadSource = useUploadProjectSource(projectId);
 
   // 필터 사이드바 제거됨 — 실데이터에 의미 있는 분류축이 없어(전부 웹 수집)
@@ -208,20 +207,18 @@ export default function SourcesPage() {
 
         {reviewOpen ? (
           <section className="flex flex-col gap-3 rounded-lg border border-border bg-bg-secondary/40 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h2 className="text-sm font-semibold text-fg">자료 추가</h2>
-                <p className="text-xs text-fg-tertiary">
-                  직접 업로드 · 라이브러리 불러오기 · 인터넷 추가 검색(하단) 3가지로 근거를 모을 수
-                  있습니다. 업로드·불러오기는 PDF·HWPX·DOCX·MD·TXT가 색인됩니다.
-                </p>
-              </div>
-              <Button variant="outline" size="sm" onClick={() => setPickerOpen(true)}>
-                <FolderInput className="mr-1 h-4 w-4" />
-                라이브러리에서 불러오기
-              </Button>
+            <div>
+              <h2 className="text-sm font-semibold text-fg">자료 추가</h2>
+              <p className="text-xs text-fg-tertiary">
+                라이브러리에서 체크로 골라 추가하거나, 오른쪽에 파일을 끌어다 놓으세요. 인터넷 추가
+                검색은 하단에 있습니다. 불러오기·업로드는 PDF·HWPX·DOCX·MD·TXT가 색인됩니다.
+              </p>
             </div>
-            <UploadDropzone onFiles={handleFiles} uploading={uploading} />
+            {/* 좌: 라이브러리 트리(체크 다중 선택) · 우: 업로드 — 2026-08-08 사용자 결정 배치 */}
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <LibraryTreePanel projectId={projectId} />
+              <UploadDropzone onFiles={handleFiles} uploading={uploading} />
+            </div>
           </section>
         ) : null}
 
@@ -375,8 +372,6 @@ export default function SourcesPage() {
           collectPending={collectMore.isPending || collecting}
         />
       ) : null}
-
-      <LibraryPickerDialog projectId={projectId} open={pickerOpen} onOpenChange={setPickerOpen} />
 
       <SourceDetailDialog
         source={activeSource}
