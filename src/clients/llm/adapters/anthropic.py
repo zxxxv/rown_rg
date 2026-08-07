@@ -48,6 +48,19 @@ def _web_tool_types(model: str) -> tuple[str, str]:
     return _BASIC_WEB_SEARCH_TYPE, _BASIC_WEB_FETCH_TYPE
 
 
+# temperature를 받지 않는 모델 접두사 — 지정하면 400(deprecated for this model).
+_NO_TEMPERATURE_PREFIXES = (
+    "claude-sonnet-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+)
+
+
+def _accepts_temperature(model: str) -> bool:
+    return not model.startswith(_NO_TEMPERATURE_PREFIXES)
+
+
 # pause_turn 재전송에서 대형 PDF를 걷어낼 때 자리에 남기는 안내문.
 PDF_RESEND_PLACEHOLDER = "[PDF 본문 생략 — 재전송 제한 회피. URL로만 참조하라]"
 
@@ -140,8 +153,12 @@ class AnthropicAdapter(BaseLLMAdapter):
             "model": request.model,
             "messages": anth_messages,
             "max_tokens": request.max_tokens,
-            "temperature": request.temperature,
         }
+        # 신형 모델(Sonnet 5·Opus 4.7+)은 temperature를 400으로 거부한다
+        # ("`temperature` is deprecated for this model", 2026-08-08 실측).
+        # 거부 모델에선 후보 다양성·재생성 온도 상향이 무의미해진다(기본 샘플링만).
+        if _accepts_temperature(request.model):
+            kwargs["temperature"] = request.temperature
         if request.system:
             kwargs["system"] = self._cacheable_system(request.system)
 

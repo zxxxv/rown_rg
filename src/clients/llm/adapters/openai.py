@@ -6,9 +6,17 @@ from src.clients.llm.adapters.base import BaseLLMAdapter, RetryKind
 from src.clients.llm.base import CompletionRequest, CompletionResponse
 from src.clients.llm.exceptions import LLMAPIError
 from src.clients.llm.models import supported_ids
+from src.core.config import settings
 
 # 지원목록은 카탈로그(models.py)에서 파생 — 단일 진실. 기본 모델은 models.default_id("openai").
 SUPPORTED_OPENAI_MODELS: Final[frozenset[str]] = supported_ids("openai")
+
+# temperature를 받지 않는 추론 모델 접두사(gpt-5 계열·o 시리즈).
+_NO_TEMPERATURE_PREFIXES: Final[tuple[str, ...]] = ("gpt-5", "o3", "o4")
+
+
+def _accepts_temperature(model: str) -> bool:
+    return not model.startswith(_NO_TEMPERATURE_PREFIXES)
 
 
 class OpenAIAdapter(BaseLLMAdapter):
@@ -20,7 +28,9 @@ class OpenAIAdapter(BaseLLMAdapter):
     def _create_client(self, api_key: str) -> Any:
         if not api_key:
             raise LLMAPIError("OPENAI_API_KEY가 설정되지 않았습니다.")
-        return httpx.AsyncClient(timeout=60.0)
+        # 60초 고정은 장문 생성(파트당 4~6천자 + 추론 토큰)에서 먼저 터진다 —
+        # Anthropic과 같은 설정값을 쓴다(2026-08-08).
+        return httpx.AsyncClient(timeout=settings.llm_client_timeout_s)
 
     def _classify_error(self, exc: Exception) -> RetryKind | None:
         if isinstance(exc, httpx.RequestError):
@@ -67,8 +77,15 @@ class OpenAIAdapter(BaseLLMAdapter):
                 if message.role != "system"
             ],
             "max_output_tokens": request.max_tokens,
-            "temperature": request.temperature,
         }
+        # 추론 모델(gpt-5 계열)은 temperature 지정을 400으로 거부한다 —
+        # Anthropic Opus에서 겪은 것과 같은 함정. 지원 모델에만 싣는다.
+        if _accepts_temperature(request.model):
+            payload["temperature"] = request.temperature
+        else:
+            # 추론 토큰이 max_output_tokens를 먹어 본문이 비는 것을 막는다
+            # (어댑터가 '텍스트 출력 없음'으로 실패). 장문 작성엔 추론이 얕아도 된다.
+            payload["reasoning"] = {"effort": "low"}
 
         system_text = self._system_text(request)
         if system_text:

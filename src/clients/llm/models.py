@@ -56,6 +56,13 @@ MODELS: tuple[ModelSpec, ...] = (
         ModelPricing(Decimal("5"), Decimal("25"), Decimal("0.50")),
     ),
     ModelSpec(
+        "claude-sonnet-5",
+        "anthropic",
+        # 도입가($2/$10, 2026-08-31까지). 이후 정가는 4.6과 동일한 $3/$15로 환원되므로
+        # 그때 이 행을 갱신해야 원장 비용이 진실을 유지한다.
+        ModelPricing(Decimal("2"), Decimal("10"), Decimal("0.20")),
+    ),
+    ModelSpec(
         "claude-sonnet-4-6",
         "anthropic",
         ModelPricing(Decimal("3"), Decimal("15"), Decimal("0.30")),
