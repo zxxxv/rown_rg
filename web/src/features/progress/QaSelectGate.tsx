@@ -66,7 +66,16 @@ export function QaSelectGate({ projectId, payload, onResumed }: QaSelectGateProp
   const selectable = useMemo(() => rows.filter((r) => !r.allExcluded), [rows]);
   const excludedCount = rows.length - selectable.length;
 
-  const [selections, setSelections] = useState<Record<string, string>>({});
+  // 단일 후보 섹션은 자동 선택 — n=1 전환(후보 1개+재생성 폴백) 후 유일 후보를
+  // 절마다 클릭하는 무의미한 동선 제거. 사람의 몫은 '고르기'가 아니라 검토·제출이 된다.
+  // 후보가 2개 이상인 섹션(재생성 등)만 명시적 선택을 요구한다.
+  const [selections, setSelections] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      payload.sections
+        .filter((sec) => !sec.all_excluded && sec.candidates.length === 1)
+        .map((sec) => [sec.section_id, sec.candidates[0].candidate_id]),
+    ),
+  );
   const selectedCount = selectable.filter((r) => selections[r.sectionId]).length;
   // 선택 가능한 섹션이 0개(전부 all_excluded)여도 제출은 가능해야 한다 —
   // 빈 선택으로 재개하면 조립 단계 structure 검사가 누락을 표시한다.
