@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from src.clients.llm.base import CompletionRequest, LLMClient, Message, WebSearchConfig, WebSource
 from src.clients.llm.factory import create_llm_client
+from src.services.research.pdf_fetch import PdfSourceFetcher, looks_like_pdf
 
 logger = structlog.get_logger(__name__)
 
@@ -32,6 +33,9 @@ SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
 목표: 각 목차 섹션의 내용을 구성할 수 있는 **신뢰할 만한 웹 출처**를 수집한다.
 - web_search로 각 목차 섹션에 관련된 페이지를 찾는다.
 - 유용한 페이지는 web_fetch로 **본문 전체를 회수**한다(요약·추측 금지, 실제 내용 근거).
+- **단 PDF는 web_fetch 하지 마라**. URL이 `.pdf`로 끝나거나 검색 결과가 PDF 문서임을
+  나타내면 회수를 건너뛰고 매니페스트에 URL만 실어라 — 시스템이 따로 내려받아 처리한다.
+  (PDF를 회수하면 요청당 100페이지 상한에 걸려 이 챕터 수집이 통째로 실패한다)
 - **회수가 최우선이다**: 본문 없이 URL만 나열한 출처는 보고서 작성에 쓰이지 못한다.
   검색 횟수를 아껴서라도 찾은 페이지 중 가장 유용한 것들은 반드시 web_fetch로 회수하라.
   (매니페스트의 출처 수보다 본문 회수 성공 수가 훨씬 중요하다)
@@ -51,8 +55,9 @@ SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
    "sections": ["<입력 목차 항목과 정확히 같은 문자열>", "..."]}
 ]}
 ```
-- **매니페스트에는 web_fetch로 본문을 회수한 출처만 싣는다** — 검색 결과로 보기만 한
-  URL은 넣지 마라(본문 없는 출처는 시스템이 사용하지 못한다). 최대 10개.
+- **매니페스트에는 web_fetch로 본문을 회수한 출처 + PDF URL만 싣는다** — 그 외에
+  검색 결과로 보기만 한 URL은 넣지 마라(본문 없는 출처는 시스템이 사용하지 못한다).
+  PDF는 회수하지 않아도 싣는다(시스템이 내려받는다). 최대 10개.
 - sections 값은 반드시 입력 목차의 항목 문자열과 정확히 일치시켜라."""
 
 
@@ -79,9 +84,17 @@ class ResearchResult(BaseModel):
 
 
 class WebResearchService:
-    def __init__(self, llm: LLMClient | None = None):
+    def __init__(
+        self,
+        llm: LLMClient | None = None,
+        *,
+        pdf_fetcher: PdfSourceFetcher | None = None,
+    ):
         # 웹검색=외부 실시간 데이터 → 캐셋 replay 부적합. 단일 관문은 유지하고 mode만 live.
         self.llm = llm or create_llm_client(mode="live")
+        # PDF만 우리가 회수한다(HTML은 서버 web_fetch 유지) — 새 의존성 없이
+        # 100페이지 상한을 피하는 최소 범위.
+        self._pdf_fetcher = pdf_fetcher or PdfSourceFetcher()
 
     async def collect(
         self,
@@ -90,6 +103,7 @@ class WebResearchService:
         model: str = DEFAULT_MODEL,
         allowed_domains: list[str] | None = None,
         max_uses: int = 5,
+        max_fetch_uses: int | None = None,
         max_tokens: int = 8000,
     ) -> ResearchResult:
         user = json.dumps(
@@ -103,6 +117,7 @@ class WebResearchService:
             max_tokens=max_tokens,
             web_search=WebSearchConfig(
                 max_uses=max_uses,
+                max_fetch_uses=max_fetch_uses,
                 fetch_pages=True,
                 user_country="KR",
                 allowed_domains=allowed_domains,
@@ -112,6 +127,7 @@ class WebResearchService:
 
         manifest = _parse_manifest(response.content)
         sources = _merge_sources(response.web_sources, manifest, spec.outline)
+        await self._fill_pdf_bodies(sources)
         covered = {sec for s in sources for sec in s.matched_sections}
         coverage_gaps = [sec for sec in spec.outline if sec not in covered]
 
@@ -126,6 +142,23 @@ class WebResearchService:
         return ResearchResult(
             spec=spec, sources=sources, manifest=manifest, coverage_gaps=coverage_gaps
         )
+
+    async def _fill_pdf_bodies(self, sources: list[CollectedSource]) -> None:
+        """본문 없는 PDF 출처를 우리가 직접 내려받아 채운다(서버 100페이지 상한 우회).
+
+        모델은 PDF를 web_fetch하지 않도록 지시받으므로 URL만 매니페스트에 실려 온다.
+        회수·파싱 실패는 그 출처만 본문 없이 남고, 상위(stages)의 has_usable_content가
+        걸러낸다 — 수집 전체를 죽이지 않는다.
+        """
+        targets = [s.url for s in sources if not s.content_md and looks_like_pdf(s.url)]
+        if not targets:
+            return
+        bodies = await self._pdf_fetcher.fetch_many(targets)
+        for source in sources:
+            body = bodies.get(source.url)
+            if body and not source.content_md:
+                source.content_md = body
+        logger.info("web_research.pdf_filled", requested=len(targets), filled=len(bodies))
 
 
 def _parse_manifest(text: str) -> dict:

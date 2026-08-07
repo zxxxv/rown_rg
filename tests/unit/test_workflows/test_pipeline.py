@@ -13,6 +13,7 @@ import pytest
 
 from src.clients.llm.base import CompletionRequest, CompletionResponse
 from src.clients.llm.exceptions import LLMAPIError
+from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import ProjectStage, RetrievedChunk, ReviewGate, SectionPlan
 from src.services.indexing.vector import IndexingResult
@@ -325,9 +326,10 @@ class TestWritePausesAtQaSelect:
         assert outcome.state.current_stage is ProjectStage.REVIEWING
         sections = outcome.review.payload["sections"]
         assert len(sections) == 2
-        # 각 섹션에 survivors 존재 (게이트 통과)
+        # 각 섹션에 survivors 존재 (게이트 통과). 후보 수는 settings.write_candidates_n을
+        # 따르므로 값에 결합하지 않는다 — 기본은 1(2026-08-07 n=1 확정).
         for sec in sections:
-            assert len(sec["candidates"]) == 2
+            assert len(sec["candidates"]) == settings.write_candidates_n
             assert sec["all_excluded"] is False
 
 

@@ -13,6 +13,7 @@ from typing import Any
 from uuid import UUID
 
 from src.clients.llm.base import LLMClient
+from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import (
     GateResult,
@@ -23,7 +24,6 @@ from src.core.types import (
 )
 from src.services.generation.candidates import (
     DEFAULT_MODEL,
-    DEFAULT_N,
     generate_section_candidates,
 )
 from src.services.generation.writer_context import build_writer_context
@@ -37,13 +37,16 @@ from src.services.retrieval.section import SectionRetriever
 from src.workflows import cancel
 from src.workflows.events import emit_step
 
+# 재생성 시 온도 — 같은 온도로 다시 부르면 같은 실패를 반복할 확률이 높다.
+RETRY_TEMPERATURE = 1.0
+
 
 async def run_write_loop(
     state: ProjectState,
     *,
     retrieve: SectionRetriever,
     client: LLMClient | None = None,
-    n: int = DEFAULT_N,
+    n: int | None = None,
     model: str = DEFAULT_MODEL,
 ) -> ProjectState:
     """section_plan의 각 섹션을 검색→후보 생성→정적 게이트로 처리해 state에 적재.
@@ -54,6 +57,7 @@ async def run_write_loop(
     게이트 판정까지 마친 SectionCandidateSet들을 state.section_candidates에 넣어 돌려준다.
     """
     pid = state.project_id
+    n = n if n is not None else settings.write_candidates_n
     candidate_sets: list[SectionCandidateSet] = []
     for section in state.section_plan:
         # 절 단위 취소 지점 — 긴 작성 단계 도중에도 다음 절로 넘어가기 전에 멈춘다.
@@ -72,15 +76,38 @@ async def run_write_loop(
             user_id=state.user_id,
             project_id=state.project_id,
         )
-        candidate_sets.append(
-            gate_candidates(
-                section.section_id,
-                drafts,
-                chunks,
-                min_chars=ctx.min_chars if ctx.min_chars is not None else DEFAULT_MIN_CHARS,
-                max_chars=ctx.max_chars if ctx.max_chars is not None else DEFAULT_MAX_CHARS,
-            )
+        min_chars = ctx.min_chars if ctx.min_chars is not None else DEFAULT_MIN_CHARS
+        max_chars = ctx.max_chars if ctx.max_chars is not None else DEFAULT_MAX_CHARS
+        cset = gate_candidates(
+            section.section_id, drafts, chunks, min_chars=min_chars, max_chars=max_chars
         )
+        # HARD 전멸 시 1회만 재생성 — n=1의 안전망이다. 캡을 1회로 두어 무한성을
+        # 유지하고, 재시도도 실패하면 그대로 넘겨 게이트가 all_excluded로 표면화한다.
+        if not cset.survivors and settings.write_retry_on_empty:
+            emit_step(pid, "writing", f"{label} (재생성)", "started")
+            retry_drafts = await generate_section_candidates(
+                section,
+                chunks,
+                n=n,
+                model=model,
+                client=client,
+                context=ctx,
+                base_temperature=RETRY_TEMPERATURE,
+                user_id=state.user_id,
+                project_id=state.project_id,
+            )
+            retry_set = gate_candidates(
+                section.section_id, retry_drafts, chunks, min_chars=min_chars, max_chars=max_chars
+            )
+            emit_step(
+                pid,
+                "writing",
+                f"{label} (재생성)",
+                "completed" if retry_set.survivors else "failed",
+            )
+            if retry_set.survivors:
+                cset = retry_set
+        candidate_sets.append(cset)
         emit_step(pid, "writing", label, "completed")
     return state.with_section_candidates(candidate_sets)
 

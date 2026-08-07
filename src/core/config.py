@@ -48,7 +48,22 @@ class Settings(BaseSettings):
     write_model: str = "claude-sonnet-4-6"
     # 웹 리서치 비용 노브 — 검색/회수 횟수와 응답 상한 (챕터당 1콜 분할 수집이라
     # 총 수집 폭 = 챕터 수 × max_uses)
+    # 절당 후보 수. 1 = 기본(2026-08-07 확정). 후보 2개는 비용을 두 배로 쓰면서
+    # 값어치가 없었다 — 사람이 게이트에서 정독하지 못하고(원격 14절 11만 자를 29분)
+    # 길이로 골랐고, 그렇게 고른 후보가 오히려 고유출처 밀도가 낮았다(1.10 vs 1.52,
+    # 21/28절). n=1은 HARD 실패 시 대체 후보가 없으므로 write_retry_on_empty와 짝이다.
+    write_candidates_n: int = 1
+    # n=1에서 정적 게이트 HARD 전멸 시 절 단위 1회 재생성. 없으면 그 절이 비고
+    # 조립의 structure_complete가 렌더를 통째로 스킵한다.
+    write_retry_on_empty: bool = True
     research_max_uses: int = 5
+    # 회수(web_fetch) 전용 횟수 — 검색과 분리한다.
+    # 5 = 검색과 동수(2026-08-07 복원). PDF는 이제 web_fetch를 타지 않고 우리가 직접
+    # 내려받으므로(services/research/pdf_fetch) 요청당 100페이지 상한 위험이 사라졌다.
+    # 임시로 2까지 조였더니 PDF 문제는 사라졌지만 HTML 회수가 목 졸려 자료가 9건에
+    # 그쳤다(기준선 18건) — 병목이 방어막 자체였다. 모델이 지시를 어기고 PDF를 회수해도
+    # stages._collect_chapter의 재시도(fetch 1회)가 받아낸다.
+    research_max_fetch_uses: int = 5
     research_max_tokens: int = 8000
     # 자료 풀 권장 하한 = 초기 수집 목표 — 미달이어도 차단하지 않고 게이트에 경고 표시.
     # 40 = 분량 레버(2026-08-06): 절당 근거 공급이 분량의 1차 병목이라 자료 풀을 2배로.

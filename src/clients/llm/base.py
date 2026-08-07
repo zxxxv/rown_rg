@@ -15,8 +15,14 @@ class WebSearchConfig(BaseModel):
 
     max_uses: int = 5
     fetch_pages: bool = True  # 검색으로 찾은 페이지 본문까지 회수(web_fetch 류)할지
+    # 회수(web_fetch) 전용 사용 횟수 — None이면 max_uses를 따른다.
+    # 검색은 PDF를 끌어오지 않고 회수만 끌어온다. Anthropic은 요청당 PDF 100페이지가
+    # 상한인데 max_content_tokens는 "binary content such as PDFs"에 적용되지 않아
+    # (SDK 타입 주석) 회수 횟수가 유일한 제동 장치다 — 검색 폭은 유지하고 회수만 조인다.
+    max_fetch_uses: int | None = None
     # 회수 페이지당 본문 토큰 상한 — pause_turn 루프가 회수 전문을 대화에 누적시키므로
     # 상한이 없으면 큰 페이지 몇 개로 컨텍스트 한도(200k)를 뚫는다(2026-08-03 실측 1.35M).
+    # 주의: PDF에는 적용되지 않는다(위 max_fetch_uses 참고).
     max_content_tokens: int = 20_000
     allowed_domains: list[str] | None = None
     blocked_domains: list[str] | None = None

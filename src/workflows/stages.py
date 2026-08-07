@@ -28,7 +28,7 @@ from src.core.types import SectionPlan, SourceRef, SourceType
 from src.services.generation.planner import plan_from_outline, plan_sections
 from src.services.indexing.raptor import RaptorBuilder, build_raptor_builder
 from src.services.indexing.web import WebSourceIndexer, build_web_source_indexer
-from src.services.research import ResearchSpec, WebResearchService
+from src.services.research import ResearchResult, ResearchSpec, WebResearchService
 from src.services.retrieval.section import SectionRetriever
 from src.workflows.events import emit_phase, emit_step
 from src.workflows.write_loop import check_assembled, run_write_loop
@@ -223,6 +223,54 @@ def _chapter_groups(state: ProjectState) -> list[tuple[int, str, list[str]]]:
     return [(n, titles.get(n, f"{n}장"), groups[n]) for n in sorted(groups)]
 
 
+# 서버 도구 루프가 요청당 PDF 100페이지 상한을 넘겼을 때의 신호. 이 400은 응답이
+# 아예 없어 클라이언트가 걷어낼 수 없다 — 회수 횟수를 줄여 다시 부르는 수밖에 없다.
+_PDF_PAGE_LIMIT_SIGNAL = "maximum of 100 pdf pages"
+
+
+def _is_pdf_page_limit_error(exc: Exception) -> bool:
+    return _PDF_PAGE_LIMIT_SIGNAL in str(exc).lower()
+
+
+async def _collect_chapter(
+    spec: ResearchSpec,
+    *,
+    model: str,
+    project_id: UUID,
+    chapter: int,
+) -> ResearchResult:
+    """챕터 1개 수집 — PDF 100페이지 400이면 회수 횟수를 1로 줄여 1회 재시도.
+
+    재시도가 없으면 큰 PDF 하나가 챕터를 통째로 0건으로 만든다(2026-08-06 실측:
+    12콜 중 6콜 전멸 → 자료 6건). 재시도는 1회로 캡해 무한성을 유지한다.
+    """
+    service = _research_service_factory()
+    try:
+        return await service.collect(
+            spec,
+            model=model,
+            max_uses=settings.research_max_uses,
+            max_fetch_uses=settings.research_max_fetch_uses,
+            max_tokens=settings.research_max_tokens,
+        )
+    except LLMClientError as exc:
+        if not _is_pdf_page_limit_error(exc):
+            raise
+        logger.warning(
+            "research.pdf_page_limit_retry",
+            project_id=str(project_id),
+            chapter=chapter,
+            fetch_uses=settings.research_max_fetch_uses,
+        )
+        return await service.collect(
+            spec,
+            model=model,
+            max_uses=settings.research_max_uses,
+            max_fetch_uses=1,
+            max_tokens=settings.research_max_tokens,
+        )
+
+
 async def _collect_sources(
     state: ProjectState,
     *,
@@ -286,11 +334,11 @@ async def _collect_sources(
                     project_id=state.project_id,
                     operation=f"research.collect:{ch_num}",
                 ):
-                    result = await _research_service_factory().collect(
+                    result = await _collect_chapter(
                         spec,
                         model=_models_for(state)["research"],
-                        max_uses=settings.research_max_uses,
-                        max_tokens=settings.research_max_tokens,
+                        project_id=state.project_id,
+                        chapter=ch_num,
                     )
             except LLMClientError as exc:
                 # 챕터 하나의 실패(재시도 소진·prompt too long 등)가 실행 전체를

@@ -41,6 +41,48 @@ def _web_tool_types(model: str) -> tuple[str, str]:
     return _WEB_SEARCH_TYPE, _WEB_FETCH_TYPE
 
 
+# pause_turn 재전송에서 대형 PDF를 걷어낼 때 자리에 남기는 안내문.
+PDF_RESEND_PLACEHOLDER = "[PDF 본문 생략 — 재전송 제한 회피. URL로만 참조하라]"
+
+
+def _is_base64_source(node: dict[str, Any]) -> bool:
+    """base64 첨부 source 딕셔너리인가 — 중첩 경로가 아니라 값으로 판정한다.
+
+    web_fetch 결과의 문서 블록은 SDK/도구 버전에 따라 중첩이 달라진다. 경로를
+    고정하면 버전이 바뀔 때 조용히 못 잡으므로(2026-08-06 3차 재발), 형태로만 본다.
+    """
+    if "data" not in node:
+        return False
+    if node.get("type") == "base64":
+        return True
+    return "pdf" in str(node.get("media_type") or "").lower()
+
+
+def _scrub_base64_sources(node: Any) -> tuple[Any, int]:
+    """중첩 구조를 재귀 순회하며 base64 source를 텍스트 안내로 치환. → (치환본, 건수)"""
+    if isinstance(node, dict):
+        if _is_base64_source(node):
+            return (
+                {"type": "text", "media_type": "text/plain", "data": PDF_RESEND_PLACEHOLDER},
+                1,
+            )
+        out: dict[str, Any] = {}
+        total = 0
+        for key, value in node.items():
+            out[key], n = _scrub_base64_sources(value)
+            total += n
+        return out, total
+    if isinstance(node, list):
+        items: list[Any] = []
+        total = 0
+        for value in node:
+            item, n = _scrub_base64_sources(value)
+            items.append(item)
+            total += n
+        return items, total
+    return node, 0
+
+
 class AnthropicAdapter(BaseLLMAdapter):
     provider = "anthropic"
 
@@ -205,17 +247,26 @@ class AnthropicAdapter(BaseLLMAdapter):
             search["blocked_domains"] = cfg.blocked_domains
         tools: list[dict[str, Any]] = [search]
         if cfg.fetch_pages:
+            # 회수 횟수는 검색과 분리한다 — 검색은 PDF를 끌어오지 않고 회수만 끌어온다.
+            # 서버 도구 루프가 한 요청 안에서 회수분을 누적하는데 PDF 100페이지를
+            # 넘으면 서버가 400을 뱉고, 그 시점엔 우리가 개입할 응답 자체가 없다
+            # (2026-08-06 실측: 12콜 중 6콜 전멸, 챕터 통째 0건).
+            fetch_uses = max(
+                1, cfg.max_fetch_uses if cfg.max_fetch_uses is not None else cfg.max_uses
+            )
             # 불변식: 회수 본문 총량(fetch 횟수 × 페이지당 상한)이 컨텍스트 예산을
             # 넘지 못하게 페이지당 상한을 자동 축소한다. max_uses만 올리고 상한을
             # 잊어도 prompt too long(200k 초과)이 구조적으로 재발하지 않게 하는 장치.
+            # ※ 이 상한은 PDF 등 바이너리엔 적용되지 않는다(SDK 타입 주석) — PDF
+            #    누적 제동은 오직 fetch_uses다.
             per_page = min(
                 cfg.max_content_tokens,
-                max(4_000, _FETCH_BUDGET_TOKENS // max(1, cfg.max_uses)),
+                max(4_000, _FETCH_BUDGET_TOKENS // fetch_uses),
             )
             fetch: dict[str, Any] = {
                 "type": fetch_type,
                 "name": "web_fetch",
-                "max_uses": cfg.max_uses,
+                "max_uses": fetch_uses,
                 "max_content_tokens": per_page,
             }
             # 도메인 필터는 검색·회수 양쪽에 일관 적용 — 검색만 거르면 모델이
@@ -264,35 +315,36 @@ class AnthropicAdapter(BaseLLMAdapter):
 
         web_fetch가 회수한 100페이지 초과 PDF는 재전송 시 API가 400으로 거부해
         챕터 수집 전체를 죽인다. 크기 임계값(500k)으로 거르던 1차 시도는 얇은
-        장문 PDF를 놓쳐 재발했다(2026-08-03 두 차례 실측) — 페이지 수를 클라이언트
-        에서 알 방법이 없으므로 base64 PDF는 전부 치환한다. 우리 추출 경로는 PDF
-        본문을 쓰지 않아(_extract_doc_text가 PDF는 None) 잃는 것이 없다.
+        장문 PDF를 놓쳐 재발했고, 이어진 2차 시도는 `web_fetch_tool_result →
+        content → content → source` 고정 경로를 getattr로 훑었는데 실제 블록의
+        중첩이 달라 **한 건도 못 잡고 조용히 통과**해 3차 재발했다(2026-08-06
+        실측: 6장 중 4장 수집 전멸, 치환 로그 0건·예외 0건).
+
+        그래서 경로가 아니라 **값**으로 판정한다 — 블록을 dict로 덤프해 재귀
+        순회하며 base64 source를 전부 치환한다. 중첩 위치나 필드명이 바뀌어도
+        걸린다. 우리 추출 경로는 PDF 본문을 쓰지 않아(_extract_doc_text가 PDF는
+        None) 잃는 것이 없다.
         """
         out: list[Any] = []
         n_stripped = 0
+        n_blocks = 0
         for b in blocks:
+            n_blocks += 1
             try:
-                if getattr(b, "type", "") == "web_fetch_tool_result":
-                    content = getattr(b, "content", None)
-                    doc = getattr(content, "content", None)
-                    source = getattr(doc, "source", None)
-                    if getattr(source, "type", "") == "base64":
-                        replaced = b.model_dump()
-                        replaced["content"]["content"]["source"] = {
-                            "type": "text",
-                            "media_type": "text/plain",
-                            "data": "[PDF 본문 생략 — 재전송 제한 회피. URL로만 참조하라]",
-                        }
-                        out.append(replaced)
-                        n_stripped += 1
-                        continue
+                dumped = b.model_dump() if hasattr(b, "model_dump") else b
+                scrubbed, n = _scrub_base64_sources(dumped)
+                if n:
+                    out.append(scrubbed)
+                    n_stripped += n
+                    continue
             except Exception:
                 # 치환 실패는 원본 재전송으로 폴백하되 반드시 흔적을 남긴다 —
                 # 조용히 삼키면 PDF 400 재발 시 원인 추적이 불가능하다(1차 교훈).
                 logger.warning("anthropic.pdf_sanitize_failed", exc_info=True)
             out.append(b)
-        if n_stripped:
-            logger.info("anthropic.pdf_stripped_on_resend", n=n_stripped)
+        # 0건도 남긴다 — '치환기가 돌았지만 못 잡았다'와 'PDF가 없었다'를 로그로
+        # 구분할 수 있어야 한다(2차 시도가 조용히 실패한 원인).
+        logger.info("anthropic.pdf_stripped_on_resend", n=n_stripped, n_blocks=n_blocks)
         return out
 
     @staticmethod
