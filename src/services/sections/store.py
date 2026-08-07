@@ -89,3 +89,56 @@ async def persist_sections(state: ProjectState) -> None:
         session.add_all(rows)
         await session.commit()
     logger.info("sections.persisted", project_id=str(state.project_id), n=len(rows))
+
+
+async def clear_project_sections(project_id) -> None:
+    """write 시작 시 이전 런 잔재 제거 — 증분 초안이 옛 완성본과 섞이지 않게."""
+    async with async_session_maker() as session:
+        await session.execute(delete(Section).where(Section.project_id == project_id))
+        await session.commit()
+
+
+async def persist_draft_section(state: ProjectState, plan, draft) -> None:
+    """작성 진행 중 절 1개 초안을 업서트(status=writing) — 미리보기 증분 표시용.
+
+    확정본이 아니다: 인용 [n]은 절 로컬 번호이고 QA 승인·조립(persist_sections)이
+    전량 교체한다. 미리보기는 부가 기능이라 실패해도 작성 루프를 죽이지 않는다
+    (삼키고 경고만). draft=None(정적 게이트 전멸)은 status=failed 빈 본문으로 남겨
+    편집 화면이 '이 절은 비었음'을 정직하게 보여주게 한다.
+    """
+    try:
+        chapter_titles = _chapter_titles(state)
+        async with async_session_maker() as session:
+            # 같은 위치의 잔재(재시도·이전 부분 실행)를 걷어내고 새 초안으로 교체
+            await session.execute(
+                delete(Section).where(
+                    Section.project_id == state.project_id,
+                    Section.chapter_number == plan.chapter_number,
+                    Section.section_number == plan.section_number,
+                )
+            )
+            session.add(
+                Section(
+                    id=plan.section_id,
+                    project_id=state.project_id,
+                    chapter_number=plan.chapter_number,
+                    section_number=plan.section_number,
+                    chapter_title=chapter_titles.get(
+                        plan.chapter_number, f"{plan.chapter_number}장"
+                    ),
+                    title=plan.title,
+                    level=2,
+                    content=draft.content if draft is not None else "",
+                    source_ids=list(draft.cited_chunk_ids) if draft is not None else [],
+                    qa_status="pending",
+                    status="writing" if draft is not None else "failed",
+                )
+            )
+            await session.commit()
+    except Exception:
+        logger.warning(
+            "sections.draft_persist_failed",
+            project_id=str(state.project_id),
+            section=f"{plan.chapter_number}.{plan.section_number}",
+            exc_info=True,
+        )

@@ -52,8 +52,16 @@ def fake_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
         # 인메모리 척추 검증 — 섹션 영구저장(DB)은 건너뛴다.
         return None
 
+    async def _no_draft_store(_state: ProjectState, _plan: object, _draft: object) -> None:
+        return None
+
+    async def _no_cleaner(_project_id: object) -> None:
+        return None
+
     monkeypatch.setattr("src.workflows.stages._exporter", _export)
     monkeypatch.setattr("src.workflows.stages._section_store", _no_store)
+    monkeypatch.setattr("src.workflows.stages._draft_store", _no_draft_store)
+    monkeypatch.setattr("src.workflows.stages._sections_cleaner", _no_cleaner)
     return exported
 
 

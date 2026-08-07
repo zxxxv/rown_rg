@@ -29,13 +29,19 @@ from src.core.types import ProjectStage, ReviewGate, SourceRef, SourceType
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.review_point import ReviewPoint
+from src.db.models.section import Section
 from src.db.models.user import User
 from src.db.session import async_session_maker
 from src.infrastructure.naver_works.bot import send_bot_message
 from src.workflows import cancel
 from src.workflows.events import emit_checkpoint, emit_error, gate_level
 from src.workflows.pipeline import Paused, advance
-from src.workflows.write_loop import apply_selection, plan_from_payload, rehydrate_from_payload
+from src.workflows.write_loop import (
+    apply_selection,
+    overlay_working_copy,
+    plan_from_payload,
+    rehydrate_from_payload,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -180,7 +186,15 @@ async def _rehydrate_qa_selection(
     selections = (review.decision or {}).get("selections", {})
     if selections:
         state = apply_selection(state, selections)
-    return state
+    # 검토 중 사람이 고친 내용(sections 행 = 작업 사본)이 payload 후보보다 우선 —
+    # 통합 검토 화면의 직접 편집·AI 재작성이 조립에 반영되는 유일한 경로.
+    rows = (
+        (await session.execute(select(Section).where(Section.project_id == project_id)))
+        .scalars()
+        .all()
+    )
+    working = {row.id: (row.content, [uuid.UUID(str(s)) for s in row.source_ids]) for row in rows}
+    return overlay_working_copy(state, working)
 
 
 async def _execute(project_id: uuid.UUID) -> None:

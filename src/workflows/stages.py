@@ -651,6 +651,20 @@ async def _default_section_store(state: ProjectState) -> None:
     await persist_sections(state)
 
 
+async def _default_draft_store(state: ProjectState, plan, draft) -> None:
+    """작성 중 절 초안을 증분 저장(미리보기용). lazy import로 DB 의존을 미룬다."""
+    from src.services.sections import persist_draft_section
+
+    await persist_draft_section(state, plan, draft)
+
+
+async def _default_sections_cleaner(project_id) -> None:
+    """write 시작 시 이전 런 sections 잔재 제거. lazy import로 DB 의존을 미룬다."""
+    from src.services.sections import clear_project_sections
+
+    await clear_project_sections(project_id)
+
+
 async def _default_pm_verifier(state: ProjectState) -> int:
     """PM 검증 리포트 생성·저장(챕터당 1콜). lazy import로 LLM·DB 의존을 미룬다."""
     from src.services.qa.pm_verify import run_pm_verify
@@ -667,6 +681,8 @@ _retriever_factory: Callable[[ProjectState], SectionRetriever] = _default_retrie
 _write_client: LLMClient | None = None
 _exporter: Callable[[ProjectState, dict[str, dict[str, str]] | None], Path] = _default_exporter
 _section_store: Callable[[ProjectState], Awaitable[None]] = _default_section_store
+_draft_store = _default_draft_store
+_sections_cleaner = _default_sections_cleaner
 _pm_verifier: Callable[[ProjectState], Awaitable[int]] = _default_pm_verifier
 
 
@@ -674,12 +690,19 @@ async def write(state: ProjectState) -> ProjectState:
     """섹션별 후보 생성 + 정적 게이트. 결과를 state.section_candidates에 적재.
 
     이후 파이프라인이 QA_SELECT 게이트에서 정지하고 사람이 고른다.
+    절이 완성될 때마다 초안을 sections에 증분 저장해(_draft_store) 편집기
+    미리보기가 작성 중에도 완성분부터 보여준다 — 확정은 여전히 assemble 몫.
     """
     state = _ensure_section_plan(state)
     retrieve = _retriever_factory(state)
     emit_phase(state.project_id, "writing", "started")
+    await _sections_cleaner(state.project_id)  # 이전 런 잔재 제거(증분 초안과 혼재 방지)
     result = await run_write_loop(
-        state, retrieve=retrieve, client=_write_client, model=_models_for(state)["write"]
+        state,
+        retrieve=retrieve,
+        client=_write_client,
+        model=_models_for(state)["write"],
+        draft_store=_draft_store,
     )
     emit_phase(state.project_id, "writing", "completed")
     # QA_SELECT 게이트(=사람 검토)로 넘어가는 지점 — qa 단계 진입만 알린다.

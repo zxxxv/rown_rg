@@ -19,6 +19,7 @@ from src.core.types import (
 from src.workflows.write_loop import (
     apply_selection,
     check_assembled,
+    overlay_working_copy,
     qa_select_payload,
     run_write_loop,
 )
@@ -188,3 +189,43 @@ class TestSelectionAndAssembly:
         assert len(drafts) == 1
         assert result.passed is False
         assert "누락 섹션 1개" in result.detail
+
+
+# ---------- overlay_working_copy (검토 중 편집 → 조립 반영) ----------
+
+
+class TestOverlayWorkingCopy:
+    def test_row_content_overrides_candidates(self):
+        s1 = SectionPlan(chapter_number=1, section_number=1, title="개요")
+        cs1 = _candset(s1.section_id)
+        state = ProjectState(
+            user_id=uuid4(), topic="t", section_plan=[s1], section_candidates=[cs1]
+        )
+        cited = [uuid4()]
+        state = overlay_working_copy(state, {s1.section_id: ("사람이 고친 본문", cited)})
+        for cand in state.section_candidates[0].candidates:
+            assert cand.draft.content == "사람이 고친 본문"
+            assert cand.draft.cited_chunk_ids == cited
+
+    def test_empty_or_missing_row_keeps_candidates(self):
+        s1 = SectionPlan(chapter_number=1, section_number=1, title="개요")
+        s2 = SectionPlan(chapter_number=2, section_number=1, title="분석")
+        cs1, cs2 = _candset(s1.section_id), _candset(s2.section_id)
+        state = ProjectState(
+            user_id=uuid4(), topic="t", section_plan=[s1, s2], section_candidates=[cs1, cs2]
+        )
+        # s1은 빈 내용(failed 행), s2는 행 없음 — 둘 다 payload 후보 유지
+        state = overlay_working_copy(state, {s1.section_id: ("   ", [])})
+        assert state.section_candidates[0].candidates[0].draft.content == "후보0"
+        assert state.section_candidates[1].candidates[0].draft.content == "후보0"
+
+    def test_filled_empty_section_promoted_and_selected(self):
+        s1 = SectionPlan(chapter_number=1, section_number=1, title="개요")
+        empty = SectionCandidateSet(section_id=s1.section_id, candidates=[])
+        state = ProjectState(
+            user_id=uuid4(), topic="t", section_plan=[s1], section_candidates=[empty]
+        )
+        state = overlay_working_copy(state, {s1.section_id: ("직접 채운 본문", [])})
+        drafts, result = check_assembled(state)
+        assert result.passed is True
+        assert [d.content for d in drafts] == ["직접 채운 본문"]

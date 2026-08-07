@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 from uuid import UUID
 
@@ -44,6 +44,10 @@ from src.workflows.events import emit_step
 # 재생성 시 온도 — 같은 온도로 다시 부르면 같은 실패를 반복할 확률이 높다.
 RETRY_TEMPERATURE = 1.0
 
+# 절 완성 즉시 초안을 영속화하는 훅(미리보기 증분 표시) — None이면 생략.
+# (state, plan, 생존 draft|None)을 받는다. 주입식이라 단위 테스트는 DB 없이 돈다.
+DraftStore = Callable[[ProjectState, SectionPlan, SectionDraft | None], Awaitable[None]]
+
 
 async def run_write_loop(
     state: ProjectState,
@@ -52,6 +56,7 @@ async def run_write_loop(
     client: LLMClient | None = None,
     n: int | None = None,
     model: str = DEFAULT_MODEL,
+    draft_store: DraftStore | None = None,
 ) -> ProjectState:
     """section_plan의 각 섹션을 검색→후보 생성→정적 게이트로 처리해 state에 적재.
 
@@ -124,6 +129,10 @@ async def run_write_loop(
             if retry_set.survivors:
                 cset = retry_set
         candidate_sets.append(cset)
+        if draft_store is not None:
+            # 절 완성 즉시 초안 영속화 — 편집기 미리보기가 진행 중에도 완성분을 보여준다
+            survivor = cset.survivors[0].draft if cset.survivors else None
+            await draft_store(state, section, survivor)
         emit_step(pid, "writing", label, "completed")
     return state.with_section_candidates(candidate_sets)
 
@@ -224,6 +233,56 @@ def rehydrate_from_payload(state: ProjectState, payload: dict[str, Any]) -> Proj
         ]
         candidate_sets.append(SectionCandidateSet(section_id=section_id, candidates=candidates))
     return state.with_section_plan(plan).with_section_candidates(candidate_sets)
+
+
+def overlay_working_copy(
+    state: ProjectState, working: dict[UUID, tuple[str, list[UUID]]]
+) -> ProjectState:
+    """검토 중 편집된 sections 행(작업 사본)을 후보 draft 위에 덮어쓴다.
+
+    통합 검토 화면(2026-08-07)에서 사람은 QA 게이트 대기 중에도 직접 편집·AI
+    재작성으로 절을 고친다 — 그 결과는 sections 테이블에만 있고 게이트 payload엔
+    없다. resume 시 행 내용이 payload 후보보다 우선해야 편집이 조립에 살아남는다.
+    편집이 없었으면 행 내용 == payload 내용이라 덮어써도 무해(멱등)하다.
+    전멸(all_excluded) 섹션을 사람이 직접 채운 경우엔 합성 후보로 승격해
+    선택까지 기록한다 — 조립 structure 검사의 누락 경고가 사라진다.
+    """
+    if not working:
+        return state
+    updated = state
+    new_sets: list[SectionCandidateSet] = []
+    for cset in state.section_candidates:
+        row = working.get(cset.section_id)
+        if row is None or not row[0].strip():
+            new_sets.append(cset)
+            continue
+        content, cited = row
+        if cset.candidates:
+            new_sets.append(
+                cset.model_copy(
+                    update={
+                        "candidates": [
+                            c.model_copy(
+                                update={
+                                    "draft": c.draft.model_copy(
+                                        update={"content": content, "cited_chunk_ids": cited}
+                                    )
+                                }
+                            )
+                            for c in cset.candidates
+                        ]
+                    }
+                )
+            )
+        else:
+            cand = SectionCandidate(
+                draft=SectionDraft(
+                    section_id=cset.section_id, content=content, cited_chunk_ids=cited
+                )
+            )
+            new_sets.append(SectionCandidateSet(section_id=cset.section_id, candidates=[cand]))
+            updated = updated.record_selection(cset.section_id, cand.candidate_id)
+    return updated.with_section_candidates(new_sets)
 
 
 def apply_selection(state: ProjectState, selections: dict[str, str]) -> ProjectState:

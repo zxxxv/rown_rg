@@ -31,6 +31,7 @@ from src.api.schemas.project import (
 )
 from src.api.schemas.section import (
     ChapterNode,
+    SectionBlockRewriteRequest,
     SectionCitation,
     SectionContentResponse,
     SectionContentUpdate,
@@ -996,6 +997,10 @@ async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID
     return row
 
 
+# 검토 중(writing·reviewing) 편집도 허용한다 — 통합 검토 화면(2026-08-07)의 정식
+# 경로. 편집 결과는 resume 시 overlay_working_copy가 payload 후보보다 우선 반영한다.
+
+
 # 본문 인용 마커 — 작성기(_extract_cited_ids)와 같은 [N] 규약.
 _CITE_NUM_RE = re.compile(r"\[(\d+)\]")
 
@@ -1177,6 +1182,58 @@ async def rewrite_section(
     row.source_ids = list(draft.cited_chunk_ids)
     row.status = "completed"
     row.qa_status = "passed"
+    project.updated_at = clock_now()
+    await session.flush()
+    await session.refresh(row)
+    return _section_content(row, await _section_citations(session, row))
+
+
+async def _default_block_rewriter(project: Project, row: Section, data) -> str:
+    """블록 국소 재작성 — 검색 없이 절 문맥+기존 인용 범위 안에서 LLM 1콜."""
+    from src.services.sections.edit import rewrite_block
+
+    return await rewrite_block(
+        section_title=row.title,
+        content=row.content,
+        block=data.block,
+        instruction=data.instruction,
+        user_id=project.owner_id,
+        project_id=project.id,
+    )
+
+
+# 주입 지점 — 테스트는 이 전역을 fake로 교체한다(실LLM 회피).
+_block_rewriter = _default_block_rewriter
+
+
+@router.post(
+    "/{project_id}/sections/{section_id}/rewrite-block", response_model=SectionContentResponse
+)
+async def rewrite_section_block(
+    project_id: UUID,
+    section_id: UUID,
+    data: SectionBlockRewriteRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SectionContentResponse:
+    """블록 재작성 — 본문에서 지정 블록 하나만 지시에 따라 고쳐 치환 저장한다.
+
+    통합 검토 화면의 블록 단위 편집용. 전체 재작성(rewrite)과 달리 검색을 다시
+    돌리지 않고 기존 인용 범위 안에서만 고친다 — 인용 번호·출처 목록이 유지된다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_section(session, project.id, section_id)
+    if data.block not in row.content:
+        raise ValidationError(
+            message="지정한 블록을 본문에서 찾을 수 없습니다(본문이 갱신됐을 수 있음)",
+            code="BLOCK_NOT_FOUND",
+        )
+    new_block = await _block_rewriter(project, row, data)
+    if not new_block.strip():
+        raise ValidationError(message="재작성 결과가 비어 있습니다", code="BLOCK_REWRITE_EMPTY")
+    # 첫 번째 일치만 치환 — 프론트가 보낸 블록은 화면의 특정 위치지만 동일 문단이
+    # 중복될 수 있어, 원문 전체가 아니라 한 곳만 바꾼다.
+    row.content = row.content.replace(data.block, new_block, 1)
     project.updated_at = clock_now()
     await session.flush()
     await session.refresh(row)

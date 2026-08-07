@@ -60,5 +60,12 @@ class SectionRewriteRequest(BaseModel):
     )
 
 
+class SectionBlockRewriteRequest(BaseModel):
+    block: str = Field(..., min_length=1, description="본문에서 재작성할 블록의 원문(정확 일치)")
+    instruction: str = Field(
+        "", max_length=2000, description="블록 재작성 지시(빈 문자열이면 문장 다듬기)"
+    )
+
+
 class SectionContentUpdate(BaseModel):
     content: str = Field(..., description="수정한 섹션 본문(마크다운/개조식)")
