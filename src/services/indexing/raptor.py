@@ -200,18 +200,24 @@ class RaptorBuilder:
         return created
 
     async def _load_leaves(self, project_id: UUID) -> list[_Node]:
-        """content 트랙 leaf 청크(임베딩 보유분)를 빌드 입력으로 로드."""
+        """content 트랙 leaf 청크(임베딩 보유분)를 빌드 입력으로 로드.
+
+        검색(_keyword/_semantic)과 동일하게 채택 자료만 — 사람이 게이트에서 제외한
+        출처가 배경 요약으로 우회 유입되지 않게 project_sources.is_included를 거른다.
+        """
         async with self._session_maker() as session:
             rows = (
                 await session.execute(
                     text(
                         """
-                        SELECT id, content, embedding
-                        FROM chunks
-                        WHERE project_id = :project_id
-                          AND track = 'content'
-                          AND embedding IS NOT NULL
-                        ORDER BY source_id, chunk_index
+                        SELECT c.id, c.content, c.embedding
+                        FROM chunks c
+                        JOIN project_sources ps ON ps.id = c.source_id
+                        WHERE c.project_id = :project_id
+                          AND c.track = 'content'
+                          AND c.embedding IS NOT NULL
+                          AND ps.is_included
+                        ORDER BY c.source_id, c.chunk_index
                         """
                     ),
                     {"project_id": str(project_id)},
