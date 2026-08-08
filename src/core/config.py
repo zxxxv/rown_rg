@@ -44,7 +44,11 @@ class Settings(BaseSettings):
 
     # LLM 역할별 기본 모델 — 테스트·비용 제어 시 .env로 교체 (예: claude-haiku-4-5)
     planner_model: str = "claude-sonnet-4-6"
-    research_model: str = "claude-sonnet-4-6"
+    # 수집만 Haiku(2026-08-08 결정): 수집은 질의 생성·도구 오케스트레이션·매니페스트
+    # JSON이라 상위 모델 이점이 작고, 부실해도 **작성 앞의 자료 검토 게이트**가 막아
+    # '추가 조사'로 복구된다(하방 차단). 런당 ~$3.6 절감. 판정 지표는 회수 건수가 아니라
+    # 미커버 절 수 — 게이트에서 실전 확인하고, 뚜렷이 나쁘면 sonnet으로 되돌린다.
+    research_model: str = "claude-haiku-4-5"
     write_model: str = "claude-sonnet-4-6"
     # 웹 리서치 비용 노브 — 검색/회수 횟수와 응답 상한 (챕터당 1콜 분할 수집이라
     # 총 수집 폭 = 챕터 수 × max_uses)
