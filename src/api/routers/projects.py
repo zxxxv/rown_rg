@@ -541,6 +541,7 @@ def _to_source_item(row: ProjectSource) -> SourceItemRead:
             is_included=row.is_included,
             preview=preview,
             has_content=chunks > 0,
+            library_node_id=row.library_node_id,
             created_at=row.created_at,
         )
     content_md = meta.get("content_md") or ""

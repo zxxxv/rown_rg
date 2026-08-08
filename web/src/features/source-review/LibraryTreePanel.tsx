@@ -1,9 +1,9 @@
-import { ChevronDown, ChevronRight, FileText, Folder, Loader2, Search } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, FileText, Folder, Loader2, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useLibraryTree } from "@/api/library";
-import { useAttachLibrarySource } from "@/api/sources";
+import { useAttachLibrarySource, useProjectSources } from "@/api/sources";
 import type { LibraryNode } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -35,6 +35,16 @@ function collectFiles(
   return out;
 }
 
+/** 이미 이 프로젝트에 불러온 파일 표식 — 체크박스는 잠기고 배지로 상태를 알린다. */
+function AddedBadge() {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-fg-success/40 bg-bg-success px-1.5 py-0.5 text-[10px] font-medium text-fg-success">
+      <Check className="h-3 w-3" aria-hidden />
+      추가됨
+    </span>
+  );
+}
+
 function formatSize(bytes: number): string {
   if (bytes <= 0) return "-";
   const kb = bytes / 1024;
@@ -45,6 +55,18 @@ function formatSize(bytes: number): string {
 export function LibraryTreePanel({ projectId }: { projectId: string }) {
   const treeQuery = useLibraryTree();
   const attach = useAttachLibrarySource(projectId);
+  // 이미 이 프로젝트에 불러온 라이브러리 노드 — 트리에 '추가됨'으로 표시해
+  // 같은 파일을 다시 고르지 않게 한다(재불러오기는 재색인이라 낭비).
+  const sourcesQuery = useProjectSources(projectId);
+  const attachedIds = useMemo(
+    () =>
+      new Set(
+        (sourcesQuery.data?.items ?? [])
+          .map((s) => s.library_file_id)
+          .filter((v): v is string => Boolean(v)),
+      ),
+    [sourcesQuery.data],
+  );
   const [q, setQ] = useState("");
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -154,12 +176,13 @@ export function LibraryTreePanel({ projectId }: { projectId: string }) {
                   >
                     <Checkbox
                       id={`lib-pick-${f.id}`}
-                      checked={checked.has(f.id)}
+                      checked={attachedIds.has(f.id) || checked.has(f.id)}
                       onCheckedChange={() => toggleChecked(f.id)}
-                      disabled={adding}
+                      disabled={adding || attachedIds.has(f.id)}
                     />
                     <FileText className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
                     <span className="flex-1 truncate text-sm text-fg">{f.name}</span>
+                    {attachedIds.has(f.id) ? <AddedBadge /> : null}
                     <span className="truncate text-xs text-fg-tertiary">{f.path}</span>
                   </label>
                 </li>
@@ -171,6 +194,7 @@ export function LibraryTreePanel({ projectId }: { projectId: string }) {
             nodes={tree}
             depth={0}
             checked={checked}
+            attachedIds={attachedIds}
             collapsed={collapsed}
             disabled={adding}
             onToggleChecked={toggleChecked}
@@ -186,6 +210,7 @@ function TreeLevel({
   nodes,
   depth,
   checked,
+  attachedIds,
   collapsed,
   disabled,
   onToggleChecked,
@@ -194,6 +219,8 @@ function TreeLevel({
   nodes: LibraryNode[];
   depth: number;
   checked: Set<string>;
+  /** 이미 프로젝트에 불러온 라이브러리 노드 id */
+  attachedIds: Set<string>;
   collapsed: Set<string>;
   disabled: boolean;
   onToggleChecked: (id: string) => void;
@@ -227,6 +254,7 @@ function TreeLevel({
                   nodes={n.children}
                   depth={depth + 1}
                   checked={checked}
+                  attachedIds={attachedIds}
                   collapsed={collapsed}
                   disabled={disabled}
                   onToggleChecked={onToggleChecked}
@@ -246,12 +274,13 @@ function TreeLevel({
             >
               <Checkbox
                 id={`lib-pick-${n.id}`}
-                checked={checked.has(n.id)}
+                checked={attachedIds.has(n.id) || checked.has(n.id)}
                 onCheckedChange={() => onToggleChecked(n.id)}
-                disabled={disabled}
+                disabled={disabled || attachedIds.has(n.id)}
               />
               <FileText className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
               <span className="flex-1 truncate text-sm text-fg">{n.name}</span>
+              {attachedIds.has(n.id) ? <AddedBadge /> : null}
               <span className="font-mono text-xs text-fg-tertiary">
                 {formatSize(n.file_meta.size_bytes)}
               </span>

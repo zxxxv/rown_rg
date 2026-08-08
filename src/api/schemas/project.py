@@ -120,6 +120,8 @@ class SourceItemRead(BaseModel):
     page_age: str | None = None
     preview: str | None = None
     has_content: bool = False
+    # 라이브러리에서 불러온 자료의 원본 노드 id — 트리에서 '이미 추가됨'을 표시하는 근거.
+    library_node_id: UUID | None = None
     created_at: datetime
 
 

@@ -19,6 +19,8 @@ export const SourceItemSchema = z.object({
   page_age: z.string().nullish(),
   preview: z.string().nullish(),
   has_content: z.boolean(),
+  // 라이브러리에서 불러온 자료면 원본 노드 id — 트리에서 '추가됨' 표시에 쓴다
+  library_node_id: z.string().nullish(),
   created_at: z.string(),
 });
 export type SourceItem = z.infer<typeof SourceItemSchema>;
@@ -49,6 +51,7 @@ function toLegacySource(projectId: string, s: SourceItem): Source {
     is_included: s.is_included,
     preview: s.preview ?? undefined,
     matched_sections: s.matched_sections,
+    library_file_id: s.library_node_id ?? undefined,
   };
 }
 
