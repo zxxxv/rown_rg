@@ -39,6 +39,9 @@ export default function SourcesPage() {
   const reviewOpen = snapshot.data?.pending_gate?.gate === "source_pool";
   // 초기 수집 진행 중 — 게이트 전이라 검토는 아직 못 하지만, 상태는 알려야 한다.
   const gathering = snapshot.data?.status === "researching" && !reviewOpen;
+  const notStarted = (snapshot.data?.status ?? "created") === "created";
+  // 자료 삭제는 백엔드가 시작 전·수집 중에만 허용한다(색인 이후엔 청크 정합 때문).
+  const canDelete = notStarted || snapshot.data?.status === "researching";
 
   // 추가 검색(+10건) — 게이트를 닫지 않는 보충 수집. 시작 시점 자료 수를 기준선으로
   // 잡아 배너에 "+n건 수집됨"을 보여주고, 도는 동안 목록을 폴링으로 따라잡는다.
@@ -226,42 +229,36 @@ export default function SourcesPage() {
             </div>
           </div>
           <p className="text-sm text-fg-secondary">
-            {gathering
-              ? "AI가 자료를 검색하고 있습니다 - 수집이 끝나면 여기서 검토를 시작할 수 있습니다."
-              : reviewOpen
-                ? "AI가 수집한 자료를 검토하고 채택할 자료를 결정해 주세요. 추가 자료는 아래 드롭존에 끌어다 놓으면 됩니다."
-                : "검토가 완료된 자료 목록입니다 (읽기 전용) - 채택된 자료만 본문 작성의 검색 근거로 사용됐습니다."}
+            {notStarted
+              ? "아직 자료 조사를 시작하지 않았습니다 - 준비한 파일을 미리 올려두면 수집 결과와 함께 검토·색인됩니다."
+              : gathering
+                ? "AI가 자료를 검색하고 있습니다 - 수집이 끝나면 여기서 검토를 시작할 수 있습니다. 그 전에도 파일을 올려둘 수 있습니다."
+                : reviewOpen
+                  ? "AI가 수집한 자료를 검토하고 채택할 자료를 결정해 주세요. 추가 자료는 아래 드롭존에 끌어다 놓으면 됩니다."
+                  : "검토가 완료된 자료 목록입니다 (읽기 전용) - 채택된 자료만 본문 작성의 검색 근거로 사용됐습니다."}
           </p>
         </header>
 
-        {reviewOpen ? (
-          <section className="flex flex-col gap-3 rounded-lg border border-border bg-bg-secondary/40 p-4">
-            <div>
-              <h2 className="text-sm font-semibold text-fg">자료 추가</h2>
-              <p className="text-xs text-fg-tertiary">
-                라이브러리에서 체크로 골라 추가하거나, 오른쪽에 파일을 끌어다 놓으세요. 인터넷 추가
-                검색은 하단에 있습니다. 불러오기·업로드는 PDF·HWPX·DOCX·MD·TXT가 색인됩니다.
-              </p>
+        {/* 자료 추가는 항상 열어둔다 — 업로드·라이브러리 불러오기는 즉시 색인되므로
+            파이프라인 단계와 무관하게 동작한다(백엔드도 상태 가드가 없다). */}
+        <section className="flex flex-col gap-3 rounded-lg border border-border bg-bg-secondary/40 p-4">
+          <div>
+            <h2 className="text-sm font-semibold text-fg">자료 추가</h2>
+            <p className="text-xs text-fg-tertiary">
+              라이브러리에서 체크로 골라 추가하거나, 오른쪽에 파일을 끌어다 놓으세요. 인터넷 추가
+              검색은 하단에 있습니다. 불러오기·업로드는 PDF·HWPX·DOCX·MD·TXT가 색인됩니다.
+            </p>
+          </div>
+          {/* 좌: 라이브러리 트리(체크 다중 선택) · 우: 업로드 + 추가된 파일 나열
+              — 파일 자료는 하단 카드가 아니라 여기 나열된다(2026-08-08 사용자 결정) */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <LibraryTreePanel projectId={projectId} />
+            <div className="flex flex-col gap-2">
+              <UploadDropzone onFiles={handleFiles} uploading={uploading} />
+              <FileSourceRows items={fileItems} onDelete={canDelete ? handleDelete : undefined} />
             </div>
-            {/* 좌: 라이브러리 트리(체크 다중 선택) · 우: 업로드 + 추가된 파일 나열
-                — 파일 자료는 하단 카드가 아니라 여기 나열된다(2026-08-08 사용자 결정) */}
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <LibraryTreePanel projectId={projectId} />
-              <div className="flex flex-col gap-2">
-                <UploadDropzone onFiles={handleFiles} uploading={uploading} />
-                <FileSourceRows items={fileItems} onDelete={handleDelete} />
-              </div>
-            </div>
-          </section>
-        ) : null}
-
-        {/* 검토 종료 후에도 파일 자료는 보여야 한다 — 추가 섹션이 접히면 여기로 */}
-        {!reviewOpen && fileItems.length > 0 ? (
-          <section className="flex flex-col gap-2 rounded-lg border border-border bg-bg-secondary/40 p-4">
-            <h2 className="text-sm font-semibold text-fg">추가된 파일 자료</h2>
-            <FileSourceRows items={fileItems} />
-          </section>
-        ) : null}
+          </div>
+        </section>
 
         {gathering ? (
           <div className="flex items-center gap-3 rounded-md border border-fg-info/30 bg-bg-info px-4 py-3 text-sm">
