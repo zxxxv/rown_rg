@@ -42,6 +42,8 @@ export default function SourcesPage() {
   const notStarted = (snapshot.data?.status ?? "created") === "created";
   // 자료 삭제는 백엔드가 시작 전·수집 중에만 허용한다(색인 이후엔 청크 정합 때문).
   const canDelete = notStarted || snapshot.data?.status === "researching";
+  // 수집 목표(권장 하한) — 게이트 전에도 진행 배너에 "현재 n / 목표 m"으로 보여준다.
+  const sourceTarget = snapshot.data?.source_target;
 
   // 추가 검색(+10건) — 게이트를 닫지 않는 보충 수집. 시작 시점 자료 수를 기준선으로
   // 잡아 배너에 "+n건 수집됨"을 보여주고, 도는 동안 목록을 폴링으로 따라잡는다.
@@ -266,9 +268,11 @@ export default function SourcesPage() {
             <p className="text-fg-secondary">
               자료 검색이 진행 중입니다 - 수집되는 대로 목록에 추가되고, 끝나면 검토 지점이
               열립니다.
-              {items.length > 0 ? (
-                <span className="ml-1 font-medium text-fg">현재 {items.length}건</span>
-              ) : null}
+              {/* 목표는 권장 하한(백엔드 research_min_sources) — 미달이어도 차단하지 않고
+                  검토 지점에서 '추가 조사'로 보충한다. */}
+              <span className="ml-1 font-medium text-fg">
+                현재 {items.length}건{sourceTarget ? ` / 목표 ${sourceTarget}건` : ""}
+              </span>
             </p>
           </div>
         ) : null}

@@ -29,6 +29,7 @@ export const ProjectProgressSchema = z.object({
   // 실행 중 세부 단계 라벨(예: "청킹·임베딩 5/17", "배경 요약 1층 · 40/152") —
   // 색인·RAPTOR 같은 수 분짜리 단계의 내부 진행. 없으면 null.
   active_step: z.string().nullish(),
+  source_target: z.number().nullish(),
 });
 export type ProjectProgress = z.infer<typeof ProjectProgressSchema>;
 
@@ -41,6 +42,8 @@ export interface ProgressSnapshot {
   phase_status: "started" | "completed";
   completed_phases: PhaseName[];
   active_step?: string;
+  /** 자료 수집 목표 건수(권장 하한) — 수집 중 '현재 n/목표 m' 표시용 */
+  source_target?: number;
   /** 단계 기반 근사 전체 진행률(0~100) */
   percent: number;
   tokens_used?: number;
@@ -86,6 +89,7 @@ export function toProgressSnapshot(res: ProjectProgress): ProgressSnapshot {
     phase_status: finished ? "completed" : "started",
     completed_phases,
     active_step: res.active_step ?? undefined,
+    source_target: res.source_target ?? undefined,
     percent: res.percent,
     tokens_used: res.tokens_used,
     cost_usd: res.cost_usd,

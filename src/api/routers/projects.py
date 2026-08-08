@@ -447,6 +447,7 @@ async def get_progress(
         last_activity_at=usage[3],
         queue_position=(queue_status(project.id) or {}).get("position"),
         active_step=_active_step_label(project.status, project.id),
+        source_target=settings.research_min_sources,
     )
 
 

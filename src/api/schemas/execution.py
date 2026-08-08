@@ -37,6 +37,10 @@ class ProgressResponse(BaseModel):
     # 색인·RAPTOR처럼 수 분짜리 단계의 내부 진행을 스테퍼 서브라벨로 보여준다.
     # 실행 중이 아니거나 세부 단계가 없으면 None.
     active_step: str | None = None
+    # 자료 수집 목표 건수(권장 하한, settings.research_min_sources) — 수집 중 배너가
+    # "현재 n건 / 목표 m건"을 보여줄 수 있게 게이트 전에도 내려준다(게이트 payload의
+    # coverage.min_required와 같은 값).
+    source_target: int = 0
 
 
 class DecideRequest(BaseModel):
