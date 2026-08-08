@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID, uuid4
+from zipfile import BadZipFile
 
 import structlog
 from fastapi import APIRouter, Depends, File, UploadFile, status
@@ -682,6 +683,17 @@ async def _index_file_source(
         raise ValidationError(
             message="지원하지 않는 파일 형식입니다(PDF·HWPX·DOCX·MD·TXT만 색인할 수 있습니다).",
             code="UNSUPPORTED_SOURCE_FORMAT",
+        ) from exc
+    except BadZipFile as exc:
+        # HWPX·DOCX는 ZIP 컨테이너다. 구형 .hwp를 확장자만 .hwpx로 바꾼 파일이 가장 흔한
+        # 원인이라(정부 보도자료 배포 관행), 사용자가 바로 조치할 수 있게 짚어준다.
+        logger.warning("source.index_bad_zip", context=error_context)
+        raise ValidationError(
+            message=(
+                "HWPX/DOCX 형식이 아닙니다. 확장자만 바꾼 구형 .hwp 파일일 수 있습니다 — "
+                "한컴오피스에서 열어 '다른 이름으로 저장 → HWPX(*.hwpx)'로 변환해 주세요."
+            ),
+            code="SOURCE_NOT_ZIP_CONTAINER",
         ) from exc
     except Exception as exc:  # 파싱·임베딩 실패 — 원인 코드 노출 없이 명확한 메시지
         logger.warning("source.index_failed", context=error_context, exc_info=True)
