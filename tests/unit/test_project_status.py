@@ -18,6 +18,7 @@ EXPECTED_STATUS_VALUES = {
     "reviewing",
     "completed",
     "archived",
+    "cancelled",
 }
 
 

@@ -49,7 +49,7 @@ class TestParserRegistry:
     def test_unsupported_format_raises(self):
         registry = ParserRegistry()
         with pytest.raises(UnsupportedFormatError):
-            registry.resolve(Path("doc.docx"))
+            registry.resolve(Path("doc.xlsx"))  # .docx는 이제 지원 → 진짜 미지원 확장자로
 
 
 class TestHwpxParser:

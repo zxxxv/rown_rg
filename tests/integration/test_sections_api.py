@@ -167,12 +167,14 @@ class TestSectionsApi:
 
         cited = uuid4()
 
+        # 본문에 인용마커를 넣지 않는다: rewrite는 renumber_content로 인용을 프로젝트 출처의
+        # 전역 번호로 재매핑하는데, 여기 cited는 실제 출처 청크가 아니라 매핑되지 않아
+        # 마커가 정상적으로 제거된다. 이 테스트의 목적은 "재작성 내용·source_ids 저장"이므로
+        # 매핑 의존 없는 본문으로 검증한다(인용 renumber 검증은 실제 출처가 있는 별도 테스트 몫).
         async def _fake_rewriter(proj, plan: SectionPlan, instruction: str) -> SectionDraft:
             assert plan.section_id == sid
             assert instruction == "더 간결하게"
-            return SectionDraft(
-                section_id=sid, content="AI 재작성 결과 [1]", cited_chunk_ids=[cited]
-            )
+            return SectionDraft(section_id=sid, content="AI 재작성 결과", cited_chunk_ids=[cited])
 
         monkeypatch.setattr(projects_router, "_section_rewriter", _fake_rewriter)
 
@@ -183,7 +185,7 @@ class TestSectionsApi:
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert body["content"] == "AI 재작성 결과 [1]"
+        assert body["content"] == "AI 재작성 결과"
         assert body["source_ids"] == [str(cited)]
         assert body["qa_status"] == "passed"
 
