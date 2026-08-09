@@ -6,6 +6,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
+# lxml·xmlsec는 no-binary(소스 빌드)로 고정돼 있어(pyproject [tool.uv]: SAML의 xmlsec가
+# 시스템 libxml2와 링크를 맞춰야 런타임 크래시가 안 남) 빌드에 개발 헤더가 필요하다.
+# 단일 스테이지라 런타임 크립토 백엔드(libxmlsec1-openssl)도 함께 남는다.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config \
+    libxml2-dev libxslt1-dev libxmlsec1-dev libxmlsec1-openssl libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # 의존성 먼저 설치 (캐시 활용)
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
