@@ -16,3 +16,5 @@ scripts/
 reports/
 notebooks/
 *.md
+# README.md 는 pyproject.toml(readme=...)가 참조 → 이미지 빌드(uv sync 프로젝트 설치)에 필요.
+!README.md
