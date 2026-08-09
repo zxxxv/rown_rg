@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -52,6 +52,7 @@ import { presetLabel } from "@/features/project-config/presets";
 import type { ProjectFormValues } from "@/features/project-config/schema";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
+import { ReportWorkspace } from "@/pages/projects/[id]/preview";
 
 const STATUS_LABEL: Record<ProjectStatus, string> = {
   created: "생성됨",
@@ -198,6 +199,32 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               ) : null}
               <Meta label="소유자" value={project.owner_name ?? project.owner_id} />
             </dl>
+            {/* 사용량·옵션은 '읽고 마는' 메타라 우측 기둥을 차지할 이유가 없다 —
+                헤더에 가로 타일로 붙여 본문 작업공간에 폭을 내준다(2026-08-09). */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1">
+              <span className="text-xs text-fg-tertiary">
+                사용 토큰{" "}
+                <b className="font-mono text-sm font-medium text-fg">
+                  {tokensUsed.toLocaleString()}
+                </b>
+              </span>
+              <span className="text-xs text-fg-tertiary">
+                비용 <b className="font-mono text-sm font-medium text-fg">${costUsed.toFixed(2)}</b>
+              </span>
+              <span className="h-3 w-px bg-border" aria-hidden />
+              <Badge variant="secondary">
+                목차 ·{" "}
+                {project.config.outline
+                  ? `${project.config.outline.chapters.reduce((n, c) => n + c.sections.length, 0)}절`
+                  : "미구성"}
+              </Badge>
+              <Badge variant="secondary">
+                깊이 · {DEPTH_LABEL[project.config.depth_mode] ?? project.config.depth_mode}
+              </Badge>
+              <Badge variant="secondary">
+                모델 · {project.config.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
+              </Badge>
+            </div>
           </div>
           <PrimaryAction project={project} />
         </div>
@@ -235,69 +262,31 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
           </Accordion>
         </div>
 
-        <aside className="flex flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
+        {/* 우측 기둥은 '지금 무슨 일이 벌어지는가'만 — 사용량·옵션은 헤더로,
+            삭제는 페이지 맨 아래로 옮겨 본문 작업공간에 자리를 내줬다. */}
+        <aside className="lg:sticky lg:top-6 lg:self-start">
           <PipelineStepper projectId={project.id} snapshot={usageQuery.data} />
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">사용량</CardTitle>
-              <CardDescription>실제 측정값 기준</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <dl className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-0.5">
-                  <dt className="text-xs text-fg-tertiary">사용 토큰</dt>
-                  <dd className="font-mono text-base font-medium text-fg">
-                    {tokensUsed.toLocaleString()}
-                  </dd>
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  <dt className="text-xs text-fg-tertiary">사용 비용</dt>
-                  <dd className="font-mono text-base font-medium text-fg">
-                    ${costUsed.toFixed(2)}
-                  </dd>
-                </div>
-              </dl>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">옵션 요약</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {/* 실제 생성에 소비되는 옵션만 표시 — 분석(enabled_analyzers)은 절별
-                  에이전트 배정으로 이관된 레거시(항상 0), 차별화·출력은 미배선 장식. */}
-              <div className="flex flex-wrap gap-1.5">
-                <Badge variant="secondary">
-                  목차 ·{" "}
-                  {project.config.outline
-                    ? `${project.config.outline.chapters.reduce((n, c) => n + c.sections.length, 0)}절`
-                    : "미구성"}
-                </Badge>
-                <Badge variant="secondary">
-                  깊이 · {DEPTH_LABEL[project.config.depth_mode] ?? project.config.depth_mode}
-                </Badge>
-                <Badge variant="secondary">
-                  모델 · {project.config.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
-                </Badge>
-              </div>
-            </CardContent>
-          </Card>
-
-          {canDelete ? (
-            <Button
-              variant="outline"
-              className="w-full border-border text-fg-danger hover:bg-bg-secondary"
-              onClick={() => setConfirmDelete(true)}
-              disabled={deleteProject.isPending}
-            >
-              <Trash2 className="mr-1 h-4 w-4" aria-hidden />
-              프로젝트 삭제
-            </Button>
-          ) : null}
         </aside>
       </div>
+
+      {/* 보고서 본문을 개요 안에 인라인 — 화면을 나누지 않는다(2026-08-09 사용자 결정).
+          작성 중에는 완성된 절부터, 완료 후에는 전체가 여기서 바로 편집된다. */}
+      {project.status !== "created" ? <ReportWorkspace projectId={project.id} /> : null}
+
+      {canDelete ? (
+        <div className="flex justify-end border-t border-border pt-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-fg-danger hover:bg-bg-secondary"
+            onClick={() => setConfirmDelete(true)}
+            disabled={deleteProject.isPending}
+          >
+            <Trash2 className="mr-1 h-4 w-4" aria-hidden />
+            프로젝트 삭제
+          </Button>
+        </div>
+      ) : null}
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>

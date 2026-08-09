@@ -70,11 +70,10 @@ const WARNING_LABEL: Record<string, string> = {
  * 편집·AI 재작성이 가능하다. QA 게이트가 열려 있으면 상단 승인 바에서 바로
  * 조립을 시작한다 — 검토 중 편집은 resume 시 overlay_working_copy가 반영한다.
  */
-export default function PreviewPage() {
-  const { id: projectId = "" } = useParams<{ id: string }>();
+/** 보고서 작업공간 — 개요 페이지에 인라인으로 박히고, /preview 단독 페이지도 이걸 쓴다.
+ *  화면을 나누지 않기 위해 셸(AppShell·헤더)과 분리했다(2026-08-09 사용자 결정). */
+export function ReportWorkspace({ projectId }: { projectId: string }) {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
-  const { user, logout } = useAuth();
 
   const projectQuery = useProject(projectId, 7000);
   const projectStatus = projectQuery.data?.status;
@@ -158,124 +157,123 @@ export default function PreviewPage() {
   };
 
   return (
+    <div className="flex flex-col gap-4">
+      {qaPayload ? (
+        <QaApproveBar projectId={projectId} payload={qaPayload} />
+      ) : isGenerating ? (
+        <div className="flex items-center gap-2 rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+          보고서 작성이 진행 중입니다 - 완성된 절부터 순서대로 표시되며, 그 자리에서 바로 편집할 수
+          있습니다.
+        </div>
+      ) : null}
+
+      {/* PM 검증 경고 — 고칠 수 있는 화면에 두되 접힌 한 줄로 시작(편집을 가리지 않게).
+            절을 선택하면 그 절의 경고만 본문 위에 인라인 표시된다. */}
+      <VerifyReportCard projectId={projectId} collapsible />
+
+      {sectionsQuery.isLoading ? (
+        <LoadingSkeleton variant="block" />
+      ) : tree.length === 0 && qaPayload ? (
+        <PayloadDraftList payload={qaPayload} />
+      ) : tree.length === 0 && isGenerating ? (
+        <EmptyState
+          icon={Eye}
+          title="아직 완성된 절이 없습니다"
+          description="본문 작성이 시작되면 완성된 절부터 여기에 순서대로 표시됩니다."
+        />
+      ) : sectionsQuery.isError || tree.length === 0 ? (
+        <EmptyState
+          title="섹션 트리를 불러올 수 없습니다"
+          description="잠시 후 다시 시도해 주세요."
+          action={
+            <Button variant="outline" onClick={() => void sectionsQuery.refetch()}>
+              다시 시도
+            </Button>
+          }
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+          {/* 트리는 내부 스크롤 없이 아래로 쭉 펼친다 — 목차 전체가 한눈에 보이고
+                페이지 스크롤 하나로 탐색한다(사용자 요청, 2026-08-04) */}
+          <aside className="self-start rounded border border-border bg-bg">
+            <SectionTree tree={tree} selectedId={selectedId} onSelect={selectNode} />
+          </aside>
+
+          <main className="rounded border border-border bg-bg">
+            {selectedId && sectionFindings.length > 0 ? (
+              <div className="flex flex-col gap-1.5 border-b border-fg-warning/30 bg-bg-warning px-4 py-3">
+                <p className="flex items-center gap-1.5 text-xs font-medium text-fg">
+                  <AlertTriangle className="h-3.5 w-3.5 text-fg-warning" aria-hidden />이 절의 PM
+                  경고 {sectionFindings.length}건
+                </p>
+                <ul className="flex flex-col gap-1">
+                  {sectionFindings.map((f) => (
+                    <li key={f.id} className="text-xs text-fg-secondary">
+                      <span
+                        className={cn(
+                          "mr-1 font-medium",
+                          f.severity === "critical" ? "text-fg-danger" : "text-fg-warning",
+                        )}
+                      >
+                        [{f.category}]
+                      </span>
+                      {f.detail}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {selectedChapter ? (
+              <ChapterView
+                key={selectedChapter.id}
+                projectId={projectId}
+                chapter={selectedChapter}
+                chapterIndex={tree.indexOf(selectedChapter)}
+                onOpenSection={navigateTo}
+              />
+            ) : selectedId ? (
+              <SectionView
+                key={selectedId}
+                projectId={projectId}
+                sectionId={selectedId}
+                contentQuery={contentQuery}
+                qaWarnings={qaWarnings}
+              />
+            ) : (
+              <EmptyState
+                title="섹션을 선택하세요"
+                description="좌측 트리에서 완성된 섹션을 클릭하면 본문이 표시됩니다."
+              />
+            )}
+          </main>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** /preview 단독 진입 — 개요에 인라인된 것과 같은 작업공간을 셸에 감싸 보여준다. */
+export default function PreviewPage() {
+  const { id: projectId = "" } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
+  return (
     <AppShell
       user={user ? { name: user.name, role: user.role } : null}
       onLogout={() => void logout()}
       tokenUsage={{ used: 1_240_000, limit: 5_000_000 }}
     >
-      <div className="flex flex-col gap-4">
-        <header className="flex flex-col gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-fit text-fg-secondary"
-            onClick={() => navigate(`/projects/${projectId}/overview`)}
-          >
-            <ArrowLeft className="mr-1 h-4 w-4" />
-            프로젝트 개요
-          </Button>
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-semibold text-fg">보고서 미리보기·편집</h1>
-              {projectQuery.data ? (
-                <p className="mt-1 text-sm text-fg-secondary">{projectQuery.data.title}</p>
-              ) : null}
-            </div>
-          </div>
-        </header>
-
-        {qaPayload ? (
-          <QaApproveBar projectId={projectId} payload={qaPayload} />
-        ) : isGenerating ? (
-          <div className="flex items-center gap-2 rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-            보고서 작성이 진행 중입니다 - 완성된 절부터 순서대로 표시되며, 그 자리에서 바로 편집할
-            수 있습니다.
-          </div>
-        ) : null}
-
-        {/* PM 검증 경고 — 고칠 수 있는 화면에 두되 접힌 한 줄로 시작(편집을 가리지 않게).
-            절을 선택하면 그 절의 경고만 본문 위에 인라인 표시된다. */}
-        <VerifyReportCard projectId={projectId} collapsible />
-
-        {sectionsQuery.isLoading ? (
-          <LoadingSkeleton variant="block" />
-        ) : tree.length === 0 && qaPayload ? (
-          <PayloadDraftList payload={qaPayload} />
-        ) : tree.length === 0 && isGenerating ? (
-          <EmptyState
-            icon={Eye}
-            title="아직 완성된 절이 없습니다"
-            description="본문 작성이 시작되면 완성된 절부터 여기에 순서대로 표시됩니다."
-          />
-        ) : sectionsQuery.isError || tree.length === 0 ? (
-          <EmptyState
-            title="섹션 트리를 불러올 수 없습니다"
-            description="잠시 후 다시 시도해 주세요."
-            action={
-              <Button variant="outline" onClick={() => void sectionsQuery.refetch()}>
-                다시 시도
-              </Button>
-            }
-          />
-        ) : (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-            {/* 트리는 내부 스크롤 없이 아래로 쭉 펼친다 — 목차 전체가 한눈에 보이고
-                페이지 스크롤 하나로 탐색한다(사용자 요청, 2026-08-04) */}
-            <aside className="self-start rounded border border-border bg-bg">
-              <SectionTree tree={tree} selectedId={selectedId} onSelect={selectNode} />
-            </aside>
-
-            <main className="rounded border border-border bg-bg">
-              {selectedId && sectionFindings.length > 0 ? (
-                <div className="flex flex-col gap-1.5 border-b border-fg-warning/30 bg-bg-warning px-4 py-3">
-                  <p className="flex items-center gap-1.5 text-xs font-medium text-fg">
-                    <AlertTriangle className="h-3.5 w-3.5 text-fg-warning" aria-hidden />이 절의 PM
-                    경고 {sectionFindings.length}건
-                  </p>
-                  <ul className="flex flex-col gap-1">
-                    {sectionFindings.map((f) => (
-                      <li key={f.id} className="text-xs text-fg-secondary">
-                        <span
-                          className={cn(
-                            "mr-1 font-medium",
-                            f.severity === "critical" ? "text-fg-danger" : "text-fg-warning",
-                          )}
-                        >
-                          [{f.category}]
-                        </span>
-                        {f.detail}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-              {selectedChapter ? (
-                <ChapterView
-                  key={selectedChapter.id}
-                  projectId={projectId}
-                  chapter={selectedChapter}
-                  chapterIndex={tree.indexOf(selectedChapter)}
-                  onOpenSection={navigateTo}
-                />
-              ) : selectedId ? (
-                <SectionView
-                  key={selectedId}
-                  projectId={projectId}
-                  sectionId={selectedId}
-                  contentQuery={contentQuery}
-                  qaWarnings={qaWarnings}
-                />
-              ) : (
-                <EmptyState
-                  title="섹션을 선택하세요"
-                  description="좌측 트리에서 완성된 섹션을 클릭하면 본문이 표시됩니다."
-                />
-              )}
-            </main>
-          </div>
-        )}
-      </div>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="mb-3 w-fit text-fg-secondary"
+        onClick={() => navigate(`/projects/${projectId}/overview`)}
+      >
+        <ArrowLeft className="mr-1 h-4 w-4" />
+        프로젝트 개요
+      </Button>
+      <ReportWorkspace projectId={projectId} />
     </AppShell>
   );
 }
