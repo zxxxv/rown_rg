@@ -5,7 +5,6 @@ import { ApiError } from "@/api/client";
 import {
   type PersonalPrompt,
   type PromptKind,
-  type PromptVolume,
   useCreatePersonalPrompt,
   useDeletePersonalPrompt,
   useListPersonalPrompts,
@@ -217,13 +216,6 @@ function SystemReference({ kind }: { kind: PromptKind }) {
   );
 }
 
-// 시스템 21종의 실제 분포에 맞춘 3단(백엔드 VOLUME_PRESETS와 같은 값).
-const VOLUME_OPTIONS = [
-  { value: "short" as const, label: "짧게", hint: "8천~1.2만자 · 5~8p" },
-  { value: "normal" as const, label: "보통", hint: "1.5~2.2만자 · 10~15p" },
-  { value: "long" as const, label: "길게", hint: "2만~3.4만자 · 15~22p" },
-];
-
 /** 작성 규칙이 꽂히는 자리. 시스템 조각과 1:1이고, 고르지 않으면 기존 규칙 뒤에 덧붙는다. */
 const RULE_SLOTS = [
   { ref: "agent_source_rules", label: "출처 규칙" },
@@ -250,7 +242,14 @@ function PromptDialog({
   const [description, setDescription] = useState(existing?.description ?? "");
   // 빈 문자열 = 원본 유지. 시스템 에이전트를 덮어쓸 때 분량까지 3단으로 떨어뜨리면
   // 원본 값(특허분석 2만~6만자 등)이 조용히 깎인다 - 그래서 덮어쓰기 기본은 유지다.
-  const [volume, setVolume] = useState<PromptVolume | "">(existing?.spec?.volume ?? "");
+  // 빈 칸 = 지정 없음. 시스템 에이전트를 덮어쓸 때 분량까지 건드리면 원본 값
+  // (특허분석 2만~6만자 등)이 조용히 깎이므로, 안 적으면 원본을 그대로 승계한다.
+  const [minChars, setMinChars] = useState<string>(
+    existing?.spec?.min_chars ? String(existing.spec.min_chars) : "",
+  );
+  const [maxChars, setMaxChars] = useState<string>(
+    existing?.spec?.max_chars ? String(existing.spec.max_chars) : "",
+  );
   // 무엇을 덮어쓸지는 만들 때만 정한다(생성 시 확정, 이후 불변).
   const [baseRef, setBaseRef] = useState<string>(existing?.base_ref ?? "");
   const pending = create.isPending || update.isPending;
@@ -272,7 +271,9 @@ function PromptDialog({
 
   const save = async () => {
     if (!valid) return;
-    const spec = kind === "agent" && volume ? { volume } : {};
+    const lo = Number(minChars);
+    const hi = Number(maxChars);
+    const spec = kind === "agent" && lo > 0 && hi > 0 ? { min_chars: lo, max_chars: hi } : {};
     try {
       if (existing) {
         await update.mutateAsync({
@@ -370,27 +371,43 @@ function PromptDialog({
           {kind === "agent" ? (
             <>
               <div className="flex flex-col gap-1.5">
-                <Label>목표 분량</Label>
+                <Label htmlFor="prompt-min">목표 분량 (자)</Label>
                 <p className="text-xs text-fg-tertiary">
                   이 에이전트를 배정한 절의 목표 분량이고 분할 작성 파트 수도 여기서 정해집니다.
+                  비워두면{" "}
+                  {baseRef ? "덮어쓴 에이전트의 원래 분량을 그대로 씁니다" : "기본값을 씁니다"}.
+                  시스템 에이전트는 11,250~60,000자 사이입니다.
                 </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {VOLUME_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => setVolume(opt.value)}
-                      className={cn(
-                        "rounded border px-3 py-1.5 text-left text-xs",
-                        volume === opt.value
-                          ? "border-accent bg-bg-info text-fg"
-                          : "border-border bg-bg text-fg-secondary hover:border-fg-tertiary",
-                      )}
-                    >
-                      <span className="font-medium">{opt.label}</span>
-                      <span className="ml-1.5 text-fg-tertiary">{opt.hint}</span>
-                    </button>
-                  ))}
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="prompt-min"
+                    type="number"
+                    min={1000}
+                    max={60000}
+                    step={1000}
+                    value={minChars}
+                    onChange={(e) => setMinChars(e.target.value)}
+                    placeholder="15000"
+                    className="w-32"
+                    disabled={pending}
+                  />
+                  <span className="text-sm text-fg-tertiary">~</span>
+                  <Input
+                    type="number"
+                    min={1000}
+                    max={60000}
+                    step={1000}
+                    value={maxChars}
+                    onChange={(e) => setMaxChars(e.target.value)}
+                    placeholder="22500"
+                    className="w-32"
+                    disabled={pending}
+                  />
+                  <span className="text-xs text-fg-tertiary">
+                    {Number(minChars) > 0 && Number(maxChars) > Number(minChars)
+                      ? `A4 ${Math.max(1, Math.floor(Number(minChars) / 1500))}~${Math.max(1, Math.floor(Number(maxChars) / 1500))}페이지`
+                      : "최소·최대를 함께 적어주세요"}
+                  </span>
                 </div>
               </div>
               <div className="flex flex-col gap-1.5">

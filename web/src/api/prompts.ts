@@ -12,6 +12,10 @@ export const PromptVolumeSchema = z.enum(["short", "normal", "long"]);
 export type PromptVolume = z.infer<typeof PromptVolumeSchema>;
 
 export const PromptSpecSchema = z.object({
+  /** 목표 분량(자). 둘 다 비면 지정 없음 - 덮어쓴 시스템 에이전트의 원본 값을 승계한다 */
+  min_chars: z.number().int().nullish(),
+  max_chars: z.number().int().nullish(),
+  /** 3단 버튼 시절의 레거시 값(예전에 저장된 것만 읽는다) */
   volume: PromptVolumeSchema.nullish(),
   queries: z.array(z.string()).default([]),
 });
@@ -96,7 +100,7 @@ export interface CreatePersonalPromptBody {
   base_ref?: string | null;
   cat?: string | null;
   description?: string | null;
-  spec?: { volume?: PromptVolume; queries?: string[] };
+  spec?: { min_chars?: number; max_chars?: number; queries?: string[] };
 }
 
 export function useCreatePersonalPrompt() {
@@ -126,7 +130,7 @@ export function useUpdatePersonalPrompt(id: string) {
       content?: string;
       cat?: string | null;
       description?: string | null;
-      spec?: { volume?: PromptVolume; queries?: string[] };
+      spec?: { min_chars?: number; max_chars?: number; queries?: string[] };
     }) => {
       const data = await apiClient.patch<unknown>(`prompts/personal/${id}`, { json: body });
       return PersonalPromptSchema.parse(data);
