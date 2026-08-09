@@ -164,9 +164,9 @@ class TestBgeRerankerV2M3ClientReal:
             )
         )
         assert len(scores) == 2
-        assert (
-            scores[0] > scores[1]
-        ), f"관련 passage 점수가 무관 passage보다 낮음: {scores[0]} <= {scores[1]}"
+        assert scores[0] > scores[1], (
+            f"관련 passage 점수가 무관 passage보다 낮음: {scores[0]} <= {scores[1]}"
+        )
 
     def test_scores_in_zero_one_range(self, reranker_client: BgeRerankerV2M3Client):
         scores = asyncio.run(

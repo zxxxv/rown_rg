@@ -401,12 +401,12 @@ class TestDataInvariants:
             )
 
         # content 트랙 검색 결과의 모든 hit은 content source 소속
-        assert all(
-            h.chunk_id in content_chunk_ids for h in content_hits
-        ), "content 트랙 검색에 다른 트랙 청크가 섞임"
-        assert all(
-            h.chunk_id in style_chunk_ids for h in style_hits
-        ), "style 트랙 검색에 다른 트랙 청크가 섞임"
+        assert all(h.chunk_id in content_chunk_ids for h in content_hits), (
+            "content 트랙 검색에 다른 트랙 청크가 섞임"
+        )
+        assert all(h.chunk_id in style_chunk_ids for h in style_hits), (
+            "style 트랙 검색에 다른 트랙 청크가 섞임"
+        )
 
 
 # ===========================================================================

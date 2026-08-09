@@ -93,9 +93,9 @@ def test_preset_agent_references_resolve():
         for chapter in preset.chapters:
             for section in chapter.sections:
                 for agent_name in section.agents:
-                    assert (
-                        agent_name in analyst_names
-                    ), f"{preset.name}/{chapter.title}/{section.title}: {agent_name}"
+                    assert agent_name in analyst_names, (
+                        f"{preset.name}/{chapter.title}/{section.title}: {agent_name}"
+                    )
 
 
 def test_unknown_preset_raises():

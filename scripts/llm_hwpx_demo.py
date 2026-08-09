@@ -206,7 +206,7 @@ def main() -> None:
         template_path=args.template,
         apply_chrome=args.template is None,  # 템플릿이 서식을 보유하면 코드 chrome 생략
     )
-    print(f"OK [{source}] -> {Path(out)} " f"({os.path.getsize(out)} bytes, {len(blocks)} blocks)")
+    print(f"OK [{source}] -> {Path(out)} ({os.path.getsize(out)} bytes, {len(blocks)} blocks)")
     if args.mock:
         print("payload 미리보기:", json.dumps(payload["blocks"][0], ensure_ascii=False))
 

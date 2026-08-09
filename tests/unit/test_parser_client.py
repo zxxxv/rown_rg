@@ -498,9 +498,9 @@ class TestPdfParserDoesNotHangAfterTimeout:
         elapsed = _time.perf_counter() - t0
         # 0.2s timeout + pymupdf4llm 폴백(<1s on tiny synthetic) → 2초 안에는 끝나야 함.
         assert elapsed < 2.0, f"main hang: {elapsed:.2f}s (worker join을 기다린 것)"
-        assert any(
-            w.startswith("fallback_to_pymupdf4llm:timeout") for w in result.warnings
-        ), result.warnings
+        assert any(w.startswith("fallback_to_pymupdf4llm:timeout") for w in result.warnings), (
+            result.warnings
+        )
 
 
 @pytest.mark.skipif(
