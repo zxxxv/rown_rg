@@ -185,6 +185,8 @@ export const SectionNodeSchema = z.object({
   level: z.number().int().min(1).max(4),
   status: SectionStatusSchema,
   parent_id: z.string(),
+  /** 작성 시 근거가 부족해 분량 목표를 내린 절 — 본문 대신 여기로 알린다 */
+  evidence_scarce: z.boolean().default(false),
 });
 export type SectionNode = z.infer<typeof SectionNodeSchema>;
 
@@ -217,6 +219,12 @@ export const UngroundedNumbersSchema = z.object({
   samples: z.array(z.string()).default([]),
 });
 
+/** 절이 쓸 수 있었던 근거의 양 — 작성 시점 기록(옛 절은 count=null) */
+export const EvidenceInfoSchema = z.object({
+  count: z.number().int().nonnegative().nullable().default(null),
+  scarce: z.boolean().default(false),
+});
+
 export const SectionContentResponseSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -227,6 +235,8 @@ export const SectionContentResponseSchema = z.object({
   citations: z.array(SectionCitationSchema).default([]),
   /** 인용 근거에서 확인되지 않는 수치 — 창작 위험 신호(조회 시점 재계산) */
   ungrounded: UngroundedNumbersSchema.default({ count: 0, samples: [] }),
+  /** 근거 부족으로 분량 목표를 내린 절인지 — 본문에는 쓰지 않고 화면에서만 표시 */
+  evidence: EvidenceInfoSchema.default({ count: null, scarce: false }),
 });
 export type SectionContentResponse = z.infer<typeof SectionContentResponseSchema>;
 

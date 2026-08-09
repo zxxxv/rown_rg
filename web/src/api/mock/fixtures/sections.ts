@@ -71,6 +71,7 @@ export const SECTION_TREE: ChapterNode[] = SECTION_SPECS.map((s) => ({
     level: 2 as const,
     status: c.status,
     parent_id: s.id,
+    evidence_scarce: false,
   })),
 }));
 

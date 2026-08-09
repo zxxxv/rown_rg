@@ -58,6 +58,7 @@ const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
     qa_status: "passed",
     level: 2,
     ungrounded: { count: 0, samples: [] },
+    evidence: { count: 24, scarce: false },
     citations: [
       {
         number: 1,
@@ -88,6 +89,7 @@ const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
     qa_status: "passed",
     level: 2,
     ungrounded: { count: 0, samples: [] },
+    evidence: { count: 24, scarce: false },
     citations: [
       {
         number: 1,
@@ -130,6 +132,7 @@ export function buildSectionContent(
     qa_status: "passed",
     level: sectionId.includes(".") ? 2 : 1,
     ungrounded: { count: 0, samples: [] },
+    evidence: { count: 24, scarce: false },
     citations: [],
   };
 }

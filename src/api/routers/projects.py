@@ -32,6 +32,7 @@ from src.api.schemas.project import (
 )
 from src.api.schemas.section import (
     ChapterNode,
+    EvidenceInfo,
     SectionBlockRewriteRequest,
     SectionCitation,
     SectionContentResponse,
@@ -1043,6 +1044,7 @@ async def get_sections(
                 level=row.level,
                 status=row.status,
                 parent_id=ch_id,
+                evidence_scarce=bool((row.meta or {}).get("volume_scaled")),
             )
         )
         chapter_statuses[row.chapter_number].append(row.status)
@@ -1150,6 +1152,16 @@ async def _ungrounded_numbers(session: AsyncSession, row: Section) -> Ungrounded
     return UngroundedNumbers(count=len(tokens), samples=tokens[:12])
 
 
+def _evidence_info(row: Section) -> EvidenceInfo:
+    """작성 시 기록한 절 지표(sections.meta) → 화면용 플래그. 옛 절은 기록이 없어 빈 값."""
+    meta = row.meta or {}
+    count = meta.get("evidence_count")
+    return EvidenceInfo(
+        count=count if isinstance(count, int) else None,
+        scarce=bool(meta.get("volume_scaled")),
+    )
+
+
 def _section_content(
     row: Section,
     citations: list[SectionCitation] | None = None,
@@ -1164,6 +1176,7 @@ def _section_content(
         level=row.level,
         citations=citations or [],
         ungrounded=ungrounded or UngroundedNumbers(),
+        evidence=_evidence_info(row),
     )
 
 

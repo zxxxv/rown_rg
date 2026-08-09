@@ -14,7 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base
@@ -53,6 +53,10 @@ class Section(Base):
     source_ids: Mapped[list[uuid.UUID]] = mapped_column(
         ARRAY(UUID(as_uuid=True)), server_default="{}", nullable=False
     )
+    # 생성 지표(opaque) — evidence_count(검색된 인용 가능 청크 수),
+    # volume_scaled(재료 부족으로 분량 목표를 내렸는지). 본문을 더럽히지 않고
+    # 화면에서 '자료 부족' 배지로 알리기 위한 자리다.
+    meta: Mapped[dict] = mapped_column(JSONB, server_default="{}", nullable=False, default=dict)
     qa_status: Mapped[str] = mapped_column(String(10), server_default="pending", nullable=False)
     status: Mapped[str] = mapped_column(String(10), server_default="pending", nullable=False)
     created_at: Mapped[datetime] = mapped_column(

@@ -84,6 +84,30 @@ class TestRunWriteLoop:
             assert len(cset.survivors) == 2  # 전부 HARD 통과
             assert cset.candidates[0].draft.cited_chunk_ids == [chunk.chunk_id]
 
+    async def test_records_evidence_meta_per_section(self):
+        """재료 지표는 본문이 아니라 state.section_meta로 — 화면 배지의 유일한 출처."""
+        rich = SectionPlan(chapter_number=1, section_number=1, title="풍부", analysts=["정책동향"])
+        poor = SectionPlan(chapter_number=1, section_number=2, title="빈약", analysts=["정책동향"])
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[rich, poor])
+
+        def _chunk() -> RetrievedChunk:
+            return RetrievedChunk(
+                chunk_id=uuid4(), source_id=uuid4(), content="근거 본문 " * 60, score=0.9
+            )
+
+        many = [_chunk() for _ in range(40)]
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            return many if section.title == "풍부" else [_chunk()]
+
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=_StubClient("본문 [1] " * 30), n=1
+        )
+        assert result.section_meta[rich.section_id]["evidence_count"] == 40
+        assert result.section_meta[rich.section_id]["volume_scaled"] is False
+        assert result.section_meta[poor.section_id]["evidence_count"] == 1
+        assert result.section_meta[poor.section_id]["volume_scaled"] is True
+
     async def test_empty_plan_yields_no_candidates(self):
         state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[])
 

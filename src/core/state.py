@@ -41,6 +41,10 @@ class ProjectState(BaseModel):
     section_plan: list[SectionPlan] = Field(default_factory=list)  # 섹션별 계획
     completed_section_ids: list[UUID] = Field(default_factory=list)  # 작성 완료 섹션 ID
 
+    # 절별 생성 지표 — section_id → {evidence_count, volume_scaled, ...}. sections.meta로
+    # 영속화돼 화면이 '자료 부족' 배지를 띄운다(본문에 메타 서술을 넣지 않기 위한 통로).
+    section_meta: dict[UUID, dict] = Field(default_factory=dict)
+
     # QA 후보 선택 (write 스테이지가 적재, QA_SELECT 게이트에서 사람이 고름)
     section_candidates: list[SectionCandidateSet] = Field(default_factory=list)
     section_selections: dict[UUID, UUID] = Field(default_factory=dict)  # section_id → candidate_id
@@ -102,6 +106,10 @@ class ProjectState(BaseModel):
         섹션 작성 완료 기록
         """
         return self._touch(completed_section_ids=[*self.completed_section_ids, section_id])
+
+    def with_section_meta(self, meta: dict[UUID, dict]) -> Self:
+        """절별 생성 지표 병합 — 부분 실행(증분 저장)에서도 앞선 절의 지표를 잃지 않는다."""
+        return self._touch(section_meta={**self.section_meta, **meta})
 
     def with_section_candidates(self, candidate_sets: list[SectionCandidateSet]) -> Self:
         """

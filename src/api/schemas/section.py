@@ -16,6 +16,8 @@ class SectionNode(BaseModel):
     level: int
     status: str
     parent_id: str
+    # 작성 시 근거가 부족해 분량 목표를 내린 절 — 목록에서 바로 눈에 띄게 한다.
+    evidence_scarce: bool = False
 
 
 class ChapterNode(BaseModel):
@@ -51,6 +53,17 @@ class UngroundedNumbers(BaseModel):
     samples: list[str] = Field(default_factory=list, description="앞부분 표본(최대 12개)")
 
 
+class EvidenceInfo(BaseModel):
+    """이 절이 쓸 수 있었던 근거의 양 — 작성 시점에 기록(sections.meta).
+
+    자료가 부족하면 분량 목표를 내려서 쓴다. 그 사실을 본문에 적으면 납품물이
+    더러워지므로 본문 대신 이 플래그로 화면에 알린다.
+    """
+
+    count: int | None = None  # 검색된 인용 가능 청크 수(None=옛 절, 기록 없음)
+    scarce: bool = False  # 재료 부족으로 분량 목표를 내렸는지
+
+
 class SectionContentResponse(BaseModel):
     id: str
     title: str
@@ -62,6 +75,7 @@ class SectionContentResponse(BaseModel):
     # 인용 근거에 없는 수치 — 창작 위험 신호. 예타 실증(2026-08-09)에서 자료 없는 절이
     # 예산·계수를 지어내고 인용만 붙이는 사례가 나와, 절 화면에 직접 노출한다.
     ungrounded: UngroundedNumbers = Field(default_factory=UngroundedNumbers)
+    evidence: EvidenceInfo = Field(default_factory=EvidenceInfo)
 
 
 class SectionRewriteRequest(BaseModel):

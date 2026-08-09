@@ -8,7 +8,7 @@ ProjectState는 인메모리 작업사본이라 실행이 끝나면 사라진다
 from __future__ import annotations
 
 import structlog
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from src.core.state import ProjectState
 from src.core.types import SectionCandidateSet
@@ -69,6 +69,7 @@ def _rows(state: ProjectState) -> list[Section]:
                 level=2,
                 content=draft.content if draft is not None else "",
                 source_ids=list(draft.cited_chunk_ids) if draft is not None else [],
+                meta=dict(state.section_meta.get(plan.section_id) or {}),
                 qa_status=_qa_status(
                     plan.section_id, state.section_selections, state.section_candidates
                 ),
@@ -85,6 +86,19 @@ async def persist_sections(state: ProjectState) -> None:
     """
     rows = _rows(state)
     async with async_session_maker() as session:
+        # 전량 교체 전에 기존 meta를 읽어 둔다 — resume 조립은 state에 지표가 없어
+        # 그냥 덮으면 작성 때 기록한 '자료 부족' 플래그가 사라진다.
+        prior = {
+            row_id: meta
+            for row_id, meta in (
+                await session.execute(
+                    select(Section.id, Section.meta).where(Section.project_id == state.project_id)
+                )
+            ).all()
+        }
+        for row in rows:
+            if not row.meta and prior.get(row.id):
+                row.meta = dict(prior[row.id])
         await session.execute(delete(Section).where(Section.project_id == state.project_id))
         session.add_all(rows)
         await session.commit()
@@ -130,6 +144,7 @@ async def persist_draft_section(state: ProjectState, plan, draft) -> None:
                     level=2,
                     content=draft.content if draft is not None else "",
                     source_ids=list(draft.cited_chunk_ids) if draft is not None else [],
+                    meta=dict(state.section_meta.get(plan.section_id) or {}),
                     qa_status="pending",
                     status="writing" if draft is not None else "failed",
                 )

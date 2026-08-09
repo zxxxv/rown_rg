@@ -70,6 +70,7 @@ async def run_write_loop(
     pid = state.project_id
     n = n if n is not None else settings.write_candidates_n
     candidate_sets: list[SectionCandidateSet] = []
+    section_meta: dict[UUID, dict] = {}
     for section in state.section_plan:
         # 절 단위 취소 지점 — 긴 작성 단계 도중에도 다음 절로 넘어가기 전에 멈춘다.
         cancel.raise_if_cancelled(pid)
@@ -78,7 +79,15 @@ async def run_write_loop(
         ctx = build_writer_context(section, analyst_catalog)
         chunks = await retrieve(section)
         # 재료가 목표에 못 미치면 목표를 내린다 — 검색 뒤라야 실제 근거 수를 안다.
-        ctx = scale_for_evidence(ctx, sum(1 for c in chunks if not c.is_summary))
+        n_evidence = sum(1 for c in chunks if not c.is_summary)
+        scaled = scale_for_evidence(ctx, n_evidence)
+        # 부족 사실은 본문이 아니라 절 메타로 — 화면이 배지로 알리고 본문은 깨끗하게.
+        section_meta[section.section_id] = {
+            "evidence_count": n_evidence,
+            "volume_scaled": scaled.min_chars != ctx.min_chars,
+            "min_chars": scaled.min_chars,
+        }
+        ctx = scaled
 
         async def _generate(base_temperature: float = 0.7) -> list[SectionDraft]:
             # volume_target이 단일 호출 출력 한계(4~8천자 실측)를 넘으면 분할 생성.
@@ -137,9 +146,10 @@ async def run_write_loop(
         if draft_store is not None:
             # 절 완성 즉시 초안 영속화 — 편집기 미리보기가 진행 중에도 완성분을 보여준다
             survivor = cset.survivors[0].draft if cset.survivors else None
-            await draft_store(state, section, survivor)
+            # 지금 절의 지표까지 실어 넘긴다 — 작성 중 미리보기도 배지를 볼 수 있게.
+            await draft_store(state.with_section_meta(section_meta), section, survivor)
         emit_step(pid, "writing", label, "completed")
-    return state.with_section_candidates(candidate_sets)
+    return state.with_section_candidates(candidate_sets).with_section_meta(section_meta)
 
 
 def section_plan_payload(plan: Sequence[SectionPlan]) -> list[dict[str, object]]:
