@@ -46,12 +46,12 @@ def _validate_base_ref(kind: str, base_ref: str | None) -> None:
                 message=f"알 수 없는 시스템 에이전트: {base_ref}", code="UNKNOWN_BASE_REF"
             ) from None
     else:  # rule
-        try:
-            load_component(base_ref)
-        except KeyError:
+        # 카탈로그 이름 집합과 대조한다. load_component(base_ref)로 검증하면 사용자 입력이
+        # 파일 경로로 조립돼(../ 순회) *.md 존재 여부 오라클이 되므로, 멤버십으로만 확인한다.
+        if base_ref not in list_components():
             raise ValidationError(
                 message=f"알 수 없는 시스템 작성 규칙: {base_ref}", code="UNKNOWN_BASE_REF"
-            ) from None
+            )
 
 
 # ─── 개인 프롬프트 CRUD (소유자 스코프) ──────────────────────────────────────
@@ -83,6 +83,7 @@ async def create_my_prompt(
         base_ref=data.base_ref,
         cat=data.cat,
         description=data.description,
+        spec=data.spec.model_dump(exclude_none=True),
     )
     return PersonalPromptRead.model_validate(row)
 
@@ -112,6 +113,7 @@ async def update_my_prompt(
         content=data.content,
         cat=data.cat,
         description=data.description,
+        spec=data.spec.model_dump(exclude_none=True) if data.spec is not None else None,
     )
     return PersonalPromptRead.model_validate(row)
 

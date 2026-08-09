@@ -38,6 +38,7 @@ export const promptsHandlers = [
       base_ref: body.base_ref ?? null,
       cat: body.cat ?? null,
       description: body.description ?? null,
+      spec: body.spec ?? { queries: [] },
       updated_at: new Date().toISOString(),
     };
     PERSONAL_PROMPTS.unshift(created);

@@ -67,6 +67,10 @@ def fake_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
     async def _no_cleaner(_project_id: object) -> None:
         return None
 
+    async def _default_rules(_owner_id: object, _selected: object) -> list:
+        # 규칙은 파일 카탈로그 기본값 — 개인 규칙 조회(DB) 없이 돈다.
+        return []
+
     async def _no_catalog(_owner_id: object) -> dict:
         # 개인 에이전트 카탈로그(DB) 없이 — 파일 카탈로그만으로 컨텍스트가 만들어진다.
         return {}
@@ -81,6 +85,7 @@ def fake_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
     monkeypatch.setattr("src.workflows.stages._sections_cleaner", _no_cleaner)
     monkeypatch.setattr("src.workflows.stages._working_copy", _no_working_copy)
     monkeypatch.setattr("src.workflows.stages._analyst_catalog", _no_catalog)
+    monkeypatch.setattr("src.workflows.stages._rule_texts", _default_rules)
     return exported
 
 

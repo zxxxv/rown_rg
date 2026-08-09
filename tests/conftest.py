@@ -24,6 +24,17 @@ from src.main import app
 TEST_DB_NAME = "rown_test"
 
 
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limiter() -> None:
+    """각 테스트 전에 로그인 실패 rate limiter의 인메모리 상태를 비운다(테스트 격리).
+
+    프로세스 전역 dict라, 테스트들이 같은 client IP로 반복 로그인하면 누적돼 429가 난다.
+    """
+    from src.infrastructure.auth import rate_limiter
+
+    rate_limiter.clear()
+
+
 def _swap_db_name(url: str, dbname: str) -> str:
     base, _ = url.rsplit("/", 1)
     return f"{base}/{dbname}"

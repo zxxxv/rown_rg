@@ -115,11 +115,16 @@ def _state_from_project(project: Project) -> ProjectState:
     # 아니라 INDEXING 구간이 실행 중임을 뜻한다. 그대로 stage로 삼으면 매칭되는 Phase가
     # 없어 advance가 즉시 Done을 돌려주고, 작성 도중 죽은 런이 '완료'로 둔갑한다
     # (2026-08-09 실측: 메모리 고갈로 1.3절에서 멈춘 런). 소유 단계로 되돌려 복구한다.
-    status = (
-        ProjectStage.INDEXING.value
-        if project.status == ProjectStage.WRITING.value
-        else project.status
-    )
+    status = project.status
+    # 취소된 런은 재개 지점을 잃는다(status=cancelled). 취소 시 기록해 둔 직전 단계로
+    # 되돌려 이어서 돌린다 — 없으면 처음부터(created). 화면의 "다시 시작" 버튼과
+    # 라우터 가드가 cancelled를 재개 가능으로 보므로 여기서도 살려야 한다(2026-08-10).
+    if status == ProjectStage.CANCELLED.value:
+        status = (project.config or {}).get("cancelled_from") or ProjectStage.CREATED.value
+        if status not in {stage.value for stage in ProjectStage}:
+            status = ProjectStage.CREATED.value
+    if status == ProjectStage.WRITING.value:
+        status = ProjectStage.INDEXING.value
     return ProjectState.from_db(
         {
             "id": project.id,
@@ -299,11 +304,14 @@ async def _execute(project_id: uuid.UUID) -> None:
         logger.info("project.cancelled", project_id=str(project_id))
         try:
             async with async_session_maker() as recovery:
-                await recovery.execute(
-                    update(Project)
-                    .where(Project.id == project_id)
-                    .values(status=ProjectStage.CANCELLED.value)
-                )
+                cancelled = await recovery.get(Project, project_id)
+                if cancelled is not None:
+                    # 재개 지점 보존 — 이 값이 없으면 취소한 런은 처음부터 다시 돌려야 한다.
+                    cancelled.config = {
+                        **(cancelled.config or {}),
+                        "cancelled_from": cancelled.status,
+                    }
+                    cancelled.status = ProjectStage.CANCELLED.value
                 await recovery.execute(
                     update(ReviewPoint)
                     .where(ReviewPoint.project_id == project_id, ReviewPoint.status == "pending")

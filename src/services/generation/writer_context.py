@@ -15,6 +15,7 @@ volume_target은 정적 게이트의 길이 경계와 생성 max_tokens에 반�
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
@@ -71,9 +72,18 @@ class WriterContext:
 
 
 @lru_cache(maxsize=1)
-def _rule_block() -> str:
-    """회사 표준 규칙 조각을 순서대로 결합 — 출처·시각자료·개조식 문체."""
-    return "\n\n".join(load_component(name) for name in _RULE_COMPONENTS)
+def _default_rules() -> tuple[str, ...]:
+    """회사 표준 규칙 조각 — 출처·시각자료·개조식 문체(고정 순서)."""
+    return tuple(load_component(name) for name in _RULE_COMPONENTS)
+
+
+def _rule_block(rules: Sequence[str] | None = None) -> str:
+    """작성 규칙 텍스트 결합. 주입이 없으면 회사 표준을 쓴다.
+
+    프로젝트에서 고른 개인 규칙(슬롯 교체·추가)은 호출부가 이미 해석해 넘긴다 —
+    이 모듈은 DB를 모른다(해석 지점은 services/prompts/personal.resolve_rules).
+    """
+    return "\n\n".join(rules if rules else _default_rules())
 
 
 @lru_cache(maxsize=64)
@@ -121,11 +131,15 @@ def scale_for_evidence(ctx: WriterContext, n_evidence: int) -> WriterContext:
 
 
 def build_writer_context(
-    section: SectionPlan, catalog: dict[str, AnalystSpec] | None = None
+    section: SectionPlan,
+    catalog: dict[str, AnalystSpec] | None = None,
+    rules: Sequence[str] | None = None,
 ) -> WriterContext:
     """SectionPlan → 작성 컨텍스트. 페르소나 → 기본 규칙 → 문체 순으로 시스템 조립.
 
     catalog: id·name → 스펙 매핑(개인 에이전트 포함). 없으면 파일 카탈로그만 본다.
+    rules: 이 보고서에 적용할 작성 규칙 텍스트(프로젝트에서 고른 개인 규칙 반영).
+    없으면 회사 표준 3종.
     개인 에이전트는 DB에 있어 이 모듈이 직접 못 읽으므로 호출부(stages.write)가
     resolve_analysts로 만들어 주입한다 — 그전엔 개인 에이전트를 배정해도 '알 수 없는
     에이전트'로 무시돼 기본 프롬프트로 쓰였다(2026-08-09 실측 거짓 스위치).
@@ -146,7 +160,7 @@ def build_writer_context(
             "각 관점을 별도 대주제로 나눠 다루되, 같은 사실을 관점만 바꿔 반복하지 마라."
         )
         parts.extend(x.prompt for x in specs)
-    parts.append(_rule_block())
+    parts.append(_rule_block(rules))
     system = "\n\n".join(parts)
 
     guidance_lines: list[str] = []

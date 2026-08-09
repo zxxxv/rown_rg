@@ -121,16 +121,23 @@ class Settings(BaseSettings):
     quota_enforcement_enabled: bool = True
     # X-API-Key
     internal_api_key: str = ""
+    # app_settings 시크릿(API키·네이버웍스 키 등) 대칭 암호화 키(Fernet, urlsafe-base64 32B).
+    # 비우면 jwt_secret_key에서 파생(하위 호환)하지만, 그러면 JWT 키를 로테이션할 때 저장된
+    # 시크릿이 복호화 불가해진다. 운영은 `Fernet.generate_key()`로 뽑은 전용 키를 넣을 것.
+    secrets_encryption_key: str = ""
 
     # NAVER WORKS API
     # 파이프라인 이벤트(게이트 도달·완료·실패) 시 소유자 봇 알림. 로컬에서 자격증명이
     # 더미면 NOTIFY_ENABLED=false로 끄면 경고 로그가 안 쌓인다.
     notify_enabled: bool = True
-    nw_client_id: str
-    nw_client_secret: str
-    nw_service_account: str
-    nw_private_key: str
-    nw_bot_id: str
+    # 네이버웍스는 부가 기능(SSO·봇 알림)이라 자격증명이 없어도 부팅되게 optional 로 둔다.
+    # 값은 실제 NW 호출(토큰 발급·봇 전송·SAML) 시점에만 지연 소비되므로, 안 쓰면 비워도
+    # 무방하다. 알림을 끄려면 NOTIFY_ENABLED=false 로 둘 것.
+    nw_client_id: str = ""
+    nw_client_secret: str = ""
+    nw_service_account: str = ""
+    nw_private_key: str = ""
+    nw_bot_id: str = ""
     nw_token_expire_sec: int = 3600
     nw_refresh_buffer: int = 60
 
@@ -182,7 +189,10 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         if self.environment == Environment.LOCAL:
             return ["*"]
-        return ["https://app.loune-insight.co.kr"]
+        return [
+            "https://www.rowninsight.cloud",
+            "https://rowninsight.cloud",
+        ]
 
     @property
     def nw_private_key_pem(self) -> str:

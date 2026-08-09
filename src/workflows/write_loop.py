@@ -59,6 +59,7 @@ async def run_write_loop(
     plan_model: str | None = None,
     draft_store: DraftStore | None = None,
     analyst_catalog: dict[str, Any] | None = None,
+    rules: list[str] | None = None,
 ) -> ProjectState:
     """section_plan의 각 섹션을 검색→후보 생성→정적 게이트로 처리해 state에 적재.
 
@@ -76,7 +77,7 @@ async def run_write_loop(
         cancel.raise_if_cancelled(pid)
         label = f"본문 작성 · {section.chapter_number}.{section.section_number} {section.title}"
         emit_step(pid, "writing", label, "started")
-        ctx = build_writer_context(section, analyst_catalog)
+        ctx = build_writer_context(section, analyst_catalog, rules)
         chunks = await retrieve(section)
         # 재료가 목표에 못 미치면 목표를 내린다 — 검색 뒤라야 실제 근거 수를 안다.
         n_evidence = sum(1 for c in chunks if not c.is_summary)

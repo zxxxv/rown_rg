@@ -711,6 +711,19 @@ async def _default_draft_store(state: ProjectState, plan, draft) -> None:
     await persist_draft_section(state, plan, draft)
 
 
+async def _default_rule_texts(owner_id, selected: list) -> list[str]:
+    """이 보고서에 적용할 작성 규칙 텍스트 — 프로젝트에서 고른 개인 규칙을 반영.
+
+    선택이 없으면 회사 표준 3종 그대로다. 규칙은 절이 아니라 보고서 단위 계약이라
+    프로젝트 config.rules에서 한 번 정해 전 절에 같은 규칙이 적용된다.
+    """
+    from src.db.session import async_session_maker
+    from src.services.prompts import resolve_rules
+
+    async with async_session_maker() as session:
+        return await resolve_rules(session, owner_id, selected)
+
+
 async def _default_analyst_catalog(owner_id) -> dict:
     """개인→시스템 병합 에이전트 카탈로그(id·name 양쪽 키) — 작성기 주입용.
 
@@ -774,7 +787,22 @@ _draft_store = _default_draft_store
 _sections_cleaner = _default_sections_cleaner
 _working_copy = _default_working_copy
 _analyst_catalog = _default_analyst_catalog
+_rule_texts = _default_rule_texts
 _pm_verifier: Callable[[ProjectState], Awaitable[int]] = _default_pm_verifier
+
+
+def _selected_rule_ids(state: ProjectState) -> list[UUID]:
+    """config.rules(개인 작성 규칙 id) 파싱 — 잘못된 값은 조용히 버린다(검증은 생성 시)."""
+    raw = state.options.get("rules") if isinstance(state.options, dict) else None
+    if not isinstance(raw, list):
+        return []
+    out: list[UUID] = []
+    for x in raw:
+        try:
+            out.append(UUID(str(x)))
+        except (ValueError, TypeError):
+            continue
+    return out
 
 
 async def write(state: ProjectState) -> ProjectState:
@@ -790,6 +818,7 @@ async def write(state: ProjectState) -> ProjectState:
     await _sections_cleaner(state.project_id)  # 이전 런 잔재 제거(증분 초안과 혼재 방지)
     models = _models_for(state)
     catalog = await _analyst_catalog(state.user_id)
+    rules = await _rule_texts(state.user_id, _selected_rule_ids(state))
     result = await run_write_loop(
         state,
         retrieve=retrieve,
@@ -798,6 +827,7 @@ async def write(state: ProjectState) -> ProjectState:
         plan_model=models["write_plan"],
         draft_store=_draft_store,
         analyst_catalog=catalog,
+        rules=rules,
     )
     emit_phase(state.project_id, "writing", "completed")
     return auto_select_survivors(result)

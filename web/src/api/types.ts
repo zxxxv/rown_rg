@@ -90,6 +90,9 @@ export const ProjectConfigSchema = z.object({
   outline: OutlineSchema.optional(),
   // 품질 모드 - economy(Haiku, 저비용)/standard(전역 설정 모델). 백엔드 stages._models_for 소비.
   model_mode: z.enum(["economy", "standard"]),
+  // 이 보고서에 적용할 개인 작성 규칙 id 목록(백엔드 stages._selected_rule_ids 소비).
+  // optional: 이 필드 도입 전 config가 catch로 통째 초기화되지 않게 한다.
+  rules: z.array(z.string()).optional(),
   // HyDE 검색 확장 - 백엔드 stages._hyde_enabled_for 소비(없으면 전역 기본 off).
   // optional: 이 필드 도입 전 프로젝트 config가 catch로 통째 초기화되지 않게 한다.
   hyde_enabled: z.boolean().optional(),
@@ -106,6 +109,7 @@ export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 export const DEFAULT_PROJECT_CONFIG: ProjectConfig = {
   preset: null,
   model_mode: "standard",
+  rules: [],
   hyde_enabled: false,
   notification_channels: [],
   enabled_analyzers: [],

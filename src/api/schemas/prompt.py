@@ -14,6 +14,16 @@ from pydantic import BaseModel, ConfigDict, Field
 PromptKind = Literal["agent", "rule"]
 
 
+class PromptSpec(BaseModel):
+    """프롬프트 텍스트로 표현할 수 없는 구조화 설정(에이전트 전용).
+
+    volume은 목표 분량 3단(short/normal/long) — 없으면 '보통'으로 동작한다.
+    """
+
+    volume: Literal["short", "normal", "long"] | None = None
+    queries: list[str] = Field(default_factory=list, max_length=10)
+
+
 class PersonalPromptCreate(BaseModel):
     kind: PromptKind = Field(..., description="agent(분석 에이전트) 또는 rule(작성 규칙)")
     name: str = Field(..., min_length=1, max_length=255)
@@ -22,6 +32,7 @@ class PersonalPromptCreate(BaseModel):
     base_ref: str | None = Field(None, max_length=100)
     cat: str | None = Field(None, max_length=100)
     description: str | None = Field(None, max_length=500)
+    spec: PromptSpec = Field(default_factory=PromptSpec)
 
 
 class PersonalPromptUpdate(BaseModel):
@@ -29,6 +40,7 @@ class PersonalPromptUpdate(BaseModel):
     content: str | None = Field(None, min_length=1)
     cat: str | None = Field(None, max_length=100)
     description: str | None = Field(None, max_length=500)
+    spec: PromptSpec | None = None
 
 
 class PersonalPromptRead(BaseModel):
@@ -41,6 +53,7 @@ class PersonalPromptRead(BaseModel):
     base_ref: str | None
     cat: str | None
     description: str | None
+    spec: dict = Field(default_factory=dict)
     updated_at: datetime
 
 

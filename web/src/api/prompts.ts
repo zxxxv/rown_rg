@@ -6,6 +6,16 @@ import { libraryKeys } from "@/api/library";
 export const PromptKindSchema = z.enum(["agent", "rule"]);
 export type PromptKind = z.infer<typeof PromptKindSchema>;
 
+/** 목표 분량 3단 - 에이전트에만 쓰인다. 절 분량과 분할 파트 수를 정하는 값. */
+export const PromptVolumeSchema = z.enum(["short", "normal", "long"]);
+export type PromptVolume = z.infer<typeof PromptVolumeSchema>;
+
+export const PromptSpecSchema = z.object({
+  volume: PromptVolumeSchema.nullish(),
+  queries: z.array(z.string()).default([]),
+});
+export type PromptSpec = z.infer<typeof PromptSpecSchema>;
+
 export const PersonalPromptSchema = z.object({
   id: z.string(),
   kind: PromptKindSchema,
@@ -14,6 +24,7 @@ export const PersonalPromptSchema = z.object({
   base_ref: z.string().nullish(),
   cat: z.string().nullish(),
   description: z.string().nullish(),
+  spec: PromptSpecSchema.default({ queries: [] }),
   updated_at: z.string(),
 });
 export type PersonalPrompt = z.infer<typeof PersonalPromptSchema>;
@@ -84,6 +95,7 @@ export interface CreatePersonalPromptBody {
   base_ref?: string | null;
   cat?: string | null;
   description?: string | null;
+  spec?: { volume?: PromptVolume; queries?: string[] };
 }
 
 export function useCreatePersonalPrompt() {
@@ -105,7 +117,13 @@ export function useUpdatePersonalPrompt(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationKey: [...promptKeys.personal(id), "update"],
-    mutationFn: async (body: { name?: string; content?: string }) => {
+    mutationFn: async (body: {
+      name?: string;
+      content?: string;
+      cat?: string | null;
+      description?: string | null;
+      spec?: { volume?: PromptVolume; queries?: string[] };
+    }) => {
       const data = await apiClient.patch<unknown>(`prompts/personal/${id}`, { json: body });
       return PersonalPromptSchema.parse(data);
     },

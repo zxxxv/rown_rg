@@ -5,6 +5,7 @@ import { ApiError } from "@/api/client";
 import {
   type PersonalPrompt,
   type PromptKind,
+  type PromptVolume,
   useCreatePersonalPrompt,
   useDeletePersonalPrompt,
   useListPersonalPrompts,
@@ -28,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/useAuth";
+import { cn } from "@/lib/utils";
 
 const KIND_META: Record<PromptKind, { title: string; desc: string; placeholder: string }> = {
   agent: {
@@ -215,6 +217,19 @@ function SystemReference({ kind }: { kind: PromptKind }) {
   );
 }
 
+const VOLUME_OPTIONS = [
+  { value: "short" as const, label: "짧게", hint: "4~7천자 · 2~4p" },
+  { value: "normal" as const, label: "보통", hint: "8천~1.2만자 · 5~8p" },
+  { value: "long" as const, label: "길게", hint: "1.5~2.2만자 · 10~15p" },
+];
+
+/** 작성 규칙이 꽂히는 자리. 시스템 조각과 1:1이고, 고르지 않으면 기존 규칙 뒤에 덧붙는다. */
+const RULE_SLOTS = [
+  { ref: "agent_source_rules", label: "출처 규칙" },
+  { ref: "agent_visual_rules", label: "시각자료 규칙" },
+  { ref: "agent_writing_style", label: "문체 규칙" },
+];
+
 function PromptDialog({
   kind,
   existing,
@@ -227,20 +242,55 @@ function PromptDialog({
   const meta = KIND_META[kind];
   const create = useCreatePersonalPrompt();
   const update = useUpdatePersonalPrompt(existing?.id ?? "");
+  const system = useListSystemPrompts(kind);
   const [name, setName] = useState(existing?.name ?? "");
   const [content, setContent] = useState(existing?.content ?? "");
+  const [cat, setCat] = useState(existing?.cat ?? "");
+  const [description, setDescription] = useState(existing?.description ?? "");
+  const [volume, setVolume] = useState<PromptVolume>(existing?.spec?.volume ?? "normal");
+  // 무엇을 덮어쓸지는 만들 때만 정한다(생성 시 확정, 이후 불변).
+  const [baseRef, setBaseRef] = useState<string>(existing?.base_ref ?? "");
   const pending = create.isPending || update.isPending;
   const valid = name.trim() !== "" && content.trim() !== "";
 
+  /** 시스템 원문을 폼에 채워 넣는다. 빈 칸에서 페르소나를 쓰라는 건 무리다. */
+  const copyFrom = (ref: string) => {
+    const found = system.data?.find((x) => x.ref === ref);
+    if (!found) return;
+    setContent(found.content);
+    if (!name.trim()) setName(kind === "agent" ? `${found.name} (내 버전)` : found.name);
+    if (kind === "agent" && !cat) setCat(found.cat ?? "");
+  };
+
+  const baseOptions =
+    kind === "rule"
+      ? RULE_SLOTS.map((x) => ({ ref: x.ref, label: x.label }))
+      : (system.data ?? []).map((x) => ({ ref: x.ref, label: x.name }));
+
   const save = async () => {
     if (!valid) return;
+    const spec = kind === "agent" ? { volume } : undefined;
     try {
       if (existing) {
-        await update.mutateAsync({ name: name.trim(), content: content.trim() });
-        toast.success(`"${name.trim()}" 저장됨`);
+        await update.mutateAsync({
+          name: name.trim(),
+          content: content.trim(),
+          cat: cat.trim() || null,
+          description: description.trim() || null,
+          spec,
+        });
+        toast.success(`${name.trim()} 저장됨`);
       } else {
-        await create.mutateAsync({ kind, name: name.trim(), content: content.trim() });
-        toast.success(`"${name.trim()}" 만들어짐`);
+        await create.mutateAsync({
+          kind,
+          name: name.trim(),
+          content: content.trim(),
+          base_ref: baseRef || null,
+          cat: cat.trim() || null,
+          description: description.trim() || null,
+          spec,
+        });
+        toast.success(`${name.trim()} 만들어짐`);
       }
       onClose();
     } catch (err) {
@@ -250,18 +300,60 @@ function PromptDialog({
 
   return (
     <Dialog open onOpenChange={(o) => (!o ? onClose() : undefined)}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {existing ? "편집" : "새로 만들기"} - {meta.title}
           </DialogTitle>
           <DialogDescription>
             {kind === "agent"
-              ? "이름은 목차 설계에서 이 분석가를 고를 때 표시됩니다."
-              : "이름이 시스템 규칙과 같으면 그 규칙을 덮어씁니다."}
+              ? "여기서 만든 에이전트는 프로젝트 생성 화면의 목차에서 절에 배정하면 적용됩니다."
+              : "작성 규칙은 프로젝트 생성 화면에서 선택해야 그 보고서에 적용됩니다."}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
+          {!existing ? (
+            <div className="flex flex-col gap-1.5">
+              <Label>{kind === "agent" ? "시스템 에이전트 덮어쓰기" : "대체할 자리"}</Label>
+              <p className="text-xs text-fg-tertiary">
+                {kind === "agent"
+                  ? "고르면 그 에이전트를 내 버전으로 대체하고 원문이 아래에 채워집니다. 비워두면 새 에이전트로 추가됩니다."
+                  : "고른 자리의 회사 표준 규칙을 대체하고 원문이 아래에 채워집니다. 비워두면 기존 규칙 뒤에 추가됩니다."}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setBaseRef("")}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-xs",
+                    baseRef === ""
+                      ? "border-accent bg-bg-info font-medium text-fg"
+                      : "border-border bg-bg text-fg-secondary hover:border-fg-tertiary",
+                  )}
+                >
+                  {kind === "agent" ? "새로 만들기" : "추가 규칙"}
+                </button>
+                {baseOptions.map((opt) => (
+                  <button
+                    key={opt.ref}
+                    type="button"
+                    onClick={() => {
+                      setBaseRef(opt.ref);
+                      copyFrom(opt.ref);
+                    }}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-xs",
+                      baseRef === opt.ref
+                        ? "border-accent bg-bg-info font-medium text-fg"
+                        : "border-border bg-bg text-fg-secondary hover:border-fg-tertiary",
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="prompt-name">이름</Label>
             <Input
@@ -269,6 +361,54 @@ function PromptDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={meta.placeholder}
+              disabled={pending}
+            />
+          </div>
+          {kind === "agent" ? (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <Label>목표 분량</Label>
+                <p className="text-xs text-fg-tertiary">
+                  이 에이전트를 배정한 절의 목표 분량이고 분할 작성 파트 수도 여기서 정해집니다.
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {VOLUME_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setVolume(opt.value)}
+                      className={cn(
+                        "rounded border px-3 py-1.5 text-left text-xs",
+                        volume === opt.value
+                          ? "border-accent bg-bg-info text-fg"
+                          : "border-border bg-bg text-fg-secondary hover:border-fg-tertiary",
+                      )}
+                    >
+                      <span className="font-medium">{opt.label}</span>
+                      <span className="ml-1.5 text-fg-tertiary">{opt.hint}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="prompt-cat">분류</Label>
+                <Input
+                  id="prompt-cat"
+                  value={cat}
+                  onChange={(e) => setCat(e.target.value)}
+                  placeholder="예: 정책, 시장, 기술"
+                  disabled={pending}
+                />
+              </div>
+            </>
+          ) : null}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="prompt-desc">한 줄 설명</Label>
+            <Input
+              id="prompt-desc"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="목록에서 이 항목을 알아볼 설명"
               disabled={pending}
             />
           </div>

@@ -1,9 +1,9 @@
 import base64
 import re
-import traceback
 import zlib
 from typing import Annotated
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import or_, select
@@ -31,15 +31,25 @@ from src.infrastructure.auth import (
     jwt_handler,
     lockout_handler,
     password_handler,
+    rate_limiter,
     refresh_token_handler,
     totp_handler,
 )
 from src.infrastructure.auth.saml import init_saml_auth
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = structlog.get_logger(__name__)
 
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.access_token_expire_minutes
 REFRESH_TOKEN_EXPIRE_DAYS = settings.refresh_token_expire_days
+
+
+def _client_ip(request: Request) -> str:
+    """엣지(Caddy)가 덮어쓴 X-Forwarded-For의 실제 클라이언트 IP. 없으면 소켓 peer."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
 
 
 def _set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
@@ -105,13 +115,25 @@ async def register(
 
 @router.post("/login", response_model=TokenPair)
 async def login(
+    request: Request,
     response: Response,
     data: LoginRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
 ) -> TokenPair:
+    # per-IP 실패 rate limit — 계정 잠금(계정당)이 못 막는 패스워드 스프레이·계정잠금 DoS 완화.
+    # 실패만 세므로 성공 로그인은 누적되지 않는다(사무실 공유 IP 안전). 조회 전에 검사해
+    # 이미 차단된 IP는 아무 일도 하지 않는다.
+    client_ip = _client_ip(request)
+    if rate_limiter.is_blocked(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="로그인 실패가 너무 많습니다. 잠시 후 다시 시도하세요.",
+        )
+
     stmt = select(User).where(or_(User.email == data.login_id, User.username == data.login_id))
     user = (await session.execute(stmt)).scalar_one_or_none()
     if user is None:
+        rate_limiter.record_failure(client_ip)
         raise AuthenticationError(
             message="아이디 또는 비밀번호가 올바르지 않습니다",
             code="INVALID_CREDENTIALS",
@@ -134,6 +156,7 @@ async def login(
         )
 
     if not password_handler.verify_password(data.password, user.password_hash):
+        rate_limiter.record_failure(client_ip)
         lockout_handler.record_failed_attempt(user)
         # 거부 직전 영속화: 실패 카운트는 롤백되면 잠금이 동작하지 않으므로 먼저 확정한다.
         await persist_before_reject(session)
@@ -144,12 +167,14 @@ async def login(
 
     if user.totp_secret:
         if not data.totp_code or not totp_handler.verify_totp(user.totp_secret, data.totp_code):
+            rate_limiter.record_failure(client_ip)
             lockout_handler.record_failed_attempt(user)
             # 거부 직전 영속화: 위와 동일 — TOTP 실패도 잠금 카운트에 반영되어야 한다.
             await persist_before_reject(session)
             raise AuthenticationError(message="TOTP 코드가 올바르지 않습니다", code="INVALID_TOTP")
 
     lockout_handler.reset_attempts(user)
+    rate_limiter.reset(client_ip)  # 성공 시 이 IP의 실패 카운트 초기화
     user.last_login_at = now()
 
     refresh_token = await refresh_token_handler.issue(session, user.id)
@@ -244,10 +269,11 @@ async def saml_login(request: Request):
         auth = await init_saml_auth(request, base_url)
         react_frontend_url = settings.react_frontend_url
         return RedirectResponse(url=auth.login(return_to=react_frontend_url))
-    except Exception as e:
+    except Exception:
+        logger.exception("saml.login_url_failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"SAML 로그인 URL 생성 실패: {str(e)}",
+            detail="SAML 로그인을 시작할 수 없습니다.",
         )
 
 
@@ -289,17 +315,19 @@ async def saml_acs(
             if not errors and auth.is_authenticated():
                 user_email = auth.get_nameid()
             elif not is_local:
+                logger.warning("saml.validation_failed", reason=auth.get_last_error_reason())
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=f"SAML 검증 실패: {auth.get_last_error_reason()}",
+                    detail="SAML 인증에 실패했습니다.",
                 )
         except HTTPException:
             raise
-        except Exception as library_err:
+        except Exception:
+            logger.exception("saml.acs_processing_error")
             if not is_local:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=f"SAML 인증 처리 중 예외 발생: {str(library_err)}",
+                    detail="SAML 인증에 실패했습니다.",
                 )
 
         if not user_email and raw_xml:
@@ -357,9 +385,9 @@ async def saml_acs(
 
     except HTTPException:
         raise
-    except Exception as e:
-        traceback.print_exc()
+    except Exception:
+        logger.exception("saml.acs_unhandled_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"서버 내부 오류 발생: {str(e)}",
+            detail="인증 처리 중 오류가 발생했습니다.",
         )

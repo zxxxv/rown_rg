@@ -59,4 +59,5 @@ app.include_router(ws_router)
 
 @app.get("/health")
 async def health_check() -> dict[str, str]:
-    return {"status": "healthy", "environment": settings.environment}
+    # 환경 문자열은 노출하지 않는다(정보 최소화) — 로드밸런서/헬스체크엔 status면 충분.
+    return {"status": "healthy"}

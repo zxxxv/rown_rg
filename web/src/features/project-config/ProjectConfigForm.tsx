@@ -14,6 +14,7 @@ import { ModelModePicker } from "./ModelModePicker";
 import { OutlineDesigner } from "./OutlineDesigner";
 import { PresetSelect } from "./PresetSelect";
 import { defaultsForPreset, presetLabel } from "./presets";
+import { RulePicker } from "./RulePicker";
 import { SourceChannels } from "./SourceChannels";
 import { ProjectFormSchema, type ProjectFormValues } from "./schema";
 
@@ -100,11 +101,14 @@ export function ProjectConfigForm({
           <Section number={3} title="목차 설계">
             <OutlineDesigner />
           </Section>
-          <Section number={4} title="모델 품질" badge={isEdit ? "수정 불가" : undefined}>
+          <Section number={4} title="작성 규칙">
+            <RulePicker disabled={isEdit} />
+          </Section>
+          <Section number={5} title="모델 품질" badge={isEdit ? "수정 불가" : undefined}>
             {/* 작성 깊이 UI는 제거 - 분할 생성 배선 이후 깊이는 항상 full_report(2026-08-07) */}
             <ModelModePicker disabled={isEdit} />
           </Section>
-          <Section number={5} title="알림">
+          <Section number={6} title="알림">
             <NotificationChannels />
           </Section>
 

@@ -15,7 +15,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import NotFoundError, ValidationError
 from src.db.models.user_prompt import UserPrompt
-from src.prompts import AnalystSpec, list_analysts
+from src.prompts import AnalystSpec, VolumeTarget, list_analysts, load_component
+
+# 개인 에이전트의 목표 분량 3단 — 폼에서 고르는 값이 여기서 실제 목표가 된다.
+# 시스템 카탈로그 실측 범위(정책분석 15000~22500 등)에 맞춰 잡았다.
+VOLUME_PRESETS: dict[str, VolumeTarget] = {
+    "short": VolumeTarget(min_chars=4000, max_chars=7000, pages="2~4p"),
+    "normal": VolumeTarget(min_chars=8000, max_chars=12000, pages="5~8p"),
+    "long": VolumeTarget(min_chars=15000, max_chars=22500, pages="10~15p"),
+}
+
+# 작성 규칙 슬롯 — 시스템 조각 3종의 고정 순서. 개인 규칙은 base_ref로 이 중
+# 하나를 교체하거나(슬롯 교체), base_ref 없이 뒤에 덧붙는다(추가 규칙).
+RULE_SLOTS: tuple[str, ...] = ("agent_source_rules", "agent_visual_rules", "agent_writing_style")
+
+
+def volume_from_spec(spec: dict | None) -> VolumeTarget | None:
+    """spec.volume(short|normal|long) → 목표 분량. 값이 없거나 모르면 None."""
+    if not isinstance(spec, dict):
+        return None
+    return VOLUME_PRESETS.get(str(spec.get("volume") or ""))
+
 
 VALID_KINDS = ("agent", "rule")
 
@@ -58,6 +78,7 @@ async def create_personal(
     base_ref: str | None = None,
     cat: str | None = None,
     description: str | None = None,
+    spec: dict | None = None,
 ) -> UserPrompt:
     _check_kind(kind)
     row = UserPrompt(
@@ -68,6 +89,7 @@ async def create_personal(
         base_ref=base_ref,
         cat=cat,
         description=description,
+        spec=spec or {},
     )
     session.add(row)
     await session.flush()
@@ -84,6 +106,7 @@ async def update_personal(
     content: str | None = None,
     cat: str | None = None,
     description: str | None = None,
+    spec: dict | None = None,
 ) -> UserPrompt:
     """개인 프롬프트 수정 — kind·base_ref는 불변(오버라이드 대상은 생성 시 확정)."""
     row = await get_personal(session, owner_id, prompt_id)
@@ -95,6 +118,8 @@ async def update_personal(
         row.cat = cat
     if description is not None:
         row.description = description
+    if spec is not None:
+        row.spec = spec
     await session.flush()
     await session.refresh(row)
     return row
@@ -135,6 +160,8 @@ async def resolve_analysts(session: AsyncSession, owner_id: UUID) -> list[Analys
                         "prompt": ov.content,
                         "desc": ov.description or spec.desc,
                         "cat": ov.cat or spec.cat,
+                        # 분량은 고쳐 적었으면 그 값, 아니면 원본 승계.
+                        "volume_target": volume_from_spec(ov.spec) or spec.volume_target,
                     }
                 )
             )
@@ -149,9 +176,44 @@ async def resolve_analysts(session: AsyncSession, owner_id: UUID) -> list[Analys
                     name=p.name,
                     cat=p.cat or "개인",
                     desc=p.description or "",
-                    queries=[],
+                    queries=[q for q in (p.spec or {}).get("queries", []) if isinstance(q, str)],
                     prompt=p.content,
-                    volume_target=None,
+                    # 목표 분량이 없으면 절 분량 목표가 통째로 사라져(=짧은 절) 개인
+                    # 에이전트를 배정할수록 손해였다. 지정 없으면 '보통'을 기본으로 준다.
+                    volume_target=volume_from_spec(p.spec) or VOLUME_PRESETS["normal"],
                 )
             )
     return merged
+
+
+async def resolve_rules(
+    session: AsyncSession, owner_id: UUID, selected_ids: list[UUID] | None = None
+) -> list[str]:
+    """작성 규칙 텍스트 목록 — 시스템 3종 슬롯에 선택된 개인 규칙을 얹어 돌려준다.
+
+    selected_ids가 None이거나 비면 회사 표준 3종 그대로다(기존 동작). 선택된 개인
+    규칙 중 base_ref가 슬롯 이름이면 그 자리를 교체하고, base_ref가 없으면 맨 뒤에
+    추가 규칙으로 붙인다. 규칙은 보고서 단위 계약이라 프로젝트에서 한 번 고른다.
+    """
+    if not selected_ids:
+        return [load_component(name) for name in RULE_SLOTS]
+    rows = (
+        (
+            await session.execute(
+                select(UserPrompt).where(
+                    UserPrompt.owner_id == owner_id,
+                    UserPrompt.kind == "rule",
+                    UserPrompt.id.in_(list(selected_ids)),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    overrides = {r.base_ref: r for r in rows if r.base_ref in RULE_SLOTS}
+    out = [
+        overrides[name].content if name in overrides else load_component(name)
+        for name in RULE_SLOTS
+    ]
+    out.extend(r.content for r in rows if r.base_ref not in RULE_SLOTS)
+    return out

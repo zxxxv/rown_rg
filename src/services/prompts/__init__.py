@@ -6,6 +6,7 @@ from src.services.prompts.personal import (
     get_personal,
     list_personal,
     resolve_analysts,
+    resolve_rules,
     update_personal,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "get_personal",
     "list_personal",
     "resolve_analysts",
+    "resolve_rules",
     "update_personal",
 ]

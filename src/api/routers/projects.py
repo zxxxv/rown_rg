@@ -64,6 +64,7 @@ from src.db.models.review_point import ReviewPoint
 from src.db.models.section import Section
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
+from src.db.models.user_prompt import UserPrompt
 from src.db.models.verify_finding import VerifyFinding
 from src.prompts import list_presets, load_preset
 from src.services.generation.planner import MAX_SECTIONS
@@ -138,6 +139,43 @@ def _validate_outline_config(config: dict, known_analysts: set[str]) -> None:
         raise ValidationError(
             message=f"알 수 없는 분석 에이전트: {', '.join(unknown)}",
             code="UNKNOWN_ANALYST",
+        )
+
+
+async def _validate_rules_config(session: AsyncSession, owner_id: UUID, config: dict) -> None:
+    """config.rules(개인 작성 규칙 id 목록)가 내 규칙인지 확인한다.
+
+    규칙은 보고서 전체의 문체·출처 계약이라 프로젝트에서 한 번 고르고 고정된다.
+    남의 id를 넣어도 조용히 무시되면 '골랐는데 안 먹는' 거짓 스위치가 되므로 막는다.
+    """
+    raw = config.get("rules")
+    if not raw:
+        return
+    if not isinstance(raw, list) or len(raw) > 10:
+        raise ValidationError(message="rules 형식이 올바르지 않습니다", code="INVALID_RULES")
+    try:
+        ids = [UUID(str(x)) for x in raw]
+    except (ValueError, TypeError):
+        raise ValidationError(
+            message="rules 형식이 올바르지 않습니다", code="INVALID_RULES"
+        ) from None
+    rows = (
+        (
+            await session.execute(
+                select(UserPrompt.id).where(
+                    UserPrompt.owner_id == owner_id,
+                    UserPrompt.kind == "rule",
+                    UserPrompt.id.in_(ids),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    missing = sorted(str(i) for i in set(ids) - set(rows))
+    if missing:
+        raise ValidationError(
+            message=f"내 작성 규칙이 아닙니다: {', '.join(missing)}", code="UNKNOWN_RULE"
         )
 
 
@@ -263,6 +301,7 @@ async def create_project(
             code="OUTLINE_REQUIRED",
         )
     _validate_outline_config(data.config, await _known_analyst_names(session, current_user.id))
+    await _validate_rules_config(session, current_user.id, data.config)
     # 한도 사전 검사 — 초과 상태면 생성 자체를 429로 막는다(만들어놓고 실행 못 하는 orphan·
     # '생성됨'+'실행 실패' 겹침 방지). 메시지는 사람이 읽을 수 있는 사유를 그대로 전달한다.
     from src.clients.llm.quota_gate import check_user_quota
@@ -371,7 +410,7 @@ async def run_project(
     # 고갈로 작성 3절에서 정지 → 재개 수단 없음). 재개 위치는 runner가 status로 판단한다.
     from src.workflows.runner import is_running
 
-    resumable = project.status not in _TERMINAL_STATUSES and not is_running(project.id)
+    resumable = project.status not in _UNRUNNABLE_STATUSES and not is_running(project.id)
     if project.status != ProjectStage.CREATED.value and not resumable:
         raise ValidationError(
             message=f"실행할 수 없는 상태입니다(현재: {project.status})",
@@ -393,6 +432,14 @@ _TERMINAL_STATUSES = (
     ProjectStage.COMPLETED.value,
     ProjectStage.ARCHIVED.value,
     ProjectStage.CANCELLED.value,
+)
+
+# 다시 돌릴 수 없는 상태 — 취소는 여기 없다. 취소한 런은 직전 단계(config.cancelled_from)
+# 부터 이어서 재개한다. 개요 화면이 취소된 프로젝트에 '다시 시작' 버튼을 띄우는데
+# 가드가 막아 422가 나던 문제(2026-08-10).
+_UNRUNNABLE_STATUSES = (
+    ProjectStage.COMPLETED.value,
+    ProjectStage.ARCHIVED.value,
 )
 
 
@@ -425,6 +472,8 @@ async def cancel_project(
         return {"project_id": str(project.id), "status": "cancelling"}
 
     # 비실행(게이트 대기 등) — 즉시 확정. 대기 게이트는 취소로 해소.
+    # 재개 지점을 남겨야 '다시 시작'이 처음부터가 아니라 이어서 돈다.
+    project.config = {**(project.config or {}), "cancelled_from": project.status}
     project.status = ProjectStage.CANCELLED.value
     await session.execute(
         update(ReviewPoint)
@@ -528,6 +577,7 @@ async def update_project_config(
     """
     project = await _get_authorized_project(project_id, session, current_user)
     _validate_outline_config(data.config, await _known_analyst_names(session, current_user.id))
+    await _validate_rules_config(session, current_user.id, data.config)
     project.config = data.config
     await session.flush()
     await session.refresh(project)

@@ -91,6 +91,18 @@ class TestBuildWriterContext:
         assert load_analyst(_ANALYST).prompt not in ctx.system
 
 
+class TestRuleInjection:
+    def test_default_rules_when_not_injected(self):
+        ctx = build_writer_context(_section())
+        assert _STYLE in ctx.system
+
+    def test_injected_rules_replace_defaults(self):
+        """프로젝트에서 고른 개인 규칙이 회사 표준 자리를 대체한다."""
+        ctx = build_writer_context(_section(), None, ["내 문체 규칙: 무조건 존댓말"])
+        assert "내 문체 규칙: 무조건 존댓말" in ctx.system
+        assert _STYLE not in ctx.system
+
+
 class TestScaleForEvidence:
     def test_scarce_evidence_lowers_target_and_adds_guard(self):
         ctx = build_writer_context(_section(analysts=[_ANALYST]))
