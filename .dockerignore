@@ -1,0 +1,18 @@
+# 빌드 컨텍스트 축소 — models/는 이미지에 굽으므로 여기서 제외하지 않는다.
+.venv/
+pgdata/
+cache/
+.git/
+.gitignore
+.env
+.env.example
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/
+scripts/
+reports/
+notebooks/
+*.md

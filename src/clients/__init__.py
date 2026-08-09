@@ -1,44 +1,7 @@
-from src.clients.base import (
-    CompletionRequest,
-    CompletionResponse,
-    LLMClient,
-    LLMMode,
-    Message,
-)
-from src.clients.cost_calculator import PRICING, CostCalculator
-from src.clients.exceptions import (
-    CassetteNotFoundError,
-    LLMAPIError,
-    LLMClientError,
-    LLMRateLimitError,
-)
-from src.clients.factory import create_llm_client, get_llm_client, reset_llm_client
-from src.clients.token_tracker import (
-    get_context,
-    get_operation,
-    record_usage,
-    record_usage_safe,
-    token_context,
-)
+"""외부 시스템 클라이언트.
 
-__all__ = [
-    "PRICING",
-    "CassetteNotFoundError",
-    "CompletionRequest",
-    "CompletionResponse",
-    "CostCalculator",
-    "LLMAPIError",
-    "LLMClient",
-    "LLMClientError",
-    "LLMMode",
-    "LLMRateLimitError",
-    "Message",
-    "create_llm_client",
-    "get_context",
-    "get_llm_client",
-    "get_operation",
-    "record_usage",
-    "record_usage_safe",
-    "reset_llm_client",
-    "token_context",
-]
+- LLM 호출(chat completion): src.clients.llm 서브패키지
+- 임베딩: src.clients.embedding_client
+- 리랭커: src.clients.reranker_client
+- 문서 파서: src.clients.parser
+"""

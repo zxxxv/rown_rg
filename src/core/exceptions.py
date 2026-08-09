@@ -25,5 +25,13 @@ class LLMError(BaseError):
     pass
 
 
+class QuotaExceededError(BaseError):
+    """월 비용 한도(사용자/조직) 초과로 LLM 호출이 차단됨 → HTTP 429."""
+
+
 class DatabaseError(BaseError):
+    pass
+
+
+class CostLimitExceededError(BaseError):
     pass

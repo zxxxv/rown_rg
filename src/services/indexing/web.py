@@ -1,0 +1,241 @@
+"""웹 소스 스테이징·인덱싱 — 파일 없는 웹 콘텐츠(content_md)를 다루는 경로.
+
+확정(SOURCE_POOL) 게이트를 사이에 두고 두 단계로 나뉜다:
+- stage(): 수집된 웹 출처를 project_sources 행으로 저장한다. 원문(content_md)은
+  metadata_(JSONB)에 담아 게이트 너머(재개=별도 프로세스, DB에서 복원)까지 살려둔다.
+  임베딩은 하지 않는다.
+- index_existing(): 사람이 채택한(is_included=true) 출처만 청킹·임베딩해 chunks에 넣는다.
+
+이렇게 나눠 임베딩을 확정 이후로 미룬다 — 제외된 자료는 임베딩 자체를 건너뛰어 비용을 아낀다.
+VectorIndexingService(vector.py)는 파일 파싱 전용이라 web_search 소스를 못 넣는다. 여기서는
+파싱 단계만 건너뛰고 동일한 뒷단(chunk_markdown → embed → chunks INSERT)을 재사용한다.
+
+트랜잭션 모델은 vector.py와 동일: source 행 INSERT(세션 #1, stage) → 임베딩(세션 밖, 느림)
+→ chunks 일괄 INSERT(세션 #2, index_existing). 임베딩이 DB 트랜잭션을 오래 잡지 않게 한다.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING
+from uuid import UUID, uuid4
+
+import structlog
+from pydantic import BaseModel
+from sqlalchemy import select
+
+from src.db.models.chunk import Chunk as ChunkModel
+from src.db.models.project_source import ProjectSource
+from src.services.indexing.vector import IndexingResult
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from src.clients.embedding_client import EmbeddingClient
+    from src.services.indexing._chunking import ChunkingService
+
+logger = structlog.get_logger(__name__)
+
+Track = str  # "content" | "style"
+Reliability = str  # "high" | "medium" | "low"
+
+# 원문을 게이트 너머까지 살려두는 저장 위치(project_sources.metadata_의 키).
+_CONTENT_MD_KEY = "content_md"
+
+
+class StagedWebSource(BaseModel):
+    """확정 후 색인 대상으로 DB에서 읽어온 웹 출처 1건(원문 포함)."""
+
+    source_id: UUID
+    content_md: str
+    title: str | None = None
+    url: str | None = None
+
+
+class WebSourceIndexer:
+    """웹 콘텐츠(마크다운)를 확정 전(stage)·후(index_existing)로 나눠 처리. 파서를 안 거친다."""
+
+    def __init__(
+        self,
+        *,
+        chunking_service: ChunkingService,
+        embedding_client: EmbeddingClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        self._chunking = chunking_service
+        self._embedding = embedding_client
+        self._session_maker = session_maker
+
+    async def stage(
+        self,
+        *,
+        project_id: UUID,
+        content_md: str,
+        url: str | None = None,
+        title: str | None = None,
+        reliability: Reliability | None = None,
+        matched_sections: list[str] | None = None,
+        page_age: str | None = None,
+    ) -> UUID:
+        """웹 출처 1건을 project_sources에 저장하고 source_id를 반환(임베딩 안 함).
+
+        원문은 metadata_[content_md]에 담겨 확정 게이트 이후 index_existing이 읽어간다.
+        source_id는 클라이언트에서 생성(uuid4)해 게이트 payload의 SourceRef.id와 일치시킨다 —
+        사람이 제외한 id가 그대로 is_included=false로 반영·색인 제외되게 한다.
+
+        업서트: 같은 URL의 기존 행이 본문 없이 남아 있으면(회수 실패 잔재) 새 행을
+        만들지 않고 그 행을 채운다 — '추가 검색'이 실패 출처를 재회수하면 껍데기가
+        실자료로 승격되고, id·채택 상태가 유지된다.
+        """
+        async with self._session_maker() as session:
+            if url:
+                existing = (
+                    (
+                        await session.execute(
+                            select(ProjectSource).where(
+                                ProjectSource.project_id == project_id,
+                                ProjectSource.url == url,
+                            )
+                        )
+                    )
+                    .scalars()
+                    .first()
+                )
+                if existing is not None:
+                    meta = dict(existing.metadata_ or {})
+                    if not (meta.get(_CONTENT_MD_KEY) or "").strip():
+                        meta[_CONTENT_MD_KEY] = content_md or ""
+                        meta["matched_sections"] = list(
+                            matched_sections or meta.get("matched_sections") or []
+                        )
+                        meta["page_age"] = page_age or meta.get("page_age")
+                        existing.metadata_ = meta
+                        existing.title = title or existing.title
+                        existing.reliability = reliability or existing.reliability
+                        await session.commit()
+                    # 본문이 이미 있으면 갱신 없이 기존 id 반환(중복 행 방지)
+                    return existing.id
+            source_id = uuid4()
+            session.add(
+                ProjectSource(
+                    id=source_id,
+                    project_id=project_id,
+                    source_type="web_search",
+                    title=title,
+                    url=url,
+                    reliability=reliability,
+                    metadata_={
+                        _CONTENT_MD_KEY: content_md or "",
+                        "matched_sections": list(matched_sections or []),
+                        "page_age": page_age,
+                    },
+                )
+            )
+            await session.commit()
+        return source_id
+
+    async def load_included(self, project_id: UUID) -> list[StagedWebSource]:
+        """확정 후 남은(is_included=true) 웹 출처를 원문과 함께 읽는다(색인 대상)."""
+        async with self._session_maker() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(ProjectSource).where(
+                            ProjectSource.project_id == project_id,
+                            ProjectSource.source_type == "web_search",
+                            ProjectSource.is_included.is_(True),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [
+            StagedWebSource(
+                source_id=row.id,
+                content_md=(row.metadata_ or {}).get(_CONTENT_MD_KEY) or "",
+                title=row.title,
+                url=row.url,
+            )
+            for row in rows
+        ]
+
+    async def index_existing(
+        self,
+        *,
+        project_id: UUID,
+        source_id: UUID,
+        content_md: str,
+        track: Track = "content",
+    ) -> IndexingResult:
+        """이미 존재하는 source_id의 원문을 청킹·임베딩해 chunks에 INSERT.
+
+        project_sources 행은 stage()가 이미 만들었으므로 여기서는 chunks만 넣는다.
+        """
+        t0 = time.perf_counter()
+        chunks = await self._chunking.chunk_markdown(content_md, source_id) if content_md else []
+        if not chunks:
+            elapsed = (time.perf_counter() - t0) * 1000
+            logger.info(
+                "web_indexing.complete",
+                project_id=str(project_id),
+                source_id=str(source_id),
+                chunks_created=0,
+                elapsed_ms=round(elapsed, 1),
+            )
+            return IndexingResult(
+                source_id=source_id, chunks_created=0, parse_cached=False, elapsed_ms=elapsed
+            )
+
+        embed_results = await self._embedding.embed_batch([c.content for c in chunks])
+
+        async with self._session_maker() as session:
+            session.add_all(
+                [
+                    ChunkModel(
+                        project_id=project_id,
+                        source_id=source_id,
+                        track=track,
+                        content=c.content,
+                        embedding=embed_results[i].embedding,
+                        chunk_index=c.chunk_index,
+                        metadata_=c.metadata,
+                    )
+                    for i, c in enumerate(chunks)
+                ]
+            )
+            await session.commit()
+
+        elapsed = (time.perf_counter() - t0) * 1000
+        logger.info(
+            "web_indexing.complete",
+            project_id=str(project_id),
+            source_id=str(source_id),
+            chunks_created=len(chunks),
+            elapsed_ms=round(elapsed, 1),
+        )
+        return IndexingResult(
+            source_id=source_id,
+            chunks_created=len(chunks),
+            parse_cached=False,
+            elapsed_ms=elapsed,
+        )
+
+
+def build_web_source_indexer() -> WebSourceIndexer:
+    """공유 임베딩 모델 + ChunkingService로 WebSourceIndexer를 조립.
+
+    임베딩 모델은 get_embedding_client() 싱글턴을 쓰므로 검색·인덱싱이 한 모델을 공유한다.
+    최초 호출 시 BGE-M3가 로드된다(무거움).
+    """
+    from src.clients.embedding_factory import get_embedding_client
+    from src.db.session import async_session_maker
+    from src.services.indexing._chunking import ChunkingService
+
+    embedder = get_embedding_client()
+    chunking = ChunkingService(embedder)
+    return WebSourceIndexer(
+        chunking_service=chunking,
+        embedding_client=embedder,
+        session_maker=async_session_maker,
+    )

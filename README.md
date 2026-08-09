@@ -43,6 +43,23 @@ uv run uvicorn src.main:app --reload
 > 환경변수 inline 실행 등 일부 명령이 달라서 자세한 절차와 명령어 대조표는
 > [docs/Windows_셋업_가이드.md](docs/Windows_셋업_가이드.md) 참고
 
+## 실행 (셋업을 마친 뒤 매번)
+
+PowerShell 기준, 터미널 2개로 백엔드와 프론트를 띄운다.
+
+```powershell
+# 터미널 1 — DB + 백엔드 (디렉터리: rown_rg)
+docker compose up -d                   # PostgreSQL (이미 떠 있으면 생략)
+uv run alembic upgrade head            # 마이그레이션 변경분 있을 때만
+uv run uvicorn src.main:app --reload   # → http://localhost:8000  (Swagger: /docs)
+
+# 터미널 2 — 프론트 (디렉터리: rown_rg/web)
+pnpm dev                               # → http://localhost:5173 (포트 점유 시 5174 등으로 자동)
+```
+
+- 프론트는 개발 환경에서 MSW 목으로 동작해 백엔드 없이도 뜬다 (자세한 건 [web/README.md](web/README.md)).
+- 종료: 각 터미널 `Ctrl+C`, DB는 `docker compose stop` (데이터는 유지).
+
 ## 환경변수
 
 `.env.example`을 `.env`로 복사해서 채워 넣기
@@ -58,18 +75,22 @@ uv run uvicorn src.main:app --reload
 | `ANTHROPIC_API_KEY` | LLM 호출 시 | — | Claude API 키 (`sk-ant-...`) |
 | `LOG_LEVEL` |  | `DEBUG` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 | `ENVIRONMENT` | ✓ | `local` | `local` / `staging` / `production` |
+| `SAML_BASE_URL` | SSO 시 | — | 네이버웍스 SSO용 SP 외부 주소(스킴 포함). 콘솔 등록 ACS/Issuer와 일치해야 함. 미설정 시 요청 호스트에서 추론 |
+| `REACT_FRONTEND_URL` |  | `http://localhost:5173` | SSO 로그인 성공 후 리다이렉트할 프론트 주소 |
 
 ## API 예시
 
 ```bash
-# 1. 초기 super_admin 생성 (한 번만)
-INITIAL_ADMIN_EMAIL=me@test.com INITIAL_ADMIN_PASSWORD='MyPass123!@' \
+# 1. 초기 super_admin 생성 (한 번만). 비밀번호는 12자 이상 + 대/소문자·숫자·특수문자 필수
+INITIAL_ADMIN_EMAIL=me@test.com INITIAL_ADMIN_PASSWORD='ChangeMe123!@#' \
   uv run python scripts/create_initial_admin.py
+# PowerShell:
+#   $env:INITIAL_ADMIN_EMAIL="me@test.com"; $env:INITIAL_ADMIN_PASSWORD='ChangeMe123!@#'; uv run python scripts/create_initial_admin.py
 
 # 2. 로그인 → access_token / refresh_token 받기
 curl -X POST http://localhost:8000/api/v1/auth/login \
   -H "content-type: application/json" \
-  -d '{"email":"me@test.com","password":"MyPass123!@"}'
+  -d '{"email":"me@test.com","password":"ChangeMe123!@#"}'
 
 # 3. access_token으로 내 정보 조회
 curl -H "Authorization: Bearer <ACCESS_TOKEN>" \
@@ -83,6 +104,53 @@ curl -X POST http://localhost:8000/api/v1/auth/register \
 ```
 
 엔드포인트 전체 목록은 서버를 띄운 뒤 <http://localhost:8000/docs> (Swagger UI)에서 확인 가능
+
+## 네이버웍스 SSO (SAML)
+
+일반 로그인(이메일/비밀번호)과 **별개의 로그인 경로**. 인증은 네이버웍스(IdP)가 하고, 우리 백엔드(SP)는 결과만 받는다.
+
+- **JIT 프로비저닝**: 네이버웍스로 처음 로그인한 사용자는 우리 DB에 `viewer`(비밀번호 없음)로 자동 생성된다. 사전 등록 불필요.
+- **쿠키 기반**: 로그인 성공 시 `access_token`·`refresh_token`을 HttpOnly 쿠키로 발급하고 프론트 `/callback`으로 리다이렉트.
+- 엔드포인트: `GET /api/v1/auth/saml/login`(시작) · `POST /api/v1/auth/saml/acs`(IdP 콜백) · `POST /api/v1/auth/saml/refresh`.
+
+흐름: 프론트 버튼 또는 `/saml/login` → 네이버웍스 로그인 → 네이버웍스가 **브라우저를 통해** `/saml/acs`로 SAMLResponse를 POST → 백엔드가 검증·유저 생성(JIT)·쿠키 발급 → `/callback`.
+
+### 로컬에서 끝까지 테스트 (ngrok 필요)
+
+네이버웍스(외부 IdP)가 결과를 POST하는 **ACS URL이 외부에서 도달 가능**해야 하고, **콘솔에 등록된 값과 정확히 일치**해야 한다. 그래서 순수 localhost로는 안 되고 터널(ngrok) 또는 배포가 필요하다.
+
+```powershell
+# 1) .env — 백엔드가 광고할 SP 주소를 터널 도메인으로 고정
+#    (빠지면 localhost를 광고 → 콘솔 등록값과 불일치 → 로그인 후 ACS로 안 오고 RelayState로 튕김)
+ENVIRONMENT=local                                       # 개발: SAML 서명검증 완화
+SAML_BASE_URL=https://<your-tunnel>.ngrok-free.dev
+REACT_FRONTEND_URL=http://localhost:5173                # ACS 성공 후 착지
+
+# 2) 백엔드(8000) 실행 후 같은 8000으로 터널
+ngrok http 8000 --domain=<your-tunnel>.ngrok-free.dev
+# 터널 확인 (ERR_NGROK_3200 이면 터널이 백엔드에 안 붙은 것)
+curl -H "ngrok-skip-browser-warning: true" https://<your-tunnel>.ngrok-free.dev/health
+
+# 3) 네이버웍스 Developer Console에 아래 두 값이 정확히 등록돼야 함
+#    ACS URL   : https://<your-tunnel>.ngrok-free.dev/api/v1/auth/saml/acs
+#    SP Issuer : https://<your-tunnel>.ngrok-free.dev/api/v1/auth/saml/metadata
+
+# 4) 브라우저에서 시작 → 네이버웍스 로그인
+#    https://<your-tunnel>.ngrok-free.dev/api/v1/auth/saml/login
+```
+
+**성공 판정** — 본인 이메일로 `viewer` 유저가 생기면 완료:
+
+```bash
+docker compose exec -T postgres psql -U dev -d rown -c \
+  "SELECT email, role, (password_hash IS NULL) AS sso FROM users ORDER BY created_at DESC LIMIT 3;"
+```
+
+**함정**
+
+- **ngrok 무료 경고 페이지**: 자동 POST가 "You are about to visit…" 페이지에 막힐 수 있음 → 테스트 전 브라우저로 터널 도메인을 한 번 방문해 "Visit Site" 클릭(쿠키 심김), 또는 유료 플랜.
+- **프론트 `/callback` 끝단**: 개발 환경 MSW 목 때문에 자동 로그인 완료가 깔끔하지 않을 수 있음 — SSO 성공 여부는 위 DB/백엔드 로그로 판정.
+- **`ENVIRONMENT=local`**: 서명검증을 끄는 개발 모드. 운영은 `production` + 인증서/서명 설정 정상화가 별도로 필요.
 
 ## pre-commit 안내
 
@@ -160,6 +228,9 @@ init-scripts/           # PostgreSQL 컨테이너 초기화 SQL (확장 활성�
 | 사용자 삭제 | ✓ | | | |
 | 자신의 프로젝트 CRUD | ✓ | ✓ | ✓ | |
 | 프로젝트 읽기·보고서 다운로드 | ✓ | ✓ | ✓ | ✓ |
+
+> 자료 라이브러리·프로젝트 자료 도메인 모델은 프론트 mock에서 먼저 잡혀 있음 —
+> 백엔드 도입 시 [`web/src/api/types.ts`](web/src/api/types.ts) (`LibraryFileMeta`, `Source`) 참고.
 
 ## 기여 가이드
 

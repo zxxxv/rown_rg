@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -44,3 +44,35 @@ class TokenUsageReadAdmin(TokenUsageRead):
     """Admin 전용 — cost_usd 포함"""
 
     cost_usd: Decimal
+
+
+class TokenUsageDailyPoint(BaseModel):
+    """일별 집계 — 마이페이지 사용량 차트용"""
+
+    date: date
+    input_tokens: int
+    output_tokens: int
+    cost_usd: Decimal
+
+
+class TokenUsageByModel(BaseModel):
+    """모델별 집계 — 마이페이지 사용량 표용"""
+
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: Decimal
+    request_count: int
+
+
+class MyTokenUsageResponse(BaseModel):
+    """현재 사용자의 기간(기본: 이번 달) 토큰 사용량 요약."""
+
+    period_start: date
+    period_end: date
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: Decimal
+    request_count: int
+    daily: list[TokenUsageDailyPoint]
+    by_model: list[TokenUsageByModel]

@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+
+.vite
+.DS_Store
+*.log
+
+# TypeScript 증분 빌드 캐시 (tsc -b 산출물 — 커밋 대상 아님)
+*.tsbuildinfo

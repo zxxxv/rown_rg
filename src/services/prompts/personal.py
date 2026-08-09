@@ -1,0 +1,256 @@
+"""개인 프롬프트 레이어 — 저장(CRUD) + 층화 해석(개인 → 시스템 폴백).
+
+시스템 카탈로그(src/prompts 파일)가 단일 진실이고, user_prompts는 그 위 오버레이다.
+- kind='agent': 분석 에이전트. base_ref가 시스템 에이전트(id/name)를 가리키면 그 프롬프트를
+  덮어쓰고, 없으면 새 개인 에이전트로 추가된다.
+- kind='rule' : 작성 규칙(components/*.md 대응). 트리에서 개인/시스템을 나란히 노출한다.
+"""
+
+from __future__ import annotations
+
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.core.exceptions import NotFoundError, ValidationError
+from src.db.models.user_prompt import UserPrompt
+from src.prompts import AnalystSpec, VolumeTarget, list_analysts, load_component
+from src.services.prompts.composer import compose_agent_prompt
+
+VALID_KINDS = ("agent", "rule")
+
+
+def _check_kind(kind: str) -> None:
+    if kind not in VALID_KINDS:
+        raise ValidationError(
+            message=f"알 수 없는 프롬프트 종류: {kind} (가능: {', '.join(VALID_KINDS)})",
+            code="INVALID_PROMPT_KIND",
+        )
+
+
+# 목표 분량은 숫자로 직접 받는다(천 단위). 3단 버튼으로는 시스템 21종의 실제 분포
+# (11,250~60,000자)를 담을 수 없었다 — 특허분석 2만~6만, 산업연관 1.1만~1.8만처럼
+# 종마다 다르다. 레거시 3단(spec.volume)은 예전에 저장된 값을 위해 남겨 둔다.
+VOLUME_PRESETS: dict[str, VolumeTarget] = {
+    "short": VolumeTarget(min_chars=8000, max_chars=12000, pages="5~8p"),
+    "normal": VolumeTarget(min_chars=15000, max_chars=22500, pages="10~15p"),
+    "long": VolumeTarget(min_chars=20000, max_chars=33750, pages="15~22p"),
+}
+
+# 사람이 넣을 수 있는 범위 — 아래로는 절 하나의 골격, 위로는 단일 절 현실 상한.
+MIN_VOLUME_CHARS = 1000
+MAX_VOLUME_CHARS = 60000
+# 페이지 환산 계수(자/페이지). 시스템 카탈로그 값들(15000~22500 = 10~15p 등)에서 역산.
+_CHARS_PER_PAGE = 1500
+
+# 작성 규칙 슬롯 — 시스템 조각 3종의 고정 순서. 개인 규칙은 base_ref로 이 중
+# 하나를 교체하거나(슬롯 교체), base_ref 없이 뒤에 덧붙는다(추가 규칙).
+RULE_SLOTS: tuple[str, ...] = ("agent_source_rules", "agent_visual_rules", "agent_writing_style")
+
+
+def pages_label(min_chars: int, max_chars: int) -> str:
+    """분량 범위 → '10~15p' 표기. 카탈로그 표기와 같은 계수로 환산한다."""
+    return f"{max(1, min_chars // _CHARS_PER_PAGE)}~{max(1, max_chars // _CHARS_PER_PAGE)}p"
+
+
+def volume_from_spec(spec: dict | None) -> VolumeTarget | None:
+    """spec → 목표 분량. 숫자(min_chars/max_chars)가 우선, 없으면 레거시 3단, 둘 다 없으면 None.
+
+    None이면 호출부가 원본 승계(시스템 에이전트 덮어쓰기) 또는 기본값을 쓴다 —
+    '지정하지 않음'과 '0으로 지정'을 구분해야 원본 분량이 조용히 깎이지 않는다.
+    """
+    if not isinstance(spec, dict):
+        return None
+    lo, hi = spec.get("min_chars"), spec.get("max_chars")
+    if isinstance(lo, int) and isinstance(hi, int) and MIN_VOLUME_CHARS <= lo < hi:
+        hi = min(hi, MAX_VOLUME_CHARS)
+        return VolumeTarget(min_chars=lo, max_chars=hi, pages=pages_label(lo, hi))
+    return VOLUME_PRESETS.get(str(spec.get("volume") or ""))
+
+
+async def list_personal(
+    session: AsyncSession, owner_id: UUID, kind: str | None = None
+) -> list[UserPrompt]:
+    """내 개인 프롬프트 목록(최신순). kind로 agent/rule 필터."""
+    stmt = select(UserPrompt).where(UserPrompt.owner_id == owner_id)
+    if kind is not None:
+        _check_kind(kind)
+        stmt = stmt.where(UserPrompt.kind == kind)
+    stmt = stmt.order_by(UserPrompt.updated_at.desc())
+    return list((await session.execute(stmt)).scalars())
+
+
+async def get_personal(session: AsyncSession, owner_id: UUID, prompt_id: UUID) -> UserPrompt:
+    """개인 프롬프트 1건 로드 + 소유자 확인."""
+    row = await session.get(UserPrompt, prompt_id)
+    if row is None or row.owner_id != owner_id:
+        raise NotFoundError(message="프롬프트를 찾을 수 없습니다", code="PROMPT_NOT_FOUND")
+    return row
+
+
+def _content_from(kind: str, name: str, content: str, spec: dict | None) -> str:
+    """칸 값(spec.sections)이 오면 프롬프트를 조합해 쓴다 — 자유 편집이면 원문 그대로.
+
+    조합 결과가 작성 경로의 단일 진실이다. 칸 값은 spec에 남아 재편집을 가능케 한다.
+    """
+    sections = (spec or {}).get("sections") if isinstance(spec, dict) else None
+    if kind == "agent" and isinstance(sections, dict) and any(sections.values()):
+        return compose_agent_prompt(name, sections)
+    return content
+
+
+async def create_personal(
+    session: AsyncSession,
+    owner_id: UUID,
+    *,
+    kind: str,
+    name: str,
+    content: str,
+    base_ref: str | None = None,
+    cat: str | None = None,
+    description: str | None = None,
+    spec: dict | None = None,
+) -> UserPrompt:
+    _check_kind(kind)
+    content = _content_from(kind, name, content, spec)
+    row = UserPrompt(
+        owner_id=owner_id,
+        kind=kind,
+        name=name,
+        content=content,
+        base_ref=base_ref,
+        cat=cat,
+        description=description,
+        spec=spec or {},
+    )
+    session.add(row)
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
+async def update_personal(
+    session: AsyncSession,
+    owner_id: UUID,
+    prompt_id: UUID,
+    *,
+    name: str | None = None,
+    content: str | None = None,
+    cat: str | None = None,
+    description: str | None = None,
+    spec: dict | None = None,
+) -> UserPrompt:
+    """개인 프롬프트 수정 — kind·base_ref는 불변(오버라이드 대상은 생성 시 확정)."""
+    row = await get_personal(session, owner_id, prompt_id)
+    if name is not None:
+        row.name = name
+    if content is not None:
+        row.content = content
+    if spec is not None and spec.get("sections"):
+        # 칸을 고쳤으면 본문을 다시 조합한다(이름 변경도 제목 줄에 반영).
+        row.content = _content_from(row.kind, name or row.name, row.content, spec)
+    if cat is not None:
+        row.cat = cat
+    if description is not None:
+        row.description = description
+    if spec is not None:
+        row.spec = spec
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
+async def delete_personal(session: AsyncSession, owner_id: UUID, prompt_id: UUID) -> None:
+    row = await get_personal(session, owner_id, prompt_id)
+    await session.delete(row)
+
+
+async def resolve_analysts(session: AsyncSession, owner_id: UUID) -> list[AnalystSpec]:
+    """개인 → 시스템 폴백으로 병합한 분석 에이전트 목록.
+
+    base_ref가 시스템 에이전트(id/name)를 가리키는 개인 에이전트는 그 프롬프트를 덮어쓰고,
+    base_ref 없는 개인 에이전트는 뒤에 새로 붙는다(id=`u-<uuid>`).
+    """
+    system = list_analysts()
+    personals = (
+        (
+            await session.execute(
+                select(UserPrompt).where(
+                    UserPrompt.owner_id == owner_id, UserPrompt.kind == "agent"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    overrides = {p.base_ref: p for p in personals if p.base_ref}
+
+    merged: list[AnalystSpec] = []
+    for spec in system:
+        ov = overrides.get(spec.id) or overrides.get(spec.name)
+        if ov is not None:
+            merged.append(
+                spec.model_copy(
+                    update={
+                        "prompt": ov.content,
+                        "desc": ov.description or spec.desc,
+                        "cat": ov.cat or spec.cat,
+                        # 분량은 고쳐 적었으면 그 값, 아니면 원본 승계 — 폼의
+                        # '원본 유지'가 spec.volume을 비워 보내 이 경로를 탄다.
+                        "volume_target": volume_from_spec(ov.spec) or spec.volume_target,
+                    }
+                )
+            )
+        else:
+            merged.append(spec)
+
+    for p in personals:
+        if not p.base_ref:
+            merged.append(
+                AnalystSpec(
+                    id=f"u-{p.id}",
+                    name=p.name,
+                    cat=p.cat or "개인",
+                    desc=p.description or "",
+                    queries=[q for q in (p.spec or {}).get("queries", []) if isinstance(q, str)],
+                    prompt=p.content,
+                    # 목표 분량이 없으면 절 분량 목표가 통째로 사라져(=짧은 절) 개인
+                    # 에이전트를 배정할수록 손해였다. 지정 없으면 '보통'을 기본으로 준다.
+                    volume_target=volume_from_spec(p.spec) or VOLUME_PRESETS["normal"],
+                )
+            )
+    return merged
+
+
+async def resolve_rules(
+    session: AsyncSession, owner_id: UUID, selected_ids: list[UUID] | None = None
+) -> list[str]:
+    """작성 규칙 텍스트 목록 — 시스템 3종 슬롯에 선택된 개인 규칙을 얹어 돌려준다.
+
+    selected_ids가 None이거나 비면 회사 표준 3종 그대로다(기존 동작). 선택된 개인
+    규칙 중 base_ref가 슬롯 이름이면 그 자리를 교체하고, base_ref가 없으면 맨 뒤에
+    추가 규칙으로 붙인다. 규칙은 보고서 단위 계약이라 프로젝트에서 한 번 고른다.
+    """
+    if not selected_ids:
+        return [load_component(name) for name in RULE_SLOTS]
+    rows = (
+        (
+            await session.execute(
+                select(UserPrompt).where(
+                    UserPrompt.owner_id == owner_id,
+                    UserPrompt.kind == "rule",
+                    UserPrompt.id.in_(list(selected_ids)),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    overrides = {r.base_ref: r for r in rows if r.base_ref in RULE_SLOTS}
+    out = [
+        overrides[name].content if name in overrides else load_component(name)
+        for name in RULE_SLOTS
+    ]
+    out.extend(r.content for r in rows if r.base_ref not in RULE_SLOTS)
+    return out

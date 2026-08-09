@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,10 +45,10 @@ class ProjectSource(Base):
         "metadata", JSONB, server_default="{}", nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    # Relationships
+    # 관계 매핑
     project: Mapped[Project] = relationship(back_populates="sources", lazy="raise")
     library_node: Mapped[LibraryNode | None] = relationship(lazy="raise")
     chunks: Mapped[list[Chunk]] = relationship(back_populates="source", lazy="raise")
@@ -61,5 +61,20 @@ class ProjectSource(Base):
         CheckConstraint(
             "reliability IN ('high', 'medium', 'low')",
             name="project_sources_reliability_check",
+        ),
+        # 부분 UNIQUE — library/upload UPSERT 키. web_search는 두 컬럼 모두 NULL이라 매번 INSERT.
+        Index(
+            "uq_project_sources_project_library",
+            "project_id",
+            "library_node_id",
+            unique=True,
+            postgresql_where="library_node_id IS NOT NULL",
+        ),
+        Index(
+            "uq_project_sources_project_upload",
+            "project_id",
+            "upload_path",
+            unique=True,
+            postgresql_where="upload_path IS NOT NULL",
         ),
     )

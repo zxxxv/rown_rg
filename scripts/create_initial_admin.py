@@ -13,15 +13,19 @@ import sys
 
 from sqlalchemy import select
 
+from src.core.asyncio_compat import configure_event_loop
 from src.db.models.user import User
 from src.db.session import async_engine, async_session_maker
 from src.infrastructure.auth.password_handler import hash_password, validate_password_policy
+
+configure_event_loop()
 
 
 async def main() -> int:
     email = os.environ.get("INITIAL_ADMIN_EMAIL")
     password = os.environ.get("INITIAL_ADMIN_PASSWORD")
     name = os.environ.get("INITIAL_ADMIN_NAME", "Initial Admin")
+    username = os.environ.get("INITIAL_ADMIN_USERNAME")  # 선택: 이메일 대신 로그인할 아이디
     if not email or not password:
         print(
             "ERROR: INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD must be set",
@@ -40,6 +44,7 @@ async def main() -> int:
 
             user = User(
                 email=email,
+                username=username,
                 name=name,
                 role="super_admin",
                 password_hash=hash_password(password),

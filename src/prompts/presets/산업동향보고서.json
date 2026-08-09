@@ -1,0 +1,170 @@
+{
+  "id": "산업동향보고서",
+  "name": "산업동향보고서",
+  "desc": "6챕터 11섹션",
+  "color": "#0e7490",
+  "builtIn": false,
+  "ch": 6,
+  "sec": 11,
+  "agents": [],
+  "chapters": [
+    {
+      "id": "ch01",
+      "title": "산업 개요",
+      "sections": [
+        {
+          "title": "산업 정의 및 범위",
+          "direction": "산업의 정의와 분류",
+          "key_points": [
+            "산업 분류",
+            "범위"
+          ],
+          "agents": [
+            "시장분석"
+          ]
+        },
+        {
+          "title": "밸류체인 구조",
+          "direction": "산업 밸류체인 분석",
+          "key_points": [
+            "밸류체인",
+            "주요 플레이어"
+          ],
+          "agents": [
+            "시장분석"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ch02",
+      "title": "거시환경 분석",
+      "sections": [
+        {
+          "title": "STEEP 분석",
+          "direction": "사회·기술·경제·환경·정치 분석",
+          "key_points": [
+            "5개 요인",
+            "핵심 트렌드"
+          ],
+          "agents": [
+            "STEEP분석"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ch03",
+      "title": "시장 동향 및 전망",
+      "sections": [
+        {
+          "title": "국내외 시장 규모",
+          "direction": "시장 규모 현황",
+          "key_points": [
+            "시장 규모",
+            "성장률"
+          ],
+          "agents": [
+            "시장분석"
+          ]
+        },
+        {
+          "title": "시장 전망",
+          "direction": "중장기 전망",
+          "key_points": [
+            "2030 전망",
+            "드라이버"
+          ],
+          "agents": [
+            "시장전망"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ch04",
+      "title": "기술 동향",
+      "sections": [
+        {
+          "title": "핵심 기술 현황",
+          "direction": "기술 수준 및 TRL",
+          "key_points": [
+            "TRL",
+            "핵심 기술"
+          ],
+          "agents": [
+            "R&D투자분석"
+          ]
+        },
+        {
+          "title": "R&D 동향",
+          "direction": "국내외 R&D 투자 동향",
+          "key_points": [
+            "R&D 투자",
+            "특허 동향"
+          ],
+          "agents": [
+            "특허분석"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ch05",
+      "title": "정책 동향",
+      "sections": [
+        {
+          "title": "국내 정책",
+          "direction": "국내 관련 정책",
+          "key_points": [
+            "법령",
+            "지원 정책"
+          ],
+          "agents": [
+            "정책동향"
+          ]
+        },
+        {
+          "title": "해외 정책",
+          "direction": "주요국 정책 비교",
+          "key_points": [
+            "주요 5개국",
+            "정책 시사점"
+          ],
+          "agents": [
+            "정책분석"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ch06",
+      "title": "SWOT 분석 및 시사점",
+      "sections": [
+        {
+          "title": "SWOT 분석",
+          "direction": "강점·약점·기회·위협 분석",
+          "key_points": [
+            "SWOT 매트릭스",
+            "교차 전략"
+          ],
+          "agents": [
+            "SWOT분석"
+          ]
+        },
+        {
+          "title": "시사점 및 제언",
+          "direction": "종합 시사점",
+          "key_points": [
+            "핵심 시사점",
+            "제언"
+          ],
+          "agents": [
+            "SWOT분석"
+          ]
+        }
+      ]
+    }
+  ],
+  "domain_context": "산업 동향 분석 보고서. 시장·기술·정책 관점의 종합 분석."
+}

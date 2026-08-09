@@ -8,18 +8,18 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.clients.base import CompletionRequest, CompletionResponse, Message
-from src.clients.cassette_manager import (
+from src.clients.llm.base import CompletionRequest, CompletionResponse, Message
+from src.clients.llm.cassette import (
     CassetteManager,
     compute_input_hash,
     resolve_cache_key,
 )
-from src.clients.exceptions import CassetteNotFoundError
-from src.clients.factory import create_llm_client
-from src.clients.token_tracker import token_context
+from src.clients.llm.exceptions import CassetteNotFoundError
+from src.clients.llm.factory import create_llm_client
+from src.clients.llm.token_tracker import token_context
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
-from tests.conftest import FIXTURE_PASSWORD
+from tests.conftest import FIXTURE_PASSWORD, _make_user
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -115,7 +115,7 @@ class TestAuthentication:
     async def test_login_success(self, test_client: AsyncClient, super_admin_user: User) -> None:
         response = await test_client.post(
             "/api/v1/auth/login",
-            json={"email": super_admin_user.email, "password": FIXTURE_PASSWORD},
+            json={"login_id": super_admin_user.email, "password": FIXTURE_PASSWORD},
         )
         assert response.status_code == 200
         body = response.json()
@@ -123,12 +123,25 @@ class TestAuthentication:
         assert body["refresh_token"]
         assert body["user"]["role"] == "super_admin"
 
+    async def test_login_with_username(
+        self, test_client: AsyncClient, test_session: AsyncSession
+    ) -> None:
+        await _make_user(
+            test_session, "rown_worker@test.com", "worker", "Rown Worker", username="rown_worker"
+        )
+        response = await test_client.post(
+            "/api/v1/auth/login",
+            json={"login_id": "rown_worker", "password": FIXTURE_PASSWORD},
+        )
+        assert response.status_code == 200
+        assert response.json()["user"]["username"] == "rown_worker"
+
     async def test_login_wrong_password(
         self, test_client: AsyncClient, super_admin_user: User
     ) -> None:
         response = await test_client.post(
             "/api/v1/auth/login",
-            json={"email": super_admin_user.email, "password": "WrongPass123!@"},
+            json={"login_id": super_admin_user.email, "password": "WrongPass123!@"},
         )
         assert response.status_code == 401
         assert response.json()["error"]["code"] == "INVALID_CREDENTIALS"
@@ -137,14 +150,14 @@ class TestAuthentication:
         for _ in range(5):
             r = await test_client.post(
                 "/api/v1/auth/login",
-                json={"email": worker_user.email, "password": "WrongPass123!@"},
+                json={"login_id": worker_user.email, "password": "WrongPass123!@"},
             )
             assert r.status_code == 401
             assert r.json()["error"]["code"] == "INVALID_CREDENTIALS"
 
         locked = await test_client.post(
             "/api/v1/auth/login",
-            json={"email": worker_user.email, "password": "WrongPass123!@"},
+            json={"login_id": worker_user.email, "password": "WrongPass123!@"},
         )
         assert locked.status_code == 401
         assert locked.json()["error"]["code"] == "ACCOUNT_LOCKED"
@@ -181,7 +194,7 @@ class TestAuthentication:
     ) -> None:
         login = await test_client.post(
             "/api/v1/auth/login",
-            json={"email": super_admin_user.email, "password": FIXTURE_PASSWORD},
+            json={"login_id": super_admin_user.email, "password": FIXTURE_PASSWORD},
         )
         refresh = login.json()["refresh_token"]
         r = await test_client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
@@ -210,7 +223,8 @@ class TestPermissions:
     ) -> None:
         response = await test_client.get("/api/v1/users", headers=_auth(admin_token))
         assert response.status_code == 200
-        emails = [u["email"] for u in response.json()]
+        body = response.json()
+        emails = [u["email"] for u in body["items"]]
         assert admin_user.email in emails
 
     async def test_only_super_admin_can_delete(
@@ -252,6 +266,124 @@ class TestPermissions:
 
 
 # ═══════════════════════════════════════════
+class TestUserSearchAndFilter:
+    """GET /users 검색·필터·정렬 검증."""
+
+    async def test_search_by_email_or_name_case_insensitive(
+        self, test_client: AsyncClient, test_session: AsyncSession, admin_token: str
+    ) -> None:
+        await _make_user(test_session, "alice@example.com", "worker", "Alice Kim")
+        await _make_user(test_session, "bob@example.com", "worker", "Bob Lee")
+
+        response = await test_client.get(
+            "/api/v1/users", params={"q": "ALICE"}, headers=_auth(admin_token)
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert [u["email"] for u in body["items"]] == ["alice@example.com"]
+        assert body["total"] == 1
+
+    async def test_filter_by_role(
+        self,
+        test_client: AsyncClient,
+        admin_token: str,
+        admin_user: User,
+        worker_user: User,
+        viewer_user: User,
+    ) -> None:
+        response = await test_client.get(
+            "/api/v1/users", params={"role": "worker"}, headers=_auth(admin_token)
+        )
+        assert response.status_code == 200
+        body = response.json()
+        emails = [u["email"] for u in body["items"]]
+        assert all(u["role"] == "worker" for u in body["items"])
+        assert worker_user.email in emails
+        assert admin_user.email not in emails
+        assert viewer_user.email not in emails
+
+    async def test_filter_by_is_active(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        admin_token: str,
+        worker_user: User,
+    ) -> None:
+        inactive = await _make_user(test_session, "inactive@example.com", "worker", "Inactive")
+        inactive.is_active = False
+        await test_session.commit()
+
+        response = await test_client.get(
+            "/api/v1/users", params={"is_active": "false"}, headers=_auth(admin_token)
+        )
+        assert response.status_code == 200
+        body = response.json()
+        emails = [u["email"] for u in body["items"]]
+        assert inactive.email in emails
+        assert worker_user.email not in emails
+        assert all(not u["is_active"] for u in body["items"])
+
+    async def test_search_and_filter_combined(
+        self, test_client: AsyncClient, test_session: AsyncSession, admin_token: str
+    ) -> None:
+        await _make_user(test_session, "carol.worker@example.com", "worker", "Carol Park")
+        await _make_user(test_session, "carol.viewer@example.com", "viewer", "Carol Choi")
+
+        response = await test_client.get(
+            "/api/v1/users",
+            params={"q": "carol", "role": "worker"},
+            headers=_auth(admin_token),
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert [u["email"] for u in body["items"]] == ["carol.worker@example.com"]
+        assert body["total"] == 1
+
+    async def test_list_without_filters_returns_all_with_total(
+        self,
+        test_client: AsyncClient,
+        admin_token: str,
+        admin_user: User,
+        worker_user: User,
+        viewer_user: User,
+    ) -> None:
+        response = await test_client.get("/api/v1/users", headers=_auth(admin_token))
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == len(body["items"])
+        emails = [u["email"] for u in body["items"]]
+        assert admin_user.email in emails
+        assert worker_user.email in emails
+        assert viewer_user.email in emails
+
+    async def test_search_with_no_match_returns_empty(
+        self, test_client: AsyncClient, admin_token: str, admin_user: User
+    ) -> None:
+        response = await test_client.get(
+            "/api/v1/users", params={"q": "no-such-user-xyz"}, headers=_auth(admin_token)
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["items"] == []
+        assert body["total"] == 0
+
+    async def test_sort_by_email_ascending(
+        self, test_client: AsyncClient, test_session: AsyncSession, admin_token: str
+    ) -> None:
+        await _make_user(test_session, "zeta@example.com", "worker", "Zeta")
+        await _make_user(test_session, "alpha@example.com", "worker", "Alpha")
+
+        response = await test_client.get(
+            "/api/v1/users",
+            params={"sort_by": "email", "order": "asc", "role": "worker"},
+            headers=_auth(admin_token),
+        )
+        assert response.status_code == 200
+        emails = [u["email"] for u in response.json()["items"]]
+        assert emails == sorted(emails)
+
+
+# ═══════════════════════════════════════════
 class TestLLMClient:
     """LLMClient 추상화 검증."""
 
@@ -280,7 +412,7 @@ class TestLLMClient:
         client = create_llm_client(
             mode="replay", allow_replay_fallback=False, cassette_dir=cassette_tmp_dir
         )
-        async with token_context(operation="replay_op"):
+        with token_context(operation="replay_op"):
             result = await client.complete(request)
 
         await _drain_background_tasks()
@@ -300,7 +432,7 @@ class TestLLMClient:
             max_tokens=10,
         )
         with pytest.raises(CassetteNotFoundError):
-            async with token_context(operation="missing_op"):
+            with token_context(operation="missing_op"):
                 await client.complete(request)
 
     async def test_token_usage_recorded(
@@ -328,7 +460,7 @@ class TestLLMClient:
         client = create_llm_client(
             mode="replay", allow_replay_fallback=False, cassette_dir=cassette_tmp_dir
         )
-        async with token_context(operation="track_op"):
+        with token_context(operation="track_op"):
             await client.complete(request)
 
         await _drain_background_tasks()

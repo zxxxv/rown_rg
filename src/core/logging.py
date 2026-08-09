@@ -6,14 +6,24 @@ import structlog
 from src.core.config import settings
 
 
-def setup_logging() -> None:
-    log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+class _StdoutHandler(logging.StreamHandler):
+    """StreamHandler that resolves sys.stdout at emit time.
 
-    logging.basicConfig(
-        format="%(message)s",
-        stream=sys.stdout,
-        level=log_level,
-    )
+    Why: pytest's capsys patches sys.stdout per-test; a handler bound to
+    sys.stdout at construction time would write to a stale buffer.
+    """
+
+    @property
+    def stream(self):
+        return sys.stdout
+
+    @stream.setter
+    def stream(self, _):
+        pass
+
+
+def configure_logging() -> None:
+    log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
@@ -29,9 +39,31 @@ def setup_logging() -> None:
         renderer = structlog.dev.ConsoleRenderer(colors=True)
 
     structlog.configure(
-        processors=[*shared_processors, renderer],
+        processors=[
+            *shared_processors,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
         wrapper_class=structlog.make_filtering_bound_logger(log_level),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+    formatter = structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=shared_processors,
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            renderer,
+        ],
+    )
+
+    handler = _StdoutHandler()
+    handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.addHandler(handler)
+    root_logger.setLevel(log_level)
+
+    for noisy in ("uvicorn.access", "httpx", "sqlalchemy.engine"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)

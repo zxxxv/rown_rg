@@ -24,6 +24,17 @@ from src.main import app
 TEST_DB_NAME = "rown_test"
 
 
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limiter() -> None:
+    """각 테스트 전에 로그인 실패 rate limiter의 인메모리 상태를 비운다(테스트 격리).
+
+    프로세스 전역 dict라, 테스트들이 같은 client IP로 반복 로그인하면 누적돼 429가 난다.
+    """
+    from src.infrastructure.auth import rate_limiter
+
+    rate_limiter.clear()
+
+
 def _swap_db_name(url: str, dbname: str) -> str:
     base, _ = url.rsplit("/", 1)
     return f"{base}/{dbname}"
@@ -94,7 +105,8 @@ async def test_session(
     app.dependency_overrides[get_async_session] = _override_get_async_session
     monkeypatch.setattr("src.db.session.async_session_maker", test_session_maker)
     monkeypatch.setattr("src.api.middleware.ip_whitelist.async_session_maker", test_session_maker)
-    monkeypatch.setattr("src.clients.token_tracker.async_session_maker", test_session_maker)
+    monkeypatch.setattr("src.clients.llm.token_tracker.async_session_maker", test_session_maker)
+    monkeypatch.setattr("src.api.routers.ws.async_session_maker", test_session_maker)
 
     try:
         async with test_session_maker() as session:
@@ -117,9 +129,12 @@ async def test_client(test_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 FIXTURE_PASSWORD = "TestPassword123!@"
 
 
-async def _make_user(session: AsyncSession, email: str, role: str, name: str) -> User:
+async def _make_user(
+    session: AsyncSession, email: str, role: str, name: str, username: str | None = None
+) -> User:
     user = User(
         email=email,
+        username=username,
         name=name,
         role=role,
         password_hash=hash_password(FIXTURE_PASSWORD),
@@ -154,7 +169,7 @@ async def viewer_user(test_session: AsyncSession) -> User:
 async def _login(test_client: AsyncClient, email: str) -> str:
     resp = await test_client.post(
         "/api/v1/auth/login",
-        json={"email": email, "password": FIXTURE_PASSWORD},
+        json={"login_id": email, "password": FIXTURE_PASSWORD},
     )
     assert resp.status_code == 200, resp.text
     return str(resp.json()["access_token"])

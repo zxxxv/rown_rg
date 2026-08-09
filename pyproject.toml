@@ -37,6 +37,25 @@ dependencies = [
     # 기타
     "httpx>=0.28",
     "python-dotenv>=1.0",
+    "python-hwpx>=2.9",
+    "optimum[exporters,onnxruntime]>=2.0",
+    "onnx>=1.17",
+    "docling>=1.0",
+    "pymupdf>=1.24",
+    "pymupdf4llm>=0.0.17",
+    "langchain-experimental>=0.4.1",
+    "langchain-text-splitters>=1.1.2",
+    # SSO
+    "python3-saml>=1.16.0",
+    "pyjwt[crypto]>=2.13.0",
+    "greenlet>=3.5.2",
+]
+
+[project.optional-dependencies]
+# onnxruntime-gpu는 base onnxruntime(CPU)을 덮어쓰며 같은 namespace를 점유한다.
+# 기본 sync는 CPU 표준을 유지하고, GPU 머신에서만 `uv sync --extra cuda` 로 전환한다.
+cuda = [
+    "onnxruntime-gpu>=1.20",
 ]
 
 [dependency-groups]
@@ -49,6 +68,9 @@ dev = [
     "pre-commit>=4.0",
 ]
 
+[tool.uv]
+no-binary-package = ["lxml", "xmlsec"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -60,7 +82,7 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP"]
+select = ["E", "F", "I", "W", "UP"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["src", "tests"]
@@ -79,6 +101,12 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = [
+    "unit: 단위 테스트 (빠름, mock 위주)",
+    "integration: 통합 테스트 (DB·외부 서비스 사용)",
+    "slow: 1초 이상 걸리는 테스트",
+    "requires_model: ML 모델 로딩 필요 (BGE-M3·Reranker 등)",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

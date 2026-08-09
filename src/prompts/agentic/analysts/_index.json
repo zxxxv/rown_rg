@@ -1,0 +1,152 @@
+{
+  "version": 2,
+  "items": [
+    {
+      "id": "a01",
+      "file": "a01_STEEP분석.json",
+      "label": "STEEP분석",
+      "builtIn": true,
+      "order": 1
+    },
+    {
+      "id": "a02",
+      "file": "a02_정책동향.json",
+      "label": "정책동향",
+      "builtIn": true,
+      "order": 2
+    },
+    {
+      "id": "a03",
+      "file": "a03_시장분석.json",
+      "label": "시장분석",
+      "builtIn": true,
+      "order": 3
+    },
+    {
+      "id": "a04",
+      "file": "a04_R_D투자분석.json",
+      "label": "R&D투자분석",
+      "builtIn": true,
+      "order": 4
+    },
+    {
+      "id": "a05",
+      "file": "a05_특허분석.json",
+      "label": "특허분석",
+      "builtIn": true,
+      "order": 5
+    },
+    {
+      "id": "a06",
+      "file": "a06_기술수준평가.json",
+      "label": "기술수준평가",
+      "builtIn": true,
+      "order": 6
+    },
+    {
+      "id": "a07",
+      "file": "a07_SWOT분석.json",
+      "label": "SWOT분석",
+      "builtIn": true,
+      "order": 7
+    },
+    {
+      "id": "a08",
+      "file": "a08_논리모형설계.json",
+      "label": "논리모형설계",
+      "builtIn": true,
+      "order": 8
+    },
+    {
+      "id": "a09",
+      "file": "a09_중복성검토.json",
+      "label": "중복성검토",
+      "builtIn": true,
+      "order": 9
+    },
+    {
+      "id": "a10",
+      "file": "a10_기술로드맵.json",
+      "label": "기술로드맵",
+      "builtIn": true,
+      "order": 10
+    },
+    {
+      "id": "a11",
+      "file": "a11_RFP구조화.json",
+      "label": "RFP구조화",
+      "builtIn": true,
+      "order": 11
+    },
+    {
+      "id": "a12",
+      "file": "a12_거버넌스설계.json",
+      "label": "거버넌스설계",
+      "builtIn": true,
+      "order": 12
+    },
+    {
+      "id": "a13",
+      "file": "a13_과학기술타당성.json",
+      "label": "과학기술타당성",
+      "builtIn": true,
+      "order": 13
+    },
+    {
+      "id": "a14",
+      "file": "a14_예산산출.json",
+      "label": "예산산출",
+      "builtIn": true,
+      "order": 14
+    },
+    {
+      "id": "a15",
+      "file": "a15_비용편익분석.json",
+      "label": "비용편익분석",
+      "builtIn": true,
+      "order": 15
+    },
+    {
+      "id": "a16",
+      "file": "a16_산업연관분석.json",
+      "label": "산업연관분석",
+      "builtIn": true,
+      "order": 16
+    },
+    {
+      "id": "a17",
+      "file": "a17_정책분석.json",
+      "label": "정책분석",
+      "builtIn": true,
+      "order": 17
+    },
+    {
+      "id": "a18",
+      "file": "a18_시장전망.json",
+      "label": "시장전망",
+      "builtIn": true,
+      "order": 18
+    },
+    {
+      "id": "a19",
+      "file": "a19_수요분석.json",
+      "label": "수요분석",
+      "builtIn": true,
+      "order": 19
+    },
+    {
+      "id": "a20",
+      "file": "a20_경쟁구도분석.json",
+      "label": "경쟁구도분석",
+      "builtIn": true,
+      "order": 20
+    },
+    {
+      "id": "a21",
+      "file": "a21_위험분석.json",
+      "label": "위험분석",
+      "builtIn": true,
+      "order": 21
+    }
+  ]
+}
