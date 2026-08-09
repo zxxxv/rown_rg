@@ -222,13 +222,16 @@ class TestWebSearchCaching:
 
         assert len(fake.messages.calls) == 2
         for kwargs in fake.messages.calls:
-            # top-level 자동 캐싱 — pause_turn 재전송 프리픽스를 턴마다 재사용
-            assert kwargs["cache_control"] == {"type": "ephemeral"}
             assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
-            # 요청 메시지 끝 고정 브레이크포인트(20블록 조회 한도 안전망)
-            first_user = kwargs["messages"][0]
-            assert first_user["content"][0]["cache_control"] == {"type": "ephemeral"}
-            assert first_user["content"][0]["text"] == "수집 스펙"
+
+        # 경계는 대화 끝으로 따라간다 — 그래야 직전 턴까지의 회수 본문이 다음 턴의
+        # 캐시 프리픽스가 된다. 옛 경계는 지운다(브레이크포인트 4개 상한).
+        # (두 호출이 같은 리스트를 공유하므로 관찰 가능한 건 최종 상태다.)
+        sent = fake.messages.calls[-1]["messages"]
+        assert sent[0]["content"][0]["text"] == "수집 스펙"
+        assert "cache_control" not in sent[0]["content"][0]
+        assert sent[-1]["role"] == "assistant"
+        assert sent[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
 
         assert response.cached_input_tokens == 900
         assert response.cache_write_input_tokens == 1500  # 턴 누적(1000+500)

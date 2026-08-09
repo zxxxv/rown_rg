@@ -103,6 +103,80 @@ def _scrub_base64_sources(node: Any) -> tuple[Any, int]:
     return node, 0
 
 
+# 캐시 브레이크포인트를 붙여도 안전한 블록 유형 — 서버 도구 결과·텍스트.
+# 목록에 없는 유형(thinking 등)에 붙이면 400으로 챕터가 통째로 죽으므로 보수적으로 간다.
+_CACHEABLE_BLOCK_TYPES = frozenset(
+    {
+        "text",
+        "tool_use",
+        "tool_result",
+        "server_tool_use",
+        "web_search_tool_result",
+        "web_fetch_tool_result",
+        "document",
+    }
+)
+
+
+def _block_to_dict(block: Any) -> Any:
+    """SDK 블록 → dict. 변환 못 하면 원본 그대로(그 블록엔 경계를 못 찍을 뿐)."""
+    if isinstance(block, dict):
+        return block
+    for attr in ("model_dump", "to_dict"):
+        fn = getattr(block, attr, None)
+        if callable(fn):
+            try:
+                return fn()
+            except Exception:  # pragma: no cover - SDK 변경 방어
+                return block
+    if hasattr(block, "__dict__"):
+        return dict(vars(block))
+    return block
+
+
+def _as_blocks(content: Any) -> list[Any] | None:
+    """메시지 content를 블록 리스트로 정규화(가능한 것만 dict로)."""
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    if not isinstance(content, list):
+        return None
+    return [_block_to_dict(b) for b in content]
+
+
+def _move_cache_boundary(messages: list[dict[str, Any]]) -> None:
+    """캐시 브레이크포인트를 대화 끝으로 옮긴다(롤링).
+
+    pause_turn 재전송은 직전 턴까지의 대화를 통째로 다시 보낸다 — 회수한 페이지
+    본문이 거기 쌓인다. 경계가 첫 요청 메시지에만 있으면 그 앞부분(수백 토큰)만
+    캐시되고, Haiku는 최소 캐시 길이가 4,096토큰이라 그마저 무시된다. 실측(7일):
+    수집 입력 14.3M 중 캐시 읽기 2.4M = 14%뿐이고 비용의 절반이 여기였다.
+    끝으로 옮기면 직전 턴까지 전부가 다음 턴의 캐시 프리픽스가 된다.
+    """
+    if not messages:
+        return
+    for m in messages:  # 이전 경계 제거 — 브레이크포인트는 4개 상한이 있다
+        if isinstance(m.get("content"), list):
+            for b in m["content"]:
+                if isinstance(b, dict):
+                    b.pop("cache_control", None)
+    last = messages[-1]
+    blocks = _as_blocks(last.get("content"))
+    if not blocks:
+        return
+    target = next(
+        (
+            b
+            for b in reversed(blocks)
+            if isinstance(b, dict) and b.get("type") in _CACHEABLE_BLOCK_TYPES
+        ),
+        None,
+    )
+    if target is None:
+        return
+    target["cache_control"] = {"type": "ephemeral"}
+    last["content"] = blocks
+
+
 class AnthropicAdapter(BaseLLMAdapter):
     provider = "anthropic"
 
@@ -201,14 +275,7 @@ class AnthropicAdapter(BaseLLMAdapter):
         # 전액 재과금당한다 — 수집 비용 지배 구간(2026-08-06 실측 런당 ~$2.4-2.6).
         # ①은 한 턴의 블록 수가 캐시 조회 한도(20블록)를 넘어 ②의 체인이 끊겨도
         # 시스템+도구+요청 프리픽스만은 항상 재사용되게 하는 안전망이다.
-        if anth_messages and isinstance(anth_messages[-1]["content"], str):
-            anth_messages[-1]["content"] = [
-                {
-                    "type": "text",
-                    "text": anth_messages[-1]["content"],
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ]
+        _move_cache_boundary(anth_messages)
         sources: dict[str, dict[str, Any]] = {}  # url -> WebSource 필드(부분 누적)
         text_parts: list[str] = []
         in_tok = out_tok = cached_tok = cache_write_tok = 0
@@ -222,7 +289,6 @@ class AnthropicAdapter(BaseLLMAdapter):
                 "messages": anth_messages,
                 "max_tokens": request.max_tokens,
                 "tools": tools,
-                "cache_control": {"type": "ephemeral"},
             }
             if request.system:
                 kwargs["system"] = self._cacheable_system(request.system)
@@ -251,6 +317,16 @@ class AnthropicAdapter(BaseLLMAdapter):
             ]
             stop_reason = result.stop_reason or "end_turn"
             model = result.model
+            # 턴별 캐시 효과 — 합계만 보면 '경계가 안 먹은 것'과 '새 내용이 많은 것'을
+            # 구분할 수 없다(2026-08-10 진단).
+            logger.info(
+                "anthropic.web_turn",
+                turn=len(anth_messages),
+                fresh=result.usage.input_tokens,
+                cache_read=getattr(result.usage, "cache_read_input_tokens", 0) or 0,
+                cache_write=getattr(result.usage, "cache_creation_input_tokens", 0) or 0,
+                stop=stop_reason,
+            )
 
             if stop_reason == "pause_turn":
                 # 서버 도구 루프 한도 → assistant content blocks를 돌려보내 이어간다.
@@ -258,6 +334,8 @@ class AnthropicAdapter(BaseLLMAdapter):
                 anth_messages.append(
                     {"role": "assistant", "content": self._sanitize_for_resend(result.content)}
                 )
+                # 다음 턴의 캐시 프리픽스 = 방금 턴까지 전부.
+                _move_cache_boundary(anth_messages)
                 continue
             break
 
