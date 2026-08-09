@@ -961,6 +961,18 @@ async def download_export(
             )
             # 약어 설명은 조립 시 저장한 사전(projects.glossary)에서 — 재렌더는 순수 코드.
             path = export_report(state, glossary=project.glossary)
+        except PermissionError:
+            # 표준 경로가 잠겨 있다(사용자가 한컴에서 그 파일을 열어둔 경우 흔하다).
+            # 폴백으로 옛 파일을 내주면 방금 고친 본문·표지가 반영 안 된 채 조용히
+            # 내려간다(2026-08-10 실측: 새 표지가 안 나옴). 임시 경로에 렌더해 서빙한다.
+            try:
+                tmp_dir = Path(settings.export_dir) / "_locked"
+                path = export_report(state, output_dir=tmp_dir, glossary=project.glossary)
+                logger.warning(
+                    "export.rerender_to_temp", project_id=str(project.id), path=str(path)
+                )
+            except Exception:
+                logger.warning("export.rerender_failed", project_id=str(project.id), exc_info=True)
         except Exception:
             logger.warning("export.rerender_failed", project_id=str(project.id), exc_info=True)
     if not path.is_file():
