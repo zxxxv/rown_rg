@@ -6,6 +6,7 @@ export const SYSTEM_PROMPTS: SystemPrompt[] = [
   {
     ref: "a01",
     kind: "agent",
+    sections: {},
     name: "STEEP분석",
     content:
       "너는 STEEP 분석 전문가다. 사회·기술·경제·환경·정치 관점에서 거시 환경을 구조적으로 분석하고, 각 요인이 대상 주제에 미치는 영향을 근거와 함께 개조식으로 정리한다.",
@@ -15,6 +16,7 @@ export const SYSTEM_PROMPTS: SystemPrompt[] = [
   {
     ref: "a07",
     kind: "agent",
+    sections: {},
     name: "SWOT분석",
     content: "너는 SWOT 분석가다. 강점·약점·기회·위협을 도출하고 SO/WO/ST/WT 전략을 제시한다.",
     cat: "전략",
@@ -23,6 +25,7 @@ export const SYSTEM_PROMPTS: SystemPrompt[] = [
   {
     ref: "a15",
     kind: "agent",
+    sections: {},
     name: "비용편익분석",
     content: "너는 비용편익분석가다. 비용과 편익을 정량화해 B/C 비율과 순현재가치를 산출한다.",
     cat: "경제성",
@@ -31,12 +34,14 @@ export const SYSTEM_PROMPTS: SystemPrompt[] = [
   {
     ref: "agent_writing_style",
     kind: "rule",
+    sections: {},
     name: "agent_writing_style",
     content: "개조식·간결·근거 중심으로 작성한다. 한 문장 한 논지, 수식어 최소화.",
   },
   {
     ref: "agent_source_rules",
     kind: "rule",
+    sections: {},
     name: "agent_source_rules",
     content: "모든 사실 주장에는 출처를 명시한다. 추정과 사실을 구분해 표기한다.",
   },
@@ -52,7 +57,7 @@ export const PERSONAL_PROMPTS: PersonalPrompt[] = [
     base_ref: null,
     cat: "커스텀",
     description: "사내 전용",
-    spec: { volume: "normal", queries: [] },
+    spec: { volume: "normal", queries: [], sections: {} },
     updated_at: new Date("2026-05-20T00:00:00Z").toISOString(),
   },
 ];

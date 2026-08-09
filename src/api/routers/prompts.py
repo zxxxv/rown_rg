@@ -30,6 +30,7 @@ from src.services.prompts import (
     list_personal,
     update_personal,
 )
+from src.services.prompts.composer import parse_agent_prompt
 
 router = APIRouter(prefix="/prompts", tags=["prompts"])
 
@@ -130,6 +131,23 @@ async def delete_my_prompt(
 # ─── 시스템 카탈로그 (읽기전용) ──────────────────────────────────────────────
 
 
+def _system_agent(a) -> SystemPromptRead:
+    """시스템 에이전트 → 응답. 칸(sections)과 분량을 함께 실어 '복제해서 시작'이
+    폼을 바로 채우게 한다 — 프론트에서 다시 파싱하면 구현이 둘로 갈린다."""
+    v = a.volume_target
+    return SystemPromptRead(
+        ref=a.id,
+        kind="agent",
+        name=a.name,
+        content=a.prompt,
+        cat=a.cat,
+        description=a.desc,
+        sections=parse_agent_prompt(a.prompt),
+        min_chars=v.min_chars if v else None,
+        max_chars=v.max_chars if v else None,
+    )
+
+
 @router.get("/system", response_model=list[SystemPromptRead])
 async def list_system_prompts(
     _: Annotated[User, Depends(get_current_active_user)],
@@ -138,17 +156,7 @@ async def list_system_prompts(
     """시스템 프롬프트 카탈로그(내용 포함). kind=agent/rule 필터."""
     items: list[SystemPromptRead] = []
     if kind in (None, "agent"):
-        items.extend(
-            SystemPromptRead(
-                ref=a.id,
-                kind="agent",
-                name=a.name,
-                content=a.prompt,
-                cat=a.cat,
-                description=a.desc,
-            )
-            for a in list_analysts()
-        )
+        items.extend(_system_agent(a) for a in list_analysts())
     if kind in (None, "rule"):
         items.extend(
             SystemPromptRead(ref=name, kind="rule", name=name, content=load_component(name))
@@ -170,9 +178,7 @@ async def get_system_prompt(
             raise NotFoundError(
                 message="에이전트를 찾을 수 없습니다", code="PROMPT_NOT_FOUND"
             ) from None
-        return SystemPromptRead(
-            ref=a.id, kind="agent", name=a.name, content=a.prompt, cat=a.cat, description=a.desc
-        )
+        return _system_agent(a)
     if kind == "rule":
         try:
             content = load_component(ref)

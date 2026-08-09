@@ -18,6 +18,8 @@ export const PromptSpecSchema = z.object({
   /** 3단 버튼 시절의 레거시 값(예전에 저장된 것만 읽는다) */
   volume: PromptVolumeSchema.nullish(),
   queries: z.array(z.string()).default([]),
+  /** 폼의 칸 값(임무·분석 방법론·핵심 산출물·구성 지침). 서버가 이걸로 본문을 조합한다 */
+  sections: z.record(z.string(), z.string()).default({}),
 });
 export type PromptSpec = z.infer<typeof PromptSpecSchema>;
 
@@ -29,7 +31,7 @@ export const PersonalPromptSchema = z.object({
   base_ref: z.string().nullish(),
   cat: z.string().nullish(),
   description: z.string().nullish(),
-  spec: PromptSpecSchema.default({ queries: [] }),
+  spec: PromptSpecSchema.default({ queries: [], sections: {} }),
   updated_at: z.string(),
 });
 export type PersonalPrompt = z.infer<typeof PersonalPromptSchema>;
@@ -41,6 +43,10 @@ export const SystemPromptSchema = z.object({
   content: z.string(),
   cat: z.string().nullish(),
   description: z.string().nullish(),
+  /** 서버가 분해해 준 칸 값 - '복제해서 시작'이 폼을 바로 채운다 */
+  sections: z.record(z.string(), z.string()).default({}),
+  min_chars: z.number().int().nullish(),
+  max_chars: z.number().int().nullish(),
 });
 export type SystemPrompt = z.infer<typeof SystemPromptSchema>;
 
@@ -100,7 +106,15 @@ export interface CreatePersonalPromptBody {
   base_ref?: string | null;
   cat?: string | null;
   description?: string | null;
-  spec?: { min_chars?: number; max_chars?: number; queries?: string[] };
+  spec?: PromptSpecInput;
+}
+
+/** 저장 시 보내는 구조화 설정 - sections를 주면 서버가 본문을 조합한다 */
+export interface PromptSpecInput {
+  min_chars?: number;
+  max_chars?: number;
+  queries?: string[];
+  sections?: Record<string, string>;
 }
 
 export function useCreatePersonalPrompt() {
@@ -130,7 +144,7 @@ export function useUpdatePersonalPrompt(id: string) {
       content?: string;
       cat?: string | null;
       description?: string | null;
-      spec?: { min_chars?: number; max_chars?: number; queries?: string[] };
+      spec?: PromptSpecInput;
     }) => {
       const data = await apiClient.patch<unknown>(`prompts/personal/${id}`, { json: body });
       return PersonalPromptSchema.parse(data);

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.exceptions import NotFoundError, ValidationError
 from src.db.models.user_prompt import UserPrompt
 from src.prompts import AnalystSpec, VolumeTarget, list_analysts, load_component
+from src.services.prompts.composer import compose_agent_prompt
 
 VALID_KINDS = ("agent", "rule")
 
@@ -88,6 +89,17 @@ async def get_personal(session: AsyncSession, owner_id: UUID, prompt_id: UUID) -
     return row
 
 
+def _content_from(kind: str, name: str, content: str, spec: dict | None) -> str:
+    """칸 값(spec.sections)이 오면 프롬프트를 조합해 쓴다 — 자유 편집이면 원문 그대로.
+
+    조합 결과가 작성 경로의 단일 진실이다. 칸 값은 spec에 남아 재편집을 가능케 한다.
+    """
+    sections = (spec or {}).get("sections") if isinstance(spec, dict) else None
+    if kind == "agent" and isinstance(sections, dict) and any(sections.values()):
+        return compose_agent_prompt(name, sections)
+    return content
+
+
 async def create_personal(
     session: AsyncSession,
     owner_id: UUID,
@@ -101,6 +113,7 @@ async def create_personal(
     spec: dict | None = None,
 ) -> UserPrompt:
     _check_kind(kind)
+    content = _content_from(kind, name, content, spec)
     row = UserPrompt(
         owner_id=owner_id,
         kind=kind,
@@ -134,6 +147,9 @@ async def update_personal(
         row.name = name
     if content is not None:
         row.content = content
+    if spec is not None and spec.get("sections"):
+        # 칸을 고쳤으면 본문을 다시 조합한다(이름 변경도 제목 줄에 반영).
+        row.content = _content_from(row.kind, name or row.name, row.content, spec)
     if cat is not None:
         row.cat = cat
     if description is not None:

@@ -26,6 +26,9 @@ class PromptSpec(BaseModel):
     max_chars: int | None = Field(None, ge=1000, le=60000)
     volume: Literal["short", "normal", "long"] | None = None
     queries: list[str] = Field(default_factory=list, max_length=10)
+    # 폼의 칸 값(임무·분석 방법론·핵심 산출물·구성 지침). 주면 서버가 프롬프트를
+    # 조합해 content에 넣는다 — 조각은 재편집용으로 여기 남는다.
+    sections: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _check_range(self) -> PromptSpec:
@@ -71,7 +74,11 @@ class PersonalPromptRead(BaseModel):
 
 
 class SystemPromptRead(BaseModel):
-    """시스템 카탈로그(읽기전용) 1건 — 에이전트 또는 작성 규칙."""
+    """시스템 카탈로그(읽기전용) 1건 — 에이전트 또는 작성 규칙.
+
+    sections는 '복제해서 시작'이 폼의 칸을 채우도록 서버가 분해해 준 값이다
+    (프론트에서 다시 파싱하면 구현이 둘로 갈린다).
+    """
 
     ref: str = Field(..., description="에이전트 id 또는 조각 이름")
     kind: PromptKind
@@ -79,3 +86,7 @@ class SystemPromptRead(BaseModel):
     content: str
     cat: str | None = None
     description: str | None = None
+    sections: dict[str, str] = Field(default_factory=dict)
+    # 이 에이전트의 목표 분량(자) — 복제 시작 시 폼의 숫자 칸을 채운다.
+    min_chars: int | None = None
+    max_chars: int | None = None

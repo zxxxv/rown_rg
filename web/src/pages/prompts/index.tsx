@@ -5,6 +5,8 @@ import { ApiError } from "@/api/client";
 import {
   type PersonalPrompt,
   type PromptKind,
+  type PromptSpecInput,
+  type SystemPrompt,
   useCreatePersonalPrompt,
   useDeletePersonalPrompt,
   useListPersonalPrompts,
@@ -162,7 +164,7 @@ function KindSection({ kind }: { kind: PromptKind }) {
 function SystemReference({ kind }: { kind: PromptKind }) {
   const [open, setOpen] = useState(false);
   const system = useListSystemPrompts(open ? kind : undefined);
-  const [viewing, setViewing] = useState<{ name: string; content: string } | null>(null);
+  const [viewing, setViewing] = useState<SystemPrompt | null>(null);
 
   return (
     <div className="mt-1 rounded border border-border">
@@ -183,7 +185,7 @@ function SystemReference({ kind }: { kind: PromptKind }) {
               <button
                 key={s.ref}
                 type="button"
-                onClick={() => setViewing({ name: s.name, content: s.content })}
+                onClick={() => setViewing(s)}
                 className="rounded-sm border border-border bg-bg-secondary px-2 py-1 text-xs text-fg-secondary hover:text-fg"
               >
                 {s.name}
@@ -194,16 +196,41 @@ function SystemReference({ kind }: { kind: PromptKind }) {
       ) : null}
       {viewing ? (
         <Dialog open onOpenChange={(o) => (!o ? setViewing(null) : undefined)}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{viewing.name} (시스템·읽기 전용)</DialogTitle>
               <DialogDescription>
-                이 내용을 바탕으로 내 것을 만들려면 위 "새로 만들기"에서 같은 이름으로 저장하세요.
+                {viewing.kind === "agent"
+                  ? '고쳐서 쓰려면 "새로 만들기"에서 이 에이전트를 고르세요. 칸이 원문으로 채워집니다.'
+                  : '고쳐서 쓰려면 "새로 만들기"에서 이 규칙 자리를 고르세요. 원문이 채워집니다.'}
               </DialogDescription>
             </DialogHeader>
-            <pre className="max-h-[24rem] overflow-auto whitespace-pre-wrap rounded border border-border bg-bg-secondary p-3 text-xs text-fg-secondary">
-              {viewing.content}
-            </pre>
+            {/* 편집 폼과 같은 칸 구조로 보여준다 - 원문 덩어리를 그대로 던지면
+                무엇을 고칠 수 있는지가 안 보인다(사용자 지적 2026-08-10). */}
+            {Object.keys(viewing.sections).length > 0 ? (
+              <div className="flex flex-col gap-3">
+                {viewing.min_chars && viewing.max_chars ? (
+                  <p className="text-xs text-fg-secondary">
+                    목표 분량 {viewing.min_chars.toLocaleString()}~
+                    {viewing.max_chars.toLocaleString()}자
+                  </p>
+                ) : null}
+                {SECTION_FIELDS.map(([key, label]) =>
+                  viewing.sections[key] ? (
+                    <div key={key} className="flex flex-col gap-1">
+                      <p className="text-xs font-medium text-fg-secondary">{label}</p>
+                      <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded border border-border bg-bg-secondary p-3 text-xs text-fg-secondary">
+                        {viewing.sections[key]}
+                      </pre>
+                    </div>
+                  ) : null,
+                )}
+              </div>
+            ) : (
+              <pre className="max-h-[24rem] overflow-auto whitespace-pre-wrap rounded border border-border bg-bg-secondary p-3 text-xs text-fg-secondary">
+                {viewing.content}
+              </pre>
+            )}
             <DialogFooter>
               <Button variant="ghost" onClick={() => setViewing(null)}>
                 닫기
@@ -215,6 +242,18 @@ function SystemReference({ kind }: { kind: PromptKind }) {
     </div>
   );
 }
+
+/** 에이전트 프롬프트의 칸 - 백엔드 composer.SECTION_FIELDS와 같은 순서·라벨.
+ * 서버가 이 칸들로 프롬프트 한 장을 조합한다(제목 줄·분량 문구는 자동). */
+const SECTION_FIELDS: [string, string, string][] = [
+  ["mission", "임무", "이 에이전트가 무엇을 하는 전문가인지 - 담당 범위와 산출 목적"],
+  [
+    "method",
+    "분석 방법론",
+    "어떤 절차·기준으로 분석하는지 - 번호 목록으로 적으면 본문 구조가 됩니다",
+  ],
+  ["deliverables", "핵심 산출물", "반드시 만들어야 할 표·그래프·소결 - 줄마다 하나"],
+];
 
 /** 작성 규칙이 꽂히는 자리. 시스템 조각과 1:1이고, 고르지 않으면 기존 규칙 뒤에 덧붙는다. */
 const RULE_SLOTS = [
@@ -238,10 +277,14 @@ function PromptDialog({
   const system = useListSystemPrompts(kind);
   const [name, setName] = useState(existing?.name ?? "");
   const [content, setContent] = useState(existing?.content ?? "");
+  // 에이전트는 칸으로 받아 서버가 한 장으로 조합한다. 21종이 모두 같은 골격
+  // (임무·분석 방법론·핵심 산출물)이라 빈 화면에 통째로 쓰게 할 이유가 없다.
+  const [sections, setSections] = useState<Record<string, string>>(existing?.spec?.sections ?? {});
+  const [freeform, setFreeform] = useState(
+    kind === "rule" || Object.keys(existing?.spec?.sections ?? {}).length === 0,
+  );
   const [cat, setCat] = useState(existing?.cat ?? "");
   const [description, setDescription] = useState(existing?.description ?? "");
-  // 빈 문자열 = 원본 유지. 시스템 에이전트를 덮어쓸 때 분량까지 3단으로 떨어뜨리면
-  // 원본 값(특허분석 2만~6만자 등)이 조용히 깎인다 - 그래서 덮어쓰기 기본은 유지다.
   // 빈 칸 = 지정 없음. 시스템 에이전트를 덮어쓸 때 분량까지 건드리면 원본 값
   // (특허분석 2만~6만자 등)이 조용히 깎이므로, 안 적으면 원본을 그대로 승계한다.
   const [minChars, setMinChars] = useState<string>(
@@ -253,13 +296,22 @@ function PromptDialog({
   // 무엇을 덮어쓸지는 만들 때만 정한다(생성 시 확정, 이후 불변).
   const [baseRef, setBaseRef] = useState<string>(existing?.base_ref ?? "");
   const pending = create.isPending || update.isPending;
-  const valid = name.trim() !== "" && content.trim() !== "";
+  const hasSections = Object.values(sections).some((v) => v.trim());
+  const valid = name.trim() !== "" && (freeform ? content.trim() !== "" : hasSections);
 
   /** 시스템 원문을 폼에 채워 넣는다. 빈 칸에서 페르소나를 쓰라는 건 무리다. */
   const copyFrom = (ref: string) => {
     const found = system.data?.find((x) => x.ref === ref);
     if (!found) return;
     setContent(found.content);
+    if (Object.keys(found.sections).length > 0) {
+      setSections(found.sections);
+      setFreeform(false);
+    }
+    if (found.min_chars && found.max_chars) {
+      setMinChars(String(found.min_chars));
+      setMaxChars(String(found.max_chars));
+    }
     if (!name.trim()) setName(kind === "agent" ? `${found.name} (내 버전)` : found.name);
     if (kind === "agent" && !cat) setCat(found.cat ?? "");
   };
@@ -273,7 +325,13 @@ function PromptDialog({
     if (!valid) return;
     const lo = Number(minChars);
     const hi = Number(maxChars);
-    const spec = kind === "agent" && lo > 0 && hi > 0 ? { min_chars: lo, max_chars: hi } : {};
+    const spec: PromptSpecInput = {};
+    if (kind === "agent" && lo > 0 && hi > 0) {
+      spec.min_chars = lo;
+      spec.max_chars = hi;
+    }
+    // 칸을 쓰면 서버가 그걸로 본문을 조합한다(자유 편집이면 content 원문 그대로).
+    if (kind === "agent" && !freeform && hasSections) spec.sections = sections;
     try {
       if (existing) {
         await update.mutateAsync({
@@ -376,7 +434,6 @@ function PromptDialog({
                   이 에이전트를 배정한 절의 목표 분량이고 분할 작성 파트 수도 여기서 정해집니다.
                   비워두면{" "}
                   {baseRef ? "덮어쓴 에이전트의 원래 분량을 그대로 씁니다" : "기본값을 씁니다"}.
-                  시스템 에이전트는 11,250~60,000자 사이입니다.
                 </p>
                 <div className="flex items-center gap-2">
                   <Input
@@ -432,21 +489,55 @@ function PromptDialog({
               disabled={pending}
             />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="prompt-content">프롬프트 내용</Label>
-            <Textarea
-              id="prompt-content"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className="min-h-[240px] font-mono text-sm"
-              placeholder={
-                kind === "agent"
-                  ? "이 분석가의 전문성·관점·작성 지침을 적으세요."
-                  : "적용할 문체·서식 규칙을 적으세요."
-              }
-              disabled={pending}
-            />
-          </div>
+          {kind === "agent" && !freeform ? (
+            <div className="flex flex-col gap-3">
+              {SECTION_FIELDS.map(([key, label, hint]) => (
+                <div key={key} className="flex flex-col gap-1.5">
+                  <Label htmlFor={`prompt-${key}`}>{label}</Label>
+                  <p className="text-xs text-fg-tertiary">{hint}</p>
+                  <Textarea
+                    id={`prompt-${key}`}
+                    value={sections[key] ?? ""}
+                    onChange={(e) => setSections({ ...sections, [key]: e.target.value })}
+                    className="min-h-[110px] text-sm"
+                    disabled={pending}
+                  />
+                </div>
+              ))}
+              <button
+                type="button"
+                className="self-start text-xs text-fg-tertiary underline"
+                onClick={() => setFreeform(true)}
+              >
+                칸 대신 전체 원문을 직접 쓰기
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="prompt-content">프롬프트 내용</Label>
+              <Textarea
+                id="prompt-content"
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                className="min-h-[240px] font-mono text-sm"
+                placeholder={
+                  kind === "agent"
+                    ? "이 분석가의 전문성·관점·작성 지침을 적으세요."
+                    : "적용할 문체·서식 규칙을 적으세요."
+                }
+                disabled={pending}
+              />
+              {kind === "agent" ? (
+                <button
+                  type="button"
+                  className="self-start text-xs text-fg-tertiary underline"
+                  onClick={() => setFreeform(false)}
+                >
+                  칸(임무·분석 방법론·핵심 산출물)으로 나눠 쓰기
+                </button>
+              ) : null}
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose} disabled={pending}>
