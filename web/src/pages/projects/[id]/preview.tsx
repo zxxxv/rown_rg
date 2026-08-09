@@ -251,6 +251,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
                 sectionId={selectedId}
                 contentQuery={contentQuery}
                 qaWarnings={qaWarnings}
+                editable={!isGenerating}
               />
             ) : (
               <EmptyState
@@ -601,11 +602,15 @@ function SectionView({
   sectionId,
   contentQuery,
   qaWarnings,
+  editable,
 }: {
   projectId: string;
   sectionId: string;
   contentQuery: ReturnType<typeof useSectionContent>;
   qaWarnings: QaSelectWarning[];
+  /** 생성이 끝나야 편집·재작성을 연다 — 작성 중 초안은 재생성으로 갈아치워질 수 있고,
+   *  절 전체 재작성은 검색까지 다시 돌아 작성 루프와 자원을 다툰다(2026-08-09). */
+  editable: boolean;
 }) {
   const data = contentQuery.data;
   const error = contentQuery.error;
@@ -702,7 +707,7 @@ function SectionView({
 
   // 클릭 = 토글(다중 선택). 직접 편집 중이면 대상이 바뀌지 않게 잠근다.
   const toggleBlock = (idx: number) => {
-    if (editing || editingIdx !== null) return;
+    if (!editable || editing || editingIdx !== null) return;
     setSelectedIdx((prev) => {
       const next = new Set(prev);
       if (next.has(idx)) next.delete(idx);
@@ -785,12 +790,16 @@ function SectionView({
                 {save.isPending ? "저장 중…" : "저장"}
               </Button>
             </>
-          ) : (
+          ) : editable ? (
             // 블록별 인라인 편집이 기본 경로라 전체 편집은 ghost로 낮춘다
             // (긴 본문을 한 상자에 넣으면 쓰기 불편하다는 실사용 지적, 2026-08-09)
             <Button variant="ghost" size="sm" onClick={startEdit} disabled={busy}>
               <Pencil className="mr-1 h-4 w-4" />절 전체 편집
             </Button>
+          ) : (
+            // 작성 중에는 편집 진입점을 두지 않는다 — 초안이 재생성으로 갈아치워질 수
+            // 있고, 절 전체 재작성은 작성 루프와 검색 자원을 다툰다(사용자 결정).
+            <Badge variant="secondary">작성 중 · 읽기 전용</Badge>
           )}
         </div>
       </header>
@@ -825,7 +834,14 @@ function SectionView({
           />
         </div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <div
+          className={cn(
+            "grid grid-cols-1",
+            // 작성 중에는 편집·재작성 패널을 아예 두지 않는다 — 초안이 재생성으로
+            // 갈아치워질 수 있고, 절 전체 재작성은 작성 루프와 자원을 다툰다.
+            editable && "xl:grid-cols-[minmax(0,1fr)_300px]",
+          )}
+        >
           {/* 중앙: 블록 본문 — 클릭해 선택하면 우측 패널에서 편집·재작성 */}
           <div className="min-w-0 px-6 py-4">
             {(rewrite.isPending || rewriteBlock.isPending) && (
@@ -908,73 +924,76 @@ function SectionView({
             <CitationList citations={data.citations} />
           </div>
 
-          {/* 우측: 검토·재작성 패널 */}
-          <aside className="border-t border-border bg-bg-secondary px-4 py-4 xl:border-l xl:border-t-0">
-            {selectedBlocks.length > 0 ? (
-              <div className="flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs font-medium text-fg">
-                    블록 {selectedBlocks.length}개 선택됨
-                  </p>
-                  <Button variant="ghost" size="sm" onClick={clearBlockSelection} disabled={busy}>
-                    <X className="h-3.5 w-3.5" />
-                    선택 해제
-                  </Button>
-                </div>
+          {/* 우측: 검토·재작성 패널 — 완료 후에만 (작성 중에는 읽기 전용) */}
+          {editable ? (
+            <aside className="border-t border-border bg-bg-secondary px-4 py-4 xl:border-l xl:border-t-0">
+              {selectedBlocks.length > 0 ? (
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-fg">
+                      블록 {selectedBlocks.length}개 선택됨
+                    </p>
+                    <Button variant="ghost" size="sm" onClick={clearBlockSelection} disabled={busy}>
+                      <X className="h-3.5 w-3.5" />
+                      선택 해제
+                    </Button>
+                  </div>
 
-                <div className="flex flex-col gap-2 border-t border-border pt-3">
-                  <Label htmlFor="block-instruction">AI 재작성 지시</Label>
-                  <Textarea
-                    id="block-instruction"
-                    value={instruction}
-                    onChange={(e) => setInstruction(e.target.value)}
-                    placeholder="예: 더 간결하게, 수치를 앞세워서"
-                    className="min-h-[80px] text-xs"
-                  />
-                  <Button size="sm" onClick={() => void onRewriteBlocks()} disabled={busy}>
-                    <Sparkles className="mr-1 h-3.5 w-3.5" />
-                    {rewriteBlock.isPending
-                      ? "작성 중…"
-                      : `선택한 블록 ${selectedBlocks.length}개 재작성`}
-                  </Button>
-                  <p className="text-[11px] leading-relaxed text-fg-tertiary">
-                    블록 재작성은 이 절이 이미 인용한 근거 안에서만 고칩니다 - 인용 번호·출처가
-                    유지됩니다.
-                  </p>
+                  <div className="flex flex-col gap-2 border-t border-border pt-3">
+                    <Label htmlFor="block-instruction">AI 재작성 지시</Label>
+                    <Textarea
+                      id="block-instruction"
+                      value={instruction}
+                      onChange={(e) => setInstruction(e.target.value)}
+                      placeholder="예: 더 간결하게, 수치를 앞세워서"
+                      className="min-h-[80px] text-xs"
+                    />
+                    <Button size="sm" onClick={() => void onRewriteBlocks()} disabled={busy}>
+                      <Sparkles className="mr-1 h-3.5 w-3.5" />
+                      {rewriteBlock.isPending
+                        ? "작성 중…"
+                        : `선택한 블록 ${selectedBlocks.length}개 재작성`}
+                    </Button>
+                    <p className="text-[11px] leading-relaxed text-fg-tertiary">
+                      블록 재작성은 이 절이 이미 인용한 근거 안에서만 고칩니다 - 인용 번호·출처가
+                      유지됩니다.
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-3">
-                <p className="text-xs font-medium text-fg">검토·재작성</p>
-                <p className="text-xs leading-relaxed text-fg-secondary">
-                  본문에서 블록(문단)을 클릭해 선택하세요. 여러 개를 골라 한 번에 AI 재작성을 지시할
-                  수 있고, 하나만 고르면 직접 편집도 열립니다. 다시 클릭하면 선택이 해제됩니다.
-                </p>
-                <div className="flex flex-col gap-2 border-t border-border pt-3">
-                  <Label htmlFor="section-instruction">절 전체 AI 재작성</Label>
-                  <Textarea
-                    id="section-instruction"
-                    value={instruction}
-                    onChange={(e) => setInstruction(e.target.value)}
-                    placeholder="예: 정책 시사점을 강조해서 다시 작성"
-                    className="min-h-[80px] text-xs"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void onRewriteSection()}
-                    disabled={busy}
-                  >
-                    <Sparkles className="mr-1 h-3.5 w-3.5" />
-                    {rewrite.isPending ? "작성 중…" : "절 전체 재작성"}
-                  </Button>
-                  <p className="text-[11px] leading-relaxed text-fg-tertiary">
-                    절 전체 재작성은 프로젝트 자료에서 근거를 다시 검색해 처음부터 새로 씁니다.
+              ) : (
+                <div className="flex flex-col gap-3">
+                  <p className="text-xs font-medium text-fg">검토·재작성</p>
+                  <p className="text-xs leading-relaxed text-fg-secondary">
+                    본문에서 블록(문단)을 클릭해 선택하세요. 여러 개를 골라 한 번에 AI 재작성을
+                    지시할 수 있고, 하나만 고르면 직접 편집도 열립니다. 다시 클릭하면 선택이
+                    해제됩니다.
                   </p>
+                  <div className="flex flex-col gap-2 border-t border-border pt-3">
+                    <Label htmlFor="section-instruction">절 전체 AI 재작성</Label>
+                    <Textarea
+                      id="section-instruction"
+                      value={instruction}
+                      onChange={(e) => setInstruction(e.target.value)}
+                      placeholder="예: 정책 시사점을 강조해서 다시 작성"
+                      className="min-h-[80px] text-xs"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void onRewriteSection()}
+                      disabled={busy}
+                    >
+                      <Sparkles className="mr-1 h-3.5 w-3.5" />
+                      {rewrite.isPending ? "작성 중…" : "절 전체 재작성"}
+                    </Button>
+                    <p className="text-[11px] leading-relaxed text-fg-tertiary">
+                      절 전체 재작성은 프로젝트 자료에서 근거를 다시 검색해 처음부터 새로 씁니다.
+                    </p>
+                  </div>
                 </div>
-              </div>
-            )}
-          </aside>
+              )}
+            </aside>
+          ) : null}
         </div>
       )}
     </article>
