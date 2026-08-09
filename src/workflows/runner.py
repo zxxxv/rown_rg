@@ -111,6 +111,15 @@ async def _apply_source_pool_exclusions(
 
 
 def _state_from_project(project: Project) -> ProjectState:
+    # projects.status는 '표시용 단계'도 담는다(Phase.running) — WRITING은 척추 단계가
+    # 아니라 INDEXING 구간이 실행 중임을 뜻한다. 그대로 stage로 삼으면 매칭되는 Phase가
+    # 없어 advance가 즉시 Done을 돌려주고, 작성 도중 죽은 런이 '완료'로 둔갑한다
+    # (2026-08-09 실측: 메모리 고갈로 1.3절에서 멈춘 런). 소유 단계로 되돌려 복구한다.
+    status = (
+        ProjectStage.INDEXING.value
+        if project.status == ProjectStage.WRITING.value
+        else project.status
+    )
     return ProjectState.from_db(
         {
             "id": project.id,
@@ -120,7 +129,7 @@ def _state_from_project(project: Project) -> ProjectState:
             "topic": project.topic,
             "preset": project.preset,
             "depth_mode": project.depth_mode,
-            "status": project.status,
+            "status": status,
             "config": project.config,
         }
     )
