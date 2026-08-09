@@ -9,11 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 
-/** 자료 검토 화면의 인라인 라이브러리 패널 — 트리에서 체크로 골라 일괄 추가한다.
+/** 자료 검토 화면의 인라인 라이브러리 패널 - 트리에서 체크로 골라 일괄 추가한다.
 
 다이얼로그(구 LibraryPickerDialog)의 단건 클릭 추가를 대체(2026-08-08 사용자 결정:
 업로드 절반 + 라이브러리 트리 절반, 체크 선택). 색인 가능한 실제 업로드 파일만
-후보로 노출한다 — AI 수집 원문(content_url)·프롬프트·가상 노드는 원본 파일이 없어
+후보로 노출한다 - AI 수집 원문(content_url)·프롬프트·가상 노드는 원본 파일이 없어
 색인할 수 없으므로 제외(구 다이얼로그와 동일 규칙). */
 
 function isPickableFile(n: LibraryNode): boolean {
@@ -35,7 +35,7 @@ function collectFiles(
   return out;
 }
 
-/** 이미 이 프로젝트에 불러온 파일 표식 — 체크박스는 잠기고 배지로 상태를 알린다. */
+/** 이미 이 프로젝트에 불러온 파일 표식 - 체크박스는 잠기고 배지로 상태를 알린다. */
 function AddedBadge() {
   return (
     <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-fg-success/40 bg-bg-success px-1.5 py-0.5 text-[10px] font-medium text-fg-success">
@@ -55,7 +55,7 @@ function formatSize(bytes: number): string {
 export function LibraryTreePanel({ projectId }: { projectId: string }) {
   const treeQuery = useLibraryTree();
   const attach = useAttachLibrarySource(projectId);
-  // 이미 이 프로젝트에 불러온 라이브러리 노드 — 트리에 '추가됨'으로 표시해
+  // 이미 이 프로젝트에 불러온 라이브러리 노드 - 트리에 '추가됨'으로 표시해
   // 같은 파일을 다시 고르지 않게 한다(재불러오기는 재색인이라 낭비).
   const sourcesQuery = useProjectSources(projectId);
   const attachedIds = useMemo(
@@ -99,7 +99,7 @@ export function LibraryTreePanel({ projectId }: { projectId: string }) {
     });
   };
 
-  // 순차 추가 — 백엔드가 건별 색인(파싱→청킹→임베딩)이라 병렬로 몰면 로컬 임베딩이 몰린다.
+  // 순차 추가 - 백엔드가 건별 색인(파싱→청킹→임베딩)이라 병렬로 몰면 로컬 임베딩이 몰린다.
   const addSelected = async () => {
     if (adding || checked.size === 0) return;
     setAdding(true);
@@ -231,7 +231,7 @@ function TreeLevel({
       {nodes.map((n) => {
         if (n.type === "folder") {
           const isCollapsed = collapsed.has(n.id);
-          // 체크 가능한 파일이 하나도 없는 폴더 가지는 통째로 숨긴다 — 빈 폴더 소음 제거
+          // 체크 가능한 파일이 하나도 없는 폴더 가지는 통째로 숨긴다 - 빈 폴더 소음 제거
           if (collectFiles([n], []).length === 0) return null;
           return (
             <li key={n.id}>

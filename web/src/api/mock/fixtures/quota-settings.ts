@@ -9,7 +9,7 @@ const SEED: Record<string, string> = {
   DEFAULT_LIMIT_VIEWER_USD: "50",
 };
 
-// 인메모리 상태 — mock 세션 동안 PATCH가 누적 반영된다.
+// 인메모리 상태 - mock 세션 동안 PATCH가 누적 반영된다.
 const rows: QuotaSetting[] = Object.entries(SEED).map(([key, value]) => ({
   key,
   value,

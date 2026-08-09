@@ -77,7 +77,7 @@ export function useUploadFile() {
   });
 }
 
-/** 노드 삭제 — 폴더는 하위 전체 포함. 관리자 또는 생성자만(그 외 403). */
+/** 노드 삭제 - 폴더는 하위 전체 포함. 관리자 또는 생성자만(그 외 403). */
 export function useDeleteNode() {
   const qc = useQueryClient();
   return useMutation({
@@ -96,7 +96,7 @@ interface SetVisibilityInput {
   visible_to_roles: string[];
 }
 
-/** 파일 열람 권한(역할) 변경 — 관리자 전용. 빈 배열=전체 공개. */
+/** 파일 열람 권한(역할) 변경 - 관리자 전용. 빈 배열=전체 공개. */
 export function useSetNodeVisibility() {
   const qc = useQueryClient();
   return useMutation({
@@ -112,7 +112,7 @@ export function useSetNodeVisibility() {
   });
 }
 
-/** AI 수집 자료의 수집 원문(content_md) 조회 — content_url이 있을 때만 활성.
+/** AI 수집 자료의 수집 원문(content_md) 조회 - content_url이 있을 때만 활성.
  *
  * contentUrl은 트리 노드의 상대 경로(예: "library/sources/{id}/content")를 그대로 GET한다.
  */
@@ -127,13 +127,13 @@ export function useSourceContent(contentUrl: string | null | undefined) {
   });
 }
 
-/** 파일 다운로드 URL(쿠키 인증, same-origin) — <a href> 또는 프로그램적 클릭에 사용. */
+/** 파일 다운로드 URL(쿠키 인증, same-origin) - <a href> 또는 프로그램적 클릭에 사용. */
 export function libraryFileDownloadUrl(nodeId: string): string {
   const base = env.VITE_API_BASE_URL.replace(/\/$/, "");
   return `${base}/library/files/${nodeId}/download`;
 }
 
-/** 가상 파일의 download_url 해석 — 절대 URL(웹 출처)은 그대로, 상대경로는 API base 접두. */
+/** 가상 파일의 download_url 해석 - 절대 URL(웹 출처)은 그대로, 상대경로는 API base 접두. */
 export function resolveDownloadUrl(url: string): string {
   if (/^https?:\/\//.test(url)) return url;
   const base = env.VITE_API_BASE_URL.replace(/\/$/, "");

@@ -29,7 +29,7 @@ const STAGE_PERCENT: Record<string, number> = {
   archived: 100,
 };
 
-// 실계약 미러: write_loop.qa_select_payload — 섹션별 HARD 통과 후보 + SOFT 경고.
+// 실계약 미러: write_loop.qa_select_payload - 섹션별 HARD 통과 후보 + SOFT 경고.
 // UUID는 데모용 고정값(선택 라운드트립 확인용).
 const QA_SECTION_1 = "0f000000-0000-4000-8000-000000000001";
 const QA_SECTION_2 = "0f000000-0000-4000-8000-000000000002";
@@ -117,7 +117,7 @@ const QA_SELECT_PAYLOAD = {
   ],
 };
 
-// 실계약 미러: pipeline._source_pool_gate — 수집된 자료 풀 + 사람이 취사선택할 신호.
+// 실계약 미러: pipeline._source_pool_gate - 수집된 자료 풀 + 사람이 취사선택할 신호.
 // 신호 없는(업로드/저신뢰·본문없음) 케이스도 데모에 포함해 UI 분기를 보여준다.
 const SOURCE_POOL_PAYLOAD = {
   message: "수집된 자료 풀을 검토하고, 본문 작성에 쓰지 않을 자료는 제외한 뒤 진행하세요.",
@@ -191,7 +191,7 @@ export const progressHandlers = [
     const state = getAnyRunnerState(projectId);
 
     if (!state) {
-      // 프론트 status 어휘 = 백엔드 ProjectStage — 픽스처 값을 그대로 통과시킨다.
+      // 프론트 status 어휘 = 백엔드 ProjectStage - 픽스처 값을 그대로 통과시킨다.
       const project = DEMO_PROJECTS.find((p) => p.id === projectId);
       const status = project?.status ?? "researching";
       return HttpResponse.json(

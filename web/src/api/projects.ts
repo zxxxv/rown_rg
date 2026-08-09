@@ -9,13 +9,13 @@ import {
 } from "@/api/types";
 import type { ProjectFormValues } from "@/features/project-config/schema";
 
-/** 목록 페이지 크기 — 배열 길이 < limit 이면 다음 페이지 없음으로 판단한다. */
+/** 목록 페이지 크기 - 배열 길이 < limit 이면 다음 페이지 없음으로 판단한다. */
 export const PROJECT_PAGE_SIZE = 20;
 
-/** 목록 상태 필터 — 실제 단계값 + 'in_progress'(완료·보관·취소가 아닌 진행 단계 묶음, 백엔드 그룹 필터). */
+/** 목록 상태 필터 - 실제 단계값 + 'in_progress'(완료·보관·취소가 아닌 진행 단계 묶음, 백엔드 그룹 필터). */
 export type ProjectStatusFilter = ProjectStatus | "in_progress";
 
-/** 서버 필터 — status는 단계값 또는 'in_progress'(오값 422), q는 제목·주제·소유자명 부분검색.
+/** 서버 필터 - status는 단계값 또는 'in_progress'(오값 422), q는 제목·주제·소유자명 부분검색.
  *  scope=all은 admin·super_admin만 전체를 본다(일반 사용자는 무시하고 자기 것). */
 export interface ProjectListFilters {
   status?: ProjectStatusFilter;
@@ -60,7 +60,7 @@ export function useProjectList(params: ProjectListParams = {}) {
   });
 }
 
-/** 목록 화면용 offset 무한 스크롤 — 필터가 바뀌면 쿼리 키가 바뀌어 페이지가 리셋된다. */
+/** 목록 화면용 offset 무한 스크롤 - 필터가 바뀌면 쿼리 키가 바뀌어 페이지가 리셋된다. */
 export function useProjectListInfinite(
   filters: ProjectListFilters = {},
   pageSize = PROJECT_PAGE_SIZE,
@@ -74,7 +74,7 @@ export function useProjectListInfinite(
   });
 }
 
-/** 백엔드 ProjectCreate 계약 — preset·depth_mode는 config 중첩이 아니라 최상위 필드다. */
+/** 백엔드 ProjectCreate 계약 - preset·depth_mode는 config 중첩이 아니라 최상위 필드다. */
 export interface ProjectCreateBody {
   title: string;
   topic: string;
@@ -112,7 +112,7 @@ export function useCreateProject() {
   });
 }
 
-/** POST /projects/{id}/run — 백그라운드 실행 시작(202). */
+/** POST /projects/{id}/run - 백그라운드 실행 시작(202). */
 export interface RunProjectResponse {
   project_id: string;
   status: string;
@@ -134,7 +134,7 @@ export function useRunProject() {
   });
 }
 
-/** POST /projects/{id}/cancel — 진행 중 실행 취소(협조적). 실행 중이면 cancelling, 아니면 cancelled. */
+/** POST /projects/{id}/cancel - 진행 중 실행 취소(협조적). 실행 중이면 cancelling, 아니면 cancelled. */
 export interface CancelProjectResponse {
   project_id: string;
   status: "cancelling" | "cancelled";
@@ -156,7 +156,7 @@ export function useCancelProject() {
   });
 }
 
-/** DELETE /projects/{id} — 완료·보관 상태만 허용(그 외 422). 사용량 기록은 보존된다. */
+/** DELETE /projects/{id} - 완료·보관 상태만 허용(그 외 422). 사용량 기록은 보존된다. */
 export async function deleteProject(id: string): Promise<void> {
   await apiClient.delete<void>(`projects/${id}`);
 }

@@ -413,7 +413,7 @@ export function pushSourceToStore(projectId: string, source: Source): void {
   list.unshift(source);
 }
 
-/** 파일 자료 삭제(실계약 미러: DELETE /sources/{sid} — 업로드·라이브러리만). */
+/** 파일 자료 삭제(실계약 미러: DELETE /sources/{sid} - 업로드·라이브러리만). */
 export function removeSourceFromStore(projectId: string, sourceId: string): Source | undefined {
   const list = getSourcesForProject(projectId);
   const idx = list.findIndex((s) => s.id === sourceId);

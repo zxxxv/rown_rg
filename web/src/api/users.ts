@@ -18,7 +18,7 @@ export const AdminUserSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   // 주의: 백엔드 UserRead에는 아직 노출되지 않는 필드(DB에는 존재).
-  // 실서버 응답에는 없으므로 optional — 잠금 해제 버튼은 값이 있을 때만 활성화된다.
+  // 실서버 응답에는 없으므로 optional - 잠금 해제 버튼은 값이 있을 때만 활성화된다.
   locked_until: z.string().nullable().optional(),
 });
 export type AdminUser = z.infer<typeof AdminUserSchema>;

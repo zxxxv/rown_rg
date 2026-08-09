@@ -16,7 +16,7 @@ export interface UploadDropzoneProps {
   disabled?: boolean;
 }
 
-// 백엔드 색인 파서가 실제 지원하는 형식만 — PDF·HWPX·DOCX(문서), MD·TXT(플레인 텍스트).
+// 백엔드 색인 파서가 실제 지원하는 형식만 - PDF·HWPX·DOCX(문서), MD·TXT(플레인 텍스트).
 const ACCEPT = {
   "application/pdf": [".pdf"],
   "application/x-hwpx": [".hwpx"],

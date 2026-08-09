@@ -41,11 +41,11 @@ export const PRESET_DESCRIPTION: Record<Preset, string> = {
   blank: "부가 기능을 모두 끈 빈 시작점. 직접 옵션 구성.",
 };
 
-// 기능 토글·자료 선택·알림은 폼에서 제거됨(2026-08-04) — 프리셋 차이는 깊이·모델만 남는다.
+// 기능 토글·자료 선택·알림은 폼에서 제거됨(2026-08-04) - 프리셋 차이는 깊이·모델만 남는다.
 export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
   preliminary_feasibility: {
     preset: "preliminary_feasibility",
-    // 분석 역량은 목차 설계의 섹션별 에이전트 배정으로 일원화 — analyzers는 레거시(항상 빈 값)
+    // 분석 역량은 목차 설계의 섹션별 에이전트 배정으로 일원화 - analyzers는 레거시(항상 빈 값)
     enabled_analyzers: [],
     depth_mode: "full_report",
     model_mode: "standard",
@@ -74,7 +74,7 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
   blank: {
     preset: "blank",
     enabled_analyzers: [],
-    // 깊이 UI 제거(2026-08-07) — 신규 생성은 항상 full_report(분할 생성이 분량을 감당)
+    // 깊이 UI 제거(2026-08-07) - 신규 생성은 항상 full_report(분할 생성이 분량을 감당)
     depth_mode: "full_report",
     model_mode: "economy",
     hyde_enabled: false,

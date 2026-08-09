@@ -27,7 +27,7 @@ const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
   cancelled: "danger",
 };
 
-// 단계 기반 근사 진행률 — 백엔드 _STAGE_PERCENT와 동일. ProjectRead에 progress가 없어
+// 단계 기반 근사 진행률 - 백엔드 _STAGE_PERCENT와 동일. ProjectRead에 progress가 없어
 // (실백엔드) 상태에서 유도한다. 완료·보관은 100%.
 const STATUS_PERCENT: Record<ProjectStatus, number> = {
   created: 0,

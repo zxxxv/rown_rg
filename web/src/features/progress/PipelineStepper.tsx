@@ -17,8 +17,8 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
-// 파이프라인 순서 — 사람 결정이 필요한 단계(자료 검토)는 도달 시 강조되고 해당
-// 작업 화면으로 가는 버튼이 붙는다. 본문 검토(QA) 게이트는 제거됨(2026-08-07) —
+// 파이프라인 순서 - 사람 결정이 필요한 단계(자료 검토)는 도달 시 강조되고 해당
+// 작업 화면으로 가는 버튼이 붙는다. 본문 검토(QA) 게이트는 제거됨(2026-08-07) -
 // 작성이 끝나면 곧장 조립·검증되고, 검토·편집은 보고서 화면에서 사후에 한다.
 const STEPS = [
   { key: "collect", label: "자료 수집" },
@@ -43,7 +43,7 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
   const status = snapshot?.status ?? "created";
   const gate = snapshot?.pending_gate?.gate ?? null;
 
-  // 현재 위치(index)와 그 단계의 표현. 게이트 대기가 status보다 우선한다 —
+  // 현재 위치(index)와 그 단계의 표현. 게이트 대기가 status보다 우선한다 -
   // status는 척추 위치라 게이트 대기 중에도 직전 단계 값에 머문다.
   let current: number;
   let currentPhase: StepPhase = "active";
@@ -56,7 +56,7 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
     actionLabel = "자료 검토로 이동";
     actionTo = `/projects/${projectId}/sources`;
   } else if (gate === "qa_select") {
-    // 레거시 — 게이트 제거 전 백엔드로 작성돼 아직 pending인 프로젝트만 도달한다.
+    // 레거시 - 게이트 제거 전 백엔드로 작성돼 아직 pending인 프로젝트만 도달한다.
     current = 4;
     currentPhase = "action";
     actionLabel = "본문 검토로 이동";
@@ -79,7 +79,7 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
       case "archived":
         current = 6; // 전부 완료
         break;
-      default: // created·cancelled — 아직 진입 전(취소는 카드 하단에 별도 표기)
+      default: // created·cancelled - 아직 진입 전(취소는 카드 하단에 별도 표기)
         current = -1;
     }
   }
@@ -101,7 +101,7 @@ function formatDuration(ms: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-/** 생성 시간 — 사람 검토 대기·중단 구간을 뺀 '실제로 돌던 시간'.
+/** 생성 시간 - 사람 검토 대기·중단 구간을 뺀 '실제로 돌던 시간'.
 
 서버가 LLM 호출 간격에서 합산해 내려주고(active_seconds), 실행 중일 때만 마지막
 활동 이후 경과를 더해 초 단위로 흐르게 한다. 게이트에서 멈추면 값이 그대로 선다
@@ -144,7 +144,7 @@ export interface PipelineStepperProps {
   snapshot: ProgressSnapshot | undefined;
 }
 
-/** 개요 우측의 파이프라인 스테퍼 — 어디까지 왔는지, 다음에 사람이 뭘 해야 하는지. */
+/** 개요 우측의 파이프라인 스테퍼 - 어디까지 왔는지, 다음에 사람이 뭘 해야 하는지. */
 export function PipelineStepper({ projectId, snapshot }: PipelineStepperProps) {
   const navigate = useNavigate();
   const steps = deriveSteps(projectId, snapshot);
@@ -204,7 +204,7 @@ export function PipelineStepper({ projectId, snapshot }: PipelineStepperProps) {
                   </span>
                 ) : null}
               </div>
-              {/* 실행 중 세부 단계 — 색인·RAPTOR처럼 수 분짜리 단계의 내부 진행
+              {/* 실행 중 세부 단계 - 색인·RAPTOR처럼 수 분짜리 단계의 내부 진행
                   (예: "청킹·임베딩 5/17", "배경 요약 1층 · 40/152") */}
               {step.phase === "active" && snapshot?.active_step ? (
                 <p className="ml-6 text-xs text-fg-tertiary">{snapshot.active_step}</p>

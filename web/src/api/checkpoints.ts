@@ -2,7 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
 
-// 실계약: POST /projects/{id}/decide — body {decision: dict}
+// 실계약: POST /projects/{id}/decide - body {decision: dict}
 // 서버(runner.resume_run)는 최신 pending review_point를 결정값과 함께 resolved 처리한다.
 // - source_pool 계열 게이트: {action: "approve" | ...} 형태의 자유 dict
 // - qa_select 게이트: {selections: {sectionId: candidateId}} (runner가 decision["selections"] 소비)
@@ -16,7 +16,7 @@ export interface RunResumeResponse {
 
 export interface DecideCheckpointInput {
   projectId: string;
-  /** 화면 표시용 참조 — 서버는 항상 최신 pending 게이트를 처리하므로 전송하지 않는다. */
+  /** 화면 표시용 참조 - 서버는 항상 최신 pending 게이트를 처리하므로 전송하지 않는다. */
   checkpointId?: string;
   decision: CheckpointDecision;
   feedback?: string;
@@ -47,7 +47,7 @@ export function useDecideCheckpoint() {
 
 // ─── qa_select 게이트 payload (백엔드 write_loop.qa_select_payload 미러) ───
 // 정적검사(HARD) 통과 후보만 내려오고, warnings는 SOFT 경고(분량·수치 근거 등)다.
-// all_excluded=true 섹션은 통과 후보가 0개 — 선택 대상에서 제외된다.
+// all_excluded=true 섹션은 통과 후보가 0개 - 선택 대상에서 제외된다.
 
 export const QaSelectWarningSchema = z.object({
   check: z.string(),
@@ -88,7 +88,7 @@ export const QaSelectPayloadSchema = z.object({
 });
 export type QaSelectPayload = z.infer<typeof QaSelectPayloadSchema>;
 
-/** 게이트 payload 파싱 — 형태가 다르거나 섹션이 없으면 null(제네릭 게이트 UI로 폴백). */
+/** 게이트 payload 파싱 - 형태가 다르거나 섹션이 없으면 null(제네릭 게이트 UI로 폴백). */
 export function parseQaSelectPayload(payload: unknown): QaSelectPayload | null {
   const parsed = QaSelectPayloadSchema.safeParse(payload);
   if (!parsed.success || parsed.data.sections.length === 0) return null;
@@ -130,12 +130,12 @@ export const SourcePoolSourceSchema = z.object({
 });
 export type SourcePoolSource = z.infer<typeof SourcePoolSourceSchema>;
 
-// 자료량 신호 — 미달은 차단이 아니라 '추가 조사' 유도(백엔드 research_min_sources).
+// 자료량 신호 - 미달은 차단이 아니라 '추가 조사' 유도(백엔드 research_min_sources).
 export const SourcePoolCoverageSchema = z.object({
   n_sources: z.number().int(),
   min_required: z.number().int(),
   sufficient: z.boolean(),
-  // 매칭 자료가 0건인 절("N.N 제목") — 해당 절 재료가 풀에 없다는 신호(추가 검색 유도)
+  // 매칭 자료가 0건인 절("N.N 제목") - 해당 절 재료가 풀에 없다는 신호(추가 검색 유도)
   uncovered_sections: z.array(z.string()).default([]),
 });
 export type SourcePoolCoverage = z.infer<typeof SourcePoolCoverageSchema>;
@@ -148,7 +148,7 @@ export const SourcePoolPayloadSchema = z.object({
 });
 export type SourcePoolPayload = z.infer<typeof SourcePoolPayloadSchema>;
 
-/** source_pool 게이트 payload 파싱 — 형태가 맞지 않으면 null(제네릭 게이트 UI로 폴백). */
+/** source_pool 게이트 payload 파싱 - 형태가 맞지 않으면 null(제네릭 게이트 UI로 폴백). */
 export function parseSourcePoolPayload(payload: unknown): SourcePoolPayload | null {
   const parsed = SourcePoolPayloadSchema.safeParse(payload);
   if (!parsed.success) return null;
@@ -157,7 +157,7 @@ export function parseSourcePoolPayload(payload: unknown): SourcePoolPayload | nu
 
 export interface DecideSourcePoolInput {
   projectId: string;
-  /** 사람이 자료 풀에서 제외한 출처 id들 — runner가 is_included=false로 반영. */
+  /** 사람이 자료 풀에서 제외한 출처 id들 - runner가 is_included=false로 반영. */
   excludedSourceIds: string[];
   action?: CheckpointDecision;
 }
@@ -176,7 +176,7 @@ export function useDecideSourcePool() {
   });
 }
 
-/** '추가 조사' — 게이트를 닫지 않고 보충 수집 1라운드 후 자료 검토가 다시 열린다. */
+/** '추가 조사' - 게이트를 닫지 않고 보충 수집 1라운드 후 자료 검토가 다시 열린다. */
 export async function decideCollectMore(projectId: string): Promise<RunResumeResponse> {
   return postDecision(projectId, { action: "collect_more" });
 }

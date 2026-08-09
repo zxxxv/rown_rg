@@ -49,9 +49,9 @@ import { MarkdownContent } from "@/features/preview/MarkdownContent";
 
 interface LibraryDetailProps {
   node: LibraryNode | null;
-  /** 조상 폴더 경로(자신 제외) — 브레드크럼 클릭 이동용 id 포함 */
+  /** 조상 폴더 경로(자신 제외) - 브레드크럼 클릭 이동용 id 포함 */
   path: { id: string; name: string }[];
-  /** 우측 패널에서의 이동(폴더 진입·파일 열기·브레드크럼) — 좌측 트리 선택과 동일 상태 */
+  /** 우측 패널에서의 이동(폴더 진입·파일 열기·브레드크럼) - 좌측 트리 선택과 동일 상태 */
   onNavigate?: (id: string) => void;
   /** 상단 파일 업로드 input을 여는 콜백(빈 폴더 안내 버튼용) */
   onRequestUpload?: () => void;
@@ -76,7 +76,7 @@ function countDescendants(node: LibraryNode): {
   folders: number;
   files: number;
   bytes: number;
-  /** 하위에서 가장 최근 등록일(ISO) — 폴더 행의 '최근 등록' 표시용 */
+  /** 하위에서 가장 최근 등록일(ISO) - 폴더 행의 '최근 등록' 표시용 */
   latest: string | null;
 } {
   if (node.type === "file") {
@@ -159,7 +159,7 @@ function Breadcrumb({
   );
 }
 
-// 폴더 목록 정렬 축 — 폴더가 항상 파일보다 먼저 오고, 그 안에서 정렬한다.
+// 폴더 목록 정렬 축 - 폴더가 항상 파일보다 먼저 오고, 그 안에서 정렬한다.
 type SortKey = "name" | "kind" | "size" | "registrant" | "date";
 
 interface FolderRow {
@@ -170,7 +170,7 @@ interface FolderRow {
   sizeBytes: number;
   pages: number | null;
   registrant: string | null;
-  /** ISO 등록일 — 폴더는 하위 최근 등록일 */
+  /** ISO 등록일 - 폴더는 하위 최근 등록일 */
   date: string | null;
   isProject: boolean;
 }
@@ -186,7 +186,7 @@ function FolderBody({
 }) {
   const navigate = useNavigate();
   const stats = countDescendants(node);
-  // '내 에이전트'/'내 작성 규칙' 폴더 — 라이브러리에선 읽기 전용, 편집은 프롬프트 관리 페이지.
+  // '내 에이전트'/'내 작성 규칙' 폴더 - 라이브러리에선 읽기 전용, 편집은 프롬프트 관리 페이지.
   const isPromptContainer = node.id === "me-agents" || node.id === "me-rules";
 
   const [sortKey, setSortKey] = useState<SortKey>("name");

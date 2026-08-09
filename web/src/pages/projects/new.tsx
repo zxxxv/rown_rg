@@ -32,7 +32,7 @@ export default function NewProjectPage() {
       navigate(`/projects/${project.id}/overview`, { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
-        // 에러코드는 개발자용 — 사용자에겐 백엔드가 준 사람이 읽을 이유(message)만 보여준다.
+        // 에러코드는 개발자용 - 사용자에겐 백엔드가 준 사람이 읽을 이유(message)만 보여준다.
         const title =
           err.status === 422
             ? "입력값을 다시 확인해 주세요."

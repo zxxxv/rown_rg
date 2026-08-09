@@ -27,7 +27,7 @@ interface UpdateBody {
   expires_at?: string | null;
 }
 
-// 백엔드 _normalize_cidr의 축소판 — 단일 IP는 /32를 붙인다(형식 오류는 422).
+// 백엔드 _normalize_cidr의 축소판 - 단일 IP는 /32를 붙인다(형식 오류는 422).
 function normalizeCidr(value: string): string | null {
   const trimmed = value.trim();
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(\/(\d{1,2}))?$/.exec(trimmed);

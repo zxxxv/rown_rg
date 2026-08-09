@@ -30,7 +30,7 @@ export function useProjectSections(projectId: string, refetchInterval?: number) 
     queryKey: sectionKeys.tree(projectId),
     queryFn: () => getProjectSections(projectId),
     enabled: Boolean(projectId),
-    // 작성 진행 중 증분 표시 — 완성된 절이 트리에 순차 반영되도록 폴링
+    // 작성 진행 중 증분 표시 - 완성된 절이 트리에 순차 반영되도록 폴링
     refetchInterval,
   });
 }
@@ -109,7 +109,7 @@ export function useRewriteSection(projectId: string, sectionId: string) {
   });
 }
 
-/** 블록 국소 재작성 — 검색 없이 지정 블록만 고쳐 치환 저장(기존 인용 범위 유지). */
+/** 블록 국소 재작성 - 검색 없이 지정 블록만 고쳐 치환 저장(기존 인용 범위 유지). */
 export async function rewriteSectionBlock(
   projectId: string,
   sectionId: string,

@@ -5,7 +5,7 @@ import type { Source, SourceListResponse } from "@/api/types";
 
 // ─── 실계약: /projects/{id}/sources ──────────────────────────────────────
 // project_sources 행 + metadata 신호(웹 수집은 indexer가, 파일 소스는 업로드/불러오기가 영속화).
-// is_included는 2-상태(bool) — 기본 채택, 사람은 제외만 고른다.
+// is_included는 2-상태(bool) - 기본 채택, 사람은 제외만 고른다.
 // 자료 추가 3경로: 인터넷 검색(수집) · 직접 업로드(POST /sources/upload) ·
 //   라이브러리 불러오기(POST /sources/library). 확정은 진행 게이트의 POST /decide.
 export const SourceItemSchema = z.object({
@@ -19,7 +19,7 @@ export const SourceItemSchema = z.object({
   page_age: z.string().nullish(),
   preview: z.string().nullish(),
   has_content: z.boolean(),
-  // 라이브러리에서 불러온 자료면 원본 노드 id — 트리에서 '추가됨' 표시에 쓴다
+  // 라이브러리에서 불러온 자료면 원본 노드 id - 트리에서 '추가됨' 표시에 쓴다
   library_node_id: z.string().nullish(),
   created_at: z.string(),
 });
@@ -111,7 +111,7 @@ export function usePatchSource(projectId: string) {
   });
 }
 
-// 파일 자료(업로드·라이브러리) 삭제 — 행과 색인 청크가 함께 제거된다.
+// 파일 자료(업로드·라이브러리) 삭제 - 행과 색인 청크가 함께 제거된다.
 // 웹 수집 자료는 제외 토글만 가능(백엔드가 거부), 작성 시작 후에도 백엔드가 잠근다.
 export function useDeleteSource(projectId: string) {
   const qc = useQueryClient();
@@ -125,7 +125,7 @@ export function useDeleteSource(projectId: string) {
   });
 }
 
-// 직접 업로드 자료 — 파일 저장 + 즉시 색인(백엔드). 성공 시 자료 목록 갱신.
+// 직접 업로드 자료 - 파일 저장 + 즉시 색인(백엔드). 성공 시 자료 목록 갱신.
 export function useUploadProjectSource(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -143,7 +143,7 @@ export function useUploadProjectSource(projectId: string) {
   });
 }
 
-// 라이브러리 파일 불러오기 — 원본 파일을 색인해 근거로 편입. 성공 시 자료 목록 갱신.
+// 라이브러리 파일 불러오기 - 원본 파일을 색인해 근거로 편입. 성공 시 자료 목록 갱신.
 export function useAttachLibrarySource(projectId: string) {
   const qc = useQueryClient();
   return useMutation({

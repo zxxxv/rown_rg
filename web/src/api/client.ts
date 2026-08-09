@@ -58,7 +58,7 @@ const baseClient = ky.create({
         } else if (response.status === 403 && !suppressAuth) {
           onForbidden?.();
         } else if (response.status >= 500) {
-          // 에러코드(HTTP 5xx)는 개발자용이라 노출하지 않는다 — 제목만으로 이유 전달.
+          // 에러코드(HTTP 5xx)는 개발자용이라 노출하지 않는다 - 제목만으로 이유 전달.
           toast.error("서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
         }
         return response;
@@ -95,7 +95,7 @@ function isErrorEnvelope(v: unknown): v is ErrorEnvelope {
 }
 
 // 관용적 언래핑: MSW 목업은 {data: ...} 봉투, 실백엔드는 raw 객체/배열을 반환한다.
-// 봉투는 정확히 'data' 단일 키일 때만 인정 — 'data' 필드를 우연히 포함한 raw 응답을
+// 봉투는 정확히 'data' 단일 키일 때만 인정 - 'data' 필드를 우연히 포함한 raw 응답을
 // 잘못 벗기지 않는다. 배열은 봉투가 될 수 없으므로 그대로 통과한다.
 function isSuccessEnvelope<T>(v: unknown): v is SuccessEnvelope<T> {
   return (
@@ -138,7 +138,7 @@ async function request<T>(method: string, path: string, init?: Options): Promise
           envelope.error.details,
         );
       }
-      // 에러 봉투가 없는 원시 HTTP 오류 — 코드("HTTP 500") 대신 사람이 읽을 이유를 메시지로.
+      // 에러 봉투가 없는 원시 HTTP 오류 - 코드("HTTP 500") 대신 사람이 읽을 이유를 메시지로.
       // status는 보존해 호출부가 분기(예: 423 잠금)할 수 있게 한다.
       const status = err.response.status;
       throw new ApiError(

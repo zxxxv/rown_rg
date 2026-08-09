@@ -22,7 +22,7 @@ export function useMyTokenUsage() {
 }
 
 export async function changePassword(input: ChangePasswordInput): Promise<void> {
-  // confirm_password 는 클라이언트 검증용 — 서버에는 보내지 않는다.
+  // confirm_password 는 클라이언트 검증용 - 서버에는 보내지 않는다.
   await apiClient.post<void>("auth/change-password", {
     json: {
       current_password: input.current_password,

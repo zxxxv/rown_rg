@@ -69,7 +69,7 @@ export interface SidebarProps {
 }
 
 export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
-  // 서버 status 필터 사용 — 작성 중(writing) 최신 3건
+  // 서버 status 필터 사용 - 작성 중(writing) 최신 3건
   const activeQuery = useProjectList({ status: "writing", limit: 3 });
   const activeProjects = activeQuery.data ?? [];
   const showAdmin = ROLE_RANK[role] >= ROLE_RANK.admin;
@@ -88,7 +88,7 @@ export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
         )}
       >
         {!collapsed && (
-          // 브랜드 라벨은 클릭·더블클릭 시 텍스트가 잡히면 지저분하다 — 선택 비활성
+          // 브랜드 라벨은 클릭·더블클릭 시 텍스트가 잡히면 지저분하다 - 선택 비활성
           <span className="flex select-none items-center gap-2 text-sm font-semibold text-fg">
             <BrandMark className="h-6 w-6 shrink-0" />
             로운 리포트

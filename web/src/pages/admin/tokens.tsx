@@ -4,7 +4,7 @@ import { QuotaSettingsCard } from "@/features/admin/QuotaSettingsCard";
 import { useAuth } from "@/hooks/useAuth";
 
 /**
- * 토큰 한도(정책) — 조직 월 상한 + 역할별 기본 한도.
+ * 토큰 한도(정책) - 조직 월 상한 + 역할별 기본 한도.
  *
  * 관리자 섹션 역할 분리: 대시보드=집계(보기), 사용자=개별 관리(한도 조정 포함),
  * 토큰 한도=정책(여기). 개별 사용자 한도는 대시보드에서 사용자를 클릭해 조정한다.

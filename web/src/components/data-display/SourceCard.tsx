@@ -10,7 +10,7 @@ export interface SourceCardProps {
   pages?: number;
   reliability?: number;
   summary?: string;
-  /** 이 자료가 매칭된 목차 절 제목들 — 칩으로 표시(최대 3개 + n) */
+  /** 이 자료가 매칭된 목차 절 제목들 - 칩으로 표시(최대 3개 + n) */
   sections?: string[];
   kindLabel?: string;
   onClick?: () => void;

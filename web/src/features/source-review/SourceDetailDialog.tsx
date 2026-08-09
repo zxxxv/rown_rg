@@ -107,7 +107,7 @@ export function SourceDetailDialog({
                 </div>
               </section>
             ) : (
-              // 본문을 회수하지 못한 출처 — 본문 영역 대신 갖고 있는 요약 정보(출처·
+              // 본문을 회수하지 못한 출처 - 본문 영역 대신 갖고 있는 요약 정보(출처·
               // 발행·신뢰도)를 보여주고, 검색 근거로 쓰이지 않는다는 사실을 안내한다.
               <section className="flex flex-col gap-2">
                 <h3 className="text-xs font-medium uppercase tracking-wide text-fg-tertiary">

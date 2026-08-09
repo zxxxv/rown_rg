@@ -99,7 +99,7 @@ export async function* demoFullScenario(costStep = 1): AsyncGenerator<ProgressMe
   yield { type: "phase", phase: "writing", status: "started" };
   await nap(400);
 
-  // Level 1 — 개요·목차
+  // Level 1 - 개요·목차
   yield {
     type: "step",
     phase: "writing",
@@ -113,7 +113,7 @@ export async function* demoFullScenario(costStep = 1): AsyncGenerator<ProgressMe
   yield { type: "step", phase: "writing", step: "개요·목차 생성", status: "completed" };
   await nap(400);
 
-  // Level 2 — 챕터 요약 → Checkpoint #2
+  // Level 2 - 챕터 요약 → Checkpoint #2
   yield {
     type: "step",
     phase: "writing",
@@ -135,7 +135,7 @@ export async function* demoFullScenario(costStep = 1): AsyncGenerator<ProgressMe
   };
   await nap(3500);
 
-  // Level 3 — 섹션 본문 상세 작성 (Preview 화면과 동일 본문 재활용)
+  // Level 3 - 섹션 본문 상세 작성 (Preview 화면과 동일 본문 재활용)
   const SECTIONS: { id: string; title: string; body: string }[] = [
     { id: "2.3", title: "본문 작성 · 2.3 인구·고령화 영향", body: RICH_2_3 },
     { id: "3.3", title: "본문 작성 · 3.3 비용편익비 (B/C)", body: RICH_3_3 },
@@ -155,7 +155,7 @@ export async function* demoFullScenario(costStep = 1): AsyncGenerator<ProgressMe
     await nap(300);
   }
 
-  // Level 4 — 통합·교정
+  // Level 4 - 통합·교정
   yield { type: "step", phase: "writing", step: "통합·교정", status: "started", eta_seconds: 600 };
   await nap(400);
   yield* draftTypewriter("polish", POLISH_NOTE, 22 / costStep);
@@ -173,7 +173,7 @@ export async function* demoFullScenario(costStep = 1): AsyncGenerator<ProgressMe
   yield bumpCost(120_000, 3);
   yield { type: "step", phase: "qa", step: "Fact-check", status: "completed" };
 
-  // Consistency — 모순 발견 → 실패 → 재시도 → 통과
+  // Consistency - 모순 발견 → 실패 → 재시도 → 통과
   yield { type: "step", phase: "qa", step: "Consistency", status: "started" };
   await nap(800);
   yield* typewriter("contradiction_explain", CONTRA, 30 / costStep);

@@ -53,7 +53,7 @@ export const profileHandlers = [
     return HttpResponse.json({ data: { success: true } }, { status: 200 });
   }),
 
-  // POST /users/me/quota-requests — 한도 증액 신청(pending 생성)
+  // POST /users/me/quota-requests - 한도 증액 신청(pending 생성)
   http.post(url("users/me/quota-requests"), async ({ request }) => {
     const body = (await request.json()) as QuotaRequestBody;
     const amount = Number(body.amount_usd);

@@ -5,7 +5,7 @@ function lockedUntilSoon(): string {
   return new Date(Date.now() + 20 * 60 * 1000).toISOString();
 }
 
-// 관리자 사용자 관리 화면 픽스처 — admin 대시보드 ADMIN_USAGE와 동일한 user_id 체계.
+// 관리자 사용자 관리 화면 픽스처 - admin 대시보드 ADMIN_USAGE와 동일한 user_id 체계.
 export const DEMO_ADMIN_USERS: AdminUser[] = [
   {
     id: "u_admin_001",

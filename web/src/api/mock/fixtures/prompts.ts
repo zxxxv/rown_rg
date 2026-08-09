@@ -1,7 +1,7 @@
 import type { PersonalPrompt, SystemPrompt } from "@/api/prompts";
 import type { LibraryNode } from "@/api/types";
 
-// 데모 시스템 카탈로그(축약) — 실백엔드는 에이전트 21 + 작성 규칙 6종.
+// 데모 시스템 카탈로그(축약) - 실백엔드는 에이전트 21 + 작성 규칙 6종.
 export const SYSTEM_PROMPTS: SystemPrompt[] = [
   {
     ref: "a01",
@@ -42,7 +42,7 @@ export const SYSTEM_PROMPTS: SystemPrompt[] = [
   },
 ];
 
-// 개인 프롬프트 인메모리 스토어(가변) — 핸들러가 CRUD로 조작한다.
+// 개인 프롬프트 인메모리 스토어(가변) - 핸들러가 CRUD로 조작한다.
 export const PERSONAL_PROMPTS: PersonalPrompt[] = [
   {
     id: "up_demo_1",

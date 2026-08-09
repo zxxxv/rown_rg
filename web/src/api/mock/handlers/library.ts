@@ -42,7 +42,7 @@ function findFile(tree: LibraryNode[], id: string): Extract<LibraryNode, { type:
   return null;
 }
 
-/** 쓰기 대상 폴더 결정 — 상위 폴더가 있으면 그 폴더, 없으면 개인(me-files)/회사(company) 루트. */
+/** 쓰기 대상 폴더 결정 - 상위 폴더가 있으면 그 폴더, 없으면 개인(me-files)/회사(company) 루트. */
 function pickContainer(
   parentId: string | null | undefined,
   isPersonal: boolean | undefined,
@@ -159,7 +159,7 @@ export const libraryHandlers = [
     });
   }),
 
-  // AI 수집 자료의 수집 원문(content_md) — 노드 id로 파일을 찾아 제목 기반 목업 본문을 낸다.
+  // AI 수집 자료의 수집 원문(content_md) - 노드 id로 파일을 찾아 제목 기반 목업 본문을 낸다.
   http.get(url("library/sources/:id/content"), ({ params }) => {
     const file = findFile(LIBRARY_TREE, String(params.id));
     const title = file?.name ?? "수집 자료";

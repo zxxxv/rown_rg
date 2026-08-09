@@ -119,7 +119,7 @@ export const sectionsHandlers = [
     const current = CONTENT_OVERRIDES.get(sectionId) ?? base.content;
     const block = body.block ?? "";
     if (!block || !current.includes(block)) {
-      // 실백엔드 BLOCK_NOT_FOUND 미러 — 본문이 갱신돼 블록이 사라진 경우
+      // 실백엔드 BLOCK_NOT_FOUND 미러 - 본문이 갱신돼 블록이 사라진 경우
       return HttpResponse.json(
         { error: { code: "BLOCK_NOT_FOUND", message: "지정한 블록을 본문에서 찾을 수 없습니다." } },
         { status: 400 },

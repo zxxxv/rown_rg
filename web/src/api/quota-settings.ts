@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
 
-// 백엔드 quota_settings 한 행 — GET/PATCH 모두 이 배열을 그대로 반환한다.
+// 백엔드 quota_settings 한 행 - GET/PATCH 모두 이 배열을 그대로 반환한다.
 export const QuotaSettingSchema = z.object({
   key: z.string(),
   value: z.string(),
@@ -64,7 +64,7 @@ export function useQuotaSettings() {
   return useQuery({ queryKey: quotaSettingsKeys.all, queryFn: getQuotaSettings });
 }
 
-// 배치 수정 — {key: value} 딕셔너리. 백엔드가 검증·감사 후 전체 최신본을 돌려준다.
+// 배치 수정 - {key: value} 딕셔너리. 백엔드가 검증·감사 후 전체 최신본을 돌려준다.
 export async function updateQuotaSettings(patch: Record<string, string>): Promise<QuotaSetting[]> {
   const data = await apiClient.patch<unknown>("admin/quota-settings", { json: patch });
   return z.array(QuotaSettingSchema).parse(data);

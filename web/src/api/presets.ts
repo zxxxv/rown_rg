@@ -61,7 +61,7 @@ export function usePresets() {
 }
 
 export async function getPresetDetail(key: string): Promise<PresetDetail> {
-  // 프리셋 id는 한글(예: 예비타당성조사) — URL 인코딩 필수.
+  // 프리셋 id는 한글(예: 예비타당성조사) - URL 인코딩 필수.
   const data = await apiClient.get<unknown>(`presets/${encodeURIComponent(key)}`);
   return PresetDetailSchema.parse(data);
 }

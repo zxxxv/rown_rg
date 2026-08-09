@@ -12,7 +12,7 @@ interface DecideBody {
 }
 
 export const checkpointsHandlers = [
-  // 실계약: POST /projects/{id}/decide — body {decision: dict}, 서버는 최신 pending 게이트를 해소
+  // 실계약: POST /projects/{id}/decide - body {decision: dict}, 서버는 최신 pending 게이트를 해소
   http.post(url("projects/:id/decide"), async ({ params, request }) => {
     const projectId = String(params.id);
     const body = (await request.json()) as DecideBody;

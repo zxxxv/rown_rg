@@ -157,7 +157,7 @@ function KindSection({ kind }: { kind: PromptKind }) {
   );
 }
 
-/** 시스템 프롬프트 참고 목록 — 접힌 상태로 시작, 읽기 전용. */
+/** 시스템 프롬프트 참고 목록 - 접힌 상태로 시작, 읽기 전용. */
 function SystemReference({ kind }: { kind: PromptKind }) {
   const [open, setOpen] = useState(false);
   const system = useListSystemPrompts(open ? kind : undefined);

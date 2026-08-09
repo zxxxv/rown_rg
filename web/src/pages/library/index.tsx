@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 
 interface Lookup {
   node: LibraryNode | null;
-  /** 조상 폴더 경로(자신 제외) — id를 실어 브레드크럼 클릭 이동에 쓴다. */
+  /** 조상 폴더 경로(자신 제외) - id를 실어 브레드크럼 클릭 이동에 쓴다. */
   path: { id: string; name: string }[];
 }
 
@@ -77,7 +77,7 @@ export default function LibraryPage() {
     [tree, selectedId],
   );
 
-  // 쓰기 대상 — 선택한 폴더의 writable(개인/회사·부모)을 따른다. 가상 컨테이너
+  // 쓰기 대상 - 선택한 폴더의 writable(개인/회사·부모)을 따른다. 가상 컨테이너
   // (프로젝트·완성본 등)나 파일을 고르면 writable이 없어 업로드/폴더생성이 막힌다.
   const selectedFolder = lookup.node?.type === "folder" ? lookup.node : null;
   const writable = selectedFolder?.writable ?? null;

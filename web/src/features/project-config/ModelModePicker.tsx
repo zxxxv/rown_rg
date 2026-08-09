@@ -2,7 +2,7 @@ import { Controller, useFormContext } from "react-hook-form";
 import { cn } from "@/lib/utils";
 import type { ProjectFormValues } from "./schema";
 
-// 품질 모드 — 프로젝트 단위 모델 선택(백엔드 stages._models_for가 소비).
+// 품질 모드 - 프로젝트 단위 모델 선택(백엔드 stages._models_for가 소비).
 // economy=Haiku(플래너·수집·작성·검증 전 역할), standard=전역 설정 모델(기본 Sonnet).
 const MODES: {
   value: "standard" | "economy";

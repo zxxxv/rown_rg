@@ -3,7 +3,7 @@ import { z } from "zod";
 import { apiClient } from "@/api/client";
 
 // 실계약: GET /analysts → 분석 에이전트 카탈로그 (섹션별 담당 배정 UI 선택지)
-// 백엔드 src/prompts 파일 카탈로그가 단일 진실 — 프롬프트 본문은 내려오지 않는다.
+// 백엔드 src/prompts 파일 카탈로그가 단일 진실 - 프롬프트 본문은 내려오지 않는다.
 export const AnalystSchema = z.object({
   id: z.string(),
   name: z.string(),

@@ -11,7 +11,7 @@ import remarkGfm from "remark-gfm";
 import type { SectionCitation } from "@/api/types";
 import { CitationHoverCard } from "./SourceHoverCard";
 
-// 본문 인용 마커 — 백엔드 작성 규약([N], 숫자만)과 동일.
+// 본문 인용 마커 - 백엔드 작성 규약([N], 숫자만)과 동일.
 const CITE_PATTERN = /\[(\d{1,3})\]/g;
 
 type CitationMap = Map<number, SectionCitation>;
@@ -53,7 +53,7 @@ function processChildren(children: ReactNode, citations: CitationMap): ReactNode
   });
 }
 
-// 모델이 발명한 비표준 대괄호 마커([배경자료 제공됨] 등) 제거 — 백엔드 QA 게이트와 동일 정의.
+// 모델이 발명한 비표준 대괄호 마커([배경자료 제공됨] 등) 제거 - 백엔드 QA 게이트와 동일 정의.
 // 허용: [n]·[그림 …]·[표 …]·마크다운 링크([텍스트](url))는 보존, 그 외 대괄호는 삭제.
 const INVENTED_MARKER_RE = / ?\[([^[\]\n]{1,40})\](?!\()/g;
 const ALLOWED_BRACKET_RE = /^(?:\d+|그림\s?[-\d. ]+|표\s?[-\d. ]+)$/;
@@ -76,7 +76,7 @@ function outlineMarker(node: unknown): string | null {
   return m ? m[1] : null;
 }
 
-// 개조식 문단 마커(□ ㅇ 등) 앞에 빈 줄을 보장한다 — 단일 줄바꿈은 마크다운에서 공백으로
+// 개조식 문단 마커(□ ㅇ 등) 앞에 빈 줄을 보장한다 - 단일 줄바꿈은 마크다운에서 공백으로
 // 합쳐져 항목이 한 문단으로 붙어 버리므로, 각 마커 줄을 독립 문단으로 분리한다.
 // 코드펜스(```) 안은 건드리지 않는다.
 function prepareOutline(md: string): string {
@@ -127,7 +127,7 @@ function buildComponents(citations: CitationMap): Components {
     p: ({ children, node, ...props }) => {
       const marker = outlineMarker(node);
       if (marker === "□") {
-        // 대주제 — 굵게 + 위 간격으로 논리 묶음의 머리로 도드라지게.
+        // 대주제 - 굵게 + 위 간격으로 논리 묶음의 머리로 도드라지게.
         return (
           <p className="mb-2 mt-6 font-semibold leading-7 text-fg" {...props}>
             {walk(children)}
@@ -135,7 +135,7 @@ function buildComponents(citations: CitationMap): Components {
         );
       }
       if (marker) {
-        // ㅇ/○/◦ — 상위 개조식 항목: 들여쓰고 위에 간격을 줘 그룹을 분리한다.
+        // ㅇ/○/◦ - 상위 개조식 항목: 들여쓰고 위에 간격을 줘 그룹을 분리한다.
         return (
           <p className="mb-1 mt-4 pl-4 leading-7 text-fg" {...props}>
             {walk(children)}
@@ -220,7 +220,7 @@ function buildComponents(citations: CitationMap): Components {
 
 export interface MarkdownContentProps {
   content: string;
-  /** 절의 [N] 인용 매핑 — 있으면 본문 마커가 호버 출처 배지로 렌더된다. */
+  /** 절의 [N] 인용 매핑 - 있으면 본문 마커가 호버 출처 배지로 렌더된다. */
   citations?: SectionCitation[];
 }
 

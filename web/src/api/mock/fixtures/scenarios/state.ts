@@ -154,7 +154,7 @@ export function decideCheckpointForProject(projectId: string, checkpointId: stri
   return false;
 }
 
-/** 실계약(POST /projects/{id}/decide)용 — 서버처럼 "최신 pending 게이트"를 id 없이 해소한다. */
+/** 실계약(POST /projects/{id}/decide)용 - 서버처럼 "최신 pending 게이트"를 id 없이 해소한다. */
 export function resolveAnyPendingCheckpoint(projectId: string): boolean {
   for (const [k, r] of runners) {
     const pending = r.state.pending_checkpoint_id;

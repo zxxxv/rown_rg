@@ -60,7 +60,7 @@ export async function getUserUsageDetail(
   });
 }
 
-/** 사용자 클릭 상세 — userId가 null이면 비활성(다이얼로그 닫힘 상태). */
+/** 사용자 클릭 상세 - userId가 null이면 비활성(다이얼로그 닫힘 상태). */
 export function useUserUsageDetail(userId: string | null, params: AdminDashboardParams = {}) {
   return useQuery({
     queryKey: adminKeys.userUsage(userId ?? "", params),

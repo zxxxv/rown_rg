@@ -46,12 +46,12 @@ function folder(name: string, children: LibraryNode[]): LibraryNode {
   return { id: nextId("dir"), name, type: "folder", children };
 }
 
-/** 가상 파일로 표시(프로젝트 소스는 읽기전용 — 삭제/권한변경 불가). */
+/** 가상 파일로 표시(프로젝트 소스는 읽기전용 - 삭제/권한변경 불가). */
 function asVirtualFile(n: LibraryNode): LibraryNode {
   return n.type === "file" ? { ...n, virtual: true } : n;
 }
 
-/** AI 수집 자료 — 가상 파일 + 수집 원문 인라인 뷰어 경로(content_url). */
+/** AI 수집 자료 - 가상 파일 + 수집 원문 인라인 뷰어 경로(content_url). */
 function asAiVirtualFile(n: LibraryNode): LibraryNode {
   return n.type === "file"
     ? { ...n, virtual: true, content_url: `library/sources/${n.id}/content` }

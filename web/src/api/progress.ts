@@ -21,12 +21,12 @@ export const ProjectProgressSchema = z.object({
   percent: z.number().min(0).max(100).default(0),
   tokens_used: z.number().nonnegative().default(0),
   cost_usd: z.number().nonnegative().default(0),
-  // 실행 시작·마지막 활동(ISO) — token_usage 첫/마지막 기록 근사. 기록 없으면 null.
+  // 실행 시작·마지막 활동(ISO) - token_usage 첫/마지막 기록 근사. 기록 없으면 null.
   started_at: z.string().nullish(),
   last_activity_at: z.string().nullish(),
-  // 전역 동시 실행 상한 대기열 위치(1부터) — 대기 중이 아니면 null
+  // 전역 동시 실행 상한 대기열 위치(1부터) - 대기 중이 아니면 null
   queue_position: z.number().int().positive().nullish(),
-  // 실행 중 세부 단계 라벨(예: "청킹·임베딩 5/17", "배경 요약 1층 · 40/152") —
+  // 실행 중 세부 단계 라벨(예: "청킹·임베딩 5/17", "배경 요약 1층 · 40/152") -
   // 색인·RAPTOR 같은 수 분짜리 단계의 내부 진행. 없으면 null.
   active_step: z.string().nullish(),
   active_seconds: z.number().nonnegative().nullish(),
@@ -43,9 +43,9 @@ export interface ProgressSnapshot {
   phase_status: "started" | "completed";
   completed_phases: PhaseName[];
   active_step?: string;
-  /** 순수 생성 시간(초) — 검토 대기·중단을 뺀 실제 작업 시간 */
+  /** 순수 생성 시간(초) - 검토 대기·중단을 뺀 실제 작업 시간 */
   active_seconds?: number;
-  /** 자료 수집 목표 건수(권장 하한) — 수집 중 '현재 n/목표 m' 표시용 */
+  /** 자료 수집 목표 건수(권장 하한) - 수집 중 '현재 n/목표 m' 표시용 */
   source_target?: number;
   /** 단계 기반 근사 전체 진행률(0~100) */
   percent: number;
@@ -54,17 +54,17 @@ export interface ProgressSnapshot {
   eta_seconds?: number;
   pending_checkpoint_id: string | null;
   pending_gate: PendingGate | null;
-  /** status=created — 아직 실행이 시작되지 않음(자료조사 진행처럼 그리면 안 됨) */
+  /** status=created - 아직 실행이 시작되지 않음(자료조사 진행처럼 그리면 안 됨) */
   not_started: boolean;
-  /** status=cancelled — 사용자가 실행 도중 취소함 */
+  /** status=cancelled - 사용자가 실행 도중 취소함 */
   cancelled: boolean;
   /** 원본 status(취소 등 판정용) */
   status: string;
-  /** 실행 시작 시각(ISO) — 페이지 재진입에도 경과 시간이 이어지도록 서버 값 사용 */
+  /** 실행 시작 시각(ISO) - 페이지 재진입에도 경과 시간이 이어지도록 서버 값 사용 */
   started_at: string | null;
-  /** 마지막 활동 시각(ISO) — 종료된 프로젝트의 경과 시간 고정용 */
+  /** 마지막 활동 시각(ISO) - 종료된 프로젝트의 경과 시간 고정용 */
   last_activity_at: string | null;
-  /** 실행 대기열 위치(1부터) — 동시 실행 상한 초과로 대기 중일 때만 값 존재 */
+  /** 실행 대기열 위치(1부터) - 동시 실행 상한 초과로 대기 중일 때만 값 존재 */
   queue_position: number | null;
 }
 

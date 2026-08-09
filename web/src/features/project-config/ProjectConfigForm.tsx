@@ -69,7 +69,7 @@ export function ProjectConfigForm({
   const watchedConfig = watch("config");
 
   const onClickSubmit = handleSubmit(async (values) => {
-    // 목차는 필수(AI 설계 없음) — 유효한 절이 없으면 생성 자체를 막는다.
+    // 목차는 필수(AI 설계 없음) - 유효한 절이 없으면 생성 자체를 막는다.
     if (!isEdit) {
       const total = values.config.outline?.chapters.reduce((n, c) => n + c.sections.length, 0) ?? 0;
       if (total === 0) {
@@ -85,7 +85,7 @@ export function ProjectConfigForm({
   return (
     <FormProvider {...form}>
       {/* 생성 = 2컬럼(본문+고정 요약 사이드바). 수정(edit)은 개요 아코디언 같은
-          좁은 컨테이너에 임베드되므로 단일 컬럼 + 하단 액션 바로 그린다 —
+          좁은 컨테이너에 임베드되므로 단일 컬럼 + 하단 액션 바로 그린다 -
           320px 고정 사이드바가 좁은 폭에서 본문을 짓누르는 문제 방지. */}
       <div
         className={cn("grid grid-cols-1 gap-6", !isEdit && "lg:grid-cols-[minmax(0,1fr)_320px]")}
@@ -101,14 +101,14 @@ export function ProjectConfigForm({
             <OutlineDesigner />
           </Section>
           <Section number={4} title="모델 품질" badge={isEdit ? "수정 불가" : undefined}>
-            {/* 작성 깊이 UI는 제거 — 분할 생성 배선 이후 깊이는 항상 full_report(2026-08-07) */}
+            {/* 작성 깊이 UI는 제거 - 분할 생성 배선 이후 깊이는 항상 full_report(2026-08-07) */}
             <ModelModePicker disabled={isEdit} />
           </Section>
           <Section number={5} title="알림">
             <NotificationChannels />
           </Section>
 
-          {/* 필수 결정은 위 5개로 끝. 기능 토글 6종은 제거됨(2026-08-04) —
+          {/* 필수 결정은 위 5개로 끝. 기능 토글 6종은 제거됨(2026-08-04) -
               출처 태깅·약어집은 파이프라인 기본 동작. 남은 실스위치는 HyDE뿐. */}
           <details className="group rounded border border-border bg-bg">
             <summary className="flex cursor-pointer select-none items-center gap-2 p-4">
@@ -231,7 +231,7 @@ function Section({
   );
 }
 
-/** 완료 알림 채널 — 켜면 보고서 완료·검토대기·실패 시 소유자에게 네이버웍스 봇 알림(기본 off). */
+/** 완료 알림 채널 - 켜면 보고서 완료·검토대기·실패 시 소유자에게 네이버웍스 봇 알림(기본 off). */
 function NotificationChannels() {
   const { control } = useFormContext<ProjectFormValues>();
   return (
@@ -268,7 +268,7 @@ function NotificationChannels() {
   );
 }
 
-/** HyDE 검색 확장 토글 — 실스위치(백엔드 stages._hyde_enabled_for가 소비). */
+/** HyDE 검색 확장 토글 - 실스위치(백엔드 stages._hyde_enabled_for가 소비). */
 function HydeToggle() {
   const { control } = useFormContext<ProjectFormValues>();
   return (

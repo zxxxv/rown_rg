@@ -1,6 +1,6 @@
 import { Globe, HardDriveUpload, Library } from "lucide-react";
 
-// 자료 출처 안내 — 토글이 아니라 정보 카드다(2026-08-04 정리).
+// 자료 출처 안내 - 토글이 아니라 정보 카드다(2026-08-04 정리).
 // 웹 검색은 파이프라인이 항상 실행하는 기본 경로라 켜고 끌 대상이 아니고,
 // 라이브러리·업로드는 설계 시 스위치가 아니라 자료 검토 단계에서 '추가하는 행위'로 붙는다.
 const CHANNELS = [
@@ -27,7 +27,7 @@ const CHANNELS = [
   },
 ] as const;
 
-/** 자료가 어디서 오는지 알려주는 읽기 전용 안내 — 폼 값과 무관하다. */
+/** 자료가 어디서 오는지 알려주는 읽기 전용 안내 - 폼 값과 무관하다. */
 export function SourceChannels() {
   return (
     <div className="flex flex-col gap-2">

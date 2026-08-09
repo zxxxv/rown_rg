@@ -10,7 +10,7 @@ export const UserSchema = z.object({
   username: z.string().nullish(),
   name: z.string(),
   role: UserRoleSchema,
-  // 프로필(마이페이지)용 — /auth/me 만 채워줌. 로그인 응답 등에선 생략될 수 있어 optional.
+  // 프로필(마이페이지)용 - /auth/me 만 채워줌. 로그인 응답 등에선 생략될 수 있어 optional.
   is_active: z.boolean().optional(),
   has_password: z.boolean().optional(),
   last_login_at: z.string().nullish(),
@@ -32,7 +32,7 @@ export type Preset = z.infer<typeof PresetSchema>;
 export const DepthModeSchema = z.enum(["outline_only", "standard", "full_report", "deep_dive"]);
 export type DepthMode = z.infer<typeof DepthModeSchema>;
 
-// 백엔드 ProjectStage(core/types.py)와 동일한 어휘 — failed 없음, 검토 대기는 reviewing.
+// 백엔드 ProjectStage(core/types.py)와 동일한 어휘 - failed 없음, 검토 대기는 reviewing.
 export const ProjectStatusSchema = z.enum([
   "created",
   "researching",
@@ -55,15 +55,15 @@ export const AnalyzerSchema = z.enum([
 ]);
 export type Analyzer = z.infer<typeof AnalyzerSchema>;
 
-// 사용자 확정 목차(config.outline) — 있으면 백엔드 planner가 LLM 없이 그대로 실행한다.
+// 사용자 확정 목차(config.outline) - 있으면 백엔드 planner가 LLM 없이 그대로 실행한다.
 // 장·절 번호는 배열 위치에서 파생되므로 클라이언트는 번호를 보내지 않는다.
-// 주의: .default()를 쓰면 zod input/output 타입이 갈라져 zodResolver와 어긋난다 —
+// 주의: .default()를 쓰면 zod input/output 타입이 갈라져 zodResolver와 어긋난다 -
 // 전 필드 필수(서버는 항상 전 필드 직렬화, 편집기도 항상 채움).
 export const OutlineSectionSchema = z.object({
   title: z.string(),
   direction: z.string(),
   key_points: z.array(z.string()),
-  // 분석 에이전트 name 참조 — 배정된 관점을 모두 반영한다(분량 목표는 최댓값)
+  // 분석 에이전트 name 참조 - 배정된 관점을 모두 반영한다(분량 목표는 최댓값)
   analysts: z.array(z.string()),
 });
 export type OutlineSection = z.infer<typeof OutlineSectionSchema>;
@@ -86,23 +86,23 @@ export type Outline = z.infer<typeof OutlineSchema>;
 export const ProjectConfigSchema = z.object({
   // 백엔드 계약: 프리셋은 카탈로그 id/name 문자열 또는 null(자유 주제)
   preset: z.string().nullable(),
-  // 생성 화면에서 직접 확정한 목차 — 백엔드 필수(OUTLINE_REQUIRED), 편집 중엔 미완성일 수 있어 optional.
+  // 생성 화면에서 직접 확정한 목차 - 백엔드 필수(OUTLINE_REQUIRED), 편집 중엔 미완성일 수 있어 optional.
   outline: OutlineSchema.optional(),
-  // 품질 모드 — economy(Haiku, 저비용)/standard(전역 설정 모델). 백엔드 stages._models_for 소비.
+  // 품질 모드 - economy(Haiku, 저비용)/standard(전역 설정 모델). 백엔드 stages._models_for 소비.
   model_mode: z.enum(["economy", "standard"]),
-  // HyDE 검색 확장 — 백엔드 stages._hyde_enabled_for 소비(없으면 전역 기본 off).
+  // HyDE 검색 확장 - 백엔드 stages._hyde_enabled_for 소비(없으면 전역 기본 off).
   // optional: 이 필드 도입 전 프로젝트 config가 catch로 통째 초기화되지 않게 한다.
   hyde_enabled: z.boolean().optional(),
-  // 완료 알림 채널 — 발송 기능은 준비 중이지만 선택은 저장해 둔다(구현 시 소급 적용).
+  // 완료 알림 채널 - 발송 기능은 준비 중이지만 선택은 저장해 둔다(구현 시 소급 적용).
   notification_channels: z.array(z.enum(["email", "naver_works"])).optional(),
-  // 분석 배정은 목차 설계로 일원화 — 레거시(항상 빈 값), 기존 config 호환용
+  // 분석 배정은 목차 설계로 일원화 - 레거시(항상 빈 값), 기존 config 호환용
   enabled_analyzers: z.array(AnalyzerSchema),
   depth_mode: DepthModeSchema,
   output_formats: z.array(z.enum(["hwpx", "markdown"])),
 });
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 
-// 백엔드 config는 dict[str, Any] — 빈/부분 config가 와도 UI가 죽지 않게 기본값으로 흡수한다.
+// 백엔드 config는 dict[str, Any] - 빈/부분 config가 와도 UI가 죽지 않게 기본값으로 흡수한다.
 export const DEFAULT_PROJECT_CONFIG: ProjectConfig = {
   preset: null,
   model_mode: "standard",
@@ -113,7 +113,7 @@ export const DEFAULT_PROJECT_CONFIG: ProjectConfig = {
   output_formats: ["hwpx"],
 };
 
-// 백엔드 ProjectRead(schemas/project.py)와 1:1 — progress만 프론트 전용 초과 필드(optional).
+// 백엔드 ProjectRead(schemas/project.py)와 1:1 - progress만 프론트 전용 초과 필드(optional).
 export const ProjectSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -123,7 +123,7 @@ export const ProjectSchema = z.object({
   status: ProjectStatusSchema,
   depth_mode: DepthModeSchema,
   owner_id: z.string(),
-  // 표시용 소유자 이름(owner eager-load 시에만 채워짐) — 없으면 owner_id로 폴백
+  // 표시용 소유자 이름(owner eager-load 시에만 채워짐) - 없으면 owner_id로 폴백
   owner_name: z.string().nullish(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -131,7 +131,7 @@ export const ProjectSchema = z.object({
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
-// 실백엔드 GET /projects — 페이지네이션 봉투 없이 배열을 반환한다(limit/offset 쿼리).
+// 실백엔드 GET /projects - 페이지네이션 봉투 없이 배열을 반환한다(limit/offset 쿼리).
 export const ProjectListSchema = z.array(ProjectSchema);
 
 export const ProjectSortSchema = z.enum(["created_desc", "title_asc"]);
@@ -161,7 +161,7 @@ export const SourceSchema = z.object({
   is_included: z.boolean().nullable(),
   quotes: z.array(z.string()).optional(),
   preview: z.string().optional(),
-  /** 이 출처가 매칭된 목차 절 제목들(수집 LLM 판정) — 검토 화면 '관련 목차' 표시용 */
+  /** 이 출처가 매칭된 목차 절 제목들(수집 LLM 판정) - 검토 화면 '관련 목차' 표시용 */
   matched_sections: z.array(z.string()).optional(),
   library_file_id: z.string().optional(),
 });
@@ -174,7 +174,7 @@ export const SourceListResponseSchema = z.object({
 export type SourceListResponse = z.infer<typeof SourceListResponseSchema>;
 
 // Contradiction* 스키마는 모순 사전 검증 페이지(reconcile)와 함께 제거됨(2026-08-04)
-// — 백엔드 실체가 없던 mock 계약이었다. 문서 횡단 검증은 PM 검증(verify)이 담당.
+// - 백엔드 실체가 없던 mock 계약이었다. 문서 횡단 검증은 PM 검증(verify)이 담당.
 
 export const SectionStatusSchema = z.enum(["pending", "writing", "completed", "failed"]);
 export type SectionStatus = z.infer<typeof SectionStatusSchema>;
@@ -185,7 +185,7 @@ export const SectionNodeSchema = z.object({
   level: z.number().int().min(1).max(4),
   status: SectionStatusSchema,
   parent_id: z.string(),
-  /** 작성 시 근거가 부족해 분량 목표를 내린 절 — 본문 대신 여기로 알린다 */
+  /** 작성 시 근거가 부족해 분량 목표를 내린 절 - 본문 대신 여기로 알린다 */
   evidence_scarce: z.boolean().default(false),
 });
 export type SectionNode = z.infer<typeof SectionNodeSchema>;
@@ -219,7 +219,7 @@ export const UngroundedNumbersSchema = z.object({
   samples: z.array(z.string()).default([]),
 });
 
-/** 절이 쓸 수 있었던 근거의 양 — 작성 시점 기록(옛 절은 count=null) */
+/** 절이 쓸 수 있었던 근거의 양 - 작성 시점 기록(옛 절은 count=null) */
 export const EvidenceInfoSchema = z.object({
   count: z.number().int().nonnegative().nullable().default(null),
   scarce: z.boolean().default(false),
@@ -233,9 +233,9 @@ export const SectionContentResponseSchema = z.object({
   qa_status: z.enum(["passed", "failed", "pending"]),
   level: z.number().int().min(1).max(4),
   citations: z.array(SectionCitationSchema).default([]),
-  /** 인용 근거에서 확인되지 않는 수치 — 창작 위험 신호(조회 시점 재계산) */
+  /** 인용 근거에서 확인되지 않는 수치 - 창작 위험 신호(조회 시점 재계산) */
   ungrounded: UngroundedNumbersSchema.default({ count: 0, samples: [] }),
-  /** 근거 부족으로 분량 목표를 내린 절인지 — 본문에는 쓰지 않고 화면에서만 표시 */
+  /** 근거 부족으로 분량 목표를 내린 절인지 - 본문에는 쓰지 않고 화면에서만 표시 */
   evidence: EvidenceInfoSchema.default({ count: null, scarce: false }),
 });
 export type SectionContentResponse = z.infer<typeof SectionContentResponseSchema>;
@@ -259,7 +259,7 @@ export const WritableTargetSchema = z.object({
 });
 export type WritableTarget = z.infer<typeof WritableTargetSchema>;
 
-// 프롬프트 파일 노드 마커 — 있으면 상세 패널이 프롬프트 에디터/뷰어를 연다.
+// 프롬프트 파일 노드 마커 - 있으면 상세 패널이 프롬프트 에디터/뷰어를 연다.
 export const PromptRefSchema = z.object({
   scope: z.enum(["personal", "system"]),
   kind: z.enum(["agent", "rule"]),
@@ -268,7 +268,7 @@ export const PromptRefSchema = z.object({
 });
 export type PromptRef = z.infer<typeof PromptRefSchema>;
 
-// virtual: 합성 노드(개인 루트·프로젝트·완성본·소스 등) — 삭제/권한변경 불가.
+// virtual: 합성 노드(개인 루트·프로젝트·완성본·소스 등) - 삭제/권한변경 불가.
 // download_url: 가상 파일의 다운로드 경로(API base 상대경로 또는 절대 URL). 실파일은 없음.
 export type LibraryNode =
   | {
@@ -344,7 +344,7 @@ export type LoginResponse = z.infer<typeof LoginResponseSchema>;
 export const MeResponseSchema = UserSchema;
 export type MeResponse = z.infer<typeof MeResponseSchema>;
 
-// 마이페이지 — 내 토큰 사용량 (cost_usd 는 백엔드가 Decimal→문자열로 줄 수 있어 coerce)
+// 마이페이지 - 내 토큰 사용량 (cost_usd 는 백엔드가 Decimal→문자열로 줄 수 있어 coerce)
 export const TokenUsageDailyPointSchema = z.object({
   date: z.string(),
   input_tokens: z.number().int().nonnegative(),
@@ -374,7 +374,7 @@ export const MyTokenUsageSchema = z.object({
 });
 export type MyTokenUsage = z.infer<typeof MyTokenUsageSchema>;
 
-// 마이페이지 — 비밀번호 변경
+// 마이페이지 - 비밀번호 변경
 export const ChangePasswordInputSchema = z
   .object({
     current_password: z.string().min(1, "현재 비밀번호를 입력하세요"),

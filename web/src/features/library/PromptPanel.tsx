@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 
 const KIND_LABEL: Record<PromptKind, string> = { agent: "에이전트", rule: "작성 규칙" };
 
-/** 프롬프트 파일 노드 상세 — 라이브러리에선 읽기 전용. 편집·추가는 '프롬프트 관리' 페이지에서. */
+/** 프롬프트 파일 노드 상세 - 라이브러리에선 읽기 전용. 편집·추가는 '프롬프트 관리' 페이지에서. */
 export function PromptBody({ prompt }: { prompt: PromptRef }) {
   if (prompt.scope === "system") return <SystemPromptView prompt={prompt} />;
   return <PersonalPromptView prompt={prompt} />;

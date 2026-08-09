@@ -11,11 +11,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { ProjectFormValues } from "./schema";
 
-// ─── 목차 설계 — 프리셋 골격을 펼쳐 장·절·에이전트를 직접 확정하는 편집기 ───
+// ─── 목차 설계 - 프리셋 골격을 펼쳐 장·절·에이전트를 직접 확정하는 편집기 ───
 // 목차는 사람이 무조건 만든다(2026-08-03 확정): AI 목차 설계 없음. 확정된
 // config.outline이 그대로 실행되고, 그 목차 순서로 자료 조사가 진행된다.
 
-// 편집기 내부 초안 — _id는 리렌더·재정렬 안정용 클라이언트 전용 키(제출 시 제거).
+// 편집기 내부 초안 - _id는 리렌더·재정렬 안정용 클라이언트 전용 키(제출 시 제거).
 interface DraftSection {
   _id: string;
   title: string;
@@ -50,7 +50,7 @@ function fromPreset(detail: PresetDetail): DraftChapter[] {
   }));
 }
 
-/** 제출 가능한 outline로 정리 — _id 제거, 제목 없는 절·빈 장은 버린다(백엔드 검증과 일치). */
+/** 제출 가능한 outline로 정리 - _id 제거, 제목 없는 절·빈 장은 버린다(백엔드 검증과 일치). */
 function toOutline(chapters: DraftChapter[]): Outline | undefined {
   const cleaned = chapters
     .map((ch) => ({
@@ -84,7 +84,7 @@ export function OutlineDesigner() {
   const detailQuery = usePresetDetail(preset ?? null);
 
   const [chapters, setChapters] = useState<DraftChapter[]>([]);
-  // 펼쳐진 장 id 집합 — 프리셋 로드 시 전부 접힘(35섹션 프리셋 스크롤 방지),
+  // 펼쳐진 장 id 집합 - 프리셋 로드 시 전부 접힘(35섹션 프리셋 스크롤 방지),
   // 새로 추가한 장만 자동으로 펼친다.
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
@@ -96,7 +96,7 @@ export function OutlineDesigner() {
       return next;
     });
 
-  // 폼과 동기화. 목차는 필수(AI 설계 없음) — 유효한 절이 없으면 undefined가
+  // 폼과 동기화. 목차는 필수(AI 설계 없음) - 유효한 절이 없으면 undefined가
   // 저장되고 폼 제출 단계에서 차단된다.
   const sync = useCallback(
     (next: DraftChapter[]) => {
@@ -142,7 +142,7 @@ export function OutlineDesigner() {
     }
   }, [preset, getValues, startBlank]);
 
-  // 예약된 골격 로드 — 프리셋 상세가 도착하는 시점에 편집기를 채운다(전부 접힘).
+  // 예약된 골격 로드 - 프리셋 상세가 도착하는 시점에 편집기를 채운다(전부 접힘).
   useEffect(() => {
     if (!preset || !detailQuery.data) return;
     if (pendingSkeletonRef.current !== preset) return;
@@ -280,7 +280,7 @@ function ChapterEditor({
         </span>
         <Input
           value={chapter.title}
-          placeholder="장 제목 — 자료 수집은 장 단위로 한 번씩 돕니다 (예: 사업 개요)"
+          placeholder="장 제목 - 자료 수집은 장 단위로 한 번씩 돕니다 (예: 사업 개요)"
           onChange={(e) => onChange({ ...chapter, title: e.target.value })}
           className="h-8"
         />
@@ -361,7 +361,7 @@ function SectionEditor({
         </span>
         <Input
           value={section.title}
-          placeholder="절 제목 — 목차·헤딩에 그대로 쓰이고 검색 질의가 됩니다"
+          placeholder="절 제목 - 목차·헤딩에 그대로 쓰이고 검색 질의가 됩니다"
           onChange={(e) => onChange({ ...section, title: e.target.value })}
           className="h-8 bg-bg"
         />
@@ -374,12 +374,9 @@ function SectionEditor({
         />
       </div>
       <p className="pl-8 text-[11px] text-fg-tertiary">
-        제목은 목차·본문 헤딩에 그대로 쓰이고, 자료 검색의 1차 질의가 됩니다.
+        절 제목은 목차와 본문 헤딩에 그대로 쓰이고 자료 검색의 1차 질의가 됩니다.
       </p>
-      <Field
-        label="작성 방향"
-        hint="이 절이 무엇을 논증해야 하는지 한 줄 — 검색 질의와 작성 지시에 함께 실립니다"
-      >
+      <Field hint="작성 방향은 이 절이 무엇을 논증해야 하는지 한 줄로 적는 칸이고, 검색 질의와 작성 지시에 함께 실립니다.">
         <Input
           value={section.direction}
           placeholder="예: 관련 법령과 상위 계획에 비춘 국고 지원의 당위성 논증"
@@ -387,10 +384,7 @@ function SectionEditor({
           className="h-8 bg-bg text-sm"
         />
       </Field>
-      <Field
-        label="핵심 포인트"
-        hint="반드시 다룰 항목(줄마다 하나) — 작성 체크리스트이자 검색 어휘로 쓰입니다"
-      >
+      <Field hint="핵심 포인트는 반드시 다룰 항목을 줄마다 하나씩 적는 칸이고, 작성 체크리스트이자 검색 어휘로 쓰입니다.">
         <Textarea
           value={section.key_points.join("\n")}
           placeholder={"예: 관련 법률\n상위 계획 연계\n국고 지원 필요성"}
@@ -407,24 +401,14 @@ function SectionEditor({
   );
 }
 
-/** 입력 칸 하나 — 라벨과 "이 값이 어디에 쓰이는지" 한 줄 설명을 붙인다.
+/** 입력 칸 하나 - "무엇을 적는 칸이고 어디에 쓰이는지"를 한 줄 문장으로 붙인다.
  * 빈 상자만 늘어놓으면 무엇을 적는 칸인지 알 수 없다(사용자 지적 2026-08-10). */
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint: string;
-  children: React.ReactNode;
-}) {
-  // label이 아니라 div — 자식이 Input/Textarea 중 무엇이든 오고, 컨트롤 id를
+function Field({ hint, children }: { hint: string; children: React.ReactNode }) {
+  // label이 아니라 div - 자식이 Input/Textarea 중 무엇이든 오고, 컨트롤 id를
   // 여기서 알 수 없다(연결 없는 label은 스크린리더에 더 나쁘다).
   return (
     <div className="flex flex-col gap-1">
-      <p className="text-[11px] font-medium text-fg-secondary">
-        {label} <span className="font-normal text-fg-tertiary">{hint}</span>
-      </p>
+      <p className="text-[11px] text-fg-tertiary">{hint}</p>
       {children}
     </div>
   );
@@ -492,7 +476,7 @@ function AnalystPicker({
   const analysts = analystsQuery.data ?? [];
 
   const toggle = (name: string) => {
-    // 선택 순서를 보존한다 — 프롬프트에 그 순서로 관점이 실린다(전부 반영).
+    // 선택 순서를 보존한다 - 프롬프트에 그 순서로 관점이 실린다(전부 반영).
     onChange(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
   };
 
@@ -500,19 +484,19 @@ function AnalystPicker({
     <details className="group rounded border border-border bg-bg">
       <summary className="cursor-pointer select-none px-3 py-2 text-xs text-fg-secondary">
         <span className="font-medium text-fg-secondary">담당 에이전트</span>{" "}
-        <span className="text-fg-tertiary">— 분석 관점(페르소나)과 목표 분량을 정합니다</span>{" "}
+        <span className="text-fg-tertiary">는 분석 관점과 목표 분량을 정합니다.</span>{" "}
         {selected.length > 0 ? (
           <span className="font-medium text-fg">
             {selected.join(", ")}
             <span className="ml-1 font-normal text-fg-tertiary">
               {selected.length > 1
-                ? `— ${selected.length}개 관점을 모두 반영(분량·검색량 상향)`
-                : "— 이 관점의 전문성·분량 기준으로 작성"}
+                ? `${selected.length}개 관점을 모두 반영하고 분량·검색량을 함께 올립니다.`
+                : "이 관점의 전문성과 분량 기준으로 작성합니다."}
             </span>
           </span>
         ) : (
           <span className="text-fg-tertiary">
-            미배정 — 기본 규칙만 적용(분량 목표 없음). 중요한 절은 2~3개 선택
+            미배정 상태라 기본 규칙만 적용되고 분량 목표가 없습니다. 중요한 절은 2~3개 고르세요.
           </span>
         )}
       </summary>

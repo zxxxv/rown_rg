@@ -1,6 +1,6 @@
 import type { SVGProps } from "react";
 
-// 로운 리포트 로고 마크 — 파비콘(public/favicon.svg)과 동일한 도형.
+// 로운 리포트 로고 마크 - 파비콘(public/favicon.svg)과 동일한 도형.
 // 브랜드 블루 타일 위 보고서 문서 + 상승 막대. 자기 배경을 가져 라이트/다크 어디서나 또렷.
 // className으로 크기 지정(예: h-6 w-6). 색은 브랜드 고정값.
 export function BrandMark({ className, ...props }: SVGProps<SVGSVGElement>) {

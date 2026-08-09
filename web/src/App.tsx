@@ -26,14 +26,14 @@ import SourcesPage from "@/pages/projects/[id]/sources";
 import NewProjectPage from "@/pages/projects/new";
 import PromptsPage from "@/pages/prompts";
 
-// 진행 페이지는 폐지됐다(개요의 진행 단계 스테퍼로 통합) — 옛 링크는 개요로 넘긴다.
+// 진행 페이지는 폐지됐다(개요의 진행 단계 스테퍼로 통합) - 옛 링크는 개요로 넘긴다.
 // 출력 페이지도 폐지됐다(개요 헤더의 즉시 다운로드 + 요약 카드로 통합, 2026-08-04).
 function OverviewRedirect() {
   const { id } = useParams<{ id: string }>();
   return <Navigate to={`/projects/${id}/overview`} replace />;
 }
 
-// 편집기는 미리보기·편집 화면으로 통합됐다 — 기존 /editor 링크는 /preview로 넘긴다.
+// 편집기는 미리보기·편집 화면으로 통합됐다 - 기존 /editor 링크는 /preview로 넘긴다.
 function EditorRedirect() {
   const { id } = useParams<{ id: string }>();
   const [sp] = useSearchParams();

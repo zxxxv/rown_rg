@@ -4,7 +4,7 @@ function hoursFromNow(h: number): string {
   return new Date(Date.now() + h * 3_600_000).toISOString();
 }
 
-// IP 화이트리스트 픽스처 — 핸들러가 직접 변형하는 in-memory 저장소.
+// IP 화이트리스트 픽스처 - 핸들러가 직접 변형하는 in-memory 저장소.
 export const IP_WHITELIST: IpWhitelistEntry[] = [
   {
     id: "ip_001",

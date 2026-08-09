@@ -445,7 +445,7 @@ function UserDailyChart({
             dataKey={u.key}
             stackId="cost"
             fill={colorFor(u.key, idx)}
-            // 스택 세그먼트 사이 표면 갭(가독성) — dataviz 규약.
+            // 스택 세그먼트 사이 표면 갭(가독성) - dataviz 규약.
             stroke="var(--color-background-primary)"
             strokeWidth={1}
             cursor={u.key === "other" ? undefined : "pointer"}
@@ -599,7 +599,7 @@ function MiniStat({ label, value, sub }: { label: string; value: string; sub?: s
   );
 }
 
-/** 사용자 클릭 상세 — 기간 지출·보고서 건수·프로젝트별 비용·일별 추이 + 한도 조정(인라인 흡수). */
+/** 사용자 클릭 상세 - 기간 지출·보고서 건수·프로젝트별 비용·일별 추이 + 한도 조정(인라인 흡수). */
 function UserDetailDialog({
   userId,
   params,

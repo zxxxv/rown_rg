@@ -8,7 +8,7 @@ function url(path: string): string {
   return `${base}/${path.replace(/^\//, "")}`;
 }
 
-// 실계약 미러: GET /presets/{key} — 목차 편집기 초기값용 축약 골격(데모).
+// 실계약 미러: GET /presets/{key} - 목차 편집기 초기값용 축약 골격(데모).
 const DEMO_PRESET_DETAIL: Omit<PresetDetail, "id" | "name" | "desc"> = {
   domain_context: "",
   chapters: [
@@ -43,7 +43,7 @@ const DEMO_PRESET_DETAIL: Omit<PresetDetail, "id" | "name" | "desc"> = {
   ],
 };
 
-// 실계약 미러: GET /analysts — 배정 UI 선택지(백엔드 21종 중 데모 축약).
+// 실계약 미러: GET /analysts - 배정 UI 선택지(백엔드 21종 중 데모 축약).
 const DEMO_ANALYSTS = [
   { id: "a02", name: "정책동향", cat: "정책", desc: "국내외 정책 비교·동향 분석", pages: "8~12" },
   { id: "a03", name: "시장분석", cat: "시장", desc: "시장 규모·성장률 분석", pages: "8~12" },

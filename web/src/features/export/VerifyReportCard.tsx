@@ -13,11 +13,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-// PM 검증 경고 리포트 — 정적 게이트가 못 잡는 문서 횡단 문제(절 간 수치·용어 충돌,
+// PM 검증 경고 리포트 - 정적 게이트가 못 잡는 문서 횡단 문제(절 간 수치·용어 충돌,
 // 법령 시점 상충, 챕터 간 통계 중복)를 납품 전에 사람이 확인하는 카드.
 // 차단이 아니라 참고용이며, 조회 실패(구백엔드 등) 시에는 조용히 숨긴다.
 // 전체 목록은 수정할 수 있는 곳(미리보기·편집)에 두고, 출력 페이지는 compact
-// 요약 배너만 쓴다(QA 산출물이 다운로드 화면을 지배하지 않게 — 2026-08-04).
+// 요약 배너만 쓴다(QA 산출물이 다운로드 화면을 지배하지 않게 - 2026-08-04).
 export function VerifyReportCard({
   projectId,
   compact = false,
@@ -27,7 +27,7 @@ export function VerifyReportCard({
 }: {
   projectId: string;
   compact?: boolean;
-  /** 접힌 한 줄로 시작 — 편집 화면처럼 경고가 본작업을 가리면 안 되는 곳용 */
+  /** 접힌 한 줄로 시작 - 편집 화면처럼 경고가 본작업을 가리면 안 되는 곳용 */
   collapsible?: boolean;
   onOpenEditor?: () => void;
   /** 경고 → 해당 절로 이동. 넘기면 목록 항목이 클릭 가능해진다(§1.1 같은 ref 기준). */
@@ -42,7 +42,7 @@ export function VerifyReportCard({
 
   if (findings.length === 0) {
     // 빈 결과 ≠ 통과: PM 검증은 조립 단계(완료 직전)에 돌므로, 완료 전에는
-    // "아직 검증 전"이다 — 통과로 표시하면 거짓 안심을 준다(2026-08-05 지적).
+    // "아직 검증 전"이다 - 통과로 표시하면 거짓 안심을 준다(2026-08-05 지적).
     const status = projectQuery.data?.status;
     if (status !== "completed" && status !== "archived") {
       return (
@@ -63,7 +63,7 @@ export function VerifyReportCard({
   const criticalCount = findings.filter((f) => f.severity === "critical").length;
 
   if (collapsible && !open) {
-    // 접힌 한 줄 — 편집 화면에서 경고가 본작업을 가리지 않게 하고, 필요할 때만 편다.
+    // 접힌 한 줄 - 편집 화면에서 경고가 본작업을 가리지 않게 하고, 필요할 때만 편다.
     return (
       <button
         type="button"
@@ -82,7 +82,7 @@ export function VerifyReportCard({
         )}
         <span className="font-medium text-fg">PM 검증 경고 {findings.length}건</span>
         {criticalCount > 0 ? (
-          // 총 건수만으론 심각한 게 섞였는지 알 수 없다 — critical은 별도 배지로 분리
+          // 총 건수만으론 심각한 게 섞였는지 알 수 없다 - critical은 별도 배지로 분리
           <Badge variant="destructive" className="shrink-0">
             critical {criticalCount}
           </Badge>

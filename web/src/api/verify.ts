@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
 
-// 실계약: GET /projects/{id}/verify-report — PM 검증 경고 리포트(차단 아님).
+// 실계약: GET /projects/{id}/verify-report - PM 검증 경고 리포트(차단 아님).
 // assemble 직후 챕터당 1콜 pm_verify가 저장한 문서 횡단 일관성 경고.
 // 아직 검증 전이거나 경고가 없으면 빈 배열이 온다.
 export const VerifyFindingSchema = z.object({

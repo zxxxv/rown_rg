@@ -22,7 +22,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useDebounce } from "@/hooks/useDebounce";
 import { cn } from "@/lib/utils";
 
-// 상태 탭 — 단일 단계 대신 '진행 중'(미완료 단계 묶음)·'완료'로 단순화.
+// 상태 탭 - 단일 단계 대신 '진행 중'(미완료 단계 묶음)·'완료'로 단순화.
 // 'in_progress'는 백엔드 그룹 필터 토큰(created~reviewing), 'completed'는 실제 단계값.
 type StatusFilter = "all" | "in_progress" | "completed";
 const STATUS_TABS: { value: StatusFilter; label: string }[] = [
@@ -55,7 +55,7 @@ export default function ProjectsPage() {
   const navigate = useNavigate();
 
   const status = parseStatus(params.get("status"));
-  // 보고서 유형 필터 — 서버 파라미터라 내 프로젝트·전체 프로젝트 모두에 같은 방식으로 걸린다
+  // 보고서 유형 필터 - 서버 파라미터라 내 프로젝트·전체 프로젝트 모두에 같은 방식으로 걸린다
   const preset = params.get("preset") ?? "";
   const presetsQuery = usePresets();
   const sort = parseSort(params.get("sort"));
@@ -84,7 +84,7 @@ export default function ProjectsPage() {
     );
   }, [debouncedSearch, params, setParams]);
 
-  // 상태·검색은 서버 파라미터(status·q) — 필터가 바뀌면 쿼리 키가 바뀌어 페이지가
+  // 상태·검색은 서버 파라미터(status·q) - 필터가 바뀌면 쿼리 키가 바뀌어 페이지가
   // 리셋된다. 정렬은 백엔드가 최신순 고정이므로 제목순만 클라이언트에서 적용.
   const filters = useMemo(
     () => ({

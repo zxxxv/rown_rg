@@ -38,7 +38,7 @@ export function useIpWhitelist() {
 export interface CreateIpEntryInput {
   ip_cidr: string;
   description?: string;
-  /** ISO(UTC) 문자열 — datetime-local 값은 전송 전 toISOString()으로 변환한다. */
+  /** ISO(UTC) 문자열 - datetime-local 값은 전송 전 toISOString()으로 변환한다. */
   expires_at?: string;
 }
 

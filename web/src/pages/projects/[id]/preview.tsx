@@ -52,7 +52,7 @@ const STATUS_KIND: Record<SectionStatus, StatusKind> = {
   failed: "danger",
 };
 
-/** 본문이 존재해 열람 가능한 상태 — writing은 작성 중 증분 초안. */
+/** 본문이 존재해 열람 가능한 상태 - writing은 작성 중 증분 초안. */
 const VIEWABLE: SectionStatus[] = ["completed", "writing"];
 
 // 정적검사 체크 이름 → 사람용 라벨 (백엔드 services/qa/gate.py 어휘)
@@ -64,20 +64,20 @@ const WARNING_LABEL: Record<string, string> = {
   renderable: "렌더 가능",
 };
 
-/** 보고서 통합 작업공간 — 미리보기·본문 검토(QA)·편집을 한 화면으로(2026-08-07).
+/** 보고서 통합 작업공간 - 미리보기·본문 검토(QA)·편집을 한 화면으로(2026-08-07).
  *
  * 작성이 진행되는 대로 완성된 절부터 표시되고, 그 자리에서 블록 단위 직접
  * 편집·AI 재작성이 가능하다. QA 게이트가 열려 있으면 상단 승인 바에서 바로
- * 조립을 시작한다 — 검토 중 편집은 resume 시 overlay_working_copy가 반영한다.
+ * 조립을 시작한다 - 검토 중 편집은 resume 시 overlay_working_copy가 반영한다.
  */
-/** 보고서 작업공간 — 개요 페이지에 인라인으로 박히고, /preview 단독 페이지도 이걸 쓴다.
+/** 보고서 작업공간 - 개요 페이지에 인라인으로 박히고, /preview 단독 페이지도 이걸 쓴다.
  *  화면을 나누지 않기 위해 셸(AppShell·헤더)과 분리했다(2026-08-09 사용자 결정). */
 export function ReportWorkspace({ projectId }: { projectId: string }) {
   const [params, setParams] = useSearchParams();
 
   const projectQuery = useProject(projectId, 7000);
   const projectStatus = projectQuery.data?.status;
-  // 생성 진행 중이면 트리를 폴링 — 절이 완성되는 대로 순차 표시(증분 미리보기)
+  // 생성 진행 중이면 트리를 폴링 - 절이 완성되는 대로 순차 표시(증분 미리보기)
   const isGenerating =
     projectStatus === "researching" ||
     projectStatus === "indexing" ||
@@ -85,7 +85,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
     projectStatus === "reviewing";
   const sectionsQuery = useProjectSections(projectId, isGenerating ? 5000 : undefined);
 
-  // QA 게이트 대기 감지 — 열려 있으면 상단 승인 바 + 절별 정적검사 경고 표시
+  // QA 게이트 대기 감지 - 열려 있으면 상단 승인 바 + 절별 정적검사 경고 표시
   const snapshotQuery = useProgressSnapshot(projectId, true, {
     refetchInterval: isGenerating ? 7000 : false,
   });
@@ -107,14 +107,14 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   // 장 선택 시엔 절 본문 쿼리를 끈다(장 id로는 본문이 없어 헛요청이 됨).
   const contentQuery = useSectionContent(projectId, selectedChapter ? null : selectedId);
 
-  // 선택된 절의 QA 정적검사 경고(게이트 payload) — 검토 중에만 존재한다.
+  // 선택된 절의 QA 정적검사 경고(게이트 payload) - 검토 중에만 존재한다.
   const qaWarnings = useMemo<QaSelectWarning[]>(() => {
     if (!qaPayload || !selectedId) return [];
     const sec = qaPayload.sections.find((s) => s.section_id === selectedId);
     return sec?.candidates[0]?.warnings ?? [];
   }, [qaPayload, selectedId]);
 
-  // 선택된 절의 PM 경고만 본문 위에 인라인 표시 — 고칠 대상 옆에 고칠 이유를 둔다.
+  // 선택된 절의 PM 경고만 본문 위에 인라인 표시 - 고칠 대상 옆에 고칠 이유를 둔다.
   const verifyQuery = useVerifyReport(projectId);
   const selectedRef = useMemo(() => {
     if (!selectedId) return null;
@@ -145,7 +145,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
       { replace: true },
     );
 
-  // PM 경고 목록에서 §1.1을 누르면 그 절로 이동 — 트리에서 손으로 찾지 않게.
+  // PM 경고 목록에서 §1.1을 누르면 그 절로 이동 - 트리에서 손으로 찾지 않게.
   const jumpToRef = (ref: string) => {
     const head = ref.split(" ")[0]; // "1.1 표 1-2-1" 같은 표기에서 앞부분만
     const [ch, sec] = head.split(".").map((n) => Number.parseInt(n, 10));
@@ -180,7 +180,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
         </div>
       ) : null}
 
-      {/* PM 검증 경고 — 고칠 수 있는 화면에 두되 접힌 한 줄로 시작(편집을 가리지 않게).
+      {/* PM 검증 경고 - 고칠 수 있는 화면에 두되 접힌 한 줄로 시작(편집을 가리지 않게).
             절을 선택하면 그 절의 경고만 본문 위에 인라인 표시된다. */}
       <VerifyReportCard projectId={projectId} collapsible onJump={jumpToRef} />
 
@@ -206,7 +206,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-          {/* 트리는 내부 스크롤 없이 아래로 쭉 펼친다 — 목차 전체가 한눈에 보이고
+          {/* 트리는 내부 스크롤 없이 아래로 쭉 펼친다 - 목차 전체가 한눈에 보이고
                 페이지 스크롤 하나로 탐색한다(사용자 요청, 2026-08-04) */}
           <aside className="self-start rounded border border-border bg-bg">
             <SectionTree tree={tree} selectedId={selectedId} onSelect={selectNode} />
@@ -266,7 +266,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   );
 }
 
-/** /preview 단독 진입 — 개요에 인라인된 것과 같은 작업공간을 셸에 감싸 보여준다. */
+/** /preview 단독 진입 - 개요에 인라인된 것과 같은 작업공간을 셸에 감싸 보여준다. */
 export default function PreviewPage() {
   const { id: projectId = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -291,9 +291,9 @@ export default function PreviewPage() {
   );
 }
 
-/** QA 승인 바 — 게이트가 열려 있는 동안만 표시. 별도 검토 페이지를 대체한다.
+/** QA 승인 바 - 게이트가 열려 있는 동안만 표시. 별도 검토 페이지를 대체한다.
  *
- * n=1 전환으로 '후보 고르기'는 없다 — 절당 유일 초안을 자동 채택해 제출한다.
+ * n=1 전환으로 '후보 고르기'는 없다 - 절당 유일 초안을 자동 채택해 제출한다.
  * 검토 중 화면에서 고친 내용은 백엔드가 조립 시 payload보다 우선 반영한다. */
 function QaApproveBar({ projectId, payload }: { projectId: string; payload: QaSelectPayload }) {
   const qc = useQueryClient();
@@ -348,7 +348,7 @@ function QaApproveBar({ projectId, payload }: { projectId: string; payload: QaSe
   );
 }
 
-/** 게이트 payload 폴백 — sections 행이 아직 없는 검토(증분 저장 배선 전 백엔드로
+/** 게이트 payload 폴백 - sections 행이 아직 없는 검토(증분 저장 배선 전 백엔드로
  * 작성된 런)에서 초안을 읽기 전용으로 나열한다. 블록 편집은 행이 생긴 뒤부터. */
 function PayloadDraftList({ payload }: { payload: QaSelectPayload }) {
   const planById = new Map(payload.section_plan.map((p) => [p.section_id, p]));
@@ -380,7 +380,7 @@ function PayloadDraftList({ payload }: { payload: QaSelectPayload }) {
   );
 }
 
-/** 절 하단 출처 목록 — 본문 [N]이 가리키는 자료를 번호순으로 나열한다. */
+/** 절 하단 출처 목록 - 본문 [N]이 가리키는 자료를 번호순으로 나열한다. */
 function CitationList({ citations }: { citations: SectionCitation[] }) {
   if (citations.length === 0) return null;
   return (
@@ -390,7 +390,7 @@ function CitationList({ citations }: { citations: SectionCitation[] }) {
       </h3>
       <ol className="flex flex-col gap-1">
         {citations.map((c, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: 위치가 곧 정체성 — source_ids 순서 고정 읽기 전용 목록(재정렬 없음)
+          // biome-ignore lint/suspicious/noArrayIndexKey: 위치가 곧 정체성 - source_ids 순서 고정 읽기 전용 목록(재정렬 없음)
           <li key={`cite-${i}`} className="flex items-start gap-2 text-xs">
             <span className="shrink-0 font-mono text-fg-tertiary">[{c.number ?? "–"}]</span>
             {c.url ? (
@@ -474,7 +474,7 @@ function TreeItem({
   onSelect,
 }: {
   id: string;
-  /** 사람이 읽는 순번(1장, 1.1) — 실데이터 id는 UUID라 라벨로 못 쓴다 */
+  /** 사람이 읽는 순번(1장, 1.1) - 실데이터 id는 UUID라 라벨로 못 쓴다 */
   label: string;
   title: SectionNode["title"];
   level: 1 | 2;
@@ -502,7 +502,7 @@ function TreeItem({
   );
 }
 
-/** 장 통합 뷰 — 그 장의 완성된 절들을 이어서 표시(읽기 전용). 편집은 개별 절을 연다. */
+/** 장 통합 뷰 - 그 장의 완성된 절들을 이어서 표시(읽기 전용). 편집은 개별 절을 연다. */
 function ChapterView({
   projectId,
   chapter,
@@ -550,7 +550,7 @@ function ChapterView({
   );
 }
 
-/** 장 통합 뷰의 절 1개 — 본문을 읽기 전용으로 렌더하고 '편집'으로 그 절 편집 화면을 연다. */
+/** 장 통합 뷰의 절 1개 - 본문을 읽기 전용으로 렌더하고 '편집'으로 그 절 편집 화면을 연다. */
 function ChapterSectionBlock({
   projectId,
   section,
@@ -601,7 +601,7 @@ function ChapterSectionBlock({
 }
 
 /** 마크다운 본문 → 블록 목록. 빈 줄 경계로 나누되 각 블록은 원문의 정확한
- * 부분 문자열로 유지한다 — 블록 치환(직접 편집·AI 재작성)의 전제 조건. */
+ * 부분 문자열로 유지한다 - 블록 치환(직접 편집·AI 재작성)의 전제 조건. */
 function splitBlocks(content: string): string[] {
   return content.split(/\n{2,}/).filter((b) => b.trim().length > 0);
 }
@@ -617,7 +617,7 @@ function SectionView({
   sectionId: string;
   contentQuery: ReturnType<typeof useSectionContent>;
   qaWarnings: QaSelectWarning[];
-  /** 생성이 끝나야 편집·재작성을 연다 — 작성 중 초안은 재생성으로 갈아치워질 수 있고,
+  /** 생성이 끝나야 편집·재작성을 연다 - 작성 중 초안은 재생성으로 갈아치워질 수 있고,
    *  절 전체 재작성은 검색까지 다시 돌아 작성 루프와 자원을 다툰다(2026-08-09). */
   editable: boolean;
 }) {
@@ -631,17 +631,17 @@ function SectionView({
   // 절 전체 직접 편집(기존 동작)
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  // 블록 선택·편집 — 중앙 본문에서 블록을 클릭해 여러 개를 고르고 한 번에 처리한다.
+  // 블록 선택·편집 - 중앙 본문에서 블록을 클릭해 여러 개를 고르고 한 번에 처리한다.
   // 직접 편집은 대상이 하나여야 의미가 있어 단일 선택일 때만 열린다.
   const [selectedIdx, setSelectedIdx] = useState<Set<number>>(new Set());
   const [blockDraft, setBlockDraft] = useState("");
-  // 인라인 편집 중인 블록 위치 — 본문 그 자리에서 고친다(절 전체 텍스트박스는 길어서
+  // 인라인 편집 중인 블록 위치 - 본문 그 자리에서 고친다(절 전체 텍스트박스는 길어서
   // 쓰기 불편하다는 실사용 지적, 2026-08-09).
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [instruction, setInstruction] = useState("");
 
   const blocks = useMemo(() => (data ? splitBlocks(data.content) : []), [data]);
-  // 문서 순서로 정렬 — 재작성은 위에서 아래로 처리해야 결과가 예측 가능하다.
+  // 문서 순서로 정렬 - 재작성은 위에서 아래로 처리해야 결과가 예측 가능하다.
   const selectedBlocks = useMemo(
     () =>
       [...selectedIdx]
@@ -690,7 +690,7 @@ function SectionView({
     setInstruction("");
   };
 
-  // 블록 하나를 그 자리에서 편집 시작 — 선택도 그 블록만 남긴다.
+  // 블록 하나를 그 자리에서 편집 시작 - 선택도 그 블록만 남긴다.
   const startBlockEdit = (idx: number) => {
     setSelectedIdx(new Set([idx]));
     setBlockDraft(blocks[idx]);
@@ -728,7 +728,7 @@ function SectionView({
   const onSaveBlock = async () => {
     const target = editingIdx !== null ? blocks[editingIdx] : singleBlock;
     if (!target) return;
-    // 선택 블록만 원문에서 치환 — replace의 $패턴 해석을 피하려고 함수 치환을 쓴다
+    // 선택 블록만 원문에서 치환 - replace의 $패턴 해석을 피하려고 함수 치환을 쓴다
     const next = data.content.replace(target, () => blockDraft);
     try {
       await save.mutateAsync(next);
@@ -740,7 +740,7 @@ function SectionView({
     }
   };
 
-  // 선택한 블록들을 문서 순서대로 하나씩 재작성 — 백엔드가 블록 단위 치환이라
+  // 선택한 블록들을 문서 순서대로 하나씩 재작성 - 백엔드가 블록 단위 치환이라
   // 순차 처리해야 앞선 결과가 뒤 블록의 원문 매칭을 깨지 않는다(병렬 금지).
   const onRewriteBlocks = async () => {
     if (selectedBlocks.length === 0) return;
@@ -782,7 +782,7 @@ function SectionView({
               QA 통과
             </Badge>
           ) : data.qa_status === "failed" ? (
-            // 소프트 경고(분량·수치 근거 등)는 차단이 아니라 참고 — '실패'는 과한 라벨이라
+            // 소프트 경고(분량·수치 근거 등)는 차단이 아니라 참고 - '실패'는 과한 라벨이라
             // 오해를 부른다(2026-08-09 지적). 경고로 표기하고 상세는 PM 배너가 보여준다.
             <Badge variant="outline" className="border-fg-warning/40 bg-bg-warning text-fg">
               QA 경고
@@ -810,7 +810,7 @@ function SectionView({
               <Pencil className="mr-1 h-4 w-4" />절 전체 편집
             </Button>
           ) : (
-            // 작성 중에는 편집 진입점을 두지 않는다 — 초안이 재생성으로 갈아치워질 수
+            // 작성 중에는 편집 진입점을 두지 않는다 - 초안이 재생성으로 갈아치워질 수
             // 있고, 절 전체 재작성은 작성 루프와 검색 자원을 다툰다(사용자 결정).
             <Badge variant="secondary">작성 중 · 읽기 전용</Badge>
           )}
@@ -818,7 +818,7 @@ function SectionView({
       </header>
 
       {data.ungrounded.count > 0 ? (
-        // 인용은 붙었지만 그 근거에 없는 수치 — 예타 실증에서 자료 없는 절이 예산·계수를
+        // 인용은 붙었지만 그 근거에 없는 수치 - 예타 실증에서 자료 없는 절이 예산·계수를
         // 지어내고 인용만 단 사례가 나왔다(2026-08-09). 사람이 가장 먼저 봐야 할 신호다.
         <div className="flex flex-col gap-1 border-b border-fg-danger/30 bg-bg-danger px-6 py-3">
           <p className="flex items-center gap-1.5 text-xs font-medium text-fg">
@@ -834,7 +834,7 @@ function SectionView({
       ) : null}
 
       {data.evidence.scarce ? (
-        // 근거가 모자란 절은 분량 목표를 내려서 쓴다 — 그 사실을 본문에 적으면 납품물이
+        // 근거가 모자란 절은 분량 목표를 내려서 쓴다 - 그 사실을 본문에 적으면 납품물이
         // 더러워지므로(사용자 지적 2026-08-10) 본문 대신 여기서만 알린다.
         <div className="flex items-center gap-1.5 border-b border-fg-warning/30 bg-bg-warning px-6 py-2.5">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-fg-warning" aria-hidden />
@@ -850,7 +850,7 @@ function SectionView({
         <div className="flex flex-col gap-1.5 border-b border-fg-warning/30 bg-bg-warning px-6 py-3">
           <p className="text-xs font-medium text-fg">정적검사 경고 {qaWarnings.length}건</p>
           <ul className="flex flex-col gap-1">
-            {/* 정적검사는 check당 결과 1건 — check 이름이 곧 고유 키다 */}
+            {/* 정적검사는 check당 결과 1건 - check 이름이 곧 고유 키다 */}
             {qaWarnings.map((w) => (
               <li key={w.check} className="flex items-start gap-1.5 text-xs text-fg-secondary">
                 <Badge
@@ -879,12 +879,12 @@ function SectionView({
         <div
           className={cn(
             "grid grid-cols-1",
-            // 작성 중에는 편집·재작성 패널을 아예 두지 않는다 — 초안이 재생성으로
+            // 작성 중에는 편집·재작성 패널을 아예 두지 않는다 - 초안이 재생성으로
             // 갈아치워질 수 있고, 절 전체 재작성은 작성 루프와 자원을 다툰다.
             editable && "xl:grid-cols-[minmax(0,1fr)_300px]",
           )}
         >
-          {/* 중앙: 블록 본문 — 클릭해 선택하면 우측 패널에서 편집·재작성 */}
+          {/* 중앙: 블록 본문 - 클릭해 선택하면 우측 패널에서 편집·재작성 */}
           <div className="min-w-0 px-6 py-4">
             {(rewrite.isPending || rewriteBlock.isPending) && (
               <div className="mb-3 flex items-center gap-2 rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
@@ -895,7 +895,7 @@ function SectionView({
             )}
             <div className="flex flex-col gap-1">
               {blocks.map((block, idx) => (
-                // biome-ignore lint/a11y/useSemanticElements: 블록 안에 인용 링크(<a>)가 렌더돼 <button> 중첩은 invalid HTML — div+role/키핸들러로 대체
+                // biome-ignore lint/a11y/useSemanticElements: 블록 안에 인용 링크(<a>)가 렌더돼 <button> 중첩은 invalid HTML - div+role/키핸들러로 대체
                 <div
                   // biome-ignore lint/suspicious/noArrayIndexKey: 블록 정체성 = 본문 내 위치(내용 중복 가능·재정렬 없음)
                   key={`block-${idx}`}
@@ -966,7 +966,7 @@ function SectionView({
             <CitationList citations={data.citations} />
           </div>
 
-          {/* 우측: 검토·재작성 패널 — 완료 후에만 (작성 중에는 읽기 전용) */}
+          {/* 우측: 검토·재작성 패널 - 완료 후에만 (작성 중에는 읽기 전용) */}
           {editable ? (
             <aside className="border-t border-border bg-bg-secondary px-4 py-4 xl:border-l xl:border-t-0">
               {selectedBlocks.length > 0 ? (

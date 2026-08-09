@@ -41,7 +41,7 @@ function violatesPasswordPolicy(pw: string): string | null {
 }
 
 export const usersHandlers = [
-  // GET /users?limit&offset — 관리자 목록 (백엔드는 총계 없이 배열만 반환)
+  // GET /users?limit&offset - 관리자 목록 (백엔드는 총계 없이 배열만 반환)
   http.get(url("users"), ({ request }) => {
     const u = new URL(request.url);
     const limit = Math.max(1, Math.min(100, Number(u.searchParams.get("limit") ?? "20")));
@@ -50,7 +50,7 @@ export const usersHandlers = [
     return HttpResponse.json({ data: items }, { status: 200 });
   }),
 
-  // PATCH /users/{id} — 이름·역할·활성 부분 수정
+  // PATCH /users/{id} - 이름·역할·활성 부분 수정
   http.patch(url("users/:id"), async ({ params, request }) => {
     const id = String(params.id);
     const user = DEMO_ADMIN_USERS.find((x) => x.id === id);
@@ -69,7 +69,7 @@ export const usersHandlers = [
     return HttpResponse.json({ data: user }, { status: 200 });
   }),
 
-  // POST /admin/users/{id}/unlock — 잠금 해제
+  // POST /admin/users/{id}/unlock - 잠금 해제
   http.post(url("admin/users/:id/unlock"), ({ params }) => {
     const id = String(params.id);
     const user = DEMO_ADMIN_USERS.find((x) => x.id === id);
@@ -79,7 +79,7 @@ export const usersHandlers = [
     return HttpResponse.json({ data: { detail: "계정 잠금이 해제되었습니다" } }, { status: 200 });
   }),
 
-  // POST /admin/users/{id}/reset-password — 비밀번호 재설정(정책 검증)
+  // POST /admin/users/{id}/reset-password - 비밀번호 재설정(정책 검증)
   http.post(url("admin/users/:id/reset-password"), async ({ params, request }) => {
     const id = String(params.id);
     const user = DEMO_ADMIN_USERS.find((x) => x.id === id);
@@ -104,7 +104,7 @@ export const usersHandlers = [
     );
   }),
 
-  // PATCH /admin/users/{id}/quota — 월 한도 지정
+  // PATCH /admin/users/{id}/quota - 월 한도 지정
   http.patch(url("admin/users/:id/quota"), async ({ params, request }) => {
     const id = String(params.id);
     const body = (await request.json()) as SetQuotaBody;

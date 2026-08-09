@@ -25,7 +25,7 @@ const PER_ANALYZER: EstimateResult = {
   estimatedCostUsd: 15,
 };
 
-// 웹 검색(자료 수집)은 파이프라인 기본 실행 — 항상 가산한다.
+// 웹 검색(자료 수집)은 파이프라인 기본 실행 - 항상 가산한다.
 const WEB_SEARCH_COST: EstimateResult = {
   estimatedHours: 1.0,
   estimatedTokens: 200_000,

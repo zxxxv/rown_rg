@@ -30,7 +30,7 @@ export const projectsHandlers = [
     const statusRaw = u.searchParams.get("status");
     const q = u.searchParams.get("q")?.trim().toLowerCase() ?? "";
 
-    // 'in_progress'는 단계값이 아니라 그룹 필터(created~reviewing) — 백엔드와 동일.
+    // 'in_progress'는 단계값이 아니라 그룹 필터(created~reviewing) - 백엔드와 동일.
     const inProgressStatuses = ["created", "researching", "indexing", "writing", "reviewing"];
     if (
       statusRaw !== null &&
@@ -103,7 +103,7 @@ export const projectsHandlers = [
     return HttpResponse.json({ data: project }, { status: 201 });
   }),
 
-  // DELETE /projects/{id} — 완료·보관 상태만 허용(그 외 422)
+  // DELETE /projects/{id} - 완료·보관 상태만 허용(그 외 422)
   http.delete(url("projects/:id"), ({ params }) => {
     const id = String(params.id);
     const idx = DEMO_PROJECTS.findIndex((p) => p.id === id);
@@ -129,7 +129,7 @@ export const projectsHandlers = [
     return new HttpResponse(null, { status: 204 });
   }),
 
-  // POST /projects/{id}/run — 백그라운드 실행 시작(202)
+  // POST /projects/{id}/run - 백그라운드 실행 시작(202)
   http.post(url("projects/:id/run"), ({ params }) => {
     const id = String(params.id);
     const project = DEMO_PROJECTS.find((p) => p.id === id);
@@ -159,7 +159,7 @@ export const projectsHandlers = [
     );
   }),
 
-  // POST /projects/{id}/cancel — 진행 중 실행 취소(협조적). 목에선 즉시 cancelled.
+  // POST /projects/{id}/cancel - 진행 중 실행 취소(협조적). 목에선 즉시 cancelled.
   http.post(url("projects/:id/cancel"), ({ params }) => {
     const id = String(params.id);
     const project = DEMO_PROJECTS.find((p) => p.id === id);
@@ -194,7 +194,7 @@ export const projectsHandlers = [
     );
   }),
 
-  // GET /projects/{id}/verify-report — PM 검증 경고 리포트(실계약 미러, 데모 2건)
+  // GET /projects/{id}/verify-report - PM 검증 경고 리포트(실계약 미러, 데모 2건)
   http.get(url("projects/:id/verify-report"), ({ params }) => {
     const id = String(params.id);
     return HttpResponse.json(
@@ -225,7 +225,7 @@ export const projectsHandlers = [
     );
   }),
 
-  // GET /projects/{id}/export — HWPX 파일(더미 blob)
+  // GET /projects/{id}/export - HWPX 파일(더미 blob)
   http.get(url("projects/:id/export"), ({ params }) => {
     const id = String(params.id);
     const project = DEMO_PROJECTS.find((p) => p.id === id);

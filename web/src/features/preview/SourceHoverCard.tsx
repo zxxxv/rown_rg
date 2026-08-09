@@ -24,7 +24,7 @@ const RELIABILITY_LABEL: Record<string, string> = {
 export interface CitationHoverCardProps {
   /** 본문에 표시되는 인용 번호([N]) */
   number: number;
-  /** 이 번호가 가리키는 출처 — 섹션 응답의 citations에서 옴(추가 fetch 없음) */
+  /** 이 번호가 가리키는 출처 - 섹션 응답의 citations에서 옴(추가 fetch 없음) */
   citation: SectionCitation;
 }
 
