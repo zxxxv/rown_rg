@@ -11,7 +11,7 @@ from uuid import uuid4
 from src.clients.llm.base import CompletionRequest, CompletionResponse
 from src.core.config import settings
 from src.core.types import RetrievedChunk, SectionPlan
-from src.prompts import load_analyst, load_component
+from src.prompts import list_analysts, load_analyst, load_component
 from src.services.generation.candidates import generate_section_candidates
 from src.services.generation.writer_context import (
     BASE_SYSTEM,
@@ -27,6 +27,8 @@ from src.workflows.write_loop import plan_from_payload, section_plan_payload
 _ANALYST = "정책분석"
 # 두 번째 앵커 — 다관점 절(에이전트 2개 이상) 검증용
 _ANALYST2 = "시장분석"
+# guidance 블록 구분자(빈 줄 하나)
+_SEP = chr(10) * 2
 _STYLE = load_component("agent_writing_style")
 
 
@@ -89,6 +91,32 @@ class TestBuildWriterContext:
         ctx = build_writer_context(_section(analysts=[_ANALYST]), {_ANALYST: mine})
         assert "내가 만든 페르소나 지침" in ctx.system
         assert load_analyst(_ANALYST).prompt not in ctx.system
+
+
+class TestVolumeInstruction:
+    """분량 지시는 volume_target에서 생성한다 — 에이전트 본문에는 더 이상 없다."""
+
+    def test_volume_line_present_for_assigned_agent(self):
+        spec = load_analyst(_ANALYST)
+        assert spec.volume_target is not None
+        ctx = build_writer_context(_section(analysts=[_ANALYST]))
+        line = next(x for x in ctx.guidance.split(_SEP) if x.startswith("목표 분량:"))
+        assert f"{spec.volume_target.min_chars:,}" in line
+
+    def test_no_volume_line_without_target(self):
+        ctx = build_writer_context(_section())
+        assert "목표 분량:" not in ctx.guidance
+
+    def test_catalog_prompts_no_longer_carry_volume_text(self):
+        # 본문과 필드가 21종 전부 어긋나 있었다(2026-08-10) — 단일 진실은 필드다.
+        assert all("분량 가이드" not in a.prompt for a in list_analysts())
+
+    def test_scaling_rewrites_the_volume_line(self):
+        ctx = build_writer_context(_section(analysts=[_ANALYST]))
+        scaled = scale_for_evidence(ctx, 4)
+        lines = [x for x in scaled.guidance.split(_SEP) if x.startswith("목표 분량:")]
+        assert len(lines) == 1  # 옛 줄이 남아 두 개가 되면 모델이 큰 숫자를 따라간다
+        assert f"{scaled.min_chars:,}" in lines[0]
 
 
 class TestRuleInjection:

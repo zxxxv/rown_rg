@@ -17,28 +17,6 @@ from src.core.exceptions import NotFoundError, ValidationError
 from src.db.models.user_prompt import UserPrompt
 from src.prompts import AnalystSpec, VolumeTarget, list_analysts, load_component
 
-# 개인 에이전트의 목표 분량 3단 — 폼에서 고르는 값이 여기서 실제 목표가 된다.
-# 시스템 21종의 실제 분포에 맞춘다(2026-08-10 재조정): 최빈값이 20000~33750과
-# 15000~22500이고 최소가 11250이다. 처음 잡았던 4000~12000대는 전 종보다 낮아,
-# 개인 에이전트를 쓰면 그것만으로 절이 짧아지는 값이었다.
-VOLUME_PRESETS: dict[str, VolumeTarget] = {
-    "short": VolumeTarget(min_chars=8000, max_chars=12000, pages="5~8p"),
-    "normal": VolumeTarget(min_chars=15000, max_chars=22500, pages="10~15p"),
-    "long": VolumeTarget(min_chars=20000, max_chars=33750, pages="15~22p"),
-}
-
-# 작성 규칙 슬롯 — 시스템 조각 3종의 고정 순서. 개인 규칙은 base_ref로 이 중
-# 하나를 교체하거나(슬롯 교체), base_ref 없이 뒤에 덧붙는다(추가 규칙).
-RULE_SLOTS: tuple[str, ...] = ("agent_source_rules", "agent_visual_rules", "agent_writing_style")
-
-
-def volume_from_spec(spec: dict | None) -> VolumeTarget | None:
-    """spec.volume(short|normal|long) → 목표 분량. 값이 없거나 모르면 None."""
-    if not isinstance(spec, dict):
-        return None
-    return VOLUME_PRESETS.get(str(spec.get("volume") or ""))
-
-
 VALID_KINDS = ("agent", "rule")
 
 
@@ -48,6 +26,46 @@ def _check_kind(kind: str) -> None:
             message=f"알 수 없는 프롬프트 종류: {kind} (가능: {', '.join(VALID_KINDS)})",
             code="INVALID_PROMPT_KIND",
         )
+
+
+# 목표 분량은 숫자로 직접 받는다(천 단위). 3단 버튼으로는 시스템 21종의 실제 분포
+# (11,250~60,000자)를 담을 수 없었다 — 특허분석 2만~6만, 산업연관 1.1만~1.8만처럼
+# 종마다 다르다. 레거시 3단(spec.volume)은 예전에 저장된 값을 위해 남겨 둔다.
+VOLUME_PRESETS: dict[str, VolumeTarget] = {
+    "short": VolumeTarget(min_chars=8000, max_chars=12000, pages="5~8p"),
+    "normal": VolumeTarget(min_chars=15000, max_chars=22500, pages="10~15p"),
+    "long": VolumeTarget(min_chars=20000, max_chars=33750, pages="15~22p"),
+}
+
+# 사람이 넣을 수 있는 범위 — 아래로는 절 하나의 골격, 위로는 단일 절 현실 상한.
+MIN_VOLUME_CHARS = 1000
+MAX_VOLUME_CHARS = 60000
+# 페이지 환산 계수(자/페이지). 시스템 카탈로그 값들(15000~22500 = 10~15p 등)에서 역산.
+_CHARS_PER_PAGE = 1500
+
+# 작성 규칙 슬롯 — 시스템 조각 3종의 고정 순서. 개인 규칙은 base_ref로 이 중
+# 하나를 교체하거나(슬롯 교체), base_ref 없이 뒤에 덧붙는다(추가 규칙).
+RULE_SLOTS: tuple[str, ...] = ("agent_source_rules", "agent_visual_rules", "agent_writing_style")
+
+
+def pages_label(min_chars: int, max_chars: int) -> str:
+    """분량 범위 → '10~15p' 표기. 카탈로그 표기와 같은 계수로 환산한다."""
+    return f"{max(1, min_chars // _CHARS_PER_PAGE)}~{max(1, max_chars // _CHARS_PER_PAGE)}p"
+
+
+def volume_from_spec(spec: dict | None) -> VolumeTarget | None:
+    """spec → 목표 분량. 숫자(min_chars/max_chars)가 우선, 없으면 레거시 3단, 둘 다 없으면 None.
+
+    None이면 호출부가 원본 승계(시스템 에이전트 덮어쓰기) 또는 기본값을 쓴다 —
+    '지정하지 않음'과 '0으로 지정'을 구분해야 원본 분량이 조용히 깎이지 않는다.
+    """
+    if not isinstance(spec, dict):
+        return None
+    lo, hi = spec.get("min_chars"), spec.get("max_chars")
+    if isinstance(lo, int) and isinstance(hi, int) and MIN_VOLUME_CHARS <= lo < hi:
+        hi = min(hi, MAX_VOLUME_CHARS)
+        return VolumeTarget(min_chars=lo, max_chars=hi, pages=pages_label(lo, hi))
+    return VOLUME_PRESETS.get(str(spec.get("volume") or ""))
 
 
 async def list_personal(

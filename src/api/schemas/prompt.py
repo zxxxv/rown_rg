@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 PromptKind = Literal["agent", "rule"]
 
@@ -17,11 +17,24 @@ PromptKind = Literal["agent", "rule"]
 class PromptSpec(BaseModel):
     """프롬프트 텍스트로 표현할 수 없는 구조화 설정(에이전트 전용).
 
-    volume은 목표 분량 3단(short/normal/long) — 없으면 '보통'으로 동작한다.
+    목표 분량은 min_chars~max_chars(문자)로 직접 받는다. 둘 다 비면 '지정 없음'이라
+    시스템 에이전트를 덮어쓴 경우 원본 분량을 그대로 승계한다. volume은 3단 버튼
+    시절의 레거시 값(예전에 저장된 것만 읽는다).
     """
 
+    min_chars: int | None = Field(None, ge=1000, le=60000)
+    max_chars: int | None = Field(None, ge=1000, le=60000)
     volume: Literal["short", "normal", "long"] | None = None
     queries: list[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def _check_range(self) -> PromptSpec:
+        lo, hi = self.min_chars, self.max_chars
+        if (lo is None) != (hi is None):
+            raise ValueError("목표 분량은 최소·최대를 함께 지정해야 합니다")
+        if lo is not None and hi is not None and lo >= hi:
+            raise ValueError("목표 분량의 최소는 최대보다 작아야 합니다")
+        return self
 
 
 class PersonalPromptCreate(BaseModel):

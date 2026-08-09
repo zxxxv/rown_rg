@@ -42,6 +42,29 @@ _RULE_COMPONENTS = ("agent_source_rules", "agent_visual_rules", "agent_writing_s
 
 DEFAULT_MAX_TOKENS = 2048
 
+# 분량 지시문 접두어 — 재료 부족으로 목표가 깎일 때 이 줄만 갈아 끼운다.
+_VOLUME_PREFIX = "목표 분량:"
+# 페이지 환산 계수(자/페이지) — 카탈로그 표기와 같은 기준.
+_CHARS_PER_PAGE = 1500
+
+
+def _volume_line(min_chars: int | None, max_chars: int | None) -> str:
+    """목표 분량 지시문 — volume_target에서 생성해 프롬프트에 싣는다.
+
+    그동안 분량은 에이전트 프롬프트 본문("## 분량 가이드")에 손으로 적혀 있었고,
+    구조화 필드(volume_target)와 21종 전부 값이 어긋나 있었다(2026-08-10 실측:
+    수요분석 본문 10,000~15,000 vs 필드 15,000~22,500). 모델은 본문을, 게이트는
+    필드를 보고 있었다. 필드를 단일 진실로 삼고 문구는 여기서 만든다.
+    """
+    if not min_chars or not max_chars:
+        return ""
+    pages = f"{max(1, min_chars // _CHARS_PER_PAGE)}~{max(1, max_chars // _CHARS_PER_PAGE)}"
+    return (
+        f"{_VOLUME_PREFIX} {min_chars:,}~{max_chars:,}자 (A4 {pages}페이지). "
+        "이 범위를 채우되, 근거 없는 서술로 늘리지 마라."
+    )
+
+
 # 근거 청크 1개가 감당할 수 있는 본문 분량(문자). 검색된 인용 가능 청크 수 ×
 # 이 값이 분량 목표의 상한이 된다.
 CHARS_PER_EVIDENCE = 750
@@ -124,7 +147,12 @@ def scale_for_evidence(ctx: WriterContext, n_evidence: int) -> WriterContext:
         min_chars=ctx.min_chars,
         scaled=cap,
     )
-    guidance = "\n\n".join(x for x in (ctx.guidance, _SCARCITY_GUARD) if x)
+    # 분량 지시문도 깎인 목표로 갈아 끼운다 — 원래 목표를 그대로 두면 "1.5만자 써라"와
+    # "짧게 끝내라"가 한 프롬프트에 같이 실려 모델이 앞의 숫자를 따라간다.
+    kept = [ln for ln in ctx.guidance.split("\n\n") if not ln.startswith(_VOLUME_PREFIX)]
+    kept.append(_volume_line(cap, max(cap, ctx.max_chars or cap)))
+    kept.append(_SCARCITY_GUARD)
+    guidance = "\n\n".join(x for x in kept if x)
     # max_chars는 그대로 둔다 — 상한이라 재료가 많은 절과 계약이 같아야 하고,
     # 깎아야 하는 건 '최소 이만큼 쓰라'는 강제뿐이다.
     return replace(ctx, guidance=guidance, min_chars=cap)
@@ -181,6 +209,12 @@ def build_writer_context(
         # 한국어 1문자≈1토큰을 상한 근사로 잡고 설정 캡 적용 — 운영 품질 모드에서만
         # WRITE_MAX_TOKENS를 올려 전체 분량 목표를 실현한다.
         max_tokens = max(DEFAULT_MAX_TOKENS, min(volume.max_chars, settings.write_max_tokens))
+
+    # 분량 지시는 volume_target에서 만들어 싣는다 — 에이전트 프롬프트 본문의
+    # "## 분량 가이드"는 제거했다(필드와 21종 전부 값이 어긋나 있었다).
+    volume_line = _volume_line(min_chars, max_chars)
+    if volume_line:
+        guidance_lines.append(volume_line)
 
     return WriterContext(
         system=system,
