@@ -353,7 +353,7 @@ function CompletedSummaryCard({
     {
       label: "본문",
       value: nSections !== null ? `${nChapters}장 ${nSections}절` : "-",
-      hint: "보고서 검토·편집 열기",
+      hint: "보고서 미리보기·편집 열기",
       to: `/projects/${project.id}/preview`,
     },
     {
@@ -582,7 +582,7 @@ function QuickActions({
             미리보기 화면에 통합돼 있어 '준비 중' 표기가 낡은 중복이었다. */}
         <QuickAction
           icon={SquarePen}
-          title="보고서 검토·편집"
+          title="보고서 미리보기·편집"
           description="작성 중 확인, 본문 검토(QA), 블록 편집·AI 재작성"
           disabled={project.status === "created"}
           onClick={() => onNavigate(`/projects/${project.id}/preview`)}

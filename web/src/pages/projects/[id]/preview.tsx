@@ -176,7 +176,7 @@ export default function PreviewPage() {
           </Button>
           <div className="flex items-center justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-semibold text-fg">보고서 검토·편집</h1>
+              <h1 className="text-3xl font-semibold text-fg">보고서 미리보기·편집</h1>
               {projectQuery.data ? (
                 <p className="mt-1 text-sm text-fg-secondary">{projectQuery.data.title}</p>
               ) : null}
@@ -607,14 +607,24 @@ function SectionView({
   // 절 전체 직접 편집(기존 동작)
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  // 블록 선택·편집 — 중앙 본문에서 블록을 클릭하면 우측 패널이 그 블록을 다룬다
-  const [blockIdx, setBlockIdx] = useState<number | null>(null);
+  // 블록 선택·편집 — 중앙 본문에서 블록을 클릭해 여러 개를 고르고 한 번에 처리한다.
+  // 직접 편집은 대상이 하나여야 의미가 있어 단일 선택일 때만 열린다.
+  const [selectedIdx, setSelectedIdx] = useState<Set<number>>(new Set());
   const [blockDraft, setBlockDraft] = useState("");
   const [blockEditing, setBlockEditing] = useState(false);
   const [instruction, setInstruction] = useState("");
 
   const blocks = useMemo(() => (data ? splitBlocks(data.content) : []), [data]);
-  const selectedBlock = blockIdx !== null && blockIdx < blocks.length ? blocks[blockIdx] : null;
+  // 문서 순서로 정렬 — 재작성은 위에서 아래로 처리해야 결과가 예측 가능하다.
+  const selectedBlocks = useMemo(
+    () =>
+      [...selectedIdx]
+        .filter((i) => i < blocks.length)
+        .sort((a, b) => a - b)
+        .map((i) => blocks[i]),
+    [selectedIdx, blocks],
+  );
+  const singleBlock = selectedBlocks.length === 1 ? selectedBlocks[0] : null;
 
   if (contentQuery.isLoading) {
     return (
@@ -648,7 +658,7 @@ function SectionView({
   const busy = save.isPending || rewrite.isPending || rewriteBlock.isPending;
 
   const clearBlockSelection = () => {
-    setBlockIdx(null);
+    setSelectedIdx(new Set());
     setBlockEditing(false);
     setBlockDraft("");
     setInstruction("");
@@ -671,22 +681,21 @@ function SectionView({
     }
   };
 
-  const selectBlock = (idx: number) => {
-    if (editing) return;
-    if (blockIdx === idx) {
-      clearBlockSelection();
-      return;
-    }
-    setBlockIdx(idx);
-    setBlockDraft(blocks[idx]);
-    setBlockEditing(false);
-    setInstruction("");
+  // 클릭 = 토글(다중 선택). 직접 편집 중이면 대상이 바뀌지 않게 잠근다.
+  const toggleBlock = (idx: number) => {
+    if (editing || blockEditing) return;
+    setSelectedIdx((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
   };
 
   const onSaveBlock = async () => {
-    if (selectedBlock === null) return;
+    if (singleBlock === null) return;
     // 선택 블록만 원문에서 치환 — replace의 $패턴 해석을 피하려고 함수 치환을 쓴다
-    const next = data.content.replace(selectedBlock, () => blockDraft);
+    const next = data.content.replace(singleBlock, () => blockDraft);
     try {
       await save.mutateAsync(next);
       toast.success("블록이 저장됐습니다.");
@@ -697,16 +706,24 @@ function SectionView({
     }
   };
 
-  const onRewriteBlock = async () => {
-    if (selectedBlock === null) return;
-    try {
-      await rewriteBlock.mutateAsync({ block: selectedBlock, instruction: instruction.trim() });
-      toast.success("블록을 다시 작성했습니다.");
-      clearBlockSelection();
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "재작성에 실패했습니다.";
-      toast.error("블록 재작성 실패", { description: msg });
+  // 선택한 블록들을 문서 순서대로 하나씩 재작성 — 백엔드가 블록 단위 치환이라
+  // 순차 처리해야 앞선 결과가 뒤 블록의 원문 매칭을 깨지 않는다(병렬 금지).
+  const onRewriteBlocks = async () => {
+    if (selectedBlocks.length === 0) return;
+    const failed: string[] = [];
+    let ok = 0;
+    for (const block of selectedBlocks) {
+      try {
+        await rewriteBlock.mutateAsync({ block, instruction: instruction.trim() });
+        ok += 1;
+      } catch (err) {
+        failed.push(err instanceof ApiError ? err.message : "재작성 실패");
+      }
     }
+    if (ok > 0) toast.success(`블록 ${ok}개를 다시 작성했습니다.`);
+    if (failed.length > 0)
+      toast.error(`${failed.length}개 실패`, { description: failed.join(" · ") });
+    clearBlockSelection();
   };
 
   const onRewriteSection = async () => {
@@ -805,19 +822,20 @@ function SectionView({
                   key={`block-${idx}`}
                   role="button"
                   tabIndex={0}
-                  aria-pressed={blockIdx === idx}
+                  aria-pressed={selectedIdx.has(idx)}
                   aria-label={`블록 ${idx + 1} 선택`}
-                  onClick={() => selectBlock(idx)}
+                  onClick={() => toggleBlock(idx)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      selectBlock(idx);
+                      toggleBlock(idx);
                     }
                   }}
                   className={cn(
-                    "cursor-pointer rounded border px-3 py-1.5 transition-colors",
-                    blockIdx === idx
-                      ? "border-accent bg-bg-info"
+                    "relative cursor-pointer rounded border px-3 py-1.5 transition-colors",
+                    // 선택 블록은 강조 배경 + 좌측 굵은 띠로 한눈에 구분(다중 선택 전제)
+                    selectedIdx.has(idx)
+                      ? "border-accent bg-bg-info ring-1 ring-accent/40 pl-4 before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:rounded-l before:bg-accent"
                       : "border-transparent hover:border-border hover:bg-bg-secondary",
                   )}
                 >
@@ -830,10 +848,12 @@ function SectionView({
 
           {/* 우측: 검토·재작성 패널 */}
           <aside className="border-t border-border bg-bg-secondary px-4 py-4 xl:border-l xl:border-t-0">
-            {selectedBlock !== null ? (
+            {selectedBlocks.length > 0 ? (
               <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs font-medium text-fg">블록 {(blockIdx ?? 0) + 1} 선택됨</p>
+                  <p className="text-xs font-medium text-fg">
+                    블록 {selectedBlocks.length}개 선택됨
+                  </p>
                   <Button variant="ghost" size="sm" onClick={clearBlockSelection} disabled={busy}>
                     <X className="h-3.5 w-3.5" />
                     선택 해제
@@ -864,12 +884,12 @@ function SectionView({
                       </Button>
                     </div>
                   </div>
-                ) : (
+                ) : singleBlock !== null ? (
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => {
-                      setBlockDraft(selectedBlock);
+                      setBlockDraft(singleBlock);
                       setBlockEditing(true);
                     }}
                     disabled={busy}
@@ -877,6 +897,13 @@ function SectionView({
                     <Pencil className="mr-1 h-3.5 w-3.5" />
                     블록 직접 편집
                   </Button>
+                ) : (
+                  // 직접 편집은 대상이 하나일 때만 — 여러 블록을 한 상자에서 고치면
+                  // 어느 블록을 바꿨는지 치환이 모호해진다(AI 재작성은 다중 지원).
+                  <p className="rounded border border-dashed border-border px-2 py-1.5 text-[11px] text-fg-tertiary">
+                    직접 편집은 블록 1개를 선택했을 때 열립니다. 여러 블록은 아래 AI 재작성으로 한
+                    번에 고칠 수 있습니다.
+                  </p>
                 )}
 
                 <div className="flex flex-col gap-2 border-t border-border pt-3">
@@ -888,9 +915,11 @@ function SectionView({
                     placeholder="예: 더 간결하게, 수치를 앞세워서"
                     className="min-h-[80px] text-xs"
                   />
-                  <Button size="sm" onClick={() => void onRewriteBlock()} disabled={busy}>
+                  <Button size="sm" onClick={() => void onRewriteBlocks()} disabled={busy}>
                     <Sparkles className="mr-1 h-3.5 w-3.5" />
-                    {rewriteBlock.isPending ? "작성 중…" : "이 블록만 재작성"}
+                    {rewriteBlock.isPending
+                      ? "작성 중…"
+                      : `선택한 블록 ${selectedBlocks.length}개 재작성`}
                   </Button>
                   <p className="text-[11px] leading-relaxed text-fg-tertiary">
                     블록 재작성은 이 절이 이미 인용한 근거 안에서만 고칩니다 - 인용 번호·출처가
@@ -902,8 +931,8 @@ function SectionView({
               <div className="flex flex-col gap-3">
                 <p className="text-xs font-medium text-fg">검토·재작성</p>
                 <p className="text-xs leading-relaxed text-fg-secondary">
-                  본문에서 블록(문단)을 클릭하면 그 블록만 직접 수정하거나 AI에 재작성을 지시할 수
-                  있습니다.
+                  본문에서 블록(문단)을 클릭해 선택하세요. 여러 개를 골라 한 번에 AI 재작성을 지시할
+                  수 있고, 하나만 고르면 직접 편집도 열립니다. 다시 클릭하면 선택이 해제됩니다.
                 </p>
                 <div className="flex flex-col gap-2 border-t border-border pt-3">
                   <Label htmlFor="section-instruction">절 전체 AI 재작성</Label>
