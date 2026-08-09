@@ -440,9 +440,13 @@ function PrimaryAction({ project }: { project: Project }) {
   // 진행 단계 스테퍼가 담당한다(7초 폴링으로 researching 전이를 따라잡음).
   const run = useRunProject();
   const download = useDownload();
+  // 같은 버튼이 '처음 시작'과 '멈춘 런 이어받기' 둘 다를 처리한다 — 안내 문구가
+  // 실제 동작과 어긋나면 사용자가 수집이 다시 도는 줄 안다(2026-08-09 보고).
+  const isResume = project.status !== "created" && project.status !== "cancelled";
   const startRun = () => {
     run.mutate(project.id, {
-      onSuccess: () => toast.success("자료 조사를 시작했습니다."),
+      onSuccess: () =>
+        toast.success(isResume ? "멈춘 지점부터 이어서 진행합니다." : "자료 조사를 시작했습니다."),
       onError: (err: unknown) => {
         const msg = err instanceof ApiError ? err.message : "시작에 실패했습니다.";
         if (msg.includes("이미 실행")) {
