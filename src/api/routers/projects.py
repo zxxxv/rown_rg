@@ -896,6 +896,7 @@ def _state_for_export(project: Project, rows: list[Section]) -> ProjectState:
         project_id=project.id,
         user_id=project.owner_id,
         topic=project.topic,
+        title=project.title,
         section_plan=plans,
         section_candidates=sets,
         section_selections=selections,

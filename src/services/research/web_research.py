@@ -32,6 +32,9 @@ SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
 
 목표: 각 목차 섹션의 내용을 구성할 수 있는 **신뢰할 만한 웹 출처**를 수집한다.
 - web_search로 각 목차 섹션에 관련된 페이지를 찾는다.
+- `section_briefs`가 있으면 그 절이 **무엇을 논증해야 하는지·어떤 분석 관점인지**가
+  적혀 있다. 절 제목만으로 검색하지 말고 그 방향·관점의 어휘(예: 예산 산출이면 단가·
+  적산 기준·유사사업 사업비, 경제성이면 편익 항목·할인율·B/C)를 질의에 넣어라.
 - 유용한 페이지는 web_fetch로 **본문 전체를 회수**한다(요약·추측 금지, 실제 내용 근거).
 - **단 PDF는 web_fetch 하지 마라**. URL이 `.pdf`로 끝나거나 검색 결과가 PDF 문서임을
   나타내면 회수를 건너뛰고 매니페스트에 URL만 실어라 — 시스템이 따로 내려받아 처리한다.
@@ -64,7 +67,13 @@ SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
 class ResearchSpec(BaseModel):
     topic: str
     report_type: str
+    # 절 제목 목록 — 매니페스트의 matched_sections가 이 문자열과 정확히 일치해야
+    # 커버리지 계산이 성립한다(절대 가공하지 말 것).
     outline: list[str]
+    # 절별 검색 힌트: "제목 — 방향 (관점: 에이전트)". 질의 품질을 올리려고 프롬프트에만
+    # 싣고 매칭에는 쓰지 않는다 — 목차에 있는 방향·핵심포인트·분석 관점이 수집 단계로
+    # 전달되지 않아 '예산 산출' 같은 절이 빈손으로 남던 문제(2026-08-09 실측).
+    briefs: list[str] = []
 
 
 class CollectedSource(BaseModel):
@@ -107,7 +116,12 @@ class WebResearchService:
         max_tokens: int = 8000,
     ) -> ResearchResult:
         user = json.dumps(
-            {"topic": spec.topic, "report_type": spec.report_type, "outline": spec.outline},
+            {
+                "topic": spec.topic,
+                "report_type": spec.report_type,
+                "outline": spec.outline,
+                **({"section_briefs": spec.briefs} if spec.briefs else {}),
+            },
             ensure_ascii=False,
         )
         request = CompletionRequest(

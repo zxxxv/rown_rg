@@ -30,7 +30,7 @@ from src.services.generation.split_writer import (
     generate_section_split,
     plan_part_count,
 )
-from src.services.generation.writer_context import build_writer_context
+from src.services.generation.writer_context import build_writer_context, scale_for_evidence
 from src.services.qa.gate import (
     DEFAULT_MAX_CHARS,
     DEFAULT_MIN_CHARS,
@@ -58,6 +58,7 @@ async def run_write_loop(
     model: str = DEFAULT_MODEL,
     plan_model: str | None = None,
     draft_store: DraftStore | None = None,
+    analyst_catalog: dict[str, Any] | None = None,
 ) -> ProjectState:
     """section_plan의 각 섹션을 검색→후보 생성→정적 게이트로 처리해 state에 적재.
 
@@ -74,8 +75,10 @@ async def run_write_loop(
         cancel.raise_if_cancelled(pid)
         label = f"본문 작성 · {section.chapter_number}.{section.section_number} {section.title}"
         emit_step(pid, "writing", label, "started")
-        ctx = build_writer_context(section)
+        ctx = build_writer_context(section, analyst_catalog)
         chunks = await retrieve(section)
+        # 재료가 목표에 못 미치면 목표를 내린다 — 검색 뒤라야 실제 근거 수를 안다.
+        ctx = scale_for_evidence(ctx, sum(1 for c in chunks if not c.is_summary))
 
         async def _generate(base_temperature: float = 0.7) -> list[SectionDraft]:
             # volume_target이 단일 호출 출력 한계(4~8천자 실측)를 넘으면 분할 생성.

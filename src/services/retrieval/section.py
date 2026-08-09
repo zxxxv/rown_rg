@@ -112,14 +112,18 @@ def make_section_retriever(
     """프로젝트·검색기에 바인딩된 SectionRetriever를 만든다 (write 루프 주입용)."""
 
     async def _retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+        # 다관점 절(에이전트 2개 이상)은 다룰 축이 늘어 분량 목표도 커진다 — 재료를
+        # 같이 늘리지 않으면 파트당 근거가 배정 최소치(3개) 아래로 떨어져 파트가
+        # 병합되고, 결국 목표만 크고 쓸 거리는 없는 상태가 된다(2026-08-09).
+        k = top_k * max(1, len(section.analysts))
         return await retrieve_for_section(
             section,
             client=client,
             project_id=project_id,
             track=track,
-            top_k=top_k,
+            top_k=k,
             reranker=reranker,
-            fetch_k=fetch_k,
+            fetch_k=max(fetch_k, k * 2),
             summary_fetcher=summary_fetcher,
             topic=topic,
         )

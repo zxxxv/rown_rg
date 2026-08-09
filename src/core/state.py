@@ -28,6 +28,9 @@ class ProjectState(BaseModel):
 
     # 입력
     topic: str
+    # 보고서 제목 — 표지에 쓰인다. topic은 "무엇을 검토한다"는 긴 지시문이라 표지에
+    # 그대로 올리면 문장이 제목 자리에 박힌다(2026-08-09 실사용 지적). 없으면 topic 폴백.
+    title: str = ""
     preset: str | None = None
     depth_mode: str = "full_report"  # 작성 깊이 — RAPTOR 트리 깊이 등 품질 노브의 입력
     options: dict = Field(default_factory=dict)
@@ -164,6 +167,7 @@ class ProjectState(BaseModel):
             created_at=project_row["created_at"],
             updated_at=project_row["updated_at"],
             topic=project_row["topic"],
+            title=project_row.get("title") or "",
             preset=project_row["preset"],
             depth_mode=project_row.get("depth_mode") or "full_report",
             options=project_row.get("config", {}),

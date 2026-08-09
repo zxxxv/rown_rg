@@ -231,7 +231,8 @@ def _cover_block(state: ProjectState) -> Cover:
     if created.tzinfo is None:  # 방어: naive면 UTC로 간주(저장은 UTC 규약)
         created = created.replace(tzinfo=UTC)
     date_text = created.astimezone(_KST).strftime("%Y년 %m월 %d일")
-    return Cover(title=state.topic, organization=HEADER_TEXT, date_text=date_text)
+    # 표지 제목은 프로젝트 제목 — topic(작성 지시문)은 폴백일 뿐이다.
+    return Cover(title=state.title or state.topic, organization=HEADER_TEXT, date_text=date_text)
 
 
 def _chapter_heading_text(chapter_number: int, ch_titles: dict[int, str]) -> str:

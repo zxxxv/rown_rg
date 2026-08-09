@@ -220,6 +220,18 @@ def _models_for(state: ProjectState) -> dict[str, str]:
     }
 
 
+def _section_brief(sec: SectionPlan) -> str:
+    """검색 질의용 절 브리프 — 제목만으론 못 찾는 절(예산·경제성)에 방향·관점을 실어준다."""
+    parts = [f"{sec.chapter_number}.{sec.section_number} {sec.title}"]
+    if sec.direction:
+        parts.append(sec.direction)
+    if sec.key_points:
+        parts.append("핵심: " + ", ".join(sec.key_points[:4]))
+    if sec.analysts:
+        parts.append("관점: " + ", ".join(sec.analysts))
+    return " — ".join(parts)
+
+
 def _chapter_groups(state: ProjectState) -> list[tuple[int, str, list[str]]]:
     """챕터별 (번호, 제목, 절 제목들) — 분할 수집의 질의 단위.
 
@@ -292,6 +304,7 @@ async def _collect_sources(
     exclude_keys: set[str],
     target: int | None = None,
     ensure_coverage: bool = True,
+    focus_titles: set[str] | None = None,
 ) -> list[SourceRef]:
     """챕터당 1콜 분할 수집 → URL 중복 제거 → 스테이징 → SourceRef 목록.
 
@@ -306,12 +319,22 @@ async def _collect_sources(
     전 챕터를 돌아 커버리지를 보장하고, 목표 미달 시 보충 패스 1회로 채운다.
     False(추가 조사)면 목표를 채우는 즉시 멈추고, 시작 챕터를 회전시켜 라운드마다
     앞 챕터 자료만 늘어나는 편향을 피한다. 비용 상한 = 챕터 수 × 2콜.
+
+    focus_titles가 있으면 그 절만 질의 대상으로 남긴다(보충 수집을 '자료 0건 절'에
+    겨냥). 이미 자료가 넉넉한 절을 다시 검색하면 dedup으로 버려질 결과만 나오고
+    빈 절은 계속 빈 채로 남는다 — 실측에서 12,000자 강제 + 재료 없음이 수치 창작의
+    직접 원인이었다(2026-08-09). 겨냥할 절이 없으면 전 챕터로 되돌린다.
     """
     pid = state.project_id
     indexer = _web_indexer_factory()
     refs: list[SourceRef] = []
     seen: set[str] = set(exclude_keys)
     chapters = _chapter_groups(state)
+    if focus_titles:
+        focused = [(n, t, [x for x in titles if x in focus_titles]) for n, t, titles in chapters]
+        focused = [g for g in focused if g[2]]
+        if focused:
+            chapters = focused
     if not ensure_coverage and chapters:
         offset = len(exclude_keys) % len(chapters)
         chapters = chapters[offset:] + chapters[:offset]
@@ -342,6 +365,11 @@ async def _collect_sources(
                 topic=topic,
                 report_type=state.preset or "blank",
                 outline=section_titles,
+                briefs=[
+                    _section_brief(sec)
+                    for sec in state.section_plan
+                    if sec.title in set(section_titles)
+                ],
             )
             try:
                 with token_context(
@@ -673,6 +701,24 @@ async def _default_draft_store(state: ProjectState, plan, draft) -> None:
     await persist_draft_section(state, plan, draft)
 
 
+async def _default_analyst_catalog(owner_id) -> dict:
+    """개인→시스템 병합 에이전트 카탈로그(id·name 양쪽 키) — 작성기 주입용.
+
+    작성기는 순수 모듈이라 DB를 못 읽는다. 실행 시작 시 한 번 만들어 넘겨야 사용자가
+    만든 개인 에이전트가 실제 작성에 반영된다(그전엔 조용히 무시됐다).
+    """
+    from src.db.session import async_session_maker
+    from src.services.prompts import resolve_analysts
+
+    async with async_session_maker() as session:
+        specs = await resolve_analysts(session, owner_id)
+    catalog: dict = {}
+    for spec in specs:
+        catalog[spec.id] = spec
+        catalog[spec.name] = spec
+    return catalog
+
+
 async def _default_working_copy(project_id) -> dict:
     """sections 행(사람이 고친 작업 사본)을 절 id → (본문, 인용) 으로 읽어온다."""
     import uuid as _uuid
@@ -717,6 +763,7 @@ _section_store: Callable[[ProjectState], Awaitable[None]] = _default_section_sto
 _draft_store = _default_draft_store
 _sections_cleaner = _default_sections_cleaner
 _working_copy = _default_working_copy
+_analyst_catalog = _default_analyst_catalog
 _pm_verifier: Callable[[ProjectState], Awaitable[int]] = _default_pm_verifier
 
 
@@ -732,6 +779,7 @@ async def write(state: ProjectState) -> ProjectState:
     emit_phase(state.project_id, "writing", "started")
     await _sections_cleaner(state.project_id)  # 이전 런 잔재 제거(증분 초안과 혼재 방지)
     models = _models_for(state)
+    catalog = await _analyst_catalog(state.user_id)
     result = await run_write_loop(
         state,
         retrieve=retrieve,
@@ -739,6 +787,7 @@ async def write(state: ProjectState) -> ProjectState:
         model=models["write"],
         plan_model=models["write_plan"],
         draft_store=_draft_store,
+        analyst_catalog=catalog,
     )
     emit_phase(state.project_id, "writing", "completed")
     return auto_select_survivors(result)

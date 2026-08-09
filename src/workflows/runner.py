@@ -127,6 +127,7 @@ def _state_from_project(project: Project) -> ProjectState:
             "created_at": project.created_at,
             "updated_at": project.updated_at,
             "topic": project.topic,
+            "title": project.title,
             "preset": project.preset,
             "depth_mode": project.depth_mode,
             "status": status,
@@ -538,11 +539,24 @@ async def _collect_more(project_id: uuid.UUID) -> None:
             if r.has_content and (key := source_dedup_key(r.url, r.title))
         }
 
+        # 자료가 한 건도 안 붙은 절을 겨냥한다 — 라운드를 거듭해도 이미 풍족한 절만
+        # 다시 긁어와 dedup으로 버려지고, 빈 절은 끝까지 빈 채 남던 문제(2026-08-09).
+        covered = {sec for r in existing_refs if r.has_content for sec in r.matched_sections}
+        uncovered = {s.title for s in state.section_plan if s.title not in covered}
+        if uncovered:
+            logger.info(
+                "source_pool.collect_more_focus",
+                project_id=str(project_id),
+                n_uncovered=len(uncovered),
+                n_sections=len(state.section_plan),
+            )
+
         new_refs = await _collect_sources(
             state,
             exclude_keys=exclude,
             target=settings.research_more_batch,
             ensure_coverage=False,
+            focus_titles=uncovered or None,
         )
         # 재회수로 승격된 출처는 id가 기존 행과 같다 — 껍데기 버전을 빼고 병합해
         # 게이트 payload에 같은 자료가 두 번 실리지 않게 한다.

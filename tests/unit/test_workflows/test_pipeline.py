@@ -67,6 +67,10 @@ def fake_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
     async def _no_cleaner(_project_id: object) -> None:
         return None
 
+    async def _no_catalog(_owner_id: object) -> dict:
+        # 개인 에이전트 카탈로그(DB) 없이 — 파일 카탈로그만으로 컨텍스트가 만들어진다.
+        return {}
+
     async def _no_working_copy(_project_id: object) -> dict:
         # 인메모리 척추 검증 — DB 작업 사본 없음(편집 안 함과 동일).
         return {}
@@ -76,6 +80,7 @@ def fake_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
     monkeypatch.setattr("src.workflows.stages._draft_store", _no_draft_store)
     monkeypatch.setattr("src.workflows.stages._sections_cleaner", _no_cleaner)
     monkeypatch.setattr("src.workflows.stages._working_copy", _no_working_copy)
+    monkeypatch.setattr("src.workflows.stages._analyst_catalog", _no_catalog)
     return exported
 
 

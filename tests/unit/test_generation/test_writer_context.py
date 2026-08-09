@@ -15,13 +15,18 @@ from src.prompts import load_analyst, load_component
 from src.services.generation.candidates import generate_section_candidates
 from src.services.generation.writer_context import (
     BASE_SYSTEM,
+    CHARS_PER_EVIDENCE,
     DEFAULT_MAX_TOKENS,
+    MIN_SCALED_CHARS,
     build_writer_context,
+    scale_for_evidence,
 )
 from src.workflows.write_loop import plan_from_payload, section_plan_payload
 
 # 실카탈로그 앵커 — a17 정책분석 (volume_target: 15000~22500자)
 _ANALYST = "정책분석"
+# 두 번째 앵커 — 다관점 절(에이전트 2개 이상) 검증용
+_ANALYST2 = "시장분석"
 _STYLE = load_component("agent_writing_style")
 
 
@@ -60,12 +65,56 @@ class TestBuildWriterContext:
         assert ctx.system.startswith(BASE_SYSTEM)
         assert ctx.min_chars is None
 
-    def test_first_valid_analyst_wins(self):
+    def test_unknown_names_dropped_valid_kept(self):
         spec = load_analyst(_ANALYST)
         assert spec.volume_target is not None
         ctx = build_writer_context(_section(analysts=["존재하지않는에이전트", _ANALYST]))
         assert spec.prompt in ctx.system
         assert ctx.min_chars == spec.volume_target.min_chars
+
+    def test_multiple_analysts_all_injected(self):
+        """배정이 여럿이면 모두 반영 — 첫 개만 쓰면 나머지는 거짓 스위치가 된다."""
+        first, second = load_analyst(_ANALYST), load_analyst(_ANALYST2)
+        assert first.volume_target is not None and second.volume_target is not None
+        ctx = build_writer_context(_section(analysts=[_ANALYST, _ANALYST2]))
+        assert first.prompt in ctx.system
+        assert second.prompt in ctx.system
+        assert _ANALYST in ctx.system and _ANALYST2 in ctx.system
+        # 분량은 합산이 아니라 최댓값 — 합치면 절 하나가 감당 못 할 목표가 된다.
+        assert ctx.min_chars == max(first.volume_target.min_chars, second.volume_target.min_chars)
+
+    def test_injected_catalog_wins_over_file(self):
+        """개인 에이전트(DB) 주입분이 파일 카탈로그보다 우선."""
+        mine = load_analyst(_ANALYST).model_copy(update={"prompt": "내가 만든 페르소나 지침"})
+        ctx = build_writer_context(_section(analysts=[_ANALYST]), {_ANALYST: mine})
+        assert "내가 만든 페르소나 지침" in ctx.system
+        assert load_analyst(_ANALYST).prompt not in ctx.system
+
+
+class TestScaleForEvidence:
+    def test_scarce_evidence_lowers_target_and_adds_guard(self):
+        ctx = build_writer_context(_section(analysts=[_ANALYST]))
+        assert ctx.min_chars is not None
+        scaled = scale_for_evidence(ctx, 2)
+        assert scaled.min_chars == MIN_SCALED_CHARS
+        assert "자료 한계" in scaled.guidance
+        # 상한은 그대로 — 깎는 건 '최소 이만큼 쓰라'는 강제뿐이다.
+        assert scaled.max_chars == ctx.max_chars
+
+    def test_scales_proportionally_to_evidence(self):
+        ctx = build_writer_context(_section(analysts=[_ANALYST]))
+        scaled = scale_for_evidence(ctx, 8)
+        assert scaled.min_chars == 8 * CHARS_PER_EVIDENCE
+
+    def test_plentiful_evidence_unchanged(self):
+        ctx = build_writer_context(_section(analysts=[_ANALYST]))
+        assert ctx.min_chars is not None
+        scaled = scale_for_evidence(ctx, ctx.min_chars // CHARS_PER_EVIDENCE + 1)
+        assert scaled == ctx
+
+    def test_no_volume_target_untouched(self):
+        ctx = build_writer_context(_section())
+        assert scale_for_evidence(ctx, 0) == ctx
 
     def test_guidance_from_direction_and_key_points(self):
         ctx = build_writer_context(
