@@ -18,11 +18,13 @@ from src.db.models.user_prompt import UserPrompt
 from src.prompts import AnalystSpec, VolumeTarget, list_analysts, load_component
 
 # 개인 에이전트의 목표 분량 3단 — 폼에서 고르는 값이 여기서 실제 목표가 된다.
-# 시스템 카탈로그 실측 범위(정책분석 15000~22500 등)에 맞춰 잡았다.
+# 시스템 21종의 실제 분포에 맞춘다(2026-08-10 재조정): 최빈값이 20000~33750과
+# 15000~22500이고 최소가 11250이다. 처음 잡았던 4000~12000대는 전 종보다 낮아,
+# 개인 에이전트를 쓰면 그것만으로 절이 짧아지는 값이었다.
 VOLUME_PRESETS: dict[str, VolumeTarget] = {
-    "short": VolumeTarget(min_chars=4000, max_chars=7000, pages="2~4p"),
-    "normal": VolumeTarget(min_chars=8000, max_chars=12000, pages="5~8p"),
-    "long": VolumeTarget(min_chars=15000, max_chars=22500, pages="10~15p"),
+    "short": VolumeTarget(min_chars=8000, max_chars=12000, pages="5~8p"),
+    "normal": VolumeTarget(min_chars=15000, max_chars=22500, pages="10~15p"),
+    "long": VolumeTarget(min_chars=20000, max_chars=33750, pages="15~22p"),
 }
 
 # 작성 규칙 슬롯 — 시스템 조각 3종의 고정 순서. 개인 규칙은 base_ref로 이 중
@@ -160,7 +162,8 @@ async def resolve_analysts(session: AsyncSession, owner_id: UUID) -> list[Analys
                         "prompt": ov.content,
                         "desc": ov.description or spec.desc,
                         "cat": ov.cat or spec.cat,
-                        # 분량은 고쳐 적었으면 그 값, 아니면 원본 승계.
+                        # 분량은 고쳐 적었으면 그 값, 아니면 원본 승계 — 폼의
+                        # '원본 유지'가 spec.volume을 비워 보내 이 경로를 탄다.
                         "volume_target": volume_from_spec(ov.spec) or spec.volume_target,
                     }
                 )
