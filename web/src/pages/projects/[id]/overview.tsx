@@ -1,6 +1,5 @@
 import {
   ArrowLeft,
-  ArrowRight,
   Download,
   FileSearch,
   PlayCircle,
@@ -19,10 +18,7 @@ import {
   useRunProject,
   useUpdateProjectConfig,
 } from "@/api/projects";
-import { useProjectSections } from "@/api/sections";
-import { useProjectSources } from "@/api/sources";
 import type { Project, ProjectStatus } from "@/api/types";
-import { useVerifyReport } from "@/api/verify";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageLoading } from "@/components/feedback/PageLoading";
@@ -35,7 +31,6 @@ import {
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -226,7 +221,22 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               </Badge>
             </div>
           </div>
-          <PrimaryAction project={project} />
+          {/* 주 CTA와 삭제를 한 줄에 — 파괴적 동작이라 ghost로 낮춰 무게 차이를 준다 */}
+          <div className="flex items-center gap-2">
+            <PrimaryAction project={project} />
+            {canDelete ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-fg-danger hover:bg-bg-secondary"
+                onClick={() => setConfirmDelete(true)}
+                disabled={deleteProject.isPending}
+              >
+                <Trash2 className="mr-1 h-4 w-4" aria-hidden />
+                삭제
+              </Button>
+            ) : null}
+          </div>
         </div>
       </header>
 
@@ -236,11 +246,10 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               우측 스테퍼(7초 폴링)와 어긋났고, 스테퍼가 위치·다음 행동을 다 보여준다. */}
           {/* 완성 후엔 요약 카드가 '숫자 달린 빠른 작업'을 겸한다 — 둘을 같이
               보여주면 진입점이 겹친다(본문↔미리보기, 채택 자료↔자료 검토). */}
-          {project.status === "completed" ? (
-            <CompletedSummaryCard project={project} onNavigate={navigate} />
-          ) : (
-            <QuickActions project={project} onNavigate={navigate} />
-          )}
+          {/* 완료 요약 카드는 제거 — 본문이 같은 화면에 인라인이라 '보고서 열기'
+              타일이 자기 자신을 가리켰다(2026-08-09 사용자 지적). 숫자는 헤더 타일과
+              PM 경고 배너가 이미 보여준다. */}
+          <QuickActions project={project} onNavigate={navigate} />
 
           <Accordion type="single" collapsible>
             <AccordionItem value="config" className="rounded-lg border border-border bg-bg">
@@ -272,21 +281,6 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
       {/* 보고서 본문을 개요 안에 인라인 — 화면을 나누지 않는다(2026-08-09 사용자 결정).
           작성 중에는 완성된 절부터, 완료 후에는 전체가 여기서 바로 편집된다. */}
       {project.status !== "created" ? <ReportWorkspace projectId={project.id} /> : null}
-
-      {canDelete ? (
-        <div className="flex justify-end border-t border-border pt-4">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-fg-danger hover:bg-bg-secondary"
-            onClick={() => setConfirmDelete(true)}
-            disabled={deleteProject.isPending}
-          >
-            <Trash2 className="mr-1 h-4 w-4" aria-hidden />
-            프로젝트 삭제
-          </Button>
-        </div>
-      ) : null}
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>
@@ -321,100 +315,6 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
 
 // 완성된 프로젝트의 결과 요약 — 개요 본문이 텅 비지 않게, 산출물의 핵심 숫자를
 // 실데이터로 보여주고 각 타일에서 해당 작업 화면으로 바로 이동한다.
-function CompletedSummaryCard({
-  project,
-  onNavigate,
-}: {
-  project: Project;
-  onNavigate: (to: string) => void;
-}) {
-  const sections = useProjectSections(project.id);
-  const sources = useProjectSources(project.id);
-  const verify = useVerifyReport(project.id);
-
-  const nSections = sections.data?.tree.reduce((n, ch) => n + ch.children.length, 0) ?? null;
-  const nChapters = sections.data?.tree.length ?? null;
-  const nAdopted = sources.data?.items.filter((s) => s.is_included !== false).length ?? null;
-  const findings = verify.data ?? null;
-  const nCritical = findings?.filter((f) => f.severity === "critical").length ?? 0;
-
-  const tiles: { label: string; value: string; hint: string; to?: string; warn?: boolean }[] = [
-    {
-      label: "본문",
-      value: nSections !== null ? `${nChapters}장 ${nSections}절` : "-",
-      hint: "보고서 미리보기·편집 열기",
-      to: `/projects/${project.id}/preview`,
-    },
-    {
-      label: "채택 자료",
-      value: nAdopted !== null ? `${nAdopted}건` : "-",
-      hint: "자료 목록 열기",
-      to: `/projects/${project.id}/sources`,
-    },
-    {
-      label: "PM 검증 경고",
-      value: findings !== null ? `${findings.length}건` : "-",
-      hint: nCritical > 0 ? `critical ${nCritical} - 확인 권장` : "납품 전 참고",
-      to: `/projects/${project.id}/preview`,
-      warn: nCritical > 0,
-    },
-    {
-      label: "완료일",
-      value: (project.updated_at ?? project.created_at).slice(0, 10),
-      hint: "회사 표준 양식 (함초롬바탕 11pt)",
-    },
-  ];
-
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-base">보고서 요약</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {tiles.map((t) => {
-            const inner = (
-              <>
-                <span className="text-xs text-fg-tertiary">{t.label}</span>
-                <span className="text-lg font-semibold text-fg">{t.value}</span>
-                <span
-                  className={cn(
-                    "flex items-center gap-1 text-xs",
-                    t.warn ? "text-fg-warning" : t.to ? "text-fg-info" : "text-fg-tertiary",
-                  )}
-                >
-                  {t.hint}
-                  {t.to ? <ArrowRight className="h-3 w-3" aria-hidden /> : null}
-                </span>
-              </>
-            );
-            const base = "flex flex-col gap-1 rounded border p-3 text-left";
-            const tone = t.warn ? "border-fg-warning/40 bg-bg-warning" : "border-border bg-bg";
-            return t.to ? (
-              <button
-                key={t.label}
-                type="button"
-                onClick={() => t.to && onNavigate(t.to)}
-                className={cn(
-                  base,
-                  tone,
-                  "transition-colors hover:border-border-strong hover:bg-bg-secondary",
-                )}
-              >
-                {inner}
-              </button>
-            ) : (
-              <div key={t.label} className={cn(base, tone)}>
-                {inner}
-              </div>
-            );
-          })}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 function Meta({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center gap-1">

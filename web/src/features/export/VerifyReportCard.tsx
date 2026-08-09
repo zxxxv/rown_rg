@@ -23,12 +23,15 @@ export function VerifyReportCard({
   compact = false,
   collapsible = false,
   onOpenEditor,
+  onJump,
 }: {
   projectId: string;
   compact?: boolean;
   /** 접힌 한 줄로 시작 — 편집 화면처럼 경고가 본작업을 가리면 안 되는 곳용 */
   collapsible?: boolean;
   onOpenEditor?: () => void;
+  /** 경고 → 해당 절로 이동. 넘기면 목록 항목이 클릭 가능해진다(§1.1 같은 ref 기준). */
+  onJump?: (sectionRef: string) => void;
 }) {
   const query = useVerifyReport(projectId);
   const projectQuery = useProject(projectId);
@@ -77,12 +80,14 @@ export function VerifyReportCard({
         ) : (
           <AlertTriangle className="h-4 w-4 shrink-0 text-fg-warning" aria-hidden />
         )}
-        <span className="font-medium text-fg">
-          PM 검증 경고 {findings.length}건{criticalCount > 0 ? ` (critical ${criticalCount})` : ""}
-        </span>
-        <span className="text-xs text-fg-tertiary">
-          절을 선택하면 해당 경고가 본문 위에 표시됩니다 - 전체 목록 펼치기
-        </span>
+        <span className="font-medium text-fg">PM 검증 경고 {findings.length}건</span>
+        {criticalCount > 0 ? (
+          // 총 건수만으론 심각한 게 섞였는지 알 수 없다 — critical은 별도 배지로 분리
+          <Badge variant="destructive" className="shrink-0">
+            critical {criticalCount}
+          </Badge>
+        ) : null}
+        <span className="text-xs text-fg-tertiary">펼쳐서 항목을 누르면 해당 절로 이동합니다</span>
         <ChevronDown className="ml-auto h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
       </button>
     );
@@ -161,27 +166,36 @@ export function VerifyReportCard({
             <p className="text-xs font-medium text-fg-secondary">{chapter}장</p>
             <ul className="flex flex-col gap-1.5">
               {items.map((f) => (
-                <li
-                  key={f.id}
-                  className="flex items-start gap-2 rounded border border-border bg-bg px-3 py-2 text-sm"
-                >
-                  <Badge
-                    variant={f.severity === "critical" ? "destructive" : "outline"}
+                <li key={f.id}>
+                  <button
+                    type="button"
+                    disabled={!onJump || !f.section_ref}
+                    onClick={() => f.section_ref && onJump?.(f.section_ref)}
                     className={cn(
-                      "shrink-0 font-normal",
-                      f.severity !== "critical" && "border-fg-warning/40 bg-bg-warning",
+                      "flex w-full items-start gap-2 rounded border border-border bg-bg px-3 py-2 text-left text-sm",
+                      onJump && f.section_ref
+                        ? "cursor-pointer transition-colors hover:border-accent hover:bg-bg-info"
+                        : "cursor-default",
                     )}
                   >
-                    {f.category}
-                  </Badge>
-                  <span className="min-w-0 text-fg">
-                    {f.section_ref ? (
-                      <span className="mr-1 font-mono text-xs text-fg-tertiary">
-                        §{f.section_ref}
-                      </span>
-                    ) : null}
-                    {f.detail}
-                  </span>
+                    <Badge
+                      variant={f.severity === "critical" ? "destructive" : "outline"}
+                      className={cn(
+                        "shrink-0 font-normal",
+                        f.severity !== "critical" && "border-fg-warning/40 bg-bg-warning",
+                      )}
+                    >
+                      {f.category}
+                    </Badge>
+                    <span className="min-w-0 text-fg">
+                      {f.section_ref ? (
+                        <span className="mr-1 font-mono text-xs text-fg-tertiary">
+                          §{f.section_ref}
+                        </span>
+                      ) : null}
+                      {f.detail}
+                    </span>
+                  </button>
                 </li>
               ))}
             </ul>

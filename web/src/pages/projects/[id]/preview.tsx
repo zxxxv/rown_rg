@@ -145,6 +145,18 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
       { replace: true },
     );
 
+  // PM 경고 목록에서 §1.1을 누르면 그 절로 이동 — 트리에서 손으로 찾지 않게.
+  const jumpToRef = (ref: string) => {
+    const head = ref.split(" ")[0]; // "1.1 표 1-2-1" 같은 표기에서 앞부분만
+    const [ch, sec] = head.split(".").map((n) => Number.parseInt(n, 10));
+    const target = tree[ch - 1]?.children[sec - 1];
+    if (!target) {
+      toast("해당 절을 찾지 못했습니다", { description: ref });
+      return;
+    }
+    navigateTo(target.id);
+  };
+
   const selectNode = (id: string, status: SectionStatus, isChapter: boolean) => {
     // 장은 항상 이동(하위 절 통독 뷰가 완성분만 골라 보여줌). 절은 본문 있는 것만.
     if (!isChapter && !VIEWABLE.includes(status)) {
@@ -170,7 +182,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
 
       {/* PM 검증 경고 — 고칠 수 있는 화면에 두되 접힌 한 줄로 시작(편집을 가리지 않게).
             절을 선택하면 그 절의 경고만 본문 위에 인라인 표시된다. */}
-      <VerifyReportCard projectId={projectId} collapsible />
+      <VerifyReportCard projectId={projectId} collapsible onJump={jumpToRef} />
 
       {sectionsQuery.isLoading ? (
         <LoadingSkeleton variant="block" />
