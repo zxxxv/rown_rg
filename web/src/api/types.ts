@@ -63,7 +63,7 @@ export const OutlineSectionSchema = z.object({
   title: z.string(),
   direction: z.string(),
   key_points: z.array(z.string()),
-  // 분석 에이전트 name 참조 — 첫 번째가 대표(페르소나·분량 기준)
+  // 분석 에이전트 name 참조 — 배정된 관점을 모두 반영한다(분량 목표는 최댓값)
   analysts: z.array(z.string()),
 });
 export type OutlineSection = z.infer<typeof OutlineSectionSchema>;

@@ -280,7 +280,7 @@ function ChapterEditor({
         </span>
         <Input
           value={chapter.title}
-          placeholder="장 제목 (예: 사업 개요)"
+          placeholder="장 제목 — 자료 수집은 장 단위로 한 번씩 돕니다 (예: 사업 개요)"
           onChange={(e) => onChange({ ...chapter, title: e.target.value })}
           className="h-8"
         />
@@ -361,7 +361,7 @@ function SectionEditor({
         </span>
         <Input
           value={section.title}
-          placeholder="절 제목 (검색 질의로 쓸 수 있게 구체적으로)"
+          placeholder="절 제목 — 목차·헤딩에 그대로 쓰이고 검색 질의가 됩니다"
           onChange={(e) => onChange({ ...section, title: e.target.value })}
           className="h-8 bg-bg"
         />
@@ -373,23 +373,59 @@ function SectionEditor({
           label={`${chapterIndex + 1}.${index + 1}절`}
         />
       </div>
-      <Input
-        value={section.direction}
-        placeholder="작성 방향 (선택)"
-        onChange={(e) => onChange({ ...section, direction: e.target.value })}
-        className="h-8 bg-bg text-sm"
-      />
-      <Textarea
-        value={section.key_points.join("\n")}
-        placeholder="핵심 포인트 - 줄마다 하나 (선택)"
-        rows={2}
-        onChange={(e) => onChange({ ...section, key_points: e.target.value.split("\n") })}
-        className="bg-bg text-sm"
-      />
+      <p className="pl-8 text-[11px] text-fg-tertiary">
+        제목은 목차·본문 헤딩에 그대로 쓰이고, 자료 검색의 1차 질의가 됩니다.
+      </p>
+      <Field
+        label="작성 방향"
+        hint="이 절이 무엇을 논증해야 하는지 한 줄 — 검색 질의와 작성 지시에 함께 실립니다"
+      >
+        <Input
+          value={section.direction}
+          placeholder="예: 관련 법령과 상위 계획에 비춘 국고 지원의 당위성 논증"
+          onChange={(e) => onChange({ ...section, direction: e.target.value })}
+          className="h-8 bg-bg text-sm"
+        />
+      </Field>
+      <Field
+        label="핵심 포인트"
+        hint="반드시 다룰 항목(줄마다 하나) — 작성 체크리스트이자 검색 어휘로 쓰입니다"
+      >
+        <Textarea
+          value={section.key_points.join("\n")}
+          placeholder={"예: 관련 법률\n상위 계획 연계\n국고 지원 필요성"}
+          rows={2}
+          onChange={(e) => onChange({ ...section, key_points: e.target.value.split("\n") })}
+          className="bg-bg text-sm"
+        />
+      </Field>
       <AnalystPicker
         selected={section.analysts}
         onChange={(analysts) => onChange({ ...section, analysts })}
       />
+    </div>
+  );
+}
+
+/** 입력 칸 하나 — 라벨과 "이 값이 어디에 쓰이는지" 한 줄 설명을 붙인다.
+ * 빈 상자만 늘어놓으면 무엇을 적는 칸인지 알 수 없다(사용자 지적 2026-08-10). */
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  // label이 아니라 div — 자식이 Input/Textarea 중 무엇이든 오고, 컨트롤 id를
+  // 여기서 알 수 없다(연결 없는 label은 스크린리더에 더 나쁘다).
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-[11px] font-medium text-fg-secondary">
+        {label} <span className="font-normal text-fg-tertiary">{hint}</span>
+      </p>
+      {children}
     </div>
   );
 }
@@ -456,21 +492,28 @@ function AnalystPicker({
   const analysts = analystsQuery.data ?? [];
 
   const toggle = (name: string) => {
-    // 선택 순서를 보존한다 — 첫 번째가 대표 에이전트(페르소나·분량 기준).
+    // 선택 순서를 보존한다 — 프롬프트에 그 순서로 관점이 실린다(전부 반영).
     onChange(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
   };
 
   return (
     <details className="group rounded border border-border bg-bg">
       <summary className="cursor-pointer select-none px-3 py-2 text-xs text-fg-secondary">
-        담당 에이전트{" "}
+        <span className="font-medium text-fg-secondary">담당 에이전트</span>{" "}
+        <span className="text-fg-tertiary">— 분석 관점(페르소나)과 목표 분량을 정합니다</span>{" "}
         {selected.length > 0 ? (
           <span className="font-medium text-fg">
             {selected.join(", ")}
-            <span className="ml-1 text-fg-tertiary">(첫 번째가 대표)</span>
+            <span className="ml-1 font-normal text-fg-tertiary">
+              {selected.length > 1
+                ? `— ${selected.length}개 관점을 모두 반영(분량·검색량 상향)`
+                : "— 이 관점의 전문성·분량 기준으로 작성"}
+            </span>
           </span>
         ) : (
-          <span className="text-fg-tertiary">미배정 - 기본 작성 규칙만 적용</span>
+          <span className="text-fg-tertiary">
+            미배정 — 기본 규칙만 적용(분량 목표 없음). 중요한 절은 2~3개 선택
+          </span>
         )}
       </summary>
       <div className="flex flex-wrap gap-1.5 border-t border-border p-3">
@@ -494,7 +537,7 @@ function AnalystPicker({
                     : "border-border bg-bg text-fg-secondary hover:border-fg-tertiary",
                 )}
               >
-                {active && order === 0 ? "★ " : ""}
+                {active ? `${order + 1}. ` : ""}
                 {a.name}
                 <span className="ml-1 text-[10px] text-fg-tertiary">{a.cat}</span>
               </button>
