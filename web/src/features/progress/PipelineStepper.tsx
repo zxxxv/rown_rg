@@ -101,23 +101,40 @@ function formatDuration(ms: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-/** 실행 중일 때만 초 단위로 흐르는 경과 시간. 종료 상태면 마지막 활동까지로 고정. */
+/** 생성 시간 — 사람 검토 대기·중단 구간을 뺀 '실제로 돌던 시간'.
+
+서버가 LLM 호출 간격에서 합산해 내려주고(active_seconds), 실행 중일 때만 마지막
+활동 이후 경과를 더해 초 단위로 흐르게 한다. 게이트에서 멈추면 값이 그대로 선다
+(2026-08-09: 게이트 9시간이 경과에 섞여 22시간으로 보였다). 벽시계 총경과는
+부차 정보라 괄호로 함께 보여준다. */
 function ElapsedRow({ snapshot }: { snapshot: ProgressSnapshot }) {
   const [now, setNow] = useState(() => Date.now());
   const ended = ["completed", "archived", "cancelled"].includes(snapshot.status);
+  const waiting = Boolean(snapshot.pending_gate);
+  const live = !ended && !waiting;
   useEffect(() => {
-    if (ended) return;
+    if (!live) return;
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(t);
-  }, [ended]);
+  }, [live]);
 
-  if (!snapshot.started_at) return null;
-  const start = Date.parse(snapshot.started_at);
-  const end = ended && snapshot.last_activity_at ? Date.parse(snapshot.last_activity_at) : now;
+  const base = snapshot.active_seconds;
+  if (base === undefined || !snapshot.started_at) return null;
+  // 마지막 활동 이후 10분 넘게 조용하면 서버와 같은 기준으로 '멈춤'으로 보고 더하지 않는다.
+  const sinceLast = snapshot.last_activity_at
+    ? (now - Date.parse(snapshot.last_activity_at)) / 1000
+    : 0;
+  const seconds = base + (live && sinceLast > 0 && sinceLast <= 600 ? sinceLast : 0);
+  const wallEnd = ended && snapshot.last_activity_at ? Date.parse(snapshot.last_activity_at) : now;
+  const wall = (wallEnd - Date.parse(snapshot.started_at)) / 1000;
+
   return (
     <div className="flex items-center justify-between border-t border-border pt-3 text-xs">
-      <span className="text-fg-tertiary">경과 시간</span>
-      <span className="font-mono text-fg">{formatDuration(end - start)}</span>
+      <span className="text-fg-tertiary">생성 시간{waiting ? " (검토 대기 중 멈춤)" : ""}</span>
+      <span className="font-mono text-fg">
+        {formatDuration(seconds * 1000)}
+        <span className="ml-1 text-fg-tertiary">/ 총 {formatDuration(wall * 1000)}</span>
+      </span>
     </div>
   );
 }

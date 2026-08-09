@@ -435,6 +435,37 @@ async def cancel_project(
     return {"project_id": str(project.id), "status": "cancelled"}
 
 
+# 순수 생성 시간 계산의 '멈춤' 판정 간격. 이보다 긴 공백은 사람 검토 대기·중단·크래시로
+# 보고 합계에서 뺀다(2026-08-09: 게이트 대기 9시간이 경과 시간에 그대로 들어가 22시간으로
+# 표시돼 실제 생성 시간을 알 수 없었다).
+_IDLE_GAP_SECONDS = 600
+
+
+async def _active_seconds(session: AsyncSession, project_id: UUID) -> int:
+    """LLM 호출 타임스탬프에서 '실제로 돌던 시간'만 합산한다.
+
+    연속 호출 간격이 _IDLE_GAP_SECONDS 이하면 그 사이는 작업 중으로 보고 더한다.
+    게이트 대기·정지 구간은 간격이 크므로 자연히 제외된다.
+    """
+    rows = (
+        (
+            await session.execute(
+                select(TokenUsage.created_at)
+                .where(TokenUsage.project_id == project_id)
+                .order_by(TokenUsage.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    total = 0.0
+    for prev, cur in zip(rows, rows[1:], strict=False):
+        gap = (cur - prev).total_seconds()
+        if 0 <= gap <= _IDLE_GAP_SECONDS:
+            total += gap
+    return int(total)
+
+
 @router.get("/{project_id}/progress", response_model=ProgressResponse)
 async def get_progress(
     project_id: UUID,
@@ -442,6 +473,7 @@ async def get_progress(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> ProgressResponse:
     project = await _get_authorized_project(project_id, session, current_user)
+    active_seconds = await _active_seconds(session, project.id)
     usage = (
         await session.execute(
             select(
@@ -466,6 +498,7 @@ async def get_progress(
         last_activity_at=usage[3],
         queue_position=(queue_status(project.id) or {}).get("position"),
         active_step=_active_step_label(project.status, project.id),
+        active_seconds=active_seconds,
         source_target=settings.research_min_sources,
     )
 
