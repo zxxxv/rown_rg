@@ -142,7 +142,10 @@ export function ProjectConfigForm({
             <div className="flex flex-wrap gap-1.5">
               <Badge variant="secondary">프리셋 · {presetLabel(watchedConfig.preset)}</Badge>
               <Badge variant="secondary">
-                모델 · {watchedConfig.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
+                모델 ·{" "}
+                {watchedConfig.model_mode === "economy"
+                  ? "절약(Haiku + GPT-mini)"
+                  : "표준(Sonnet 4.6)"}
               </Badge>
             </div>
             <div className="flex items-center gap-2">
@@ -173,7 +176,10 @@ export function ProjectConfigForm({
                     : "미구성 (필수)"}
                 </Badge>
                 <Badge variant="secondary">
-                  모델 · {watchedConfig.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
+                  모델 ·{" "}
+                  {watchedConfig.model_mode === "economy"
+                    ? "절약(Haiku + GPT-mini)"
+                    : "표준(Sonnet 4.6)"}
                 </Badge>
               </div>
             </div>

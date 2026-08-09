@@ -20,11 +20,14 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/hooks/useAuth";
 
-// 알림용 자격증명 그룹 — 로그인(SSO)엔 불필요라 기본 접어둔다.
+// 알림용 자격증명 그룹 - 로그인(SSO)엔 불필요라 기본 접어둔다.
 const COLLAPSED_BY_DEFAULT = new Set(["네이버웍스"]);
 const GROUP_HINT: Record<string, string> = {
   네이버웍스: "알림 봇 전용 - 로그인(SSO)엔 불필요합니다. 알림을 쓸 때만 채우세요.",
 };
+// 감출 설정 키. 절약 모드의 본문 작성이 gpt-5.4-mini라 OpenAI 키는 실제로 쓰인다 -
+// 숨기면 키를 못 넣어 그 모드가 통째로 죽는다(2026-08-10 되돌림).
+const HIDDEN_KEYS = new Set<string>();
 
 function errMsg(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
@@ -38,6 +41,7 @@ export default function AdminSettingsPage() {
 
   const grouped: Record<string, SettingItem[]> = {};
   for (const item of query.data ?? []) {
+    if (HIDDEN_KEYS.has(item.key)) continue;
     if (!grouped[item.group]) grouped[item.group] = [];
     grouped[item.group].push(item);
   }

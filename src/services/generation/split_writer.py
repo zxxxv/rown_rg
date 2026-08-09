@@ -53,6 +53,11 @@ _PLAN_SYSTEM = (
 )
 
 
+# 파트 하나가 한 번의 호출로 낼 수 있는 현실 상한(실측 4~8천자) — 이보다 큰 목표를
+# 파트에 주면 지시만 크고 결과는 안 늘어난다.
+_MAX_PART_GOAL_CHARS = 4000
+
+
 def plan_part_count(min_chars: int | None) -> int:
     """volume_target min → 파트 수. 분할이 꺼져 있거나 목표가 작으면 1(단일 호출)."""
     if not settings.write_split_enabled or not min_chars:
@@ -145,11 +150,15 @@ def _part_tail(
     allowed: Sequence[int],
     prev_headers: Sequence[str],
     used_numbers: Sequence[str],
+    per_part_goal: int | None = None,
 ) -> str:
     """파트별 가변 지시 — 공유 프리픽스 뒤에 별도 메시지로 붙는다(캐시 경계 밖)."""
     others = ", ".join(f"'{t}'" for t in all_titles if t != title)
     allowed_s = "".join(f"[{n}]" for n in allowed)
-    per_part_goal = settings.write_split_chars_per_part
+    # 파트당 목표는 절 목표를 실제 파트 수로 나눈 값이다. 고정값을 쓰면 파트 수가
+    # 요청보다 적게 계획됐을 때 그 곱이 곧 천장이 된다 — 실측(2026-08-10): 목표
+    # 20,000자 절이 6파트로 계획되자 6×2,250=13,500자에서 정확히 멈췄다.
+    per_part_goal = per_part_goal or settings.write_split_chars_per_part
     lines = [
         "[파트 작성 지시]",
         f"이 절은 파트 {n_parts}개로 나눠 작성 중이고, 너는 파트 {idx}/{n_parts}"
@@ -330,6 +339,13 @@ async def generate_section_split(
 
     prefix = _build_prompt(section, chunks, guidance=context.guidance)
     parts: list[str] = []
+    # 계획이 요청보다 적은 파트를 돌려주면(자주 있다) 파트당 목표를 그만큼 올려
+    # 절 목표를 지킨다. 상한은 단일 호출 출력 한계(실측 4~8천자) 근처로 묶는다.
+    goal_per_part = settings.write_split_chars_per_part
+    if context.min_chars:
+        goal_per_part = max(
+            goal_per_part, min(_MAX_PART_GOAL_CHARS, -(-context.min_chars // len(part_titles)))
+        )
     headers: list[str] = []
     violations = 0
     with token_context(user_id=user_id, project_id=project_id, operation=operation):
@@ -342,6 +358,7 @@ async def generate_section_split(
                 groups[i - 1],
                 headers,
                 _numbers_used(parts),
+                per_part_goal=goal_per_part,
             )
             request = CompletionRequest(
                 messages=[

@@ -3,7 +3,12 @@ import { cn } from "@/lib/utils";
 import type { ProjectFormValues } from "./schema";
 
 // 품질 모드 - 프로젝트 단위 모델 선택(백엔드 stages._models_for가 소비).
-// economy=Haiku(플래너·수집·작성·검증 전 역할), standard=전역 설정 모델(기본 Sonnet).
+// 역할별로 다른 모델을 쓴다(멀티 프로바이더):
+//   economy  = 수집·검증 Haiku 4.5 + 본문 GPT-5.4-mini
+//   standard = 수집·검증·본문 전역 설정 모델(기본 Sonnet 4.6)
+//   파트 계획은 두 모드 모두 Sonnet 4.6(_PLAN_MODEL) - 절당 1콜이라 비용이 무시할 수준.
+// 라벨을 'Haiku'로만 적어두면 사실과 다르다(2026-08-10 실측: 절약 런의 본문은 전부
+// gpt-5.4-mini였다).
 const MODES: {
   value: "standard" | "economy";
   label: string;
@@ -13,14 +18,14 @@ const MODES: {
   {
     value: "standard",
     label: "표준 (품질 우선)",
-    model: "Claude Sonnet",
-    hint: "납품용 보고서 - 페르소나·분량 목표를 온전히 실현합니다.",
+    model: "Sonnet 4.6",
+    hint: "수집·본문·검증 모두 Sonnet 4.6. 납품용 - 페르소나·분량 목표를 온전히 실현합니다.",
   },
   {
     value: "economy",
     label: "절약 (저비용)",
-    model: "Claude Haiku",
-    hint: "테스트·초안용 - 비용이 수 분의 1, 품질은 다소 낮습니다.",
+    model: "Haiku 4.5 + GPT-5.4-mini",
+    hint: "수집·검증은 Haiku, 본문은 GPT-5.4-mini. 테스트·초안용 - 비용이 1/5 수준입니다.",
   },
 ];
 

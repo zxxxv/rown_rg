@@ -209,7 +209,11 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
                 깊이 · {DEPTH_LABEL[project.config.depth_mode] ?? project.config.depth_mode}
               </Badge>
               <Badge variant="secondary">
-                모델 · {project.config.model_mode === "economy" ? "절약(Haiku)" : "표준(Sonnet)"}
+                {/* 역할별로 모델이 다르다 - 'Haiku'로만 적으면 사실과 다르다(본문은 GPT-5.4-mini) */}
+                모델 ·{" "}
+                {project.config.model_mode === "economy"
+                  ? "절약(Haiku + GPT-mini)"
+                  : "표준(Sonnet 4.6)"}
               </Badge>
             </div>
           </div>
