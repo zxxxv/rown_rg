@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.api.dependencies.auth import get_current_active_user
+from src.api.dependencies.cost_limit import enforce_cost_limit
 from src.api.dependencies.db import get_async_session
 from src.api.schemas.execution import DecideRequest, ProgressResponse, RunResponse
 from src.api.schemas.project import (
@@ -396,7 +397,9 @@ async def get_project(
 async def run_project(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    # 비용 한도 게이트를 실행 진입점에 배선 — 초과 시 프로젝트 조회 전에 429로 빠르게 막는다.
+    # (enforce_cost_limit이 내부에서 get_current_active_user를 호출하고 User를 반환)
+    current_user: Annotated[User, Depends(enforce_cost_limit)],
 ) -> RunResponse:
     project = await _get_authorized_project(project_id, session, current_user)
     # 새로 생성된 프로젝트만 실행(thread_id=project_id 재사용 충돌 회피).
