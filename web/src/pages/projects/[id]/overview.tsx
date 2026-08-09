@@ -492,8 +492,15 @@ function PrimaryAction({ project }: { project: Project }) {
       </Button>
     );
   }
-  // 실행 중 — 별도 CTA 없음(우측 스테퍼가 현재 위치·다음 행동을 안내)
-  return null;
+  // 작업 단계 — 정상 실행 중이면 스테퍼가 안내하지만, 프로세스 재시작·자원 고갈로
+  // 실행이 사라지면 화면상 '진행 중'인 채 영원히 멈춘다(2026-08-09 실사고). 이어받기
+  // 버튼을 항상 열어두고, 실제로 살아 있으면 백엔드가 '이미 실행 중'으로 되돌린다.
+  return (
+    <Button size="lg" variant="outline" onClick={startRun} disabled={run.isPending}>
+      <PlayCircle className="mr-1 h-4 w-4" />
+      {run.isPending ? "재개 중…" : "멈췄으면 이어서 진행"}
+    </Button>
+  );
 }
 
 function QuickAction({

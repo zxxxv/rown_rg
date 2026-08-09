@@ -353,7 +353,14 @@ async def run_project(
     # 진행 위치라서 선점하면 _execute가 research 단계를 건너뛴다(2026-08-03 실사고:
     # 자료 0건·게이트 없이 폴백 목차로 완료). 중복 기동 차단은 runner의
     # 인프로세스 가드(_RUNNING, 단일 워커 전제)가 담당한다.
-    if project.status != ProjectStage.CREATED.value:
+    # 시작 전(created·cancelled)이거나, 작업 단계인데 살아 있는 실행이 없는 '멈춘' 런은
+    # 이어서 재개한다. 후자는 프로세스 재시작·자원 고갈로 태스크가 사라진 경우로, 이
+    # 경로가 없으면 보고서를 처음부터 다시 만드는 수밖에 없다(2026-08-09 실사고: 메모리
+    # 고갈로 작성 3절에서 정지 → 재개 수단 없음). 재개 위치는 runner가 status로 판단한다.
+    from src.workflows.runner import is_running
+
+    resumable = project.status not in _TERMINAL_STATUSES and not is_running(project.id)
+    if project.status != ProjectStage.CREATED.value and not resumable:
         raise ValidationError(
             message=f"실행할 수 없는 상태입니다(현재: {project.status})",
             code="PROJECT_NOT_RUNNABLE",
