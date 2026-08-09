@@ -58,6 +58,19 @@ export const promptKeys = {
   systemList: (kind: string) => [...promptKeys.all, "system-list", kind] as const,
 };
 
+/** 개인 프롬프트가 바뀌면 되돌아봐야 하는 캐시 전부.
+ *
+ * 목록(personalList)·상세(personal)·라이브러리 트리·목차 편집기의 담당 에이전트
+ * 칩(/analysts)이 모두 이 데이터를 보여준다. 하나라도 빠뜨리면 "고쳤는데 화면은
+ * 그대로"가 된다 - 수정이 상세 키만 지워 목록이 새로고침 전까지 옛 값이었다
+ * (2026-08-10 사용자 지적).
+ */
+function invalidatePrompts(qc: ReturnType<typeof useQueryClient>): void {
+  void qc.invalidateQueries({ queryKey: promptKeys.all });
+  void qc.invalidateQueries({ queryKey: libraryKeys.all });
+  void qc.invalidateQueries({ queryKey: analystKeys.all });
+}
+
 // ─── 목록 (전용 관리 페이지용) ───────────────────────────────────────────────
 
 export function useListPersonalPrompts(kind?: PromptKind) {
@@ -125,13 +138,7 @@ export function useCreatePersonalPrompt() {
       const data = await apiClient.post<unknown>("prompts/personal", { json: body });
       return PersonalPromptSchema.parse(data);
     },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: libraryKeys.all });
-      // 개인 에이전트는 목차 편집기의 담당 에이전트 목록(/analysts)에도 뜬다 -
-      // 여기서 무효화하지 않으면 만들어도 새로고침 전까지 칩이 안 보인다.
-      void qc.invalidateQueries({ queryKey: analystKeys.all });
-      void qc.invalidateQueries({ queryKey: promptKeys.all });
-    },
+    onSuccess: () => invalidatePrompts(qc),
   });
 }
 
@@ -149,13 +156,7 @@ export function useUpdatePersonalPrompt(id: string) {
       const data = await apiClient.patch<unknown>(`prompts/personal/${id}`, { json: body });
       return PersonalPromptSchema.parse(data);
     },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: promptKeys.personal(id) });
-      void qc.invalidateQueries({ queryKey: libraryKeys.all });
-      // 개인 에이전트는 목차 편집기의 담당 에이전트 목록(/analysts)에도 뜬다 -
-      // 여기서 무효화하지 않으면 만들어도 새로고침 전까지 칩이 안 보인다.
-      void qc.invalidateQueries({ queryKey: analystKeys.all });
-    },
+    onSuccess: () => invalidatePrompts(qc),
   });
 }
 
@@ -166,13 +167,7 @@ export function useDeletePersonalPrompt() {
     mutationFn: async (id: string) => {
       await apiClient.delete<void>(`prompts/personal/${id}`);
     },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: libraryKeys.all });
-      // 개인 에이전트는 목차 편집기의 담당 에이전트 목록(/analysts)에도 뜬다 -
-      // 여기서 무효화하지 않으면 만들어도 새로고침 전까지 칩이 안 보인다.
-      void qc.invalidateQueries({ queryKey: analystKeys.all });
-      void qc.invalidateQueries({ queryKey: promptKeys.all });
-    },
+    onSuccess: () => invalidatePrompts(qc),
   });
 }
 
