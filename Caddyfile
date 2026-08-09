@@ -1,0 +1,54 @@
+# 프로덕션 리버스 프록시 + 자동 HTTPS (Let's Encrypt)
+#
+# 사용자는 https://www.rowninsight.cloud 로 접속한다. 이 파일이:
+#   - 빌드된 React SPA(web/dist)를 서빙하고
+#   - /api/*, /ws/*, /health 는 백엔드(app:8000)로 프록시하며
+#   - HTTPS 인증서를 도메인으로 자동 발급/갱신한다.
+# apex(rowninsight.cloud)는 www 로 영구 리다이렉트해 정식 주소를 www 로 통일한다.
+#
+#    인증서 자동 발급은 공개 DNS(A 레코드)가 이 서버를 가리키고 80/443 이 열려 있어야
+#    성공한다. compose up 전에 DNS 전파가 끝나 있어야 한다.
+
+www.rowninsight.cloud {
+	# 빌드된 React SPA — caddy 컨테이너의 /srv 에 web/dist 를 마운트한다.
+	root * /srv
+	encode zstd gzip
+
+	# --- API ---
+	@api path /api/*
+	handle @api {
+		reverse_proxy app:8000 {
+			# 엣지(Caddy)가 보는 실제 클라이언트 IP 만 남기도록 덮어쓴다.
+			# IPWhitelistMiddleware 가 X-Forwarded-For[0] 을 신뢰하므로,
+			# 클라이언트가 위조한 헤더가 그대로 흘러들어가지 않게 하려면 필수.
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+
+	# --- WebSocket (진행 상황) — reverse_proxy 가 업그레이드를 자동 처리 ---
+	@ws path /ws/*
+	handle @ws {
+		reverse_proxy app:8000 {
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+
+	# --- 헬스체크 ---
+	handle /health {
+		reverse_proxy app:8000 {
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+
+	# --- 그 외 전부 SPA ---
+	# 클라이언트 사이드 라우팅을 위해, 실제 파일이 없으면 index.html 로 폴백한다.
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# apex → www 영구 리다이렉트
+rowninsight.cloud {
+	redir https://www.rowninsight.cloud{uri} permanent
+}
