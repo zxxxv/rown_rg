@@ -99,6 +99,24 @@ def load_workflow_role(name: str) -> str:
     return _read_markdown(_ROLES_DIR, name)
 
 
+def catalog_file_stat(kind: str, ref: str) -> tuple[int, float] | None:
+    """카탈로그 원본 파일의 (바이트 수, mtime) — 라이브러리 목록 메타 표시용.
+
+    시스템 프롬프트는 DB 행이 아니라 저장소 파일이라 등록 시각·크기가 없었다
+    (0 B·고정 날짜로 표시됨, 2026-08-09 지적). 파일 자체의 값을 그대로 보여준다.
+    """
+    if kind == "rule":
+        path = _COMPONENTS_DIR / f"{ref}.md"
+    else:
+        path = next(
+            (p for p in _indexed_files(_ANALYSTS_DIR) if p.stem.startswith(f"{ref}_")), None
+        )
+    if path is None or not path.is_file():
+        return None
+    st = path.stat()
+    return st.st_size, st.st_mtime
+
+
 def list_analysts() -> list[AnalystSpec]:
     """분석 에이전트 전체(21종)를 _index.json 순서대로 읽는다."""
     return [

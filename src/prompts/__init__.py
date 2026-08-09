@@ -12,6 +12,7 @@ from src.prompts.loader import (
     PresetSection,
     ReportPreset,
     VolumeTarget,
+    catalog_file_stat,
     list_analysts,
     list_components,
     list_presets,
@@ -22,6 +23,7 @@ from src.prompts.loader import (
 )
 
 __all__ = [
+    "catalog_file_stat",
     "AnalystSpec",
     "PresetChapter",
     "PresetSection",

@@ -773,7 +773,11 @@ function SectionView({
               QA 통과
             </Badge>
           ) : data.qa_status === "failed" ? (
-            <Badge variant="destructive">QA 실패</Badge>
+            // 소프트 경고(분량·수치 근거 등)는 차단이 아니라 참고 — '실패'는 과한 라벨이라
+            // 오해를 부른다(2026-08-09 지적). 경고로 표기하고 상세는 PM 배너가 보여준다.
+            <Badge variant="outline" className="border-fg-warning/40 bg-bg-warning text-fg">
+              QA 경고
+            </Badge>
           ) : (
             <Badge variant="secondary">QA 대기</Badge>
           )}

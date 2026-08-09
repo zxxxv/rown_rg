@@ -40,6 +40,7 @@ from src.api.schemas.library_node import (
     VisibilityUpdateRequest,
     WritableTarget,
 )
+from src.api.uploads import read_validated_upload
 from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from src.core.types import Role
@@ -47,7 +48,7 @@ from src.db.models.library_node import LibraryNode
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.user import User
-from src.prompts import list_analysts, list_components
+from src.prompts import catalog_file_stat, list_analysts, list_components
 from src.services.prompts import list_personal
 
 router = APIRouter(prefix="/library", tags=["library"])
@@ -243,16 +244,22 @@ _PROMPT_EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _prompt_file(
-    node_id: str, name: str, ref: PromptRef, registered_by: str, registered_at: datetime
+    node_id: str,
+    name: str,
+    ref: PromptRef,
+    registered_by: str,
+    registered_at: datetime,
+    *,
+    size_bytes: int = 0,
 ) -> LibraryTreeFile:
-    """프롬프트 파일 노드(가상). 프론트는 prompt 마커로 에디터를 연다(file_meta=표시용 최소값)."""
+    """프롬프트 파일 노드(가상). 프론트는 prompt 마커로 에디터를 연다."""
     return LibraryTreeFile(
         id=node_id,
         name=name,
         virtual=True,
         prompt=ref,
         file_meta=LibraryFileMeta(
-            size_bytes=0,
+            size_bytes=size_bytes,
             registered_at=registered_at,
             registered_by=registered_by,
             source_kind="library",
@@ -303,25 +310,27 @@ async def _build_prompts_folder(
 
 def _system_prompts_folder() -> LibraryTreeFolder:
     """회사 공유의 '시스템 프롬프트' 폴더 — 에이전트/작성 규칙(파일 카탈로그, 읽기전용)."""
-    agents: list[LibraryTreeFolder | LibraryTreeFile] = [
-        _prompt_file(
-            f"sysagent-{a.id}",
-            a.name,
-            PromptRef(scope="system", kind="agent", ref=a.id, editable=False),
+
+    def _sys(node_id: str, name: str, kind: str, ref: str) -> LibraryTreeFile:
+        # 카탈로그 원본 파일의 크기·수정시각을 그대로 노출 — 0 B·고정 날짜로 보이던
+        # 문제(2026-08-09 지적)를 없앤다. 파일이 없으면 종전 표시로 폴백.
+        stat = catalog_file_stat(kind, ref)
+        size = stat[0] if stat else 0
+        at = datetime.fromtimestamp(stat[1], tz=UTC) if stat else _PROMPT_EPOCH
+        return _prompt_file(
+            node_id,
+            name,
+            PromptRef(scope="system", kind=kind, ref=ref, editable=False),
             "시스템",
-            _PROMPT_EPOCH,
+            at,
+            size_bytes=size,
         )
-        for a in list_analysts()
+
+    agents: list[LibraryTreeFolder | LibraryTreeFile] = [
+        _sys(f"sysagent-{a.id}", a.name, "agent", a.id) for a in list_analysts()
     ]
     rules: list[LibraryTreeFolder | LibraryTreeFile] = [
-        _prompt_file(
-            f"syscomp-{name}",
-            name,
-            PromptRef(scope="system", kind="rule", ref=name, editable=False),
-            "시스템",
-            _PROMPT_EPOCH,
-        )
-        for name in list_components()
+        _sys(f"syscomp-{name}", name, "rule", name) for name in list_components()
     ]
     return LibraryTreeFolder(
         id="sys-prompts",
@@ -512,13 +521,7 @@ async def upload_file(
     parent = await _get_parent_folder(session, parent_id)
     # 상위 폴더가 있으면 개인/공유 성격 상속, 최상위면 요청값(내 자료=True/회사 공유=False).
     personal = parent.is_personal if parent is not None else is_personal
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise ValidationError(
-            message=f"파일이 너무 큽니다(최대 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB)",
-            code="FILE_TOO_LARGE",
-        )
-    safe_name = Path(file.filename or "untitled").name
+    safe_name, content = await read_validated_upload(file, max_bytes=MAX_UPLOAD_BYTES)
 
     node = LibraryNode(
         name=safe_name,
