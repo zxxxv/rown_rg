@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
+import { analystKeys } from "@/api/analysts";
 import { apiClient } from "@/api/client";
 import { libraryKeys } from "@/api/library";
 
@@ -108,6 +109,9 @@ export function useCreatePersonalPrompt() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: libraryKeys.all });
+      // 개인 에이전트는 목차 편집기의 담당 에이전트 목록(/analysts)에도 뜬다 -
+      // 여기서 무효화하지 않으면 만들어도 새로고침 전까지 칩이 안 보인다.
+      void qc.invalidateQueries({ queryKey: analystKeys.all });
       void qc.invalidateQueries({ queryKey: promptKeys.all });
     },
   });
@@ -130,6 +134,9 @@ export function useUpdatePersonalPrompt(id: string) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: promptKeys.personal(id) });
       void qc.invalidateQueries({ queryKey: libraryKeys.all });
+      // 개인 에이전트는 목차 편집기의 담당 에이전트 목록(/analysts)에도 뜬다 -
+      // 여기서 무효화하지 않으면 만들어도 새로고침 전까지 칩이 안 보인다.
+      void qc.invalidateQueries({ queryKey: analystKeys.all });
     },
   });
 }
@@ -143,6 +150,9 @@ export function useDeletePersonalPrompt() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: libraryKeys.all });
+      // 개인 에이전트는 목차 편집기의 담당 에이전트 목록(/analysts)에도 뜬다 -
+      // 여기서 무효화하지 않으면 만들어도 새로고침 전까지 칩이 안 보인다.
+      void qc.invalidateQueries({ queryKey: analystKeys.all });
       void qc.invalidateQueries({ queryKey: promptKeys.all });
     },
   });
