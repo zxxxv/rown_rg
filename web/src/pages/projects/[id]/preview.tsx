@@ -621,7 +621,9 @@ function SectionView({
   // 직접 편집은 대상이 하나여야 의미가 있어 단일 선택일 때만 열린다.
   const [selectedIdx, setSelectedIdx] = useState<Set<number>>(new Set());
   const [blockDraft, setBlockDraft] = useState("");
-  const [blockEditing, setBlockEditing] = useState(false);
+  // 인라인 편집 중인 블록 위치 — 본문 그 자리에서 고친다(절 전체 텍스트박스는 길어서
+  // 쓰기 불편하다는 실사용 지적, 2026-08-09).
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [instruction, setInstruction] = useState("");
 
   const blocks = useMemo(() => (data ? splitBlocks(data.content) : []), [data]);
@@ -669,9 +671,16 @@ function SectionView({
 
   const clearBlockSelection = () => {
     setSelectedIdx(new Set());
-    setBlockEditing(false);
+    setEditingIdx(null);
     setBlockDraft("");
     setInstruction("");
+  };
+
+  // 블록 하나를 그 자리에서 편집 시작 — 선택도 그 블록만 남긴다.
+  const startBlockEdit = (idx: number) => {
+    setSelectedIdx(new Set([idx]));
+    setBlockDraft(blocks[idx]);
+    setEditingIdx(idx);
   };
 
   const startEdit = () => {
@@ -693,7 +702,7 @@ function SectionView({
 
   // 클릭 = 토글(다중 선택). 직접 편집 중이면 대상이 바뀌지 않게 잠근다.
   const toggleBlock = (idx: number) => {
-    if (editing || blockEditing) return;
+    if (editing || editingIdx !== null) return;
     setSelectedIdx((prev) => {
       const next = new Set(prev);
       if (next.has(idx)) next.delete(idx);
@@ -703,9 +712,10 @@ function SectionView({
   };
 
   const onSaveBlock = async () => {
-    if (singleBlock === null) return;
+    const target = editingIdx !== null ? blocks[editingIdx] : singleBlock;
+    if (!target) return;
     // 선택 블록만 원문에서 치환 — replace의 $패턴 해석을 피하려고 함수 치환을 쓴다
-    const next = data.content.replace(singleBlock, () => blockDraft);
+    const next = data.content.replace(target, () => blockDraft);
     try {
       await save.mutateAsync(next);
       toast.success("블록이 저장됐습니다.");
@@ -776,9 +786,10 @@ function SectionView({
               </Button>
             </>
           ) : (
-            <Button variant="outline" size="sm" onClick={startEdit} disabled={busy}>
-              <Pencil className="mr-1 h-4 w-4" />
-              전체 직접 편집
+            // 블록별 인라인 편집이 기본 경로라 전체 편집은 ghost로 낮춘다
+            // (긴 본문을 한 상자에 넣으면 쓰기 불편하다는 실사용 지적, 2026-08-09)
+            <Button variant="ghost" size="sm" onClick={startEdit} disabled={busy}>
+              <Pencil className="mr-1 h-4 w-4" />절 전체 편집
             </Button>
           )}
         </div>
@@ -849,7 +860,48 @@ function SectionView({
                       : "border-transparent hover:border-border hover:bg-bg-secondary",
                   )}
                 >
-                  <MarkdownContent content={block} citations={data.citations} />
+                  {editingIdx === idx ? (
+                    <div className="flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
+                      <Textarea
+                        value={blockDraft}
+                        onChange={(e) => setBlockDraft(e.target.value)}
+                        className="min-h-[160px] font-mono text-xs"
+                        aria-label="블록 편집"
+                      />
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" onClick={() => void onSaveBlock()} disabled={busy}>
+                          <Save className="mr-1 h-3.5 w-3.5" />
+                          {save.isPending ? "저장 중…" : "저장"}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setEditingIdx(null)}
+                          disabled={busy}
+                        >
+                          취소
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <MarkdownContent content={block} citations={data.citations} />
+                      {selectedIdx.has(idx) && selectedIdx.size === 1 ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-1 h-7 px-2 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startBlockEdit(idx);
+                          }}
+                          disabled={busy}
+                        >
+                          <Pencil className="mr-1 h-3 w-3" />이 블록 편집
+                        </Button>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               ))}
             </div>
@@ -869,52 +921,6 @@ function SectionView({
                     선택 해제
                   </Button>
                 </div>
-
-                {blockEditing ? (
-                  <div className="flex flex-col gap-2">
-                    <Label htmlFor="block-draft">블록 직접 편집</Label>
-                    <Textarea
-                      id="block-draft"
-                      value={blockDraft}
-                      onChange={(e) => setBlockDraft(e.target.value)}
-                      className="min-h-[180px] font-mono text-xs"
-                    />
-                    <div className="flex items-center gap-2">
-                      <Button size="sm" onClick={() => void onSaveBlock()} disabled={busy}>
-                        <Save className="mr-1 h-3.5 w-3.5" />
-                        {save.isPending ? "저장 중…" : "블록 저장"}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setBlockEditing(false)}
-                        disabled={busy}
-                      >
-                        취소
-                      </Button>
-                    </div>
-                  </div>
-                ) : singleBlock !== null ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setBlockDraft(singleBlock);
-                      setBlockEditing(true);
-                    }}
-                    disabled={busy}
-                  >
-                    <Pencil className="mr-1 h-3.5 w-3.5" />
-                    블록 직접 편집
-                  </Button>
-                ) : (
-                  // 직접 편집은 대상이 하나일 때만 — 여러 블록을 한 상자에서 고치면
-                  // 어느 블록을 바꿨는지 치환이 모호해진다(AI 재작성은 다중 지원).
-                  <p className="rounded border border-dashed border-border px-2 py-1.5 text-[11px] text-fg-tertiary">
-                    직접 편집은 블록 1개를 선택했을 때 열립니다. 여러 블록은 아래 AI 재작성으로 한
-                    번에 고칠 수 있습니다.
-                  </p>
-                )}
 
                 <div className="flex flex-col gap-2 border-t border-border pt-3">
                   <Label htmlFor="block-instruction">AI 재작성 지시</Label>

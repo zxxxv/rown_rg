@@ -67,10 +67,15 @@ def fake_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
     async def _no_cleaner(_project_id: object) -> None:
         return None
 
+    async def _no_working_copy(_project_id: object) -> dict:
+        # 인메모리 척추 검증 — DB 작업 사본 없음(편집 안 함과 동일).
+        return {}
+
     monkeypatch.setattr("src.workflows.stages._exporter", _export)
     monkeypatch.setattr("src.workflows.stages._section_store", _no_store)
     monkeypatch.setattr("src.workflows.stages._draft_store", _no_draft_store)
     monkeypatch.setattr("src.workflows.stages._sections_cleaner", _no_cleaner)
+    monkeypatch.setattr("src.workflows.stages._working_copy", _no_working_copy)
     return exported
 
 

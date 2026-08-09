@@ -31,7 +31,12 @@ from src.services.indexing.web import WebSourceIndexer, build_web_source_indexer
 from src.services.research import ResearchResult, ResearchSpec, WebResearchService
 from src.services.retrieval.section import SectionRetriever
 from src.workflows.events import emit_phase, emit_step
-from src.workflows.write_loop import auto_select_survivors, check_assembled, run_write_loop
+from src.workflows.write_loop import (
+    auto_select_survivors,
+    check_assembled,
+    overlay_working_copy,
+    run_write_loop,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -668,6 +673,24 @@ async def _default_draft_store(state: ProjectState, plan, draft) -> None:
     await persist_draft_section(state, plan, draft)
 
 
+async def _default_working_copy(project_id) -> dict:
+    """sections 행(사람이 고친 작업 사본)을 절 id → (본문, 인용) 으로 읽어온다."""
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from src.db.models.section import Section
+    from src.db.session import async_session_maker
+
+    async with async_session_maker() as session:
+        rows = (
+            (await session.execute(select(Section).where(Section.project_id == project_id)))
+            .scalars()
+            .all()
+        )
+    return {r.id: (r.content, [_uuid.UUID(str(x)) for x in r.source_ids]) for r in rows}
+
+
 async def _default_sections_cleaner(project_id) -> None:
     """write 시작 시 이전 런 sections 잔재 제거. lazy import로 DB 의존을 미룬다."""
     from src.services.sections import clear_project_sections
@@ -693,6 +716,7 @@ _exporter: Callable[[ProjectState, dict[str, dict[str, str]] | None], Path] = _d
 _section_store: Callable[[ProjectState], Awaitable[None]] = _default_section_store
 _draft_store = _default_draft_store
 _sections_cleaner = _default_sections_cleaner
+_working_copy = _default_working_copy
 _pm_verifier: Callable[[ProjectState], Awaitable[int]] = _default_pm_verifier
 
 
@@ -729,6 +753,13 @@ async def assemble(state: ProjectState) -> ProjectState:
     pid = state.project_id
     emit_phase(pid, "export", "started")
     emit_step(pid, "export", "통합·교정·HWPX 변환", "started")
+    # 작성 중/직후에 사람이 고친 sections 행이 인메모리 후보보다 우선 — 이게 없으면
+    # 미리보기에서 편집·재작성한 내용이 조립 때 조용히 덮어써진다(2026-08-09 지적).
+    # resume 경로(runner)와 같은 규칙을 straight-through 경로에도 적용한다.
+    try:
+        state = overlay_working_copy(state, await _working_copy(pid))
+    except Exception:
+        logger.warning("assemble.working_copy_failed", project_id=str(pid), exc_info=True)
     # 인용 전역 번호화 — 절-로컬 [n]을 출처장 번호로 재작성(저장·검증·렌더 전부
     # 전역 번호 기준이 되도록 가장 먼저). 실패는 비치명 — 로컬 번호로 계속한다.
     try:

@@ -1,12 +1,4 @@
-import {
-  ArrowLeft,
-  Download,
-  FileSearch,
-  PlayCircle,
-  Settings2,
-  SquarePen,
-  Trash2,
-} from "lucide-react";
+import { ArrowLeft, Download, FileSearch, PlayCircle, Settings2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -269,6 +261,10 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               </AccordionContent>
             </AccordionItem>
           </Accordion>
+
+          {/* 보고서 본문 — 좌측 흐름 안에 두어야 진행 단계 카드 옆이 비지 않는다
+              (2026-08-09: 그리드 밖에 두니 중앙이 붕 떴다는 사용자 지적). */}
+          {project.status !== "created" ? <ReportWorkspace projectId={project.id} /> : null}
         </div>
 
         {/* 우측 기둥은 '지금 무슨 일이 벌어지는가'만 — 사용량·옵션은 헤더로,
@@ -277,10 +273,6 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
           <PipelineStepper projectId={project.id} snapshot={usageQuery.data} />
         </aside>
       </div>
-
-      {/* 보고서 본문을 개요 안에 인라인 — 화면을 나누지 않는다(2026-08-09 사용자 결정).
-          작성 중에는 완성된 절부터, 완료 후에는 전체가 여기서 바로 편집된다. */}
-      {project.status !== "created" ? <ReportWorkspace projectId={project.id} /> : null}
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>
@@ -459,23 +451,15 @@ function QuickActions({
   }
   return (
     <section>
-      <h2 className="mb-3 text-base font-semibold text-fg">빠른 작업</h2>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <QuickAction
           icon={FileSearch}
           title="자료 검토"
           description="채택할 자료를 선택하고 추가 업로드"
           onClick={() => onNavigate(`/projects/${project.id}/sources`)}
         />
-        {/* '보고서 편집' 별도 카드는 제거됨 — 편집(직접 수정·AI 재작성)이
-            미리보기 화면에 통합돼 있어 '준비 중' 표기가 낡은 중복이었다. */}
-        <QuickAction
-          icon={SquarePen}
-          title="보고서 미리보기·편집"
-          description="작성 중 확인, 본문 검토(QA), 블록 편집·AI 재작성"
-          disabled={project.status === "created"}
-          onClick={() => onNavigate(`/projects/${project.id}/preview`)}
-        />
+        {/* '보고서 미리보기·편집' 카드도 제거 — 본문이 이 페이지 아래에 인라인이라
+            버튼이 자기 아래 내용을 가리켰다(2026-08-09 사용자 지적). */}
         {/* 'HWPX 다운로드' 카드는 제거됨 — 완료 시 헤더 CTA가 같은 출력 페이지로
             이동하는 중복 진입점이었다(진입점 정리 원칙). */}
       </div>
