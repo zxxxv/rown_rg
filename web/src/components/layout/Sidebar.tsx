@@ -88,7 +88,8 @@ export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
         )}
       >
         {!collapsed && (
-          <span className="flex items-center gap-2 text-sm font-semibold text-fg">
+          // 브랜드 라벨은 클릭·더블클릭 시 텍스트가 잡히면 지저분하다 — 선택 비활성
+          <span className="flex select-none items-center gap-2 text-sm font-semibold text-fg">
             <BrandMark className="h-6 w-6 shrink-0" />
             로운 리포트
           </span>

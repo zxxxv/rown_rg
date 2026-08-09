@@ -20,6 +20,8 @@ export type ProjectStatusFilter = ProjectStatus | "in_progress";
 export interface ProjectListFilters {
   status?: ProjectStatusFilter;
   q?: string;
+  /** 보고서 유형(프리셋 id). 'blank'는 프리셋 없이 만든 자유 주제만 고른다. */
+  preset?: string;
   scope?: "mine" | "all";
 }
 
@@ -43,6 +45,7 @@ export async function getProjectList(params: ProjectListParams = {}): Promise<Pr
   if (params.offset !== undefined) searchParams.offset = String(params.offset);
   if (params.status) searchParams.status = params.status;
   if (params.q) searchParams.q = params.q;
+  if (params.preset) searchParams.preset = params.preset;
   if (params.scope) searchParams.scope = params.scope;
 
   const data = await apiClient.get<unknown>("projects", { searchParams });

@@ -1,6 +1,7 @@
 import { FilePlus2, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { usePresets } from "@/api/presets";
 import { useProjectListInfinite } from "@/api/projects";
 import { type ProjectSort, ProjectSortSchema } from "@/api/types";
 import { ProjectCard } from "@/components/data-display/ProjectCard";
@@ -54,6 +55,9 @@ export default function ProjectsPage() {
   const navigate = useNavigate();
 
   const status = parseStatus(params.get("status"));
+  // 보고서 유형 필터 — 서버 파라미터라 내 프로젝트·전체 프로젝트 모두에 같은 방식으로 걸린다
+  const preset = params.get("preset") ?? "";
+  const presetsQuery = usePresets();
   const sort = parseSort(params.get("sort"));
   const qRaw = params.get("q") ?? "";
   // 관리자만 전체 프로젝트 조회 가능(scope=all). 일반 사용자는 항상 자기 것.
@@ -86,9 +90,10 @@ export default function ProjectsPage() {
     () => ({
       ...(status !== "all" ? { status } : {}),
       ...(debouncedSearch.trim() ? { q: debouncedSearch.trim() } : {}),
+      ...(preset ? { preset } : {}),
       ...(scope === "all" ? { scope: "all" as const } : {}),
     }),
-    [status, debouncedSearch, scope],
+    [status, debouncedSearch, preset, scope],
   );
   const { data, isLoading, isError, refetch, hasNextPage, fetchNextPage, isFetchingNextPage } =
     useProjectListInfinite(filters);
@@ -167,6 +172,34 @@ export default function ProjectsPage() {
           </Tabs>
 
           <div className="flex items-center gap-2">
+            <Select
+              value={preset || "__all__"}
+              onValueChange={(v) =>
+                setParams(
+                  (prev) => {
+                    const next = new URLSearchParams(prev);
+                    if (v === "__all__") next.delete("preset");
+                    else next.set("preset", v);
+                    return next;
+                  },
+                  { replace: true },
+                )
+              }
+            >
+              <SelectTrigger className="w-40" aria-label="보고서 유형 필터">
+                <SelectValue placeholder="유형 전체" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">유형 전체</SelectItem>
+                {(presetsQuery.data ?? []).map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+                <SelectItem value="blank">자유 주제</SelectItem>
+              </SelectContent>
+            </Select>
+
             <div className="relative">
               <Search
                 className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-tertiary"

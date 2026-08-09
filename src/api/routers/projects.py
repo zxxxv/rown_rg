@@ -40,6 +40,7 @@ from src.api.schemas.section import (
     SectionRewriteRequest,
     SectionTreeResponse,
 )
+from src.api.uploads import read_validated_upload
 from src.core.clock import now as clock_now
 from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
@@ -291,6 +292,7 @@ async def list_projects(
     offset: int = 0,
     status: str | None = None,
     q: str | None = None,
+    preset: str | None = None,
     scope: str = "mine",
 ) -> list[Project]:
     """프로젝트 목록(최신순).
@@ -318,6 +320,12 @@ async def list_projects(
         stmt = stmt.where(Project.status.in_(_IN_PROGRESS_STATUSES))
     elif status is not None:
         stmt = stmt.where(Project.status == status)
+    # 보고서 유형(프리셋) 필터 — 목록에서 유형별로 좁혀 보기 위함. 자유 주제는
+    # preset이 비어 있으므로 'blank' 토큰으로 그것만 고를 수 있게 한다.
+    if preset:
+        stmt = stmt.where(
+            Project.preset.is_(None) if preset == "blank" else Project.preset == preset
+        )
     if q:
         pattern = f"%{q}%"
         # 제목·주제·소유자명 검색(소유자명은 owner join으로).
@@ -737,15 +745,9 @@ async def upload_project_source(
     채택(is_included) 기본 참. 나중에 제외하면 검색 시점에 자동으로 근거에서 빠진다.
     """
     project = await _get_authorized_project(project_id, session, current_user)
-    content = await file.read()
+    safe_name, content = await read_validated_upload(file, max_bytes=MAX_SOURCE_UPLOAD_BYTES)
     if not content:
         raise ValidationError(message="빈 파일입니다.", code="EMPTY_UPLOAD")
-    if len(content) > MAX_SOURCE_UPLOAD_BYTES:
-        raise ValidationError(
-            message=f"파일이 너무 큽니다(최대 {MAX_SOURCE_UPLOAD_BYTES // (1024 * 1024)}MB).",
-            code="UPLOAD_TOO_LARGE",
-        )
-    safe_name = Path(file.filename or "untitled").name
     dest_dir = Path(settings.library_dir) / "project_sources" / str(project.id)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{uuid4()}_{safe_name}"
@@ -786,8 +788,11 @@ async def attach_library_source(
         raise NotFoundError(
             message="라이브러리 파일을 찾을 수 없습니다.", code="LIBRARY_FILE_NOT_FOUND"
         )
-    is_admin = current_user.role in ("super_admin", "admin")
-    if node.is_personal and node.created_by != current_user.id and not is_admin:
+    # 개인 소유뿐 아니라 회사 공유 자료의 역할/사용자 가시성 제한(visible_to_roles/users)까지
+    # 검사한다. 다운로드 경로와 동일한 규칙을 재사용해 첨부로 우회되지 않게 한다.
+    from src.api.routers.library import _can_view
+
+    if not _can_view(node, current_user):
         raise AuthorizationError(message="이 자료에 접근할 수 없습니다.", code="FORBIDDEN")
     if not node.file_path or not Path(node.file_path).is_file():
         raise ValidationError(
