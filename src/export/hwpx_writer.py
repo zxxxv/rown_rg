@@ -44,9 +44,17 @@ COVER_TITLE_SIZE_PT = 24
 COVER_ORG_SIZE_PT = 14
 COVER_DATE_SIZE_PT = 12
 # 세로 배치용 여백(pt) — A4 본문 높이(≈728pt) 기준 제목을 화면 중앙 근처로 내린다.
-COVER_ORG_SPACE_BEFORE_PT = 90.0
-COVER_TITLE_SPACE_BEFORE_PT = 150.0
-COVER_DATE_SPACE_BEFORE_PT = 220.0
+COVER_SUBTITLE_SIZE_PT = 14
+COVER_TYPE_SIZE_PT = 13
+COVER_AUTHOR_SIZE_PT = 11
+# 세로 배치(위→아래): 유형 라벨 → 제목 → 부제 → (여백) 작성일 → 기관 → 작성자.
+# 한 페이지에 균형 있게 떨어지도록 앞 여백으로만 배치한다(표·프레임 없이).
+COVER_TYPE_SPACE_BEFORE_PT = 110.0
+COVER_ORG_SPACE_BEFORE_PT = 90.0  # 유형 라벨이 없을 때 제목 앞 여백
+COVER_TITLE_SPACE_BEFORE_PT = 40.0
+COVER_SUBTITLE_SPACE_BEFORE_PT = 14.0
+COVER_DATE_SPACE_BEFORE_PT = 150.0
+COVER_ORG_SPACE_AFTER_PT = 24.0
 
 # 표·그림 폭 — A4(210mm) 기준 본문 폭(좌우 여백 제외)에 맞춰 페이지를 넘지 않게 한다.
 PAGE_WIDTH_MM = 210.0
@@ -70,14 +78,19 @@ def _page_content_width_hwp() -> int:
 
 @dataclass(frozen=True)
 class Cover:
-    """표지 블록 — 문서 첫 장. 제목(대)·기관·날짜를 가운데 정렬로 배치한다.
+    """표지 블록 — 문서 첫 장. 공공 보고서 표지의 표준 구성으로 배치한다.
 
+    위에서부터: 유형 라벨(예 '예비타당성조사 보고서') → 제목(대) → 부제 →
+    작성일 → 기관 · 작성자. 빈 값은 통째로 건너뛴다.
     개요 수준을 부여하지 않아 목차·개요 자동번호에 잡히지 않는다(표지는 본문이 아님).
     """
 
     title: str
     organization: str = ""
     date_text: str = ""
+    report_type: str = ""  # 문서 유형 라벨 — 표지 최상단
+    subtitle: str = ""  # 부제 — 제목 아래 한 단계 작게
+    author: str = ""  # 작성자 — 기관명 아래
 
 
 @dataclass(frozen=True)
@@ -202,31 +215,57 @@ def _apply_company_chrome(doc: HwpxDocument) -> None:
 
 
 def _add_cover(doc: HwpxDocument, cover: Cover) -> None:
-    """표지 문단들(기관 → 제목 → 날짜)을 가운데 정렬·세로 배치로 추가한다."""
-    if cover.organization:
-        org_id = doc.ensure_run_style(font=HEADING_FONT, size=COVER_ORG_SIZE_PT)
-        org = doc.add_paragraph(cover.organization, char_pr_id_ref=org_id, inherit_style=False)
+    """표지 문단들을 가운데 정렬·세로 배치로 추가한다(유형 → 제목 → 부제 → 날짜 → 기관·작성자)."""
+
+    def line(text: str, *, size: float, bold: bool, space_before: float, font: str = HEADING_FONT):
+        char_id = doc.ensure_run_style(font=font, size=size, bold=bold)
+        para = doc.add_paragraph(text, char_pr_id_ref=char_id, inherit_style=False)
         doc.set_paragraph_format(
-            paragraph_index=doc.paragraphs.index(org),
+            paragraph_index=doc.paragraphs.index(para),
             alignment="CENTER",
-            spacing_before_pt=COVER_ORG_SPACE_BEFORE_PT,
+            line_spacing_percent=150,
+            spacing_before_pt=space_before,
         )
-    title_id = doc.ensure_run_style(font=HEADING_FONT, size=COVER_TITLE_SIZE_PT, bold=True)
-    title = doc.add_paragraph(cover.title, char_pr_id_ref=title_id, inherit_style=False)
-    doc.set_paragraph_format(
-        paragraph_index=doc.paragraphs.index(title),
-        alignment="CENTER",
-        line_spacing_percent=150,
-        spacing_before_pt=COVER_TITLE_SPACE_BEFORE_PT,
+
+    if cover.report_type:
+        line(
+            cover.report_type,
+            size=COVER_TYPE_SIZE_PT,
+            bold=False,
+            space_before=COVER_TYPE_SPACE_BEFORE_PT,
+        )
+    line(
+        cover.title,
+        size=COVER_TITLE_SIZE_PT,
+        bold=True,
+        space_before=COVER_TITLE_SPACE_BEFORE_PT
+        if cover.report_type
+        else COVER_ORG_SPACE_BEFORE_PT,
     )
-    if cover.date_text:
-        date_id = doc.ensure_run_style(font=BODY_FONT, size=COVER_DATE_SIZE_PT)
-        date = doc.add_paragraph(cover.date_text, char_pr_id_ref=date_id, inherit_style=False)
-        doc.set_paragraph_format(
-            paragraph_index=doc.paragraphs.index(date),
-            alignment="CENTER",
-            spacing_before_pt=COVER_DATE_SPACE_BEFORE_PT,
+    if cover.subtitle:
+        line(
+            cover.subtitle,
+            size=COVER_SUBTITLE_SIZE_PT,
+            bold=False,
+            space_before=COVER_SUBTITLE_SPACE_BEFORE_PT,
         )
+    if cover.date_text:
+        line(
+            cover.date_text,
+            size=COVER_DATE_SIZE_PT,
+            bold=False,
+            space_before=COVER_DATE_SPACE_BEFORE_PT,
+            font=BODY_FONT,
+        )
+    if cover.organization:
+        line(
+            cover.organization,
+            size=COVER_ORG_SIZE_PT,
+            bold=True,
+            space_before=COVER_ORG_SPACE_AFTER_PT,
+        )
+    if cover.author:
+        line(cover.author, size=COVER_AUTHOR_SIZE_PT, bold=False, space_before=6.0, font=BODY_FONT)
 
 
 def _add_heading(doc: HwpxDocument, heading: Heading):

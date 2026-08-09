@@ -649,6 +649,16 @@ def _default_exporter(
     return export_report(state, glossary=glossary)
 
 
+async def _owner_name(user_id: UUID) -> str:
+    """표지 작성자 표기용 소유자 이름 — 실행 중엔 필요 없어 렌더 직전에만 읽는다."""
+    from src.db.models.user import User
+    from src.db.session import async_session_maker
+
+    async with async_session_maker() as session:
+        owner = await session.get(User, user_id)
+        return owner.name if owner else ""
+
+
 async def _adopted_source_refs(project_id: UUID) -> list[SourceRef]:
     """채택(is_included) 자료를 출처 최종장용 SourceRef로 로드.
 
@@ -860,6 +870,12 @@ async def assemble(state: ProjectState) -> ProjectState:
         except Exception:
             # 설명은 장식 — 실패해도 풀네임만으로 렌더를 계속한다.
             logger.warning("assemble.glossary_failed", project_id=str(pid), exc_info=True)
+        # 표지 작성자 — 소유자 이름. 실패해도 작성자 줄만 빠진다(렌더는 계속).
+        if not state.author:
+            try:
+                state = state.model_copy(update={"author": await _owner_name(state.user_id)})
+            except Exception:
+                logger.warning("assemble.author_load_failed", project_id=str(pid), exc_info=True)
         path = _exporter(state, glossary)
         logger.info("assemble.exported", project_id=str(state.project_id), path=str(path))
     else:

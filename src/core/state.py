@@ -31,6 +31,8 @@ class ProjectState(BaseModel):
     # 보고서 제목 — 표지에 쓰인다. topic은 "무엇을 검토한다"는 긴 지시문이라 표지에
     # 그대로 올리면 문장이 제목 자리에 박힌다(2026-08-09 실사용 지적). 없으면 topic 폴백.
     title: str = ""
+    # 표지 작성자 표기 — 소유자 이름. 실행 상태가 아니라 렌더 입력이라 조회 시 채운다.
+    author: str = ""
     preset: str | None = None
     depth_mode: str = "full_report"  # 작성 깊이 — RAPTOR 트리 깊이 등 품질 노브의 입력
     options: dict = Field(default_factory=dict)

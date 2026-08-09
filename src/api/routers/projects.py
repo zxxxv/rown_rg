@@ -873,7 +873,7 @@ async def get_verify_report(
     return list(rows)
 
 
-def _state_for_export(project: Project, rows: list[Section]) -> ProjectState:
+def _state_for_export(project: Project, rows: list[Section], author: str = "") -> ProjectState:
     """sections 테이블의 확정 본문 → export_report가 먹는 최소 상태.
 
     후보/선택 구조를 절당 1후보로 재구성한다 — 편집된 최신 본문이 곧 선택본.
@@ -898,6 +898,10 @@ def _state_for_export(project: Project, rows: list[Section]) -> ProjectState:
         user_id=project.owner_id,
         topic=project.topic,
         title=project.title,
+        author=author,
+        # 표지 작성일 — 프로젝트 생성 시각(기본값 now()로 두면 다운로드 날짜가 찍힌다)
+        created_at=project.created_at,
+        preset=project.preset,
         section_plan=plans,
         section_candidates=sets,
         section_selections=selections,
@@ -924,7 +928,8 @@ async def download_export(
         try:
             from src.services.export.report import export_report
 
-            state = _state_for_export(project, rows)
+            owner = await session.get(User, project.owner_id)
+            state = _state_for_export(project, rows, author=owner.name if owner else "")
             # 출처 최종장 — 채택 자료를 실어야 렌더된다(조립 경로와 동일 규칙).
             src_rows = (
                 (

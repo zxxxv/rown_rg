@@ -225,14 +225,56 @@ def _chapter_titles(state: ProjectState) -> dict[int, str]:
     return titles
 
 
+# 부제 길이 상한 — 넘치면 표지 한 장의 균형이 깨진다.
+_SUBTITLE_MAX_CHARS = 120
+
+
+def _report_type_label(preset: str | None) -> str:
+    """표지 최상단 유형 라벨 — 프리셋 이름 기반. 자유 주제(프리셋 없음)면 빈 문자열."""
+    name = (preset or "").strip()
+    if not name:
+        return ""
+    return name if name.endswith("보고서") else f"{name} 보고서"
+
+
+def _cover_subtitle(state: ProjectState) -> str:
+    """부제 — 주제문(topic). 제목과 사실상 같으면 생략한다(같은 줄을 두 번 쓰지 않는다).
+
+    topic은 "무엇을 어떤 범위로 검토한다"는 문장이라 표지 부제로 읽힌다. 제목이
+    비어 topic이 이미 제목 자리에 올라간 경우에는 부제를 비운다.
+    """
+    topic = (state.topic or "").strip()
+    title = (state.title or "").strip()
+    if not topic or not title:
+        return ""
+    if topic == title or topic.startswith(title) or title.startswith(topic):
+        return ""
+    if len(topic) > _SUBTITLE_MAX_CHARS:
+        # 긴 주제문은 앞부분이 제목을 되풀이하고 뒤가 실제 범위 서술이다
+        # ("A 사업의 예타 분석 - 기술 수준, 시장 전망, …을 검토한다"). 뒤를 쓴다.
+        for sep in (" - ", " – ", " — ", ": "):
+            head, found, tail = topic.partition(sep)
+            if found and len(tail.strip()) >= 15:
+                topic = tail.strip()
+                break
+    return topic if len(topic) <= _SUBTITLE_MAX_CHARS else topic[: _SUBTITLE_MAX_CHARS - 1] + "…"
+
+
 def _cover_block(state: ProjectState) -> Cover:
-    """표지 블록 — 제목(주제)·기관·작성일(KST 표시)."""
+    """표지 블록 — 유형 라벨·제목·부제·작성일(KST)·기관·작성자."""
     created = state.created_at
     if created.tzinfo is None:  # 방어: naive면 UTC로 간주(저장은 UTC 규약)
         created = created.replace(tzinfo=UTC)
     date_text = created.astimezone(_KST).strftime("%Y년 %m월 %d일")
     # 표지 제목은 프로젝트 제목 — topic(작성 지시문)은 폴백일 뿐이다.
-    return Cover(title=state.title or state.topic, organization=HEADER_TEXT, date_text=date_text)
+    return Cover(
+        title=state.title or state.topic,
+        organization=HEADER_TEXT,
+        date_text=date_text,
+        report_type=_report_type_label(state.preset),
+        subtitle=_cover_subtitle(state),
+        author=f"작성자  {state.author}" if state.author else "",
+    )
 
 
 def _chapter_heading_text(chapter_number: int, ch_titles: dict[int, str]) -> str:
