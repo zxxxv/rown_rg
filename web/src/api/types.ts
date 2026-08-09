@@ -212,6 +212,11 @@ export const SectionCitationSchema = z.object({
 });
 export type SectionCitation = z.infer<typeof SectionCitationSchema>;
 
+export const UngroundedNumbersSchema = z.object({
+  count: z.number().int().nonnegative().default(0),
+  samples: z.array(z.string()).default([]),
+});
+
 export const SectionContentResponseSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -220,6 +225,8 @@ export const SectionContentResponseSchema = z.object({
   qa_status: z.enum(["passed", "failed", "pending"]),
   level: z.number().int().min(1).max(4),
   citations: z.array(SectionCitationSchema).default([]),
+  /** 인용 근거에서 확인되지 않는 수치 — 창작 위험 신호(조회 시점 재계산) */
+  ungrounded: UngroundedNumbersSchema.default({ count: 0, samples: [] }),
 });
 export type SectionContentResponse = z.infer<typeof SectionContentResponseSchema>;
 

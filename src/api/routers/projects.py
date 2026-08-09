@@ -39,6 +39,7 @@ from src.api.schemas.section import (
     SectionNode,
     SectionRewriteRequest,
     SectionTreeResponse,
+    UngroundedNumbers,
 )
 from src.api.uploads import read_validated_upload
 from src.core.clock import now as clock_now
@@ -54,6 +55,7 @@ from src.core.types import (
     SourceRef,
     SourceType,
 )
+from src.db.models.chunk import Chunk
 from src.db.models.library_node import LibraryNode
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
@@ -66,6 +68,7 @@ from src.prompts import list_presets, load_preset
 from src.services.generation.planner import MAX_SECTIONS
 from src.services.indexing.vector import SourceInput
 from src.services.prompts import resolve_analysts
+from src.services.qa.gate import ungrounded_numbers
 from src.workflows import cancel
 from src.workflows.events import emit_error, last_step
 from src.workflows.runner import get_pending_gate, is_running, queue_status, resume_run, start_run
@@ -1098,8 +1101,25 @@ async def _section_citations(session: AsyncSession, row: Section) -> list[Sectio
     return _citations_from_numbers(numbers, list(sources_ordered))
 
 
+async def _ungrounded_numbers(session: AsyncSession, row: Section) -> UngroundedNumbers:
+    """이 절의 수치 중 인용 근거에서 확인 안 되는 것 — 저장이 아니라 조회 시점 재계산.
+
+    저장하지 않는 이유: 본문을 편집하면 즉시 달라져야 하고, 이미 완성된 보고서에도
+    소급 적용돼야 한다(마이그레이션 불필요). 근거는 절이 인용한 청크 본문 전체다.
+    """
+    if not row.source_ids or not row.content:
+        return UngroundedNumbers()
+    rows = (
+        await session.execute(select(Chunk.content).where(Chunk.id.in_(list(row.source_ids))))
+    ).scalars()
+    tokens = ungrounded_numbers(row.content, " ".join(rows))
+    return UngroundedNumbers(count=len(tokens), samples=tokens[:12])
+
+
 def _section_content(
-    row: Section, citations: list[SectionCitation] | None = None
+    row: Section,
+    citations: list[SectionCitation] | None = None,
+    ungrounded: UngroundedNumbers | None = None,
 ) -> SectionContentResponse:
     return SectionContentResponse(
         id=str(row.id),
@@ -1109,6 +1129,7 @@ def _section_content(
         qa_status=row.qa_status,
         level=row.level,
         citations=citations or [],
+        ungrounded=ungrounded or UngroundedNumbers(),
     )
 
 
@@ -1121,7 +1142,11 @@ async def get_section_content(
 ) -> SectionContentResponse:
     project = await _get_authorized_project(project_id, session, current_user)
     row = await _get_section(session, project.id, section_id)
-    return _section_content(row, await _section_citations(session, row))
+    return _section_content(
+        row,
+        await _section_citations(session, row),
+        await _ungrounded_numbers(session, row),
+    )
 
 
 @router.patch("/{project_id}/sections/{section_id}", response_model=SectionContentResponse)
@@ -1142,7 +1167,11 @@ async def update_section_content(
     project.updated_at = clock_now()
     await session.flush()
     await session.refresh(row)
-    return _section_content(row, await _section_citations(session, row))
+    return _section_content(
+        row,
+        await _section_citations(session, row),
+        await _ungrounded_numbers(session, row),
+    )
 
 
 async def _default_section_rewriter(
@@ -1211,7 +1240,11 @@ async def rewrite_section(
     project.updated_at = clock_now()
     await session.flush()
     await session.refresh(row)
-    return _section_content(row, await _section_citations(session, row))
+    return _section_content(
+        row,
+        await _section_citations(session, row),
+        await _ungrounded_numbers(session, row),
+    )
 
 
 async def _default_block_rewriter(project: Project, row: Section, data) -> str:
@@ -1263,4 +1296,8 @@ async def rewrite_section_block(
     project.updated_at = clock_now()
     await session.flush()
     await session.refresh(row)
-    return _section_content(row, await _section_citations(session, row))
+    return _section_content(
+        row,
+        await _section_citations(session, row),
+        await _ungrounded_numbers(session, row),
+    )

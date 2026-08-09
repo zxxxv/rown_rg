@@ -103,22 +103,33 @@ def _significant_numbers(text: str) -> list[str]:
     return out
 
 
+def ungrounded_numbers(content: str, cited_content: str) -> list[str]:
+    """본문에서 인용 근거에 없는 유의미한 숫자 토큰(등장 순서·중복 제거).
+
+    게이트(생성 시점)와 편집 화면(조회 시점)이 같은 판정을 쓰도록 분리했다 —
+    화면에서 "이 절의 근거 미확인 수치"를 그대로 보여주기 위함(2026-08-09).
+    퍼지 매칭(콤마 정규화 후 부분문자열)이라 오탐 여지가 있어 경고용이다.
+    """
+    haystack = cited_content.replace(",", "")
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in _significant_numbers(content):
+        norm = _normalize_number(token)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        if norm and norm not in haystack:
+            out.append(token)
+    return out
+
+
 def check_numeric_grounded(draft: SectionDraft, cited_content: str) -> GateResult:
     """본문의 유의미한 숫자가 인용된 근거 청크 본문에 실제로 등장하는지.
 
     퍼지 매칭(콤마 정규화 후 부분문자열)이라 오탐 여지가 있어 SOFT — 미매칭
     숫자는 제외 사유가 아니라 사람에게 넘기는 '확인 요망' 플래그다.
     """
-    haystack = cited_content.replace(",", "")
-    ungrounded: list[str] = []
-    seen: set[str] = set()
-    for token in _significant_numbers(draft.content):
-        norm = _normalize_number(token)
-        if norm in seen:
-            continue
-        seen.add(norm)
-        if norm and norm not in haystack:
-            ungrounded.append(token)
+    ungrounded = ungrounded_numbers(draft.content, cited_content)
     passed = not ungrounded
     detail = None
     if not passed:
