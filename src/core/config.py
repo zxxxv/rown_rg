@@ -80,6 +80,11 @@ class Settings(BaseSettings):
     # stages._collect_chapter의 재시도(fetch 1회)가 받아낸다.
     research_max_fetch_uses: int = 5
     research_max_tokens: int = 8000
+    # 챕터 1콜의 벽시계 상한(초). 수집은 서버측 web_search·web_fetch를 여러 번 도는
+    # 에이전틱 루프라 응답이 영원히 안 오는 상태가 실제로 나온다(2026-08-10 실측:
+    # 17건 수집 후 28분 무활동, 화면은 '수집 중' 그대로). 넘기면 그 챕터만 버리고
+    # 다음 챕터로 간다 — 챕터 실패는 이미 격리돼 있다.
+    research_chapter_timeout_seconds: int = 480
     # 자료 풀 권장 하한 = 초기 수집 목표 — 미달이어도 차단하지 않고 게이트에 경고 표시.
     # 40 = 분량 레버(2026-08-06): 절당 근거 공급이 분량의 1차 병목이라 자료 풀을 2배로.
     research_min_sources: int = 40

@@ -11,6 +11,7 @@ _retriever_factory·_write_client·_exporter) — 테스트는 이를 fake로 �
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -377,12 +378,34 @@ async def _collect_sources(
                     project_id=state.project_id,
                     operation=f"research.collect:{ch_num}",
                 ):
-                    result = await _collect_chapter(
-                        spec,
-                        model=_models_for(state)["research"],
-                        project_id=state.project_id,
-                        chapter=ch_num,
+                    # 벽시계 상한 — 수집은 서버측 검색·회수를 도는 에이전틱 루프라
+                    # 응답이 영영 안 오는 상태가 실제로 났다(2026-08-10: 28분 무활동,
+                    # 화면은 '수집 중'). 끊고 다음 챕터로 넘어간다.
+                    result = await asyncio.wait_for(
+                        _collect_chapter(
+                            spec,
+                            model=_models_for(state)["research"],
+                            project_id=state.project_id,
+                            chapter=ch_num,
+                        ),
+                        timeout=settings.research_chapter_timeout_seconds,
                     )
+            except TimeoutError as exc:
+                emit_step(pid, "research", f"{label} (응답 없음)", "failed")
+                # 전 챕터가 타임아웃이면 시스템 문제다 — 아래 n_ok==0 분기가
+                # 실행 실패로 승격하도록 원인을 남긴다.
+                last_error = LLMClientError(
+                    f"{ch_num}장 수집이 {settings.research_chapter_timeout_seconds}초 안에 "
+                    "끝나지 않았습니다"
+                )
+                logger.warning(
+                    "research.chapter_timeout",
+                    project_id=str(state.project_id),
+                    chapter=ch_num,
+                    timeout_s=settings.research_chapter_timeout_seconds,
+                    error=str(exc),
+                )
+                continue
             except LLMClientError as exc:
                 # 챕터 하나의 실패(재시도 소진·prompt too long 등)가 실행 전체를
                 # 죽이지 않게 격리한다 — 해당 챕터만 건너뛰고 나머지를 계속 모아
