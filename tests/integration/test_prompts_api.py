@@ -173,3 +173,47 @@ class TestPromptsInTree:
         sys_node = _find(sys_agents["children"], "sysagent-a01")
         assert sys_node is not None
         assert sys_node["prompt"]["editable"] is False
+
+
+class TestPromptPreview:
+    """조합 미리보기 - 작성 경로와 같은 함수로 조립해 보여준다.
+
+    "만든 것이 반영됐는지" 볼 눈이 없어 거짓 스위치를 두 번 늦게 발견했다
+    (2026-08-09 다중 배정·2026-08-10 개인 작성 규칙).
+    """
+
+    async def test_assembles_persona_rules_and_volume(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        resp = await test_client.post(
+            "/api/v1/prompts/preview",
+            json={
+                "analysts": ["예산산출", "비용편익분석"],
+                "title": "예산 산출",
+                "direction": "총사업비 산출 근거",
+                "key_points": ["단가 기준"],
+            },
+            headers=_auth(worker_token),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        # 배정 2개면 페르소나가 둘 다 실린다(첫 개만 쓰이던 거짓 스위치 회귀 방지).
+        labels = [b["label"] for b in body["blocks"]]
+        assert sum(1 for x in labels if x.startswith("페르소나")) == 2
+        # 작성 규칙 3종도 함께.
+        assert sum(1 for x in labels if x.startswith("작성 규칙")) == 3
+        # 분량은 volume_target에서 생성돼 지시 블록에 실린다.
+        assert body["min_chars"] and body["n_parts"] > 1
+        assert "목표 분량:" in body["guidance"]
+        assert "총사업비 산출 근거" in body["guidance"]
+
+    async def test_unknown_analyst_is_reported_not_silent(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        resp = await test_client.post(
+            "/api/v1/prompts/preview",
+            json={"analysts": ["존재하지않는에이전트"], "title": "x"},
+            headers=_auth(worker_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["unknown_analysts"] == ["존재하지않는에이전트"]

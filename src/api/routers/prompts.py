@@ -18,6 +18,9 @@ from src.api.schemas.prompt import (
     PersonalPromptCreate,
     PersonalPromptRead,
     PersonalPromptUpdate,
+    PromptPreviewBlock,
+    PromptPreviewRequest,
+    PromptPreviewResponse,
     SystemPromptRead,
 )
 from src.core.exceptions import NotFoundError, ValidationError
@@ -28,6 +31,8 @@ from src.services.prompts import (
     delete_personal,
     get_personal,
     list_personal,
+    resolve_analysts,
+    resolve_rules,
     update_personal,
 )
 from src.services.prompts.composer import parse_agent_prompt
@@ -188,3 +193,57 @@ async def get_system_prompt(
             ) from None
         return SystemPromptRead(ref=ref, kind="rule", name=ref, content=content)
     raise ValidationError(message=f"알 수 없는 종류: {kind}", code="INVALID_PROMPT_KIND")
+
+
+@router.post("/preview", response_model=PromptPreviewResponse)
+async def preview_prompt(
+    data: PromptPreviewRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> PromptPreviewResponse:
+    """이 배정·규칙 조합으로 절을 쓰면 모델에 실제로 가는 프롬프트.
+
+    조립 규칙(기본 규칙 → 페르소나 → 작성 규칙, 분량 문구 생성)이 작성 경로 안에만
+    있어서, 사용자는 만든 것이 반영됐는지 볼 방법이 없었다 — 그 눈이 없어서 거짓
+    스위치를 두 번이나 늦게 발견했다(2026-08-09·10). 같은 함수로 조립해 보여준다.
+    """
+    from src.core.types import SectionPlan
+    from src.services.generation.split_writer import plan_part_count
+    from src.services.generation.writer_context import BASE_SYSTEM, build_writer_context
+
+    specs = await resolve_analysts(session, current_user.id)
+    catalog = {}
+    for spec in specs:
+        catalog[spec.id] = spec
+        catalog[spec.name] = spec
+    known = [n for n in data.analysts if n in catalog]
+    unknown = [n for n in data.analysts if n not in catalog]
+    rules = await resolve_rules(session, current_user.id, data.rules)
+
+    section = SectionPlan(
+        chapter_number=1,
+        section_number=1,
+        title=data.title or "(절 제목)",
+        direction=data.direction,
+        key_points=list(data.key_points),
+        analysts=known,
+    )
+    ctx = build_writer_context(section, catalog, rules)
+    blocks = [PromptPreviewBlock(label="기본 규칙", chars=len(BASE_SYSTEM))]
+    blocks += [
+        PromptPreviewBlock(label=f"페르소나 · {catalog[n].name}", chars=len(catalog[n].prompt))
+        for n in known
+    ]
+    blocks += [
+        PromptPreviewBlock(label=f"작성 규칙 {i}", chars=len(text))
+        for i, text in enumerate(rules, start=1)
+    ]
+    return PromptPreviewResponse(
+        system=ctx.system,
+        guidance=ctx.guidance,
+        blocks=blocks,
+        min_chars=ctx.min_chars,
+        max_chars=ctx.max_chars,
+        n_parts=plan_part_count(ctx.min_chars),
+        unknown_analysts=unknown,
+    )

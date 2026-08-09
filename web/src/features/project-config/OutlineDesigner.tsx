@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { PromptPreviewDialog } from "./PromptPreviewDialog";
 import type { ProjectFormValues } from "./schema";
 
 // ─── 목차 설계 - 프리셋 골격을 펼쳐 장·절·에이전트를 직접 확정하는 편집기 ───
@@ -353,6 +354,9 @@ function SectionEditor({
   onMove: (delta: -1 | 1) => void;
   onRemove: () => void;
 }) {
+  const [previewing, setPreviewing] = useState(false);
+  // 규칙은 보고서 단위(config.rules)라 절 미리보기에도 같이 실어야 실제와 같아진다.
+  const rules = useWatch<ProjectFormValues, "config.rules">({ name: "config.rules" }) ?? [];
   return (
     <div className="flex flex-col gap-2 rounded border border-border bg-bg-secondary p-3">
       <div className="flex items-center gap-2">
@@ -397,6 +401,23 @@ function SectionEditor({
         selected={section.analysts}
         onChange={(analysts) => onChange({ ...section, analysts })}
       />
+      <button
+        type="button"
+        className="self-start text-[11px] text-fg-tertiary underline"
+        onClick={() => setPreviewing(true)}
+      >
+        이 절의 최종 프롬프트 미리보기
+      </button>
+      {previewing ? (
+        <PromptPreviewDialog
+          analysts={section.analysts}
+          rules={rules}
+          title={section.title}
+          direction={section.direction}
+          keyPoints={section.key_points.filter((k) => k.trim())}
+          onClose={() => setPreviewing(false)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -185,3 +185,36 @@ export function useSystemPrompt(kind: string, ref: string, enabled = true) {
     enabled: enabled && Boolean(ref),
   });
 }
+
+// ─── 조합 미리보기 (이 배정·규칙으로 쓰면 모델에 뭐가 가는가) ────────────────
+
+export const PromptPreviewSchema = z.object({
+  system: z.string(),
+  guidance: z.string(),
+  blocks: z.array(z.object({ label: z.string(), chars: z.number().int() })).default([]),
+  min_chars: z.number().int().nullish(),
+  max_chars: z.number().int().nullish(),
+  n_parts: z.number().int().default(1),
+  unknown_analysts: z.array(z.string()).default([]),
+});
+export type PromptPreview = z.infer<typeof PromptPreviewSchema>;
+
+export interface PromptPreviewBody {
+  analysts: string[];
+  rules?: string[];
+  title?: string;
+  direction?: string;
+  key_points?: string[];
+}
+
+/** 조립은 서버(작성 경로와 같은 함수)에서 한다 - 프론트가 흉내 내면 실제와 어긋난다. */
+export function usePromptPreview(body: PromptPreviewBody, enabled: boolean) {
+  return useQuery({
+    queryKey: [...promptKeys.all, "preview", body],
+    enabled,
+    queryFn: async () => {
+      const data = await apiClient.post<unknown>("prompts/preview", { json: body });
+      return PromptPreviewSchema.parse(data);
+    },
+  });
+}

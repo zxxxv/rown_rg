@@ -90,3 +90,30 @@ class SystemPromptRead(BaseModel):
     # 이 에이전트의 목표 분량(자) — 복제 시작 시 폼의 숫자 칸을 채운다.
     min_chars: int | None = None
     max_chars: int | None = None
+
+
+class PromptPreviewRequest(BaseModel):
+    """이 조합으로 작성하면 모델에 무엇이 가는지 — 절 하나 기준."""
+
+    analysts: list[str] = Field(default_factory=list, max_length=5)
+    rules: list[UUID] = Field(default_factory=list, max_length=10)
+    title: str = ""
+    direction: str = ""
+    key_points: list[str] = Field(default_factory=list, max_length=20)
+
+
+class PromptPreviewBlock(BaseModel):
+    label: str
+    chars: int
+
+
+class PromptPreviewResponse(BaseModel):
+    """조립 결과. blocks는 무엇이 얼마나 차지하는지 한눈에 보기 위한 내역이다."""
+
+    system: str
+    guidance: str
+    blocks: list[PromptPreviewBlock] = Field(default_factory=list)
+    min_chars: int | None = None
+    max_chars: int | None = None
+    n_parts: int = 1
+    unknown_analysts: list[str] = Field(default_factory=list)
