@@ -35,10 +35,13 @@ RUN uv sync --frozen --no-dev
 # 안 그러면 appuser가 root 소유 .venv를 수정하려다 Permission denied + dev 의존성까지 내려받는다.
 ENV UV_NO_SYNC=1
 
-# 비root 유저 + 앱이 런타임에 쓰는 경로(임베딩 캐시·산출물·업로드) 소유권 확보
+# 비root 유저 + 런타임 쓰기 경로 소유권.
+# /app 자체를 appuser 소유로 둬서(비재귀 — 기존 root 파일은 그대로) 앱이 런타임에
+# 상대경로 디렉터리(cassettes 등)를 자유롭게 만들 수 있게 한다. 명시 경로도 함께 생성.
 RUN useradd --create-home appuser \
-    && mkdir -p /app/cache /app/exports /app/data/library \
-    && chown -R appuser:appuser /app/cache /app/exports /app/data
+    && mkdir -p /app/cache /app/exports /app/data/library /app/cassettes \
+    && chown appuser:appuser /app \
+    && chown -R appuser:appuser /app/cache /app/exports /app/data /app/cassettes
 USER appuser
 
 CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
