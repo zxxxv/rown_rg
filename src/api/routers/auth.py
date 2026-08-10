@@ -18,9 +18,11 @@ from src.api.schemas.auth import (
     LoginRequest,
     LogoutResponse,
     RefreshRequest,
+    SsoStatus,
     TokenPair,
 )
 from src.api.schemas.user import UserCreate, UserRead
+from src.core import app_settings
 from src.core.clock import now
 from src.core.config import settings
 from src.core.exceptions import AuthenticationError, ValidationError
@@ -262,8 +264,31 @@ def get_base_url(request: Request) -> str:
     return f"{proto}://{host}"
 
 
+def _require_sso_enabled() -> None:
+    """SSO가 꺼져 있으면 막는다 — 버튼만 살아 있고 실패하는 것보다 명확하다."""
+    if not app_settings.get_bool("sso_enabled"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SSO 로그인이 비활성화되어 있습니다.",
+        )
+
+
+@router.get("/sso/status", response_model=SsoStatus)
+async def sso_status() -> SsoStatus:
+    """로그인 화면이 SSO 버튼을 띄울지 판단하는 공개 정보(인증 불필요).
+
+    IdP 값이 비어 있으면 켜져 있어도 실패하므로 '설정 완료'까지 함께 본다.
+    """
+    configured = all(
+        app_settings.get_str(k)
+        for k in ("saml_idp_entity_id", "saml_idp_sso_url", "saml_idp_x509cert")
+    )
+    return SsoStatus(enabled=app_settings.get_bool("sso_enabled") and configured)
+
+
 @router.get("/saml/login")
 async def saml_login(request: Request):
+    _require_sso_enabled()
     try:
         base_url = get_base_url(request)
         auth = await init_saml_auth(request, base_url)
@@ -282,6 +307,7 @@ async def saml_acs(
     request: Request,
     session: Annotated[AsyncSession, Depends(get_async_session)],
 ):
+    _require_sso_enabled()
     try:
         form_data = await request.form()
         saml_response_b64 = form_data.get("SAMLResponse")

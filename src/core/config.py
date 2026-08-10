@@ -115,6 +115,9 @@ class Settings(BaseSettings):
 
     # SAML SSO / 프론트엔드 (네이버웍스 로그인 리다이렉트)
     saml_base_url: str = ""  # 운영 공개 베이스 URL (비면 요청 헤더로 추론)
+    # SSO 사용 여부 — 끄면 로그인 화면에서 버튼이 사라지고 SAML 엔드포인트도 막힌다.
+    # IdP 값을 넣기 전(또는 IdP 점검 중)에 버튼만 살아 있으면 사용자는 오류만 본다.
+    sso_enabled: bool = True
     # SAML IdP(네이버웍스) — 관리자 설정에서 덮어쓸 수 있다(app_settings). 여기 값은
     # .env 미설정 시 기본값이다. IdP를 바꾸려고 재배포하지 않아도 되게 하려는 것
     # (2026-08-10: 코드에 하드코딩돼 있어 변경마다 재배포가 필요했다).

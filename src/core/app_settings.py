@@ -47,6 +47,14 @@ SETTING_DEFS: list[SettingDef] = [
     SettingDef("nw_bot_id", "네이버웍스 Bot ID", False, "str", "네이버웍스"),
     # SAML SSO(로그인) — 네이버웍스 "봇"(알림)과 별개다. IdP 콘솔에서 복사해 넣는다.
     SettingDef(
+        "sso_enabled",
+        "SAML SSO 사용",
+        False,
+        "bool",
+        "SSO",
+        help="끄면 로그인 화면의 네이버웍스 버튼이 숨겨지고 SSO 엔드포인트도 막힙니다.",
+    ),
+    SettingDef(
         "saml_idp_entity_id",
         "SAML IdP Entity ID",
         False,

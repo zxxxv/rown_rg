@@ -34,3 +34,13 @@ class ChangePasswordRequest(BaseModel):
 
 class LogoutResponse(BaseModel):
     success: bool = True
+
+
+class SsoStatus(BaseModel):
+    """로그인 화면이 SSO 버튼을 띄울지 — 인증 없이 조회한다.
+
+    켜짐이면서 IdP 3값이 다 채워졌을 때만 true. 버튼만 살아 있고 누르면 실패하는
+    상태를 없애려는 것이다.
+    """
+
+    enabled: bool

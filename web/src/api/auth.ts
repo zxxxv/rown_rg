@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { z } from "zod";
 import { apiClient } from "@/api/client";
 import {
   type LoginInput,
@@ -40,5 +41,18 @@ export function useMe() {
     queryFn: me,
     retry: false,
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+/** SSO 버튼을 띄울지 - 인증 없이 조회한다(켜짐 + IdP 3값 설정 완료일 때만 true). */
+export function useSsoStatus() {
+  return useQuery({
+    queryKey: ["auth", "sso-status"],
+    queryFn: async () => {
+      const data = await apiClient.get<unknown>("auth/sso/status");
+      return z.object({ enabled: z.boolean() }).parse(data);
+    },
+    staleTime: 5 * 60_000,
+    retry: false,
   });
 }
