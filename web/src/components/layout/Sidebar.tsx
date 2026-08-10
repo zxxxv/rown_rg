@@ -6,7 +6,6 @@ import {
   Globe,
   KeyRound,
   Library,
-  Loader2,
   ScrollText,
   Settings2,
   ShieldCheck,
@@ -80,7 +79,9 @@ export function Sidebar({ role, collapsed, onToggleCollapsed, onNavigate }: Side
   return (
     <aside
       className={cn(
-        "flex flex-col border-r border-border bg-bg-secondary transition-[width] duration-200",
+        // 캐럿 브라우징(F7)이 켜져 있으면 메뉴 글자에 입력 커서가 깜박인다 - 내비게이션
+        // 텍스트는 선택 대상이 아니라 선택 자체를 막는다(2026-08-10 지적).
+        "flex select-none flex-col border-r border-border bg-bg-secondary transition-[width] duration-200",
         collapsed ? "w-16" : "w-48 2xl:w-56",
       )}
     >
@@ -116,13 +117,12 @@ export function Sidebar({ role, collapsed, onToggleCollapsed, onNavigate }: Side
 
         {!collapsed && activeProjects.length > 0 ? (
           <div className="mt-3 flex flex-col gap-1 border-t border-border pt-3">
-            <div className="flex items-center justify-between px-3 pb-1">
+            {/* 폴링할 때마다 스피너가 깜박여 시선을 뺏었다 - 진행률 막대가 이미
+                상태를 보여준다(2026-08-10 지적). */}
+            <div className="px-3 pb-1">
               <span className="text-[10px] font-medium uppercase tracking-wide text-fg-tertiary">
                 진행 중
               </span>
-              {activeQuery.isFetching ? (
-                <Loader2 className="h-3 w-3 animate-spin text-fg-tertiary" aria-hidden />
-              ) : null}
             </div>
             {activeProjects.map((p) => (
               <NavLink
