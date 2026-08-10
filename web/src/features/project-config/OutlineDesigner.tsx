@@ -8,6 +8,7 @@ import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { PromptDialog } from "@/features/prompts/PromptDialog";
 import { cn } from "@/lib/utils";
 import { PromptPreviewDialog } from "./PromptPreviewDialog";
 import type { ProjectFormValues } from "./schema";
@@ -495,6 +496,9 @@ function AnalystPicker({
 }) {
   const analystsQuery = useAnalysts();
   const analysts = analystsQuery.data ?? [];
+  // 목차를 짜다 원하는 관점이 없을 때 여기서 바로 만든다 - 프롬프트 화면으로
+  // 나갔다 오면 동선이 끊긴다(초안은 남지만 흐름이 끊기는 건 마찬가지).
+  const [creating, setCreating] = useState(false);
 
   const toggle = (name: string) => {
     // 선택 순서를 보존한다 - 프롬프트에 그 순서로 관점이 실린다(전부 반영).
@@ -549,7 +553,25 @@ function AnalystPicker({
             );
           })
         )}
+        <button
+          type="button"
+          onClick={() => setCreating(true)}
+          className="rounded-full border border-dashed border-fg-tertiary px-2.5 py-1 text-xs text-fg-secondary hover:border-accent hover:text-fg"
+        >
+          + 새 에이전트
+        </button>
       </div>
+      {creating ? (
+        <PromptDialog
+          kind="agent"
+          onClose={() => setCreating(false)}
+          onSaved={(p) => {
+            // 만든 즉시 이 절에 배정 - 목록 갱신은 캐시 무효화가 처리한다.
+            if (!selected.includes(p.name)) onChange([...selected, p.name]);
+            setCreating(false);
+          }}
+        />
+      ) : null}
     </details>
   );
 }

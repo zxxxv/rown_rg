@@ -17,6 +17,7 @@ import { defaultsForPreset, presetLabel } from "./presets";
 import { RulePicker } from "./RulePicker";
 import { SourceChannels } from "./SourceChannels";
 import { ProjectFormSchema, type ProjectFormValues } from "./schema";
+import { clearProjectDraft, useProjectDraft } from "./useFormDraft";
 
 export type ProjectConfigFormMode = "create" | "edit";
 
@@ -55,6 +56,9 @@ export function ProjectConfigForm({
     formState: { dirtyFields, isSubmitting },
   } = form;
   const isEdit = mode === "edit";
+  // 생성 폼은 순수 메모리 상태라 잠깐 다른 화면에 다녀오거나 새로고침만 해도
+  // 목차 편집이 통째로 날아갔다 - 브라우저에 초안을 남긴다(수정 모드는 서버가 진실).
+  const draft = useProjectDraft(form, !isEdit);
 
   const onPresetChange = (preset: string | null) => {
     const current = getValues();
@@ -81,6 +85,7 @@ export function ProjectConfigForm({
       }
     }
     await onSubmit?.(values);
+    if (!isEdit) clearProjectDraft(); // 저장됐으면 초안은 역할이 끝났다
   });
 
   return (
@@ -92,6 +97,16 @@ export function ProjectConfigForm({
         className={cn("grid grid-cols-1 gap-6", !isEdit && "lg:grid-cols-[minmax(0,1fr)_320px]")}
       >
         <div className="flex flex-col gap-8">
+          {draft.restored ? (
+            <div className="flex flex-wrap items-center gap-2 rounded border border-accent/40 bg-bg-info px-3 py-2">
+              <p className="text-xs text-fg-secondary">
+                작성하던 내용을 복원했습니다. 새로 시작하려면 초안을 비우세요.
+              </p>
+              <Button type="button" variant="ghost" size="sm" onClick={draft.discard}>
+                초안 비우기
+              </Button>
+            </div>
+          ) : null}
           <Section number={1} title="기본 정보" badge={isEdit ? "수정 불가" : undefined}>
             <BasicInfo readOnly={isEdit} />
           </Section>
