@@ -381,10 +381,26 @@ export const MyTokenUsageSchema = z.object({
 export type MyTokenUsage = z.infer<typeof MyTokenUsageSchema>;
 
 // 마이페이지 - 비밀번호 변경
+/** 비밀번호 규칙 - 백엔드 password_handler와 같은 값이어야 한다.
+ * (프론트 8자 / 백엔드 12자로 어긋나 있어 통과시켜 놓고 서버가 거절했다) */
+export const PASSWORD_RULES: { label: string; test: (v: string) => boolean }[] = [
+  { label: "12자 이상", test: (v) => v.length >= 12 },
+  { label: "대문자", test: (v) => /[A-Z]/.test(v) },
+  { label: "소문자", test: (v) => /[a-z]/.test(v) },
+  { label: "숫자", test: (v) => /[0-9]/.test(v) },
+  { label: "특수문자(!@#$%^&* 등)", test: (v) => /[!@#$%^&*(),.?":{}|<>]/.test(v) },
+];
+
 export const ChangePasswordInputSchema = z
   .object({
     current_password: z.string().min(1, "현재 비밀번호를 입력하세요"),
-    new_password: z.string().min(8, "새 비밀번호는 8자 이상이어야 합니다"),
+    new_password: z.string().superRefine((v, ctx) => {
+      // 첫 위반만 알리면 고칠 때마다 다음 규칙이 튀어나온다 - 한 번에 다 말한다.
+      const missing = PASSWORD_RULES.filter((r) => !r.test(v)).map((r) => r.label);
+      if (missing.length > 0) {
+        ctx.addIssue({ code: "custom", message: `부족한 항목: ${missing.join(", ")}` });
+      }
+    }),
     confirm_password: z.string().min(1, "새 비밀번호를 한 번 더 입력하세요"),
   })
   .refine((v) => v.new_password === v.confirm_password, {
