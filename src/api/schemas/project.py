@@ -122,6 +122,10 @@ class SourceItemRead(BaseModel):
     has_content: bool = False
     # 라이브러리에서 불러온 자료의 원본 노드 id — 트리에서 '이미 추가됨'을 표시하는 근거.
     library_node_id: UUID | None = None
+    # 색인이 뒤에서 도는 중인지(업로드 직후). 화면은 '색인 중' 배지를 띄우고 새로고침한다.
+    indexing: bool = False
+    # 색인 실패 사유(사람이 읽는 한 줄). 실패를 조용히 삼키면 0조각 자료가 방치된다.
+    index_error: str | None = None
     created_at: datetime
 
 

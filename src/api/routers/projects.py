@@ -1,3 +1,4 @@
+import asyncio
 import re
 from pathlib import Path
 from typing import Annotated
@@ -67,6 +68,7 @@ from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from src.db.models.user_prompt import UserPrompt
 from src.db.models.verify_finding import VerifyFinding
+from src.db.session import async_session_maker
 from src.prompts import list_presets, load_preset
 from src.services.generation.planner import MAX_SECTIONS
 from src.services.indexing.vector import SourceInput
@@ -636,7 +638,14 @@ def _to_source_item(row: ProjectSource) -> SourceItemRead:
     if row.source_type in _FILE_SOURCE_LABEL:
         chunks = int(meta.get("chunks") or 0)
         label = _FILE_SOURCE_LABEL[row.source_type]
-        preview = f"{label} · {chunks}개 조각으로 색인됨" if chunks else f"{label} · 색인 대기"
+        indexing = bool(meta.get("indexing"))
+        index_error = meta.get("index_error")
+        if indexing:
+            preview = f"{label} · 색인 중… (수백 페이지 PDF는 몇 분 걸립니다)"
+        elif index_error:
+            preview = f"{label} · 색인 실패"
+        else:
+            preview = f"{label} · {chunks}개 조각으로 색인됨" if chunks else f"{label} · 색인 대기"
         return SourceItemRead(
             id=row.id,
             source_type=row.source_type,
@@ -647,6 +656,8 @@ def _to_source_item(row: ProjectSource) -> SourceItemRead:
             preview=preview,
             has_content=chunks > 0,
             library_node_id=row.library_node_id,
+            indexing=indexing,
+            index_error=index_error,
             created_at=row.created_at,
         )
     content_md = meta.get("content_md") or ""
@@ -767,6 +778,91 @@ async def delete_project_source(
     await session.flush()
 
 
+# 색인 백그라운드 태스크 참조 — GC로 사라지지 않게 붙잡아 둔다.
+_INDEX_TASKS: set[asyncio.Task] = set()
+
+
+async def _index_in_background(source: SourceInput, error_context: str) -> None:
+    """업로드/라이브러리 자료를 요청 밖에서 색인하고 결과를 행 메타에 남긴다.
+
+    수백 페이지 PDF는 파싱·임베딩에 수 분이 걸린다. 요청 안에서 처리하면 프론트
+    타임아웃에 걸려 '실패'로 보이지만 실제로는 뒤에서 끝나 있었다(2026-08-10 지적).
+    placeholder 행을 먼저 만들고 여기서 채우므로 화면은 '색인 중'을 보여줄 수 있다.
+    """
+    from src.services.indexing.vector import build_vector_indexing_service
+
+    error: str | None = None
+    try:
+        await build_vector_indexing_service().index_source(source)
+    except Exception as exc:
+        error = _index_error_message(exc)
+        logger.warning("source.index_failed_bg", context=error_context, exc_info=True)
+    async with async_session_maker() as session:
+        row = (
+            await session.execute(
+                select(ProjectSource).where(
+                    ProjectSource.project_id == source.project_id,
+                    ProjectSource.upload_path == source.upload_path
+                    if source.upload_path
+                    else ProjectSource.library_node_id == source.library_node_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is not None:
+            meta = dict(row.metadata_ or {})
+            meta["indexing"] = False
+            if error:
+                meta["index_error"] = error
+            else:
+                meta.pop("index_error", None)
+            row.metadata_ = meta
+            await session.commit()
+
+
+def _index_error_message(exc: BaseException) -> str:
+    """색인 실패를 사람이 읽을 수 있는 한 줄로(원인 코드는 노출하지 않는다)."""
+    from src.clients.parser import UnsupportedFormatError
+
+    if isinstance(exc, UnsupportedFormatError):
+        return "지원하지 않는 파일 형식입니다(PDF·HWPX·DOCX·MD·TXT만 색인할 수 있습니다)."
+    if isinstance(exc, BadZipFile):
+        return (
+            "HWPX/DOCX 형식이 아닙니다. 확장자만 바꾼 구형 .hwp 파일일 수 있습니다 — "
+            "한컴오피스에서 열어 '다른 이름으로 저장 → HWPX(*.hwpx)'로 변환해 주세요."
+        )
+    return "자료를 색인하지 못했습니다. 파일이 손상되지 않았는지 확인해 주세요."
+
+
+async def _placeholder_source(session: AsyncSession, source: SourceInput) -> ProjectSource:
+    """색인 전 자리 행 — 화면이 즉시 목록에 띄우고 '색인 중'을 표시한다."""
+    row = (
+        await session.execute(
+            select(ProjectSource).where(
+                ProjectSource.project_id == source.project_id,
+                ProjectSource.upload_path == source.upload_path
+                if source.upload_path
+                else ProjectSource.library_node_id == source.library_node_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = ProjectSource(
+            project_id=source.project_id,
+            library_node_id=source.library_node_id,
+            upload_path=source.upload_path,
+            source_type=source.source_type,
+            title=source.title,
+            url=source.url,
+            reliability=source.reliability,
+        )
+        session.add(row)
+    row.metadata_ = {**(row.metadata_ or {}), "indexing": True, "index_error": None}
+    row.metadata_.pop("index_error")
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
 async def _index_file_source(
     session: AsyncSession,
     source: SourceInput,
@@ -842,17 +938,21 @@ async def upload_project_source(
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{uuid4()}_{safe_name}"
     dest.write_bytes(content)
-    row = await _index_file_source(
-        session,
-        SourceInput(
-            project_id=project.id,
-            source_type="upload",
-            file_path=dest,
-            upload_path=str(dest),
-            title=safe_name,
-        ),
-        error_context=f"upload:{project.id}:{safe_name}",
+    source = SourceInput(
+        project_id=project.id,
+        source_type="upload",
+        file_path=dest,
+        upload_path=str(dest),
+        title=safe_name,
     )
+    # 수백 페이지 PDF는 파싱·임베딩이 수 분이다 — 요청 안에서 처리하면 프론트
+    # 타임아웃에 걸려 '실패'로 보인다(실제로는 뒤에서 끝나 있었다). 자리 행을 먼저
+    # 돌려주고 색인은 뒤에서 돈다.
+    row = await _placeholder_source(session, source)
+    await session.commit()
+    task = asyncio.create_task(_index_in_background(source, f"upload:{project.id}:{safe_name}"))
+    _INDEX_TASKS.add(task)
+    task.add_done_callback(_INDEX_TASKS.discard)
     return _to_source_item(row)
 
 
@@ -1157,13 +1257,21 @@ def _citation_numbers(content: str) -> list[int]:
 
 
 def _citations_from_numbers(
-    numbers: list[int], sources_ordered: list[ProjectSource]
+    numbers: list[int],
+    sources_ordered: list[ProjectSource],
+    *,
+    renumbered: bool = True,
 ) -> list[SectionCitation]:
     """전역 번호 → 채택 자료 목록(수집 순서) 직해석.
 
     조립 시 renumber가 본문 번호를 이 순서로 재매핑하므로(출처 최종장과 동일),
-    번호 n = sources_ordered[n-1]이다. 범위 밖 번호(수동 편집 잔재)는 불명 처리.
+    번호 n = sources_ordered[n-1]이다.
+
+    renumbered=False(조립 전)면 본문의 [n]은 아직 그 절이 검색해 온 청크 풀의
+    인덱스라, 채택 자료 수를 넘는 번호가 정상적으로 나온다. 그걸 '출처 불명'으로
+    보여주면 사용자가 오류로 오해하므로(2026-08-10 지적) 문구를 구분한다.
     """
+    unknown = "(출처 불명 - 번호 범위 밖)" if renumbered else "(조립 후 번호가 확정됩니다)"
     citations: list[SectionCitation] = []
     for n in sorted(numbers):
         if 1 <= n <= len(sources_ordered):
@@ -1178,11 +1286,22 @@ def _citations_from_numbers(
                 )
             )
         else:
-            citations.append(SectionCitation(number=n, title="(출처 불명 - 번호 범위 밖)"))
+            citations.append(SectionCitation(number=n, title=unknown))
     return citations
 
 
-async def _section_citations(session: AsyncSession, row: Section) -> list[SectionCitation]:
+def _is_renumbered(project: Project) -> bool:
+    """본문 인용 번호가 출처장 기준으로 확정됐는가 — 조립(assemble)을 지났는가.
+
+    renumber는 assemble 단계에서 돈다(workflows/stages.py). 그 전에는 절-로컬
+    번호라 채택 자료 수를 넘을 수 있다.
+    """
+    return project.status in (ProjectStage.COMPLETED.value, ProjectStage.ARCHIVED.value)
+
+
+async def _section_citations(
+    session: AsyncSession, row: Section, *, renumbered: bool = True
+) -> list[SectionCitation]:
     """본문의 전역 인용 번호 [n]을 출처(제목·URL·신뢰도) 목록으로 푼다.
 
     번호 체계 = 채택 자료의 수집 순서(renumber·출처 최종장과 동일 단일 진실).
@@ -1204,7 +1323,7 @@ async def _section_citations(session: AsyncSession, row: Section) -> list[Sectio
         .scalars()
         .all()
     )
-    return _citations_from_numbers(numbers, list(sources_ordered))
+    return _citations_from_numbers(numbers, list(sources_ordered), renumbered=renumbered)
 
 
 async def _ungrounded_numbers(session: AsyncSession, row: Section) -> UngroundedNumbers:
@@ -1261,7 +1380,7 @@ async def get_section_content(
     row = await _get_section(session, project.id, section_id)
     return _section_content(
         row,
-        await _section_citations(session, row),
+        await _section_citations(session, row, renumbered=_is_renumbered(project)),
         await _ungrounded_numbers(session, row),
     )
 
@@ -1286,7 +1405,7 @@ async def update_section_content(
     await session.refresh(row)
     return _section_content(
         row,
-        await _section_citations(session, row),
+        await _section_citations(session, row, renumbered=_is_renumbered(project)),
         await _ungrounded_numbers(session, row),
     )
 
@@ -1359,7 +1478,7 @@ async def rewrite_section(
     await session.refresh(row)
     return _section_content(
         row,
-        await _section_citations(session, row),
+        await _section_citations(session, row, renumbered=_is_renumbered(project)),
         await _ungrounded_numbers(session, row),
     )
 
@@ -1415,6 +1534,6 @@ async def rewrite_section_block(
     await session.refresh(row)
     return _section_content(
         row,
-        await _section_citations(session, row),
+        await _section_citations(session, row, renumbered=_is_renumbered(project)),
         await _ungrounded_numbers(session, row),
     )

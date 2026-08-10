@@ -170,6 +170,9 @@ export const SourceSchema = z.object({
   /** 이 출처가 매칭된 목차 절 제목들(수집 LLM 판정) - 검토 화면 '관련 목차' 표시용 */
   matched_sections: z.array(z.string()).optional(),
   library_file_id: z.string().optional(),
+  /** 색인이 뒤에서 도는 중(업로드 직후) - 목록 폴링·'색인 중' 배지의 근거 */
+  indexing: z.boolean().optional(),
+  index_error: z.string().optional(),
 });
 export type Source = z.infer<typeof SourceSchema>;
 

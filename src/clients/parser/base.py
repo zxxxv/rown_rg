@@ -88,6 +88,31 @@ def _strip_page_numbers(markdown: str) -> str:
     return _PAGE_NUMBER_LINE.sub("", markdown)
 
 
+# 글리프를 유니코드로 못 되돌린 자리에 남는 대체 문자(U+FFFD, ). PDF 추출에서
+# 흔하다(실측 2026-08-10: 정부 PDF 본문의 최대 2.4%). 화면에 보기 흉할 뿐 아니라
+# 임베딩·인용 원문에도 그대로 들어가므로 파싱 단계에서 걷어낸다.
+_REPLACEMENT_CHAR = "�"
+# 한 줄이 이 비율 이상 깨졌으면 남은 글자도 못 믿는다 — 줄째로 버린다.
+_LINE_GARBLED_RATIO = 0.3
+
+
+def strip_replacement_chars(markdown: str) -> str:
+    """대체 문자 제거. 심하게 깨진 줄은 통째로 버린다(부분 제거는 단어를 뭉갠다)."""
+    if _REPLACEMENT_CHAR not in markdown:
+        return markdown
+    out: list[str] = []
+    for line in markdown.split(chr(10)):
+        bad = line.count(_REPLACEMENT_CHAR)
+        if not bad:
+            out.append(line)
+            continue
+        stripped = line.strip()
+        if stripped and bad / len(stripped) >= _LINE_GARBLED_RATIO:
+            continue
+        out.append(line.replace(_REPLACEMENT_CHAR, ""))
+    return chr(10).join(out)
+
+
 def _extract_cells(line: str) -> list[str]:
     s = line.strip()
     if s.startswith("|"):

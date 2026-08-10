@@ -23,12 +23,17 @@ from src.clients.parser.base import (
     _filter_empty_tables,
     _measure_markdown,
     _strip_page_numbers,
+    strip_replacement_chars,
 )
 
 logger = structlog.get_logger(__name__)
 
 
 _DOCLING_CONVERTER: object | None = None
+# docling을 이 프로세스에서 못 쓰는 이유(시스템 라이브러리 부재 등). 한 번 확인되면
+# 다시 시도하지 않는다 — 매 PDF마다 초기화에 실패하며 15초씩 버렸다(2026-08-10 실측:
+# libxcb1 미설치 환경). 파일별 실패(타임아웃 등)는 여기 해당하지 않는다.
+_DOCLING_UNAVAILABLE: str | None = None
 
 # Daemon worker tracking — process exit 시 PdfDocument cleanup 충돌(SIGABRT) 완화용.
 _active_docling_workers: list[threading.Thread] = []
@@ -112,6 +117,26 @@ def _pymupdf_convert(file_path: Path) -> tuple[str, int | None, int]:
     finally:
         src.close()
     return markdown, page_count, image_count
+
+
+def _disable_docling(reason: str, detail: str) -> None:
+    """이 프로세스에서 docling 사용을 끈다 — 이후 PDF는 곧장 pymupdf로."""
+    global _DOCLING_UNAVAILABLE
+    _DOCLING_UNAVAILABLE = reason
+    logger.warning("pdf.parse.docling_disabled_for_process", reason=reason, error_message=detail)
+
+
+def _is_environment_failure(exc: BaseException) -> bool:
+    """이 프로세스에서 docling을 아예 못 쓰는 실패인가(파일별 실패와 구분).
+
+    시스템 공유 라이브러리 부재(libxcb1 등)나 import 실패는 파일을 바꿔도 똑같이
+    난다. 이걸 파일별 실패로 취급하면 업로드마다 초기화에 15초씩 버린다.
+    """
+    if isinstance(exc, ImportError | ModuleNotFoundError):
+        return True
+    if isinstance(exc, OSError) and "cannot open shared object file" in str(exc):
+        return True
+    return False
 
 
 class PdfParser(ParserClient):
@@ -261,6 +286,10 @@ class PdfParser(ParserClient):
             warnings.append("skip_docling_too_large")
             return _pymupdf_convert(path)
 
+        if _DOCLING_UNAVAILABLE is not None:
+            warnings.append(f"skip_docling_unavailable:{_DOCLING_UNAVAILABLE}")
+            return _pymupdf_convert(path)
+
         timeout_s = (
             self._small_pdf_timeout_s
             if size_bytes < self._small_pdf_max_bytes
@@ -285,6 +314,9 @@ class PdfParser(ParserClient):
                 error_type=type(e).__name__,
                 error_message=str(e),
             )
+            if _is_environment_failure(e):
+                # 환경 문제는 다음 파일에서도 똑같이 난다 — 프로세스 내내 건너뛴다.
+                _disable_docling(type(e).__name__, str(e))
             warnings.append(f"fallback_to_pymupdf4llm:{type(e).__name__}")
             return _pymupdf_convert(path)
 
@@ -343,6 +375,6 @@ class PdfParser(ParserClient):
     @staticmethod
     def _postprocess(markdown: str) -> str:
         # HwpxParser 후처리와 동일 정책으로 일관성 유지.
-        markdown = _strip_page_numbers(markdown)
+        markdown = strip_replacement_chars(_strip_page_numbers(markdown))
         markdown = _filter_empty_tables(markdown)
         return markdown

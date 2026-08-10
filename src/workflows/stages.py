@@ -22,6 +22,7 @@ import structlog
 from src.clients.llm.base import LLMClient
 from src.clients.llm.exceptions import LLMClientError
 from src.clients.llm.token_tracker import token_context
+from src.clients.parser.base import strip_replacement_chars
 from src.core import app_settings
 from src.core.config import settings
 from src.core.state import ProjectState
@@ -87,7 +88,7 @@ def clean_web_markdown(md: str) -> str:
     추적 스크립트(GTM iframe) 잔재가 본문 앞에 붙는다(2026-08-03 실측). 머리말을
     벗기고, 이미지와 링크만으로 이뤄진 줄을 걷어내 문장이 있는 줄만 남긴다.
     """
-    md = strip_web_frontmatter(md)
+    md = strip_replacement_chars(strip_web_frontmatter(md))
     kept: list[str] = []
     for line in md.splitlines():
         if any(marker in line for marker in _BOILERPLATE_MARKERS):

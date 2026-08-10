@@ -21,6 +21,9 @@ export const SourceItemSchema = z.object({
   has_content: z.boolean(),
   // 라이브러리에서 불러온 자료면 원본 노드 id - 트리에서 '추가됨' 표시에 쓴다
   library_node_id: z.string().nullish(),
+  /** 색인이 뒤에서 도는 중 - 목록은 이 값이 있는 동안 자동 새로고침한다 */
+  indexing: z.boolean().default(false),
+  index_error: z.string().nullish(),
   created_at: z.string(),
 });
 export type SourceItem = z.infer<typeof SourceItemSchema>;
@@ -52,6 +55,8 @@ function toLegacySource(projectId: string, s: SourceItem): Source {
     preview: s.preview ?? undefined,
     matched_sections: s.matched_sections,
     library_file_id: s.library_node_id ?? undefined,
+    indexing: s.indexing,
+    index_error: s.index_error ?? undefined,
   };
 }
 
@@ -72,7 +77,13 @@ export function useProjectSources(projectId: string, opts?: { refetchInterval?: 
     queryFn: () => getProjectSources(projectId),
     enabled: Boolean(projectId),
     // 추가 검색이 백그라운드에서 도는 동안 목록을 폴링으로 따라잡는 용도.
-    refetchInterval: opts?.refetchInterval ?? false,
+    // 색인 중인 자료가 있으면(업로드 직후) 끝날 때까지 스스로 따라간다 -
+    // "올리고 새로고침하세요"를 사용자에게 시키지 않는다.
+    refetchInterval: (query) => {
+      const items = query.state.data?.items;
+      if (items?.some((s) => s.indexing)) return 4000;
+      return opts?.refetchInterval ?? false;
+    },
   });
 }
 
@@ -134,6 +145,9 @@ export function useUploadProjectSource(projectId: string) {
       fd.append("file", file);
       const data = await apiClient.post<unknown>(`projects/${projectId}/sources/upload`, {
         body: fd,
+        // 업로드 자체(수십 MB)는 기본 30초로 부족할 수 있다. 색인은 뒤에서 도므로
+        // 이 요청은 파일 전송 + 자리 행 생성까지만 기다린다.
+        timeout: 120_000,
       });
       return toLegacySource(projectId, SourceItemSchema.parse(data));
     },

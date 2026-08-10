@@ -22,6 +22,7 @@ from src.clients.parser.base import (
     _filter_empty_tables,
     _measure_markdown,
     _strip_page_numbers,
+    strip_replacement_chars,
 )
 
 logger = structlog.get_logger(__name__)
@@ -111,6 +112,6 @@ class DocxParser(ParserClient):
     @staticmethod
     def _postprocess(markdown: str) -> str:
         # HWPX/PDF 후처리와 동일 정책으로 일관성 유지.
-        markdown = _strip_page_numbers(markdown)
+        markdown = strip_replacement_chars(_strip_page_numbers(markdown))
         markdown = _filter_empty_tables(markdown)
         return markdown
