@@ -140,6 +140,10 @@ function SettingRow({ item }: { item: SettingItem }) {
   };
 
   const onClear = () => void save("");
+  // 비밀값은 저장 후 칸이 비므로 '변경 있음'이 자명하다. 일반값은 값이 남아 있어
+  // 눌러도 화면이 그대로라 저장 여부를 알 수 없었다(2026-08-10 지적) - 바뀐 게
+  // 없으면 버튼을 잠가 "누를 게 없음"을 눈에 보이게 한다.
+  const unchanged = !item.is_secret && value.trim() === (item.value ?? "").trim();
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -198,10 +202,11 @@ function SettingRow({ item }: { item: SettingItem }) {
             <Button
               size="sm"
               onClick={() => void save(value)}
-              disabled={update.isPending || value.trim() === ""}
+              disabled={update.isPending || value.trim() === "" || unchanged}
+              title={unchanged ? "저장된 값과 같습니다" : undefined}
             >
               <Save className="mr-1 h-3.5 w-3.5" />
-              저장
+              {unchanged ? "저장됨" : "저장"}
             </Button>
           </>
         )}
