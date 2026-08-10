@@ -18,6 +18,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/useAuth";
 
 // 알림용 자격증명 그룹 - 로그인(SSO)엔 불필요라 기본 접어둔다.
@@ -163,10 +165,30 @@ function SettingRow({ item }: { item: SettingItem }) {
             미설정
           </Badge>
         )}
+        {unchanged && item.configured ? (
+          <span className="text-[10px] text-fg-tertiary">저장된 값과 같음</span>
+        ) : null}
         <span className="ml-auto font-mono text-[10px] text-fg-tertiary">{item.key}</span>
       </div>
       <div className="flex items-center gap-2">
-        {item.kind === "enum" && item.options ? (
+        {item.kind === "bool" ? (
+          // 켜고 끄는 값 - 토글이 곧 의도라 선택 즉시 저장한다(드롭다운과 같은 규칙).
+          <div className="flex items-center gap-2">
+            <Switch
+              id={`set-${item.key}`}
+              checked={value === "true"}
+              disabled={update.isPending}
+              onCheckedChange={(on) => {
+                const next = on ? "true" : "false";
+                setValue(next);
+                void save(next);
+              }}
+            />
+            <span className="text-sm text-fg-secondary">
+              {value === "true" ? "사용" : "사용 안 함"}
+            </span>
+          </div>
+        ) : item.kind === "enum" && item.options ? (
           // 드롭다운은 선택 즉시 저장(선택=의도). 자유입력·오타 방지.
           <Select
             value={value || undefined}
@@ -188,29 +210,44 @@ function SettingRow({ item }: { item: SettingItem }) {
           </Select>
         ) : (
           <>
-            <Input
-              id={`set-${item.key}`}
-              type={item.is_secret ? "password" : "text"}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder={
-                item.is_secret ? (item.configured ? "변경하려면 새 값 입력" : "값 입력") : "값 입력"
-              }
-              className="font-mono"
-              autoComplete="off"
-            />
+            {item.kind === "text" ? (
+              // 인증서처럼 긴 값 - 한 줄 입력으론 확인도 수정도 안 된다.
+              <Textarea
+                id={`set-${item.key}`}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="값 입력(BEGIN/END 줄 제외, 내용만)"
+                className="min-h-[96px] font-mono text-xs"
+                autoComplete="off"
+              />
+            ) : (
+              <Input
+                id={`set-${item.key}`}
+                type={item.is_secret ? "password" : "text"}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder={
+                  item.is_secret
+                    ? item.configured
+                      ? "변경하려면 새 값 입력"
+                      : "값 입력"
+                    : "값 입력"
+                }
+                className="font-mono"
+                autoComplete="off"
+              />
+            )}
             <Button
               size="sm"
               onClick={() => void save(value)}
-              disabled={update.isPending || value.trim() === "" || unchanged}
-              title={unchanged ? "저장된 값과 같습니다" : undefined}
+              disabled={update.isPending || value.trim() === ""}
             >
               <Save className="mr-1 h-3.5 w-3.5" />
-              {unchanged ? "저장됨" : "저장"}
+              저장
             </Button>
           </>
         )}
-        {item.source === "db" ? (
+        {item.source === "db" && item.kind !== "bool" ? (
           <Button
             variant="ghost"
             size="sm"

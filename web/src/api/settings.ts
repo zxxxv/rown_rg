@@ -9,7 +9,8 @@ export const SettingItemSchema = z.object({
   key: z.string(),
   label: z.string(),
   group: z.string(),
-  kind: z.enum(["str", "number", "bool", "enum"]),
+  // text = 여러 줄(인증서처럼 긴 값). 화면이 textarea로 렌더한다.
+  kind: z.enum(["str", "text", "number", "bool", "enum"]),
   is_secret: z.boolean(),
   configured: z.boolean(),
   source: z.enum(["db", "env", "none"]),

@@ -12,7 +12,7 @@ class SettingItem(BaseModel):
     key: str
     label: str
     group: str
-    kind: str  # str | number | bool | enum
+    kind: str  # str | text(여러 줄) | number | bool | enum
     is_secret: bool
     configured: bool  # 값이 설정돼 있는지(설정됨/미설정)
     source: str  # "db"(관리자 입력) | "env" | "none"

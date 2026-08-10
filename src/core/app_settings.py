@@ -26,7 +26,7 @@ class SettingDef:
     key: str
     label: str
     secret: bool
-    kind: str  # "str" | "number" | "bool" | "enum"
+    kind: str  # "str" | "text"(여러 줄) | "number" | "bool" | "enum"
     group: str
     help: str = ""
     # kind="enum"일 때만 사용 — (값, 표시라벨) 쌍. 프론트가 드롭다운으로 렌더한다.
@@ -74,7 +74,7 @@ SETTING_DEFS: list[SettingDef] = [
         "saml_idp_x509cert",
         "SAML IdP 인증서",
         False,
-        "str",
+        "text",
         "SSO",
         help="Certificate 파일 내용을 한 줄로(BEGIN/END 줄 제외)",
     ),
