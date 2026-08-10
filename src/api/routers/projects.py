@@ -792,8 +792,9 @@ async def _index_in_background(source: SourceInput, error_context: str) -> None:
     from src.services.indexing.vector import build_vector_indexing_service
 
     error: str | None = None
+    indexed: object | None = None
     try:
-        await build_vector_indexing_service().index_source(source)
+        indexed = await build_vector_indexing_service().index_source(source)
     except Exception as exc:
         error = _index_error_message(exc)
         logger.warning("source.index_failed_bg", context=error_context, exc_info=True)
@@ -811,6 +812,8 @@ async def _index_in_background(source: SourceInput, error_context: str) -> None:
         if row is not None:
             meta = dict(row.metadata_ or {})
             meta["indexing"] = False
+            if indexed is not None:
+                meta.update(_index_meta(source, indexed))
             if error:
                 meta["index_error"] = error
             else:
@@ -863,6 +866,26 @@ async def _placeholder_source(session: AsyncSession, source: SourceInput) -> Pro
     return row
 
 
+def _index_meta(source: SourceInput, result: object) -> dict:
+    """색인 결과에서 자료 메타를 만든다 — 라이브러리 목록의 크기·페이지 열이 이걸 읽는다.
+
+    업로드 자료는 본문(content_md)이 없고 디스크에 파일로 있어, 크기를 여기서
+    재두지 않으면 목록에 0 B로 뜬다(상위 폴더 합계도 0). 페이지 수는 파서만 안다.
+    """
+    meta: dict = {
+        "origin": source.source_type,
+        "chunks": getattr(result, "chunks_created", 0),
+    }
+    pages = getattr(result, "page_count", None)
+    if pages:
+        meta["page_count"] = pages
+    try:
+        meta["size_bytes"] = Path(source.file_path).stat().st_size
+    except OSError:
+        pass
+    return meta
+
+
 async def _index_file_source(
     session: AsyncSession,
     source: SourceInput,
@@ -908,8 +931,7 @@ async def _index_file_source(
     ).scalar_one()
     row.metadata_ = {
         **(row.metadata_ or {}),
-        "origin": source.source_type,
-        "chunks": result.chunks_created,
+        **_index_meta(source, result),
     }
     await session.flush()
     return row

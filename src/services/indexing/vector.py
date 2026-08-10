@@ -84,6 +84,9 @@ class IndexingResult(BaseModel):
     chunks_created: int
     parse_cached: bool
     elapsed_ms: float
+    # 파서가 읽은 페이지 수(PDF 등). 라이브러리 목록의 '페이지' 열이 이 값을 쓴다 —
+    # 색인 때 말고는 알 수 없어 여기서 실어 보낸다(2026-08-10: 계속 '-'로 비어 있었다).
+    page_count: int | None = None
 
 
 class VectorIndexingService:
@@ -166,6 +169,7 @@ class VectorIndexingService:
                 chunks_created=0,
                 parse_cached=parse_result.cached,
                 elapsed_ms=elapsed,
+                page_count=parse_result.metadata.page_count,
             )
 
         # 본문 임베딩은 외부 I/O — DB 세션 밖에서. BGE-M3 자체 캐시가 재실행 시 비용을 흡수.
@@ -197,6 +201,7 @@ class VectorIndexingService:
             elapsed_ms=round(elapsed, 1),
         )
         return IndexingResult(
+            page_count=parse_result.metadata.page_count,
             source_id=source_id,
             chunks_created=len(chunks),
             parse_cached=parse_result.cached,

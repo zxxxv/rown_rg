@@ -122,7 +122,29 @@ _SOURCE_GROUPS: list[tuple[str, str, str]] = [
 _REGISTERED_BY = {"web_search": "AI 수집", "library": "라이브러리 참조"}
 
 
-def _source_file(src: ProjectSource, pid: UUID, owner_name: str) -> LibraryTreeFile:
+def _source_size(src: ProjectSource, content_md: str, node_sizes: dict[UUID, int]) -> int:
+    """자료 1건의 표시 크기.
+
+    ① 색인 때 기록한 값 ② 업로드 파일이면 디스크에서 즉시 측정 ③ 라이브러리 참조면
+    원본 노드의 크기 ④ 웹 수집이면 본문 바이트 길이. ②③은 옛 자료(기록 없음)도
+    재색인 없이 보이게 하려는 폴백이다.
+    """
+    recorded = int((src.metadata_ or {}).get("size_bytes") or 0)
+    if recorded:
+        return recorded
+    if src.upload_path:
+        try:
+            return Path(src.upload_path).stat().st_size
+        except OSError:
+            return 0
+    if src.library_node_id is not None:
+        return node_sizes.get(src.library_node_id, 0)
+    return len(content_md.encode("utf-8"))
+
+
+def _source_file(
+    src: ProjectSource, pid: UUID, owner_name: str, node_sizes: dict[UUID, int] | None = None
+) -> LibraryTreeFile:
     """project_sources 1건 → 가상 파일 노드(읽기전용). 원본 복사 없이 참조만."""
     name = src.title or src.url or f"{src.source_type} 자료"
     # AI 수집 자료의 원문(content_md)은 수집 시점 metadata_에 저장돼 있다(web.py stage()).
@@ -143,8 +165,11 @@ def _source_file(src: ProjectSource, pid: UUID, owner_name: str) -> LibraryTreeF
         download_url=download_url,
         content_url=content_url,
         file_meta=LibraryFileMeta(
-            # 물리 파일이 없으므로 수집 본문의 UTF-8 바이트 길이를 크기로 쓴다(0 하드코딩 폐지).
-            size_bytes=len(content_md.encode("utf-8")),
+            # 웹 수집은 물리 파일이 없어 본문 바이트 길이를, 업로드·라이브러리 참조는
+            # 색인 때 기록한 실제 파일 크기를 쓴다. 후자를 안 쓰면 목록이 0 B로 뜨고
+            # 상위 폴더 합계까지 0이 된다(2026-08-10 지적).
+            size_bytes=_source_size(src, content_md, node_sizes or {}),
+            page_count=(src.metadata_ or {}).get("page_count"),
             registered_at=src.created_at,
             registered_by=_REGISTERED_BY.get(src.source_type, owner_name),
             source_kind=src.source_type,
@@ -160,6 +185,7 @@ def _project_folder(
     updated_at: datetime,
     sources: list[ProjectSource],
     owner_name: str,
+    node_sizes: dict[UUID, int] | None = None,
 ) -> LibraryTreeFolder:
     """프로젝트 1건 → 가상 폴더(완성본 + AI수집/업로드/참조). project_sources·export 합성."""
     base = f"proj-{pid}"
@@ -187,7 +213,9 @@ def _project_folder(
 
     for source_type, suffix, label in _SOURCE_GROUPS:
         files: list[LibraryTreeFolder | LibraryTreeFile] = [
-            _source_file(s, pid, owner_name) for s in sources if s.source_type == source_type
+            _source_file(s, pid, owner_name, node_sizes)
+            for s in sources
+            if s.source_type == source_type
         ]
         children.append(
             LibraryTreeFolder(id=f"{base}-{suffix}", name=label, virtual=True, children=files)
@@ -232,8 +260,19 @@ async def _build_projects_folder(
     for s in srcs:
         by_proj[s.project_id].append(s)
 
+    # 라이브러리 참조 자료는 원본 노드가 크기를 안다 — 한 번에 모아 온다(N+1 방지).
+    ref_ids = {s.library_node_id for s in srcs if s.library_node_id is not None}
+    node_sizes: dict[UUID, int] = {}
+    if ref_ids:
+        rows = (
+            await session.execute(
+                select(LibraryNode.id, LibraryNode.file_size).where(LibraryNode.id.in_(ref_ids))
+            )
+        ).all()
+        node_sizes = {nid: int(size or 0) for nid, size in rows}
+
     empty.children = [
-        _project_folder(pid, title, updated_at, by_proj[pid], user_name)
+        _project_folder(pid, title, updated_at, by_proj[pid], user_name, node_sizes)
         for pid, title, updated_at in projs
     ]
     return empty
