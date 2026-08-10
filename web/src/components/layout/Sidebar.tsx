@@ -65,10 +65,13 @@ function visible(role: UserRole, item: NavItem): boolean {
 export interface SidebarProps {
   role: UserRole;
   collapsed: boolean;
-  onToggleCollapsed: () => void;
+  /** 접기 토글 - 모바일 서랍처럼 접을 수 없는 자리에서는 생략한다(버튼도 숨김) */
+  onToggleCollapsed?: () => void;
+  /** 링크로 이동했을 때 - 모바일 서랍이 스스로 닫히게 한다 */
+  onNavigate?: () => void;
 }
 
-export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
+export function Sidebar({ role, collapsed, onToggleCollapsed, onNavigate }: SidebarProps) {
   // 서버 status 필터 사용 - 작성 중(writing) 최신 3건
   const activeQuery = useProjectList({ status: "writing", limit: 3 });
   const activeProjects = activeQuery.data ?? [];
@@ -78,7 +81,7 @@ export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
     <aside
       className={cn(
         "flex flex-col border-r border-border bg-bg-secondary transition-[width] duration-200",
-        collapsed ? "w-16" : "w-60",
+        collapsed ? "w-16" : "w-56",
       )}
     >
       <div
@@ -94,19 +97,21 @@ export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
             로운 리포트
           </span>
         )}
-        <button
-          type="button"
-          onClick={onToggleCollapsed}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-sm text-fg-secondary hover:bg-bg-tertiary"
-          aria-label={collapsed ? "사이드바 펼치기" : "사이드바 접기"}
-        >
-          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-        </button>
+        {onToggleCollapsed ? (
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-sm text-fg-secondary hover:bg-bg-tertiary"
+            aria-label={collapsed ? "사이드바 펼치기" : "사이드바 접기"}
+          >
+            {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+          </button>
+        ) : null}
       </div>
 
       <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2">
         {MAIN_NAV.filter((n) => visible(role, n)).map((item) => (
-          <SideLink key={item.to} item={item} collapsed={collapsed} />
+          <SideLink key={item.to} item={item} collapsed={collapsed} onNavigate={onNavigate} />
         ))}
 
         {!collapsed && activeProjects.length > 0 ? (
@@ -123,6 +128,7 @@ export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
               <NavLink
                 key={p.id}
                 to={`/projects/${p.id}/overview`}
+                onClick={onNavigate}
                 className={({ isActive }) =>
                   cn(
                     "flex flex-col gap-1 rounded px-3 py-1.5 text-xs transition-colors",
@@ -155,7 +161,7 @@ export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
               </div>
             ) : null}
             {ADMIN_NAV.filter((n) => visible(role, n)).map((item) => (
-              <SideLink key={item.to} item={item} collapsed={collapsed} />
+              <SideLink key={item.to} item={item} collapsed={collapsed} onNavigate={onNavigate} />
             ))}
           </div>
         ) : null}
@@ -164,7 +170,15 @@ export function Sidebar({ role, collapsed, onToggleCollapsed }: SidebarProps) {
   );
 }
 
-function SideLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
+function SideLink({
+  item,
+  collapsed,
+  onNavigate,
+}: {
+  item: NavItem;
+  collapsed: boolean;
+  onNavigate?: () => void;
+}) {
   if (item.disabled) {
     return (
       <span
@@ -190,6 +204,7 @@ function SideLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
   return (
     <NavLink
       to={item.to}
+      onClick={onNavigate}
       end={item.to === "/projects"}
       className={({ isActive }) =>
         cn(

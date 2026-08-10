@@ -1,4 +1,4 @@
-import { LogOut, Sparkles } from "lucide-react";
+import { LogOut, Menu, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { Link, Outlet, useSearchParams } from "react-router-dom";
@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import type { UserRole } from "@/components/auth/RequireAuth";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
 export interface AppShellProps {
   user: { name: string; role: UserRole } | null;
@@ -16,21 +17,45 @@ export interface AppShellProps {
 
 export function AppShell({ user, tokenUsage, onLogout, children }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
+  // 폰에서는 사이드바가 화면의 2/3를 먹어 본문이 짓눌린다 - 서랍으로 접는다.
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [params] = useSearchParams();
   const role = user?.role ?? "viewer";
   const demoMode = params.get("demo") === "1";
 
   return (
     <div className="flex min-h-screen bg-bg">
-      <Sidebar
-        role={role}
-        collapsed={collapsed}
-        onToggleCollapsed={() => setCollapsed((v) => !v)}
-      />
+      {/* md 미만에서는 숨기고 헤더의 메뉴 버튼으로 연다(아래 Sheet). */}
+      <div className="hidden md:flex">
+        <Sidebar
+          role={role}
+          collapsed={collapsed}
+          onToggleCollapsed={() => setCollapsed((v) => !v)}
+        />
+      </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b border-border bg-bg px-6">
-          <div className="text-sm text-fg-tertiary">AI 보고서 자동생성 시스템</div>
+        <header className="flex h-14 items-center justify-between gap-2 border-b border-border bg-bg px-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-2">
+            <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+              <SheetTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-fg-secondary hover:bg-bg-tertiary md:hidden"
+                  aria-label="메뉴 열기"
+                >
+                  <Menu className="h-5 w-5" aria-hidden />
+                </button>
+              </SheetTrigger>
+              <SheetContent side="left" className="w-64 p-0">
+                <SheetTitle className="sr-only">메뉴</SheetTitle>
+                {/* 서랍 안에서는 항상 펼친 상태 - 좁은 화면에서 아이콘만 남기면 무엇인지
+                    모른다. 이동하면 스스로 닫아야 본문이 보인다. */}
+                <Sidebar role={role} collapsed={false} onNavigate={() => setDrawerOpen(false)} />
+              </SheetContent>
+            </Sheet>
+            <div className="truncate text-sm text-fg-tertiary">AI 보고서 자동생성 시스템</div>
+          </div>
           <div className="flex items-center gap-4">
             {demoMode ? (
               <button
@@ -81,7 +106,11 @@ export function AppShell({ user, tokenUsage, onLogout, children }: AppShellProps
           </div>
         </header>
 
-        <main className="flex-1 px-8 py-6">{children ?? <Outlet />}</main>
+        {/* 초광폭에서 본문이 끝없이 늘어나면 읽기 어렵다 - 상한을 두고 가운데 정렬.
+            노트북 폭(1280~1600)에서는 상한에 안 걸려 폭을 그대로 다 쓴다. */}
+        <main className="min-w-0 flex-1 px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
+          <div className="mx-auto w-full max-w-[1600px]">{children ?? <Outlet />}</div>
+        </main>
       </div>
     </div>
   );
