@@ -257,26 +257,15 @@ def _report_type_label(preset: str | None) -> str:
 
 
 def _cover_subtitle(state: ProjectState) -> str:
-    """부제 — 주제문(topic). 제목과 사실상 같으면 생략한다(같은 줄을 두 번 쓰지 않는다).
+    """표지 부제 — 프로젝트가 명시한 값만 쓴다.
 
-    topic은 "무엇을 어떤 범위로 검토한다"는 문장이라 표지 부제로 읽힌다. 제목이
-    비어 topic이 이미 제목 자리에 올라간 경우에는 부제를 비운다.
+    한때 주제문(topic)을 부제로 올렸지만, topic은 "무엇을 어떤 범위로 검토하라"는
+    **검색·작성 지시문**이지 표지에 실을 문장이 아니다(2026-08-10 판단). 지시문을
+    납품물 표지에 인쇄하면 읽는 사람에게는 군더더기다. 부제를 따로 받기 전까지는
+    표지에서 생략한다.
     """
-    topic = (state.topic or "").strip()
-    title = (state.title or "").strip()
-    if not topic or not title:
-        return ""
-    if topic == title or topic.startswith(title) or title.startswith(topic):
-        return ""
-    if len(topic) > _SUBTITLE_MAX_CHARS:
-        # 긴 주제문은 앞부분이 제목을 되풀이하고 뒤가 실제 범위 서술이다
-        # ("A 사업의 예타 분석 - 기술 수준, 시장 전망, …을 검토한다"). 뒤를 쓴다.
-        for sep in (" - ", " – ", " — ", ": "):
-            head, found, tail = topic.partition(sep)
-            if found and len(tail.strip()) >= 15:
-                topic = tail.strip()
-                break
-    return topic if len(topic) <= _SUBTITLE_MAX_CHARS else topic[: _SUBTITLE_MAX_CHARS - 1] + "…"
+    options = state.options if isinstance(state.options, dict) else {}
+    return str(options.get("subtitle") or "").strip()
 
 
 def _cover_block(state: ProjectState) -> Cover:
