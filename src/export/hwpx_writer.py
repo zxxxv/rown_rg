@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from weakref import WeakKeyDictionary
 
 from hwpx import HwpxDocument
 
@@ -138,6 +139,11 @@ Block = Cover | Heading | Paragraph | Table | Figure | PageBreak
 
 # 표 머리행 음영(옅은 회색) — 본문 행과 시각적으로 구분한다.
 TABLE_HEADER_SHADE = "#E6E6E6"
+
+# 왼쪽 정렬 문단 속성 id — 문서마다 한 번만 만들어 표 셀에 재사용한다.
+# 문서별로 보관한다: 백엔드는 한 프로세스에서 여러 보고서를 렌더하는데, 전역으로 두면
+# 다른 문서에서 만든 id를 참조해 정렬이 엉뚱해진다.
+_LEFT_PARA_IDS: WeakKeyDictionary = WeakKeyDictionary()
 
 
 def build_report(
@@ -357,6 +363,41 @@ def _fit_table_width(tbl, headers: list[str], rows: list[list[str]]) -> None:
         pass
 
 
+def _left_align_para_id(doc: HwpxDocument) -> str | None:
+    """왼쪽 정렬 문단 속성 id를 하나 만들어 재사용한다(표 셀에 붙일 용도).
+
+    셀 문단은 기본 paraPr(양쪽 정렬)을 쓴다. 한글 표에서 양쪽 정렬은 짧은 셀의
+    글자 사이를 벌려 놓아 읽기 나쁘다(2026-08-10 지적) — 왼쪽 정렬로 고정한다.
+    """
+    if doc in _LEFT_PARA_IDS:
+        return _LEFT_PARA_IDS[doc]
+    para_id: str | None = None
+    try:
+        probe = doc.add_paragraph("")
+        result = doc.set_paragraph_format(
+            paragraph_index=doc.paragraphs.index(probe), alignment="LEFT"
+        )
+        para_id = str(result["paragraphs"][0]["paraPrIDRef"])
+        doc.remove_paragraph(probe)
+    except Exception:  # noqa: BLE001 — 정렬은 표시 품질, 실패해도 표는 유효
+        para_id = None
+    _LEFT_PARA_IDS[doc] = para_id
+    return para_id
+
+
+def _align_cells_left(doc: HwpxDocument, tbl, n_rows: int, n_cols: int) -> None:
+    para_id = _left_align_para_id(doc)
+    if para_id is None:
+        return
+    for r in range(n_rows):
+        for c in range(n_cols):
+            try:
+                for para in tbl.cell(r, c).paragraphs:
+                    para.para_pr_id_ref = para_id
+            except Exception:  # noqa: BLE001 — 병합 셀 등 접근 실패는 건너뛴다
+                continue
+
+
 def _add_table(doc: HwpxDocument, table: Table) -> None:
     n_rows = len(table.rows) + 1
     n_cols = len(table.headers)
@@ -373,6 +414,7 @@ def _add_table(doc: HwpxDocument, table: Table) -> None:
         for col, value in enumerate(row):
             tbl.set_cell_text(row_idx, col, value)
     _fit_table_width(tbl, table.headers, table.rows)
+    _align_cells_left(doc, tbl, n_rows, n_cols)
 
 
 def _add_figure(doc: HwpxDocument, figure: Figure) -> None:

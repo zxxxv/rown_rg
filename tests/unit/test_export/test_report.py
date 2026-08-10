@@ -259,24 +259,25 @@ class TestReportBlocks:
         glossary_headings = [b for b in blocks if isinstance(b, Heading) and b.text == "약어 정리"]
         assert len(glossary_headings) == 2
 
-        glossary_tables = [
-            b for b in blocks if isinstance(b, Table) and b.headers == ["약어", "전체 명칭", "설명"]
-        ]
+        # 약어표는 2단(한 표에 15개 x 2 = 30개)이라 열이 6개다 - 3열짜리는 본문 폭을
+        # 다 쓰면서 내용이 몇 글자뿐이라 페이지가 비어 보였다(2026-08-10).
+        glossary_tables = [b for b in blocks if isinstance(b, Table) and b.headers[0] == "약어"]
         assert len(glossary_tables) == 2
-        # 1장 정리표: SMR·KDI가 첫 등장 순서, 장 넘는 중복 없음(설명은 사전 없으면 빈칸).
+        assert glossary_tables[0].headers == ["약어", "전체 명칭", "설명"] * 2
+        # 1장 정리표: SMR·KDI가 첫 등장 순서(오른쪽 단은 15개를 넘지 않아 빈칸).
         assert glossary_tables[0].rows == [
-            ["SMR", "Small Modular Reactor", ""],
-            ["KDI", "한국개발연구원", ""],
+            ["SMR", "Small Modular Reactor", "", "", "", ""],
+            ["KDI", "한국개발연구원", "", "", "", ""],
         ]
         # 2장 정리표: NEA만.
-        assert glossary_tables[1].rows == [["NEA", "National Energy Agency", ""]]
+        assert glossary_tables[1].rows == [["NEA", "National Energy Agency", "", "", "", ""]]
 
     def test_glossary_descriptions_from_dict(self):
         """조립 시 생성한 약어 사전(glossary)이 있으면 설명 열이 채워진다."""
         glossary = {"SMR": {"full": "Small Modular Reactor", "desc": "소형 모듈 원자로"}}
         blocks = report_blocks(_state_with_abbreviations(), glossary)
         table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] == "약어")
-        assert ["SMR", "Small Modular Reactor", "소형 모듈 원자로"] in table.rows
+        assert ["SMR", "Small Modular Reactor", "소형 모듈 원자로", "", "", ""] in table.rows
 
     def test_glossary_sits_at_chapter_end_before_next_chapter(self):
         """1장 약어 정리는 1장 본문 뒤·2장 헤딩 앞, 쪽 나눔 뒤(별도 페이지)에 놓인다."""

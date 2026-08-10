@@ -214,6 +214,25 @@ def _drop_duplicate_lead_heading(md: str, chapter: int, section: int) -> str:
     return md
 
 
+# 약어 정리표 배치 — 한 단(段)에 15줄, 두 단을 나란히(=한 표에 30개). 넘치면 다음 표로.
+# 3열 한 줄짜리는 본문 폭을 다 쓰면서 내용이 몇 글자뿐이라 페이지가 비어 보였다
+# (2026-08-10 지적). 두 단으로 접어 폭을 절반씩 쓴다.
+_GLOSSARY_ROWS_PER_COLUMN = 15
+_GLOSSARY_HEADERS = ["약어", "전체 명칭", "설명", "약어", "전체 명칭", "설명"]
+
+
+def _glossary_tables(entries: list[list[str]]) -> list[Table]:
+    """약어 목록 → 2단 표들. 30개마다 새 표(=다음 줄)로 넘어간다."""
+    per_table = _GLOSSARY_ROWS_PER_COLUMN * 2
+    tables: list[Table] = []
+    for start in range(0, len(entries), per_table):
+        chunk = entries[start : start + per_table]
+        left, right = chunk[:_GLOSSARY_ROWS_PER_COLUMN], chunk[_GLOSSARY_ROWS_PER_COLUMN:]
+        rows = [left[i] + (right[i] if i < len(right) else ["", "", ""]) for i in range(len(left))]
+        tables.append(Table(headers=_GLOSSARY_HEADERS, rows=rows))
+    return tables
+
+
 def _chapter_titles(state: ProjectState) -> dict[int, str]:
     """config.outline에서 챕터 제목을 위치 기반으로 복원(없으면 빈 dict)."""
     titles: dict[int, str] = {}
@@ -370,11 +389,11 @@ def report_blocks(
             # 약어 정리는 장 끝 별도 페이지(쪽 나눔 후)에 배치한다(2026-08-05 확정).
             blocks.append(PageBreak())
             blocks.append(Heading(level=2, text="약어 정리"))
-            rows = [
+            entries = [
                 [abbr, full, (glossary or {}).get(abbr, {}).get("desc", "")]
                 for abbr, full in chapter_abbrs.items()
             ]
-            blocks.append(Table(headers=["약어", "전체 명칭", "설명"], rows=rows))
+            blocks.extend(_glossary_tables(entries))
             chapter_abbrs.clear()
 
     for plan in rendered:
