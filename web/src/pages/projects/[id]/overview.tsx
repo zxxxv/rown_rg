@@ -324,7 +324,7 @@ function PrimaryAction({ project }: { project: Project }) {
   // 진행 페이지 폐지 - 시작은 개요에서 바로 실행하고, 진행 관찰은 우측
   // 진행 단계 스테퍼가 담당한다(7초 폴링으로 researching 전이를 따라잡음).
   const run = useRunProject();
-  const download = useDownload();
+  const { download, pending: downloading } = useDownload();
   // 같은 버튼이 '처음 시작'과 '멈춘 런 이어받기' 둘 다를 처리한다 - 안내 문구가
   // 실제 동작과 어긋나면 사용자가 수집이 다시 도는 줄 안다(2026-08-09 보고).
   const isResume = project.status !== "created" && project.status !== "cancelled";
@@ -366,8 +366,9 @@ function PrimaryAction({ project }: { project: Project }) {
     return (
       <Button
         size="lg"
+        disabled={downloading}
         onClick={() =>
-          download({
+          void download({
             url: `${env.VITE_API_BASE_URL.replace(/\/$/, "")}/projects/${project.id}/export`,
             filename: `${project.title}.hwpx`,
             label: "HWPX",
@@ -375,7 +376,7 @@ function PrimaryAction({ project }: { project: Project }) {
         }
       >
         <Download className="mr-1 h-4 w-4" />
-        HWPX 다운로드
+        {downloading ? "준비 중…" : "HWPX 다운로드"}
       </Button>
     );
   }

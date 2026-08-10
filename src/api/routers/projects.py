@@ -1,5 +1,6 @@
 import asyncio
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -1084,6 +1085,25 @@ def _state_for_export(project: Project, rows: list[Section], author: str = "") -
     )
 
 
+def _export_is_stale(path: Path, project: Project, rows: list[Section]) -> bool:
+    """렌더된 파일이 최신 편집보다 오래됐는가 — 재렌더 여부의 유일한 판단.
+
+    보수적으로 본다: 시각을 못 읽으면 오래된 것으로 쳐서 다시 만든다(낡은 파일을
+    내주는 쪽이 느린 것보다 나쁘다).
+    """
+    try:
+        rendered_at = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    except OSError:
+        return True
+    stamps = [project.updated_at, *(r.updated_at for r in rows if r.updated_at is not None)]
+    latest = max((t for t in stamps if t is not None), default=None)
+    if latest is None:
+        return True
+    if latest.tzinfo is None:  # 방어: naive면 UTC로 간주(저장은 UTC 규약)
+        latest = latest.replace(tzinfo=UTC)
+    return latest > rendered_at
+
+
 @router.get("/{project_id}/export")
 async def download_export(
     project_id: UUID,
@@ -1099,6 +1119,15 @@ async def download_export(
     project = await _get_authorized_project(project_id, session, current_user)
     path = Path(settings.export_dir) / f"{project.id}.hwpx"
     rows = await _load_sections(session, project.id)
+    # 이미 렌더된 파일이 마지막 편집보다 새것이면 다시 만들 이유가 없다. 35절 보고서
+    # 재렌더는 수십 초라, 매번 돌리면 클릭 후 한참 아무 일도 안 일어나는 것처럼 보인다
+    # (2026-08-10 지적). 편집·조립이 있으면 아래 재렌더 경로가 그대로 탄다.
+    if rows and path.is_file() and not _export_is_stale(path, project, rows):
+        return FileResponse(
+            path,
+            filename=f"{project.title}.hwpx",
+            media_type="application/octet-stream",
+        )
     if rows:
         try:
             from src.services.export.report import export_report
