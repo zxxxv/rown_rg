@@ -392,8 +392,19 @@ async def get_project(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
-) -> Project:
-    return await _get_authorized_project(project_id, session, current_user)
+) -> ProjectRead:
+    project = await _get_authorized_project(project_id, session, current_user)
+    # 본문 총 글자 수 — DB에서 합산한다(수천 자 본문을 파이썬으로 끌어오지 않는다).
+    total = (
+        await session.execute(
+            select(func.coalesce(func.sum(func.length(Section.content)), 0)).where(
+                Section.project_id == project.id
+            )
+        )
+    ).scalar_one()
+    read = ProjectRead.model_validate(project)
+    read.total_chars = int(total)
+    return read
 
 
 @router.post("/{project_id}/run", response_model=RunResponse, status_code=status.HTTP_202_ACCEPTED)

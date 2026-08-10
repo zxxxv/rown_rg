@@ -153,8 +153,14 @@ function buildComponents(citations: CitationMap): Components {
         {walk(children)}
       </li>
     ),
+    // "- 항목"은 개조식 3수준(□ -> ㅇ -> - -> *)이라 ㅇ(pl-4)보다 깊어야 한다.
+    // 기본 list-disc는 ㅇ보다 얕게 그려져 위계가 뒤집혀 보였다(2026-08-10 지적).
+    // 마커도 원문 그대로 '-'를 쓴다 - 규칙이 정한 기호다.
     ul: ({ children, ...props }) => (
-      <ul className="my-3 list-disc space-y-1 pl-6" {...props}>
+      <ul
+        className="my-2 list-none space-y-1 pl-8 [&>li]:relative [&>li]:pl-4 [&>li]:before:absolute [&>li]:before:left-0 [&>li]:before:text-fg-tertiary [&>li]:before:content-['-']"
+        {...props}
+      >
         {walk(children)}
       </ul>
     ),

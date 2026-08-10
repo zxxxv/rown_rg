@@ -168,3 +168,6 @@ class ProjectRead(ProjectBase):
     owner_name: str | None = None
     created_at: datetime
     updated_at: datetime
+    # 저장된 본문의 총 글자 수 — 상세 조회에서만 채운다(목록에선 세지 않는다).
+    # 분량이 목표에 닿았는지가 이 화면의 핵심 질문이라 헤더에 함께 보여준다.
+    total_chars: int | None = None

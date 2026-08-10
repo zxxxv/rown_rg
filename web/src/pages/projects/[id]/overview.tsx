@@ -198,6 +198,15 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               <span className="text-xs text-fg-tertiary">
                 비용 <b className="font-mono text-sm font-medium text-fg">${costUsed.toFixed(2)}</b>
               </span>
+              {project.total_chars ? (
+                // 분량이 목표에 닿았는지가 이 화면의 핵심 질문이다 - 토큰·비용 옆에 둔다.
+                <span className="text-xs text-fg-tertiary">
+                  본문{" "}
+                  <b className="font-mono text-sm font-medium text-fg">
+                    {project.total_chars.toLocaleString()}자
+                  </b>
+                </span>
+              ) : null}
               <span className="h-3 w-px bg-border" aria-hidden />
               <Badge variant="secondary">
                 목차 ·{" "}

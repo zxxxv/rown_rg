@@ -131,6 +131,8 @@ export const ProjectSchema = z.object({
   owner_id: z.string(),
   // 표시용 소유자 이름(owner eager-load 시에만 채워짐) - 없으면 owner_id로 폴백
   owner_name: z.string().nullish(),
+  /** 저장된 본문 총 글자 수 - 상세 조회에서만 온다(목록엔 없다) */
+  total_chars: z.number().int().nullish(),
   created_at: z.string(),
   updated_at: z.string(),
   progress: z.number().min(0).max(100).optional(),
