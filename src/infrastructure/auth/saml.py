@@ -4,6 +4,7 @@ import re
 from fastapi import Request
 from onelogin.saml2.auth import OneLogin_Saml2_Auth
 
+from src.core import app_settings
 from src.core.config import settings
 
 
@@ -20,16 +21,14 @@ def get_saml_settings(base_url: str) -> dict:
             },
         },
         "idp": {
-            # NAVER WORKS Identity Provider 정보에서 Response Issuer 복사/붙여넣기
-            "entityId": "https://auth.worksmobile.com/saml2/oseop.by-works.net",
+            # 관리자 설정(app_settings) → .env → 코드 기본값 순으로 읽는다.
+            # 하드코딩이던 시절엔 IdP를 바꿀 때마다 재배포가 필요했다(2026-08-10).
+            "entityId": app_settings.get_str("saml_idp_entity_id"),
             "singleSignOnService": {
-                # NAVER WORKS Identity Provider 정보에서 SSO URL 복사/붙여넣기
-                "url": "https://auth.worksmobile.com/saml2/idp/oseop.by-works.net",
+                "url": app_settings.get_str("saml_idp_sso_url"),
                 "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect",
             },
-            # NAVER WORKS Identity Provider 정보에서 Certificate 다운로드 후
-            # 내용을 한 줄로 복사/붙여넣기
-            "x509cert": "MIIC6jCCAdKgAwIBAgIIX0B8jtiXKtYwDQYJKoZIhvcNAQELBQAwNTETMBEGA1UEAwwKTElORSBXT1JLUzERMA8GA1UEBwwIU0VPTkdOQU0xCzAJBgNVBAYTAktSMB4XDTI2MDUzMDEyMzc0N1oXDTMxMDUzMDEyMzc0N1owNTETMBEGA1UEAwwKTElORSBXT1JLUzERMA8GA1UEBwwIU0VPTkdOQU0xCzAJBgNVBAYTAktSMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvnAOMLaXoeEto9PryxQVpqt0FrlWpTbIQDcCenCbI70F2HMkAh5twBCPY6Mv5NLNYFDJF4NselJcMYCFwtF2otUGLINzUXtAVrksRMsvIjHmh7ldQRvyK7k/WJLHdSX3qEyJre6sdvlWWshA+nX51vS2x5XR8r/KXYN6OTKgtTyBYaRvPO58hNUvXC8ZY0sss2zWdiFweuprkxI6wF8TQDSKWf02vi26nRNMsfcigK12QRNcni1sVPUEdiDbxfhBON0GgInXeVU+Oqd6cMC8bjnHaA7o6loVGlk17V+2l2cidZEhI7bkJAoY7yxKjDJERB1fZ45TipTyrtz6rhSbrwIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQBljuK68BXDAg/SrP8cmgK0Rlwh0nYg21M/7pNj5T+bDDuyWZzsw9djWmIlXjzr8kALiz+miUtDRIBNoyANi68Ed1NlIDXa4yP++IoJDdMeAF9YScPsQgEX23+CY1sxHKhoTUuznvFdAqmkSJ/uhJMXkMliZtQdShRQcK3pVoZ9NYTIy2GXIlXN9W17rAd/EfR0DV4AFUYbvanrUPrRLcqn3LEn1414W6AQBk0atCL4Y3ZYZQfyeIwCf2oqBqHmfQxkkSwaGjbP2FuczIGrFvXb7BI311feFQyPN5BASWMtPjiTtL+Kgf8AjTho/Xrw9wRsrX5jD10+EmiFp16eBaED",  # noqa: E501
+            "x509cert": app_settings.get_str("saml_idp_x509cert"),
         },
         "security": {
             "wantMessagesSigned": True,

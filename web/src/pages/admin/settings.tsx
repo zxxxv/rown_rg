@@ -24,6 +24,7 @@ import { useAuth } from "@/hooks/useAuth";
 const COLLAPSED_BY_DEFAULT = new Set(["네이버웍스"]);
 const GROUP_HINT: Record<string, string> = {
   네이버웍스: "알림 봇 전용 - 로그인(SSO)엔 불필요합니다. 알림을 쓸 때만 채우세요.",
+  SSO: "네이버웍스 로그인(SAML) - IdP 콘솔의 Identity Provider 정보에서 복사해 넣습니다. 위 '네이버웍스'(알림 봇)와 별개입니다.",
 };
 // 감출 설정 키. 절약 모드의 본문 작성이 gpt-5.4-mini라 OpenAI 키는 실제로 쓰인다 -
 // 숨기면 키를 못 넣어 그 모드가 통째로 죽는다(2026-08-10 되돌림).
@@ -33,7 +34,7 @@ function errMsg(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
 }
 
-const GROUP_ORDER = ["LLM", "네이버웍스"];
+const GROUP_ORDER = ["LLM", "SSO", "네이버웍스"];
 
 export default function AdminSettingsPage() {
   const { user, logout } = useAuth();

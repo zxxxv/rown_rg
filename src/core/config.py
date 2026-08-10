@@ -115,6 +115,12 @@ class Settings(BaseSettings):
 
     # SAML SSO / 프론트엔드 (네이버웍스 로그인 리다이렉트)
     saml_base_url: str = ""  # 운영 공개 베이스 URL (비면 요청 헤더로 추론)
+    # SAML IdP(네이버웍스) — 관리자 설정에서 덮어쓸 수 있다(app_settings). 여기 값은
+    # .env 미설정 시 기본값이다. IdP를 바꾸려고 재배포하지 않아도 되게 하려는 것
+    # (2026-08-10: 코드에 하드코딩돼 있어 변경마다 재배포가 필요했다).
+    saml_idp_entity_id: str = "https://auth.worksmobile.com/saml2/oseop.by-works.net"
+    saml_idp_sso_url: str = "https://auth.worksmobile.com/saml2/idp/oseop.by-works.net"
+    saml_idp_x509cert: str = "MIIC6jCCAdKgAwIBAgIIX0B8jtiXKtYwDQYJKoZIhvcNAQELBQAwNTETMBEGA1UEAwwKTElORSBXT1JLUzERMA8GA1UEBwwIU0VPTkdOQU0xCzAJBgNVBAYTAktSMB4XDTI2MDUzMDEyMzc0N1oXDTMxMDUzMDEyMzc0N1owNTETMBEGA1UEAwwKTElORSBXT1JLUzERMA8GA1UEBwwIU0VPTkdOQU0xCzAJBgNVBAYTAktSMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvnAOMLaXoeEto9PryxQVpqt0FrlWpTbIQDcCenCbI70F2HMkAh5twBCPY6Mv5NLNYFDJF4NselJcMYCFwtF2otUGLINzUXtAVrksRMsvIjHmh7ldQRvyK7k/WJLHdSX3qEyJre6sdvlWWshA+nX51vS2x5XR8r/KXYN6OTKgtTyBYaRvPO58hNUvXC8ZY0sss2zWdiFweuprkxI6wF8TQDSKWf02vi26nRNMsfcigK12QRNcni1sVPUEdiDbxfhBON0GgInXeVU+Oqd6cMC8bjnHaA7o6loVGlk17V+2l2cidZEhI7bkJAoY7yxKjDJERB1fZ45TipTyrtz6rhSbrwIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQBljuK68BXDAg/SrP8cmgK0Rlwh0nYg21M/7pNj5T+bDDuyWZzsw9djWmIlXjzr8kALiz+miUtDRIBNoyANi68Ed1NlIDXa4yP++IoJDdMeAF9YScPsQgEX23+CY1sxHKhoTUuznvFdAqmkSJ/uhJMXkMliZtQdShRQcK3pVoZ9NYTIy2GXIlXN9W17rAd/EfR0DV4AFUYbvanrUPrRLcqn3LEn1414W6AQBk0atCL4Y3ZYZQfyeIwCf2oqBqHmfQxkkSwaGjbP2FuczIGrFvXb7BI311feFQyPN5BASWMtPjiTtL+Kgf8AjTho/Xrw9wRsrX5jD10+EmiFp16eBaED"  # noqa: E501
     react_frontend_url: str = "http://localhost:5173"
 
     # 관리자 — 조직 월 비용 한도(USD). quota_settings(ORG_MONTHLY_COST_LIMIT_USD) 행이

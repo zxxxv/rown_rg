@@ -45,6 +45,31 @@ SETTING_DEFS: list[SettingDef] = [
     SettingDef("nw_service_account", "네이버웍스 Service Account", False, "str", "네이버웍스"),
     SettingDef("nw_private_key", "네이버웍스 Private Key", True, "str", "네이버웍스"),
     SettingDef("nw_bot_id", "네이버웍스 Bot ID", False, "str", "네이버웍스"),
+    # SAML SSO(로그인) — 네이버웍스 "봇"(알림)과 별개다. IdP 콘솔에서 복사해 넣는다.
+    SettingDef(
+        "saml_idp_entity_id",
+        "SAML IdP Entity ID",
+        False,
+        "str",
+        "SSO",
+        help="네이버웍스 Identity Provider 정보의 Response Issuer",
+    ),
+    SettingDef(
+        "saml_idp_sso_url",
+        "SAML IdP SSO URL",
+        False,
+        "str",
+        "SSO",
+        help="네이버웍스 Identity Provider 정보의 SSO URL",
+    ),
+    SettingDef(
+        "saml_idp_x509cert",
+        "SAML IdP 인증서",
+        False,
+        "str",
+        "SSO",
+        help="Certificate 파일 내용을 한 줄로(BEGIN/END 줄 제외)",
+    ),
     # 조직 월 한도 → 조직 한도 페이지(quota_settings)로 이관.
     # 알림 사용(notify_enabled) → 프로젝트별 config.notification_channels로 이관(전역 off).
 ]
