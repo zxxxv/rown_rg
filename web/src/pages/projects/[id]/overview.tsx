@@ -245,7 +245,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
         </div>
       </header>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_280px]">
         <div className="flex flex-col gap-6">
           {/* 진행 요약(% 바) 카드는 제거됨 - 폴링 없는 project.status 기반이라
               우측 스테퍼(7초 폴링)와 어긋났고, 스테퍼가 위치·다음 행동을 다 보여준다. */}
