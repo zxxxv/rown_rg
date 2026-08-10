@@ -124,18 +124,20 @@ function GroupCard({ group, items }: { group: string; items: SettingItem[] }) {
 
 function SettingRow({ item }: { item: SettingItem }) {
   const update = useUpdateSetting();
-  // 비밀 아닌 값은 현재 값을 프리필, 시크릿은 항상 빈칸에서 시작(되읽기 불가).
-  const [value, setValue] = useState(item.is_secret ? "" : (item.value ?? ""));
-  // 저장·해제 후 서버 값이 바뀌면 동기화(입력 중엔 refetch가 없어 방해 없음).
+  // 입력칸은 항상 빈칸에서 시작한다 - 설정된 값은 위에 읽기 전용으로 보여주고,
+  // 이 칸은 "새 값을 넣을 때만" 쓴다(시크릿과 같은 동선으로 통일, 2026-08-10).
+  const [value, setValue] = useState("");
+  // 서버 값이 바뀌면(저장·해제) 입력칸을 다시 비운다.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: item.value 변화가 트리거다
   useEffect(() => {
-    if (!item.is_secret) setValue(item.value ?? "");
-  }, [item.is_secret, item.value]);
+    setValue("");
+  }, [item.value]);
 
   const save = async (next: string) => {
     try {
       await update.mutateAsync({ key: item.key, value: next });
       toast.success(`${item.label} 저장됨`);
-      if (item.is_secret) setValue("");
+      setValue("");
     } catch (err) {
       toast.error("저장 실패", { description: errMsg(err, "값을 확인해 주세요.") });
     }
@@ -145,7 +147,10 @@ function SettingRow({ item }: { item: SettingItem }) {
   // 비밀값은 저장 후 칸이 비므로 '변경 있음'이 자명하다. 일반값은 값이 남아 있어
   // 눌러도 화면이 그대로라 저장 여부를 알 수 없었다(2026-08-10 지적) - 바뀐 게
   // 없으면 버튼을 잠가 "누를 게 없음"을 눈에 보이게 한다.
-  const unchanged = !item.is_secret && value.trim() === (item.value ?? "").trim();
+  // 읽기 전용으로 보여줄 현재 값(시크릿은 되읽기 불가라 없음). 긴 값은 줄여서.
+  const current = item.is_secret || item.kind === "bool" ? null : (item.value ?? "");
+  const currentShort =
+    current && current.length > 88 ? `${current.slice(0, 60)}… (${current.length}자)` : current;
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -165,27 +170,23 @@ function SettingRow({ item }: { item: SettingItem }) {
             미설정
           </Badge>
         )}
-        {unchanged && item.configured ? (
-          <span className="text-[10px] text-fg-tertiary">저장된 값과 같음</span>
-        ) : null}
         <span className="ml-auto font-mono text-[10px] text-fg-tertiary">{item.key}</span>
       </div>
+      {currentShort ? (
+        <p className="break-all font-mono text-[11px] text-fg-tertiary">현재: {currentShort}</p>
+      ) : null}
       <div className="flex items-center gap-2">
         {item.kind === "bool" ? (
           // 켜고 끄는 값 - 토글이 곧 의도라 선택 즉시 저장한다(드롭다운과 같은 규칙).
           <div className="flex items-center gap-2">
             <Switch
               id={`set-${item.key}`}
-              checked={value === "true"}
+              checked={item.value === "true"}
               disabled={update.isPending}
-              onCheckedChange={(on) => {
-                const next = on ? "true" : "false";
-                setValue(next);
-                void save(next);
-              }}
+              onCheckedChange={(on) => void save(on ? "true" : "false")}
             />
             <span className="text-sm text-fg-secondary">
-              {value === "true" ? "사용" : "사용 안 함"}
+              {item.value === "true" ? "사용" : "사용 안 함"}
             </span>
           </div>
         ) : item.kind === "enum" && item.options ? (
@@ -216,7 +217,9 @@ function SettingRow({ item }: { item: SettingItem }) {
                 id={`set-${item.key}`}
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                placeholder="값 입력(BEGIN/END 줄 제외, 내용만)"
+                placeholder={
+                  item.configured ? "변경하려면 새 값 입력(BEGIN/END 줄 제외)" : "값 입력"
+                }
                 className="min-h-[96px] font-mono text-xs"
                 autoComplete="off"
               />
@@ -226,13 +229,7 @@ function SettingRow({ item }: { item: SettingItem }) {
                 type={item.is_secret ? "password" : "text"}
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                placeholder={
-                  item.is_secret
-                    ? item.configured
-                      ? "변경하려면 새 값 입력"
-                      : "값 입력"
-                    : "값 입력"
-                }
+                placeholder={item.configured ? "변경하려면 새 값 입력" : "값 입력"}
                 className="font-mono"
                 autoComplete="off"
               />
