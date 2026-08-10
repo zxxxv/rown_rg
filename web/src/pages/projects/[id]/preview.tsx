@@ -205,7 +205,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-4 min-[1200px]:grid-cols-[240px_minmax(0,1fr)]">
           {/* 트리는 내부 스크롤 없이 아래로 쭉 펼친다 - 목차 전체가 한눈에 보이고
                 페이지 스크롤 하나로 탐색한다(사용자 요청, 2026-08-04) */}
           <aside className="self-start rounded border border-border bg-bg">

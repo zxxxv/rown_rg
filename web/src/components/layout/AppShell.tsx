@@ -15,14 +15,10 @@ export interface AppShellProps {
   children?: ReactNode;
 }
 
-// 이 폭 미만에서는 사이드바를 접은 채로 시작한다. 노트북(1280~1536)에서 사이드바
-// 224 + 우측 레일 280을 빼면 본문에 700px도 안 남아 가운데가 눌렸다(2026-08-10 지적).
-const WIDE_ENOUGH_PX = 1536;
-
 export function AppShell({ user, tokenUsage, onLogout, children }: AppShellProps) {
-  const [collapsed, setCollapsed] = useState(
-    () => typeof window !== "undefined" && window.innerWidth < WIDE_ENOUGH_PX,
-  );
+  // 접기는 사용자가 정한다 - 좁은 화면에서 자동으로 접으면 라벨이 사라져 원하는
+  // 모습이 아니게 된다(2026-08-10). 폭 절약은 사이드바 자체를 좁혀서 한다.
+  const [collapsed, setCollapsed] = useState(false);
   // 폰에서는 사이드바가 화면의 2/3를 먹어 본문이 짓눌린다 - 서랍으로 접는다.
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [params] = useSearchParams();

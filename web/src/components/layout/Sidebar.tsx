@@ -81,7 +81,7 @@ export function Sidebar({ role, collapsed, onToggleCollapsed, onNavigate }: Side
     <aside
       className={cn(
         "flex flex-col border-r border-border bg-bg-secondary transition-[width] duration-200",
-        collapsed ? "w-16" : "w-56",
+        collapsed ? "w-16" : "w-48 2xl:w-56",
       )}
     >
       <div
