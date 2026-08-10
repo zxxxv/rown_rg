@@ -94,6 +94,28 @@ function isErrorEnvelope(v: unknown): v is ErrorEnvelope {
   return typeof v === "object" && v !== null && "error" in v;
 }
 
+/** FastAPI 기본 오류 모양({detail})에서 사람이 읽을 문장을 뽑는다.
+ *
+ * 우리 핸들러는 {error:{code,message}} 봉투를 쓰지만, HTTPException과 요청 검증
+ * 실패는 {detail}로 나간다. 그 경우를 안 읽어서 "요청을 처리할 수 없습니다"라는
+ * 정체불명 문구가 떴다 - 이미 실행 중인 프로젝트에서 재생을 누른 경우가 그랬다
+ * (2026-08-10). 서버가 이유를 말해줬는데 화면이 버린 셈이다.
+ */
+function detailMessage(v: unknown): string | null {
+  if (typeof v !== "object" || v === null || !("detail" in v)) return null;
+  const detail = (v as { detail: unknown }).detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d) =>
+        typeof d === "object" && d && "msg" in d ? String((d as { msg: unknown }).msg) : "",
+      )
+      .filter(Boolean);
+    if (msgs.length > 0) return msgs.join(" · ");
+  }
+  return null;
+}
+
 // 관용적 언래핑: MSW 목업은 {data: ...} 봉투, 실백엔드는 raw 객체/배열을 반환한다.
 // 봉투는 정확히 'data' 단일 키일 때만 인정 - 'data' 필드를 우연히 포함한 raw 응답을
 // 잘못 벗기지 않는다. 배열은 봉투가 될 수 없으므로 그대로 통과한다.
@@ -137,6 +159,10 @@ async function request<T>(method: string, path: string, init?: Options): Promise
           err.response.status,
           envelope.error.details,
         );
+      }
+      const detail = detailMessage(envelope);
+      if (detail) {
+        throw new ApiError("http_error", detail, err.response.status);
       }
       // 에러 봉투가 없는 원시 HTTP 오류 - 코드("HTTP 500") 대신 사람이 읽을 이유를 메시지로.
       // status는 보존해 호출부가 분기(예: 423 잠금)할 수 있게 한다.

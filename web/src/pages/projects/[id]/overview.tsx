@@ -334,11 +334,16 @@ function PrimaryAction({ project }: { project: Project }) {
         toast.success(isResume ? "멈춘 지점부터 이어서 진행합니다." : "자료 조사를 시작했습니다."),
       onError: (err: unknown) => {
         const msg = err instanceof ApiError ? err.message : "시작에 실패했습니다.";
-        if (msg.includes("이미 실행")) {
-          toast.info("이미 실행 중입니다");
+        // 문구가 아니라 코드로 판정한다 - 메시지 문장이 바뀌면 조용히 빗나간다.
+        if (err instanceof ApiError && err.code === "ALREADY_RUNNING") {
+          toast.info("이미 진행 중입니다", {
+            description: "지금 돌고 있는 작업이 끝나면 다음 단계로 넘어갑니다.",
+          });
           return;
         }
-        toast.error("자료 조사 시작 실패", { description: msg });
+        toast.error(isResume ? "이어서 진행하지 못했습니다" : "자료 조사 시작 실패", {
+          description: msg,
+        });
       },
     });
   };

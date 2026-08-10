@@ -15,7 +15,6 @@ import { OutlineDesigner } from "./OutlineDesigner";
 import { PresetSelect } from "./PresetSelect";
 import { defaultsForPreset, presetLabel } from "./presets";
 import { RulePicker } from "./RulePicker";
-import { SourceChannels } from "./SourceChannels";
 import { ProjectFormSchema, type ProjectFormValues } from "./schema";
 import { clearProjectDraft, useProjectDraft } from "./useFormDraft";
 
@@ -136,18 +135,15 @@ export function ProjectConfigForm({
               </span>
               <span className="text-base font-semibold text-fg">고급 옵션</span>
               <span className="text-xs text-fg-tertiary">
-                자료 출처 안내 · 검색 확장(HyDE) - 기본값으로 충분합니다
+                검색 확장(HyDE) - 기본값으로 충분합니다
               </span>
             </summary>
-            <div className="flex flex-col gap-6 border-t border-border p-4">
-              <div className="flex flex-col gap-3">
-                <h3 className="text-sm font-semibold text-fg">자료 출처</h3>
-                <SourceChannels />
-              </div>
-              <div className="flex flex-col gap-3">
-                <h3 className="text-sm font-semibold text-fg">검색 품질</h3>
-                <HydeToggle />
-              </div>
+            {/* 자료 출처 3종(자동 검색·라이브러리·업로드) 안내는 뺐다 - 라이브러리와
+                업로드가 '준비 중'으로 적혀 있었지만 실제로는 자료 검토 단계에서 되는
+                기능이다. 거짓 라벨을 지우고 실제 스위치인 HyDE만 남긴다(2026-08-10). */}
+            <div className="flex flex-col gap-3 border-t border-border p-4">
+              <h3 className="text-sm font-semibold text-fg">검색 품질</h3>
+              <HydeToggle />
             </div>
           </details>
         </div>
