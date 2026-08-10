@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,8 +28,11 @@ from src.core.clock import now
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from src.core.types import Role
 from src.db.models.limit_request import LimitRequest
+from src.db.models.project import Project
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -299,3 +303,64 @@ async def soft_delete_user(
     if user is None:
         raise NotFoundError(message="사용자를 찾을 수 없습니다", code="USER_NOT_FOUND")
     user.is_active = False
+
+
+@router.delete("/{user_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_permanently(
+    user_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_role(Role.SUPER_ADMIN))],
+) -> None:
+    """계정을 영구 삭제한다(비활성화와 별개) — 되돌릴 수 없다.
+
+    비활성화는 로그인만 막고 흔적을 남긴다. 오탈자 계정·퇴사자 정리처럼 흔적까지
+    지워야 할 때가 있어 영구 삭제를 연다. 다만 보고서를 잃는 사고를 막으려고
+    소유 프로젝트가 있으면 거부한다(FK도 RESTRICT라 DB가 한 번 더 막는다).
+
+    남는 것: 토큰 사용량·라이브러리 자료·설정 변경 이력은 SET NULL로 보존된다
+    (비용 집계와 회사 자료가 사용자 삭제로 사라지면 안 된다).
+    사라지는 것: 로그인 세션·개인 프롬프트·개인 한도·한도 요청(CASCADE).
+    """
+    user = await session.get(User, user_id)
+    if user is None:
+        raise NotFoundError(message="사용자를 찾을 수 없습니다", code="USER_NOT_FOUND")
+    if user.id == current_user.id:
+        raise ValidationError(message="자기 계정은 삭제할 수 없습니다.", code="CANNOT_DELETE_SELF")
+    if user.is_active:
+        # 두 단계로 나눈다 — 실수로 한 번에 지우는 일을 막는다.
+        raise ValidationError(
+            message="먼저 계정을 비활성화한 뒤 삭제할 수 있습니다.",
+            code="DEACTIVATE_FIRST",
+        )
+    if user.role == Role.SUPER_ADMIN.value:
+        remaining = (
+            await session.execute(
+                select(func.count())
+                .select_from(User)
+                .where(User.role == Role.SUPER_ADMIN.value, User.id != user.id)
+            )
+        ).scalar_one()
+        if remaining == 0:
+            raise ValidationError(
+                message="마지막 최고관리자는 삭제할 수 없습니다.",
+                code="LAST_SUPER_ADMIN",
+            )
+    n_projects = (
+        await session.execute(
+            select(func.count()).select_from(Project).where(Project.owner_id == user.id)
+        )
+    ).scalar_one()
+    if n_projects:
+        raise ValidationError(
+            message=(
+                f"이 사용자가 소유한 보고서가 {n_projects}건 있습니다. "
+                "보고서를 먼저 삭제하거나 비활성화 상태로 두세요."
+            ),
+            code="USER_HAS_PROJECTS",
+        )
+    await session.delete(user)
+    logger.info(
+        "admin.user_deleted",
+        target_user_id=str(user.id),
+        by=str(current_user.id),
+    )

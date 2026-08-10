@@ -1,10 +1,20 @@
-import { ChevronLeft, ChevronRight, KeyRound, Lock, LockOpen, Search, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  KeyRound,
+  Lock,
+  LockOpen,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import type { UserRoleType } from "@/api/types";
 import {
   type AdminUser,
+  useDeleteUserPermanently,
   useResetUserPassword,
   useUnlockUser,
   useUpdateUser,
@@ -246,6 +256,21 @@ function UserRow({
 }) {
   const updateUser = useUpdateUser();
   const unlock = useUnlockUser();
+  const removeUser = useDeleteUserPermanently();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const doDelete = () => {
+    removeUser.mutate(row.id, {
+      onSuccess: () => {
+        toast.success(`${row.name} 계정을 삭제했습니다.`);
+        setConfirmDelete(false);
+      },
+      onError: (err: unknown) =>
+        toast.error("삭제 실패", {
+          description: err instanceof ApiError ? err.message : "잠시 후 다시 시도해 주세요.",
+        }),
+    });
+  };
 
   // 자기보다 상위 역할 사용자는 관리 불가 (백엔드 assert_can_manage_user와 동일 규칙)
   const canManage = ROLE_RANK[row.role] <= ROLE_RANK[myRole];
@@ -363,9 +388,89 @@ function UserRow({
             <KeyRound className="mr-1 h-3.5 w-3.5" aria-hidden />
             비번 리셋
           </Button>
+          {/* 영구 삭제는 비활성 계정에만 연다 - 두 단계로 나눠 실수를 막는다.
+              보고서를 소유한 계정은 서버가 거부하고 이유를 돌려준다. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-fg-danger"
+            disabled={!canManage || isSelf || row.is_active || removeUser.isPending}
+            onClick={() => setConfirmDelete(true)}
+            title={
+              row.is_active
+                ? "먼저 비활성화해야 삭제할 수 있습니다"
+                : isSelf
+                  ? "자기 계정은 삭제할 수 없습니다"
+                  : "계정 영구 삭제"
+            }
+          >
+            <Trash2 className="mr-1 h-3.5 w-3.5" aria-hidden />
+            삭제
+          </Button>
         </div>
       </TableCell>
+      {confirmDelete ? (
+        <ConfirmDeleteDialog
+          name={row.name}
+          email={row.email}
+          pending={removeUser.isPending}
+          onConfirm={doDelete}
+          onClose={() => setConfirmDelete(false)}
+        />
+      ) : null}
     </TableRow>
+  );
+}
+
+/** 되돌릴 수 없는 동작이라 이름을 직접 입력하게 한다(오클릭 방지). */
+function ConfirmDeleteDialog({
+  name,
+  email,
+  pending,
+  onConfirm,
+  onClose,
+}: {
+  name: string;
+  email: string;
+  pending: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  return (
+    <Dialog open onOpenChange={(o) => (!o ? onClose() : undefined)}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>계정 영구 삭제</DialogTitle>
+          <DialogDescription>
+            {name}({email}) 계정을 삭제합니다. 되돌릴 수 없습니다. 로그인 세션·개인 프롬프트·개인
+            한도가 함께 사라지고, 토큰 사용량과 라이브러리 자료는 기록으로 남습니다.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="confirm-name">확인을 위해 이름을 입력하세요</Label>
+          <Input
+            id="confirm-name"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={name}
+            autoComplete="off"
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={pending}>
+            취소
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={onConfirm}
+            disabled={pending || typed.trim() !== name}
+          >
+            {pending ? "삭제 중…" : "영구 삭제"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -161,3 +161,20 @@ export function useSetUserQuota() {
     },
   });
 }
+
+/** 계정 영구 삭제(비활성화와 별개) - 되돌릴 수 없다.
+ * 서버가 막는 경우: 자기 자신 · 활성 계정 · 보고서 소유자 · 마지막 최고관리자. */
+export async function deleteUserPermanently(userId: string): Promise<void> {
+  await apiClient.delete<void>(`users/${userId}/permanent`);
+}
+
+export function useDeleteUserPermanently() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...userKeys.all, "delete-permanent"],
+    mutationFn: deleteUserPermanently,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: userKeys.all });
+    },
+  });
+}
