@@ -150,6 +150,9 @@ class SectionDraft(BaseModel):
     # "보고도 안 쓴 근거"와 "안 보고 쓴 주장"을 가를 수 없다. 재작성 경로도 이 값을
     # 절 meta로 넘겨 근거 추적이 반쪽이 되지 않게 한다.
     pool_chunk_ids: list[UUID] = Field(default_factory=list)
+    # 분할 계획이 무너져 단일 호출로 떨어졌는가. 그러면 절이 짧아지고 인용이 줄어드는데
+    # 지금까지 아무 신호가 없어 짧고 근거 얇은 절이 조용히 보고서에 실렸다(2026-08-11).
+    split_fallback: bool = False
 
 
 # QA 후보 검사 — AI는 후보만 생성, 합격/불합격은 정적 코드, 최종 선택은 사람.

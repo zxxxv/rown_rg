@@ -112,7 +112,11 @@ async def run_write_loop(
                 )
                 if split_draft is not None:
                     return [split_draft]
-            return await generate_section_candidates(
+                # 분할이 무너진 채 단일 호출로 간다 - 결과에 흔적을 남겨야 화면이 알린다.
+                fell_back = True
+            else:
+                fell_back = False
+            drafts = await generate_section_candidates(
                 section,
                 chunks,
                 n=n,
@@ -123,8 +127,11 @@ async def run_write_loop(
                 user_id=state.user_id,
                 project_id=state.project_id,
             )
+            return [d.model_copy(update={"split_fallback": fell_back}) for d in drafts]
 
         drafts = await _generate()
+        if drafts and drafts[0].split_fallback:
+            section_meta[section.section_id]["plan_failed"] = True
         min_chars = ctx.min_chars if ctx.min_chars is not None else DEFAULT_MIN_CHARS
         max_chars = ctx.max_chars if ctx.max_chars is not None else DEFAULT_MAX_CHARS
         cset = gate_candidates(

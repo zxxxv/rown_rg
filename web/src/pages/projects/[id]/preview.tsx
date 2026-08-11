@@ -837,6 +837,18 @@ function SectionView({
         </div>
       ) : null}
 
+      {data.evidence.plan_failed ? (
+        // 분할 계획이 무너지면 절이 단일 호출로 떨어져 짧아지고 인용이 준다.
+        // 지금까지 아무 신호가 없어 그 절이 조용히 보고서에 실렸다(2026-08-11).
+        <div className="flex items-center gap-1.5 border-b border-fg-warning/30 bg-bg-warning px-6 py-2.5">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-fg-warning" aria-hidden />
+          <p className="text-xs text-fg">
+            분할 계획 실패 - 이 절은 한 번에 작성돼 분량이 짧고 근거 인용이 얇을 수 있습니다.
+            재작성하면 정상 분할로 다시 씁니다.
+          </p>
+        </div>
+      ) : null}
+
       {data.evidence.scarce ? (
         // 근거가 모자란 절은 분량 목표를 내려서 쓴다 - 그 사실을 본문에 적으면 납품물이
         // 더러워지므로(사용자 지적 2026-08-10) 본문 대신 여기서만 알린다.

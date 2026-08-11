@@ -62,6 +62,8 @@ class EvidenceInfo(BaseModel):
 
     count: int | None = None  # 검색된 인용 가능 청크 수(None=옛 절, 기록 없음)
     scarce: bool = False  # 재료 부족으로 분량 목표를 내렸는지
+    # 분할 계획이 무너져 단일 호출로 쓴 절 - 짧고 인용이 얇아진다. 재작성을 권할 신호.
+    plan_failed: bool = False
 
 
 class SectionContentResponse(BaseModel):
