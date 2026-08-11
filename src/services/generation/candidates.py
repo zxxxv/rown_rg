@@ -110,6 +110,8 @@ async def _one_candidate(
         section_id=section.section_id,
         content=response.content,
         cited_chunk_ids=_extract_cited_ids(response.content, chunks),
+        # 인용 가능한 것만 — 요약 노드는 [n] 풀에서 빠지므로 여기서도 뺀다.
+        pool_chunk_ids=[c.chunk_id for c in chunks if not c.is_summary],
     )
 
 

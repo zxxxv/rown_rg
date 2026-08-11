@@ -390,4 +390,5 @@ async def generate_section_split(
         section_id=section.section_id,
         content=combined,
         cited_chunk_ids=_extract_cited_ids(combined, citable),
+        pool_chunk_ids=[c.chunk_id for c in citable],
     )

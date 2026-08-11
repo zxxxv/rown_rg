@@ -1714,15 +1714,32 @@ async def rewrite_section(
     )
     draft = await _section_rewriter(project, plan, data.instruction)
     content = draft.content
+    # 근거 추적 기록 — 재작성은 작성 루프 밖 경로라 그냥 두면 이 절만 추적이 반쪽이 된다
+    # (실린 근거 수를 모르고, 마커→청크 대응도 복원할 수 없다).
+    meta = {**(row.meta or {}), "pool_chunk_ids": [str(c) for c in draft.pool_chunk_ids]}
+    if draft.pool_chunk_ids:
+        meta["evidence_count"] = len(draft.pool_chunk_ids)
     try:
         # 재작성 결과도 전역 번호로 재매핑 — 문서의 나머지 절·출처장과 번호 체계 유지.
-        from src.services.sections.renumber import build_chunk_to_global, renumber_content
+        from src.services.sections.renumber import (
+            build_chunk_to_global,
+            citation_chunk_map,
+            renumber_content,
+        )
 
         mapping = await build_chunk_to_global(project.id, set(draft.cited_chunk_ids))
-        content = renumber_content(draft.content, list(draft.cited_chunk_ids), mapping)
+        cited = list(draft.cited_chunk_ids)
+        # 매핑은 재작성 전(절-로컬 번호) 본문 기준으로만 뜰 수 있다 — 순서 주의.
+        marker_map = citation_chunk_map(draft.content, cited, mapping)
+        if marker_map:
+            meta["citation_chunks"] = {
+                str(g): [str(c) for c in cids] for g, cids in sorted(marker_map.items())
+            }
+        content = renumber_content(draft.content, cited, mapping)
     except Exception:
         logger.warning("rewrite.renumber_failed", project_id=str(project.id), exc_info=True)
     row.content = content
+    row.meta = meta
     row.source_ids = list(draft.cited_chunk_ids)
     row.status = "completed"
     row.qa_status = "passed"

@@ -146,6 +146,10 @@ class SectionDraft(BaseModel):
     section_id: UUID
     content: str
     cited_chunk_ids: list[UUID]
+    # 프롬프트에 실린 인용 가능 청크(순서 = 절-로컬 [n] 번호). 인용한 것만 남기면
+    # "보고도 안 쓴 근거"와 "안 보고 쓴 주장"을 가를 수 없다. 재작성 경로도 이 값을
+    # 절 meta로 넘겨 근거 추적이 반쪽이 되지 않게 한다.
+    pool_chunk_ids: list[UUID] = Field(default_factory=list)
 
 
 # QA 후보 검사 — AI는 후보만 생성, 합격/불합격은 정적 코드, 최종 선택은 사람.
