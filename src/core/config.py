@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     # n=1에서 정적 게이트 HARD 전멸 시 절 단위 1회 재생성. 없으면 그 절이 비고
     # 조립의 structure_complete가 렌더를 통째로 스킵한다.
     write_retry_on_empty: bool = True
+    # 절 단위 병렬 작성 동시성 상한(세마포어). 절끼리는 의존성이 없어 병렬이 안전하고,
+    # 상한은 LLM 레이트리밋 보호다 — 429가 잦으면 낮춘다(.env WRITE_SECTION_CONCURRENCY).
+    # 절 내부의 분할 파트는 문맥 연결 때문에 여전히 직렬이다.
+    write_section_concurrency: int = 4
     # 분할 생성 — 단일 LLM 호출은 재료·캡과 무관하게 4~8천자에서 멈춘다(2026-08-07
     # top_k 곡선 실측). volume_target min이 그 한계를 넘는 절은 소주제 파트로 나눠
     # 순차 생성 후 결합한다(프로토타입: 분량 7배·무근거 밀도 flat 이하, exp_split2).

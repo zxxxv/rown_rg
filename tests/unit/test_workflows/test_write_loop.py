@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
+import pytest
+
 from src.clients.llm.base import CompletionRequest, CompletionResponse
+from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import (
     CheckSeverity,
@@ -16,6 +20,8 @@ from src.core.types import (
     SectionPlan,
     StaticCheckReport,
 )
+from src.workflows import cancel
+from src.workflows.cancel import RunCancelled
 from src.workflows.write_loop import (
     apply_selection,
     check_assembled,
@@ -116,6 +122,139 @@ class TestRunWriteLoop:
 
         result = await run_write_loop(state, retrieve=retrieve, client=_StubClient("x"), n=2)
         assert result.section_candidates == []
+
+
+# ---------- run_write_loop 병렬화 (순서·동일성·상한·취소) ----------
+
+
+def _mk_state(titles: list[str]) -> tuple[ProjectState, RetrievedChunk]:
+    plans = [
+        SectionPlan(chapter_number=i + 1, section_number=1, title=t) for i, t in enumerate(titles)
+    ]
+    state = ProjectState(user_id=uuid4(), topic="주제", section_plan=plans)
+    chunk = RetrievedChunk(
+        chunk_id=uuid4(), source_id=uuid4(), content="근거 본문 " * 60, score=0.9
+    )
+    return state, chunk
+
+
+class TestRunWriteLoopParallel:
+    async def test_output_in_plan_order_despite_reversed_completion(self):
+        """앞 절이 느려 완료 순서가 뒤집혀도 결과는 plan 순서 — gather 입력 순서 보존."""
+        state, chunk = _mk_state(["느린절", "빠른절"])
+        completed: list[str] = []
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            if section.title == "느린절":
+                await asyncio.sleep(0.05)
+            completed.append(section.title)
+            return [chunk]
+
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=_StubClient("본문입니다. [1] " * 30), n=1
+        )
+        assert completed == ["빠른절", "느린절"]  # 실제로 병렬로 돌았다
+        assert [cs.section_id for cs in result.section_candidates] == [
+            p.section_id for p in state.section_plan
+        ]
+        assert list(result.section_meta) == [p.section_id for p in state.section_plan]
+
+    async def test_parallel_result_equals_serial(self, monkeypatch):
+        """같은 입력이면 동시성 1(직렬)과 4(병렬)의 산출이 내용까지 동일하다."""
+        state, chunk = _mk_state(["개요", "분석", "전망"])
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            return [chunk]
+
+        stub = _StubClient("이 섹션의 본문입니다. [1] " * 30)
+
+        def _essence(result: ProjectState) -> list[tuple]:
+            return [
+                (
+                    cs.section_id,
+                    [c.draft.content for c in cs.candidates],
+                    [c.draft.cited_chunk_ids for c in cs.candidates],
+                )
+                for cs in result.section_candidates
+            ]
+
+        monkeypatch.setattr(settings, "write_section_concurrency", 1)
+        serial = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        monkeypatch.setattr(settings, "write_section_concurrency", 4)
+        parallel = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+
+        assert _essence(serial) == _essence(parallel)
+        assert serial.section_meta == parallel.section_meta
+
+    async def test_semaphore_caps_concurrency(self, monkeypatch):
+        """동시 실행 절 수가 write_section_concurrency를 넘지 않는다(그리고 병렬이긴 하다)."""
+        monkeypatch.setattr(settings, "write_section_concurrency", 2)
+        state, chunk = _mk_state([f"{i}절" for i in range(6)])
+        active = 0
+        peak = 0
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return [chunk]
+
+        await run_write_loop(
+            state, retrieve=retrieve, client=_StubClient("본문입니다. [1] " * 30), n=1
+        )
+        assert peak == 2
+
+    async def test_cancel_stops_queued_sections(self, monkeypatch):
+        """작성 중 취소 — 큐에 있던 절은 시작 전에 멈추고 RunCancelled가 올라간다."""
+        monkeypatch.setattr(settings, "write_section_concurrency", 1)
+        state, chunk = _mk_state(["첫절", "둘째절", "셋째절"])
+        retrieved: list[str] = []
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            retrieved.append(section.title)
+            if section.title == "첫절":
+                cancel.request(state.project_id)
+            return [chunk]
+
+        try:
+            with pytest.raises(RunCancelled):
+                await run_write_loop(
+                    state, retrieve=retrieve, client=_StubClient("본문입니다. [1] " * 30), n=1
+                )
+        finally:
+            cancel.clear(state.project_id)
+        assert retrieved == ["첫절"]  # 뒤 절들은 시작조차 안 했다
+
+    async def test_cancel_aborts_inflight_sibling(self, monkeypatch):
+        """취소 전파 시 진행 중이던 다른 절 태스크도 실제로 중단(cancel)된다."""
+        monkeypatch.setattr(settings, "write_section_concurrency", 2)
+        state, chunk = _mk_state(["막힌절", "신호절", "대기절"])
+        blocked = asyncio.Event()
+        aborted = asyncio.Event()
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            if section.title == "막힌절":
+                blocked.set()
+                try:
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    aborted.set()
+                    raise
+            if section.title == "신호절":
+                await blocked.wait()
+                cancel.request(state.project_id)
+            return [chunk]
+
+        try:
+            with pytest.raises(RunCancelled):
+                await run_write_loop(
+                    state, retrieve=retrieve, client=_StubClient("본문입니다. [1] " * 30), n=1
+                )
+        finally:
+            cancel.clear(state.project_id)
+        assert aborted.is_set()
 
 
 # ---------- qa_select_payload (survivors 필터 + 경고 노출) ----------

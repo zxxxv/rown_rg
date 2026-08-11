@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 from uuid import UUID
@@ -67,13 +68,18 @@ async def run_write_loop(
     섹션별 WriterContext가 페르소나·방향·분량 목표를 프롬프트에 주입하고, 에이전트
     volume_target이 있으면 정적 게이트의 길이 경계도 그것을 따른다.
     게이트 판정까지 마친 SectionCandidateSet들을 state.section_candidates에 넣어 돌려준다.
+
+    절 처리는 write_section_concurrency 상한의 병렬(2026-08-11) — 절끼리 의존성이
+    없어서다. 결과 순서·내용은 직렬과 동일하고(타이밍만 다름), 절 내부 분할 파트는
+    문맥 연결 때문에 직렬을 유지한다.
     """
     pid = state.project_id
     n = n if n is not None else settings.write_candidates_n
-    candidate_sets: list[SectionCandidateSet] = []
+    # 완료 순서대로 채워지는 공유 dict — 단일 이벤트 루프라 태스크 간 mutation이 안전하다.
     section_meta: dict[UUID, dict] = {}
-    for section in state.section_plan:
-        # 절 단위 취소 지점 — 긴 작성 단계 도중에도 다음 절로 넘어가기 전에 멈춘다.
+
+    async def _process_section(section: SectionPlan) -> SectionCandidateSet:
+        # 절 단위 취소 지점 — 세마포어 대기 중이던 절도 시작 전에 여기서 멈춘다.
         cancel.raise_if_cancelled(pid)
         label = f"본문 작성 · {section.chapter_number}.{section.section_number} {section.title}"
         emit_step(pid, "writing", label, "started")
@@ -96,6 +102,7 @@ async def run_write_loop(
         async def _generate(base_temperature: float = 0.7) -> list[SectionDraft]:
             # volume_target이 단일 호출 출력 한계(4~8천자 실측)를 넘으면 분할 생성.
             # 분할 실패(계획·배정 무너짐, 풀 빈약)는 비치명 — 단일 호출로 폴백한다.
+            # 파트 간 문맥 연결 때문에 절 내부는 여전히 직렬이다(병렬은 절 사이만).
             n_parts = plan_part_count(ctx.min_chars)
             if n_parts > 1:
                 split_draft = await generate_section_split(
@@ -146,14 +153,37 @@ async def run_write_loop(
             )
             if retry_set.survivors:
                 cset = retry_set
-        candidate_sets.append(cset)
         if draft_store is not None:
             # 절 완성 즉시 초안 영속화 — 편집기 미리보기가 진행 중에도 완성분을 보여준다
             survivor = cset.survivors[0].draft if cset.survivors else None
-            # 지금 절의 지표까지 실어 넘긴다 — 작성 중 미리보기도 배지를 볼 수 있게.
-            await draft_store(state.with_section_meta(section_meta), section, survivor)
+            # 지금까지 완료된 절들의 지표 스냅샷을 실어 넘긴다 — 작성 중 미리보기 배지용.
+            # 스냅샷이어야 draft_store가 await하는 동안 다른 절의 mutation이 새지 않는다.
+            await draft_store(state.with_section_meta(dict(section_meta)), section, survivor)
         emit_step(pid, "writing", label, "completed")
-    return state.with_section_candidates(candidate_sets).with_section_meta(section_meta)
+        return cset
+
+    # 절끼리는 의존성이 없어(각자 검색→생성→게이트) 병렬이 안전하다. 상한은
+    # LLM 레이트리밋 보호 — 어댑터의 429 백오프가 있지만 동시 폭주 자체를 줄인다.
+    sem = asyncio.Semaphore(max(1, settings.write_section_concurrency))
+
+    async def _bounded(section: SectionPlan) -> SectionCandidateSet:
+        async with sem:
+            return await _process_section(section)
+
+    tasks = [asyncio.ensure_future(_bounded(s)) for s in state.section_plan]
+    try:
+        # gather는 입력 순서대로 돌려준다 — candidate_sets 순서 = section_plan 순서.
+        candidate_sets = list(await asyncio.gather(*tasks))
+    except BaseException:
+        # 취소(RunCancelled·CancelledError)든 한 절의 실제 예외든, 진행 중인 나머지
+        # 절을 정리하고 전파한다 — 고아 태스크가 취소 후에도 LLM을 계속 부르지 않게.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    # 완료 순서로 쌓인 meta를 절 순서로 재배열 — 직렬 버전과 동일한 산출을 보장한다.
+    ordered_meta = {s.section_id: section_meta[s.section_id] for s in state.section_plan}
+    return state.with_section_candidates(candidate_sets).with_section_meta(ordered_meta)
 
 
 def section_plan_payload(plan: Sequence[SectionPlan]) -> list[dict[str, object]]:
