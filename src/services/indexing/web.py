@@ -26,6 +26,7 @@ from sqlalchemy import select
 
 from src.db.models.chunk import Chunk as ChunkModel
 from src.db.models.project_source import ProjectSource
+from src.services.indexing._boilerplate import excluded_metadata
 from src.services.indexing.vector import IndexingResult
 
 if TYPE_CHECKING:
@@ -190,6 +191,7 @@ class WebSourceIndexer:
         embed_results = await self._embedding.embed_batch([c.content for c in chunks])
 
         async with self._session_maker() as session:
+            metas = await excluded_metadata(session, project_id, chunks)
             session.add_all(
                 [
                     ChunkModel(
@@ -199,7 +201,7 @@ class WebSourceIndexer:
                         content=c.content,
                         embedding=embed_results[i].embedding,
                         chunk_index=c.chunk_index,
-                        metadata_=c.metadata,
+                        metadata_=metas[i],
                     )
                     for i, c in enumerate(chunks)
                 ]

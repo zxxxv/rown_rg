@@ -21,6 +21,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
+from hashlib import md5
+from typing import Any
 
 # 사이트 내비게이션·공유 위젯 — 본문에는 나올 이유가 없는 어휘.
 _NAV_TOKENS: tuple[str, ...] = (
@@ -82,3 +85,43 @@ def boilerplate_kind(content: str) -> str | None:
 
 def is_boilerplate(content: str) -> bool:
     return boilerplate_kind(content) is not None
+
+
+async def excluded_metadata(
+    session: Any, project_id: Any, chunks: Sequence[Any]
+) -> list[dict[str, Any]]:
+    """색인 직전 청크들의 metadata에 배제 이유를 실어 돌려준다.
+
+    두 가지를 본다 - 보일러플레이트(내용만 보면 판정 가능)와 내용 중복(프로젝트 안에 이미
+    같은 본문이 있는가). 중복은 같은 문서를 웹 수집과 파일 업로드로 두 번 넣으면 생긴다.
+    실측에서 한 보고서가 54청크 + 55청크 두 벌로 들어가 프롬프트에 [2][3]처럼 같은 내용이
+    두 번 실렸다.
+
+    이 배선이 없으면 필터는 백필한 옛 자료에만 걸리고 새로 수집한 자료는 그대로 통과한다.
+    """
+    from sqlalchemy import text
+
+    seen: set[str] = set(
+        (
+            await session.execute(
+                text("SELECT DISTINCT md5(content) FROM chunks WHERE project_id = :p"),
+                {"p": str(project_id)},
+            )
+        )
+        .scalars()
+        .all()
+    )
+    out: list[dict[str, Any]] = []
+    for chunk in chunks:
+        meta = dict(getattr(chunk, "metadata", None) or {})
+        kind = boilerplate_kind(chunk.content or "")
+        if not kind:
+            digest = md5((chunk.content or "").encode("utf-8")).hexdigest()
+            if digest in seen:
+                kind = "내용 중복"
+            else:
+                seen.add(digest)
+        if kind:
+            meta["excluded"] = kind
+        out.append(meta)
+    return out
