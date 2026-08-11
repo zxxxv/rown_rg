@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { useMyTokenUsage } from "@/api/profile";
 import type { UserRole } from "@/components/auth/RequireAuth";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { UsageMeter } from "@/components/layout/UsageMeter";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
@@ -27,7 +28,6 @@ export function AppShell({ user, onLogout, children }: AppShellProps) {
   // 화면에 박아둔 숫자(1,240,000 / 5,000,000)는 아무 데이터도 아니었다 - 이번 달
   // 실사용량을 직접 읽는다(5분 캐시라 페이지마다 요청이 늘지 않는다).
   const usage = useMyTokenUsage().data;
-  const tokenTotal = usage ? usage.total_input_tokens + usage.total_output_tokens : 0;
 
   return (
     <div className="flex min-h-screen bg-bg">
@@ -78,22 +78,7 @@ export function AppShell({ user, onLogout, children }: AppShellProps) {
               </button>
             ) : null}
 
-            {usage ? (
-              // 한도는 토큰이 아니라 비용(달러)으로 집행된다(clients/llm/quota_gate).
-              // 토큰에 상한을 붙여 보여주면 없는 규칙을 지어내는 것이라 사용량만 적는다.
-              <div className="flex items-center gap-3 font-mono text-xs text-fg-secondary">
-                <span className="hidden sm:inline">
-                  토큰 <span className="text-fg">{tokenTotal.toLocaleString()}</span>
-                </span>
-                <span>
-                  비용{" "}
-                  <span className="text-fg">
-                    ${usage.total_cost_usd.toFixed(2)}
-                    {usage.cost_limit_usd !== null ? ` / $${usage.cost_limit_usd.toFixed(0)}` : ""}
-                  </span>
-                </span>
-              </div>
-            ) : null}
+            {usage ? <UsageMeter usage={usage} /> : null}
 
             {user ? (
               <div className="flex items-center gap-2">
