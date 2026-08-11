@@ -164,7 +164,7 @@ function ClaimTable({ claims, chunks }: { claims: ClaimAlignment[]; chunks: Evid
       {shown.length === 0 ? (
         <p className="text-xs text-fg-tertiary">모든 문장이 원문 대목까지 확인됐습니다.</p>
       ) : (
-        <ul className="flex max-h-96 flex-col gap-2 overflow-y-auto">
+        <ul className="flex max-h-[32rem] flex-col gap-2 overflow-y-auto">
           {shown.map((c) => {
             const badge = CLAIM_STATUS[c.status] ?? CLAIM_STATUS.uncited;
             return (
@@ -252,7 +252,7 @@ function EvidenceCard({ item }: { item: EvidenceChunk }) {
           {item.header_path.join(" > ")}
         </p>
       ) : null}
-      <p className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-bg-secondary px-2 py-1.5 text-xs leading-relaxed text-fg-secondary">
+      <p className="mt-1.5 max-h-72 overflow-y-auto whitespace-pre-wrap rounded bg-bg-secondary px-2 py-2 text-xs leading-relaxed text-fg-secondary">
         {item.content}
       </p>
     </li>

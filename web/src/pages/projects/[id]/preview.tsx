@@ -972,7 +972,9 @@ function SectionView({
             "grid grid-cols-1",
             // 작성 중에는 편집·재작성 패널을 아예 두지 않는다 - 초안이 재생성으로
             // 갈아치워질 수 있고, 절 전체 재작성은 작성 루프와 자원을 다툰다.
-            editable && "xl:grid-cols-[minmax(0,1fr)_300px]",
+            // 근거 패널이 300px면 인용 원문이 세로로 길게 흘러 읽을 수가 없다.
+            // 검토의 본작업이 "본문 옆에서 근거를 읽는 것"이라 폭을 본문에서 떼어 준다.
+            editable && "xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_520px]",
           )}
         >
           {/* 중앙: 블록 본문 - 클릭해 선택하면 우측 패널에서 편집·재작성 */}
@@ -1098,7 +1100,9 @@ function SectionView({
             <EvidencePanel projectId={projectId} sectionId={sectionId} />
           </div>
 
-          {/* 우측: 검토·재작성 패널 - 완료 후에만 (작성 중에는 읽기 전용) */}
+          {/* 우측: 근거 전용 - 검토의 본작업은 "본문 옆에서 근거를 읽는 것"이다.
+              재작성 지시는 짧고 가끔 쓰는 것이라 아래 띠로 내렸다(2026-08-12 지적:
+              근거 패널이 눌려 원문을 읽을 수 없었다). */}
           {editable ? (
             <aside className="border-t border-border bg-bg-secondary px-4 py-4 xl:border-l xl:border-t-0">
               {selectedBlocks.length > 0 ? (
@@ -1112,79 +1116,66 @@ function SectionView({
                       선택 해제
                     </Button>
                   </div>
-
-                  {/* 근거를 읽는 자리 옆에 둔다 - 절 전체 목록은 본문 맨 아래라 멀다 */}
-                  <div className="border-t border-border pt-3">
-                    <BlockEvidence
-                      projectId={projectId}
-                      sectionId={sectionId}
-                      blocks={selectedBlocks}
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-2 border-t border-border pt-3">
-                    <Label htmlFor="block-instruction">AI 재작성 지시</Label>
-                    <Textarea
-                      id="block-instruction"
-                      value={instruction}
-                      onChange={(e) => setInstruction(e.target.value)}
-                      placeholder="예: 더 간결하게, 수치를 앞세워서"
-                      className="min-h-[80px] text-xs"
-                      disabled={chartSelected}
-                    />
-                    <Button
-                      size="sm"
-                      onClick={() => void onRewriteBlocks()}
-                      disabled={busy || chartSelected}
-                    >
-                      <Sparkles className="mr-1 h-3.5 w-3.5" />
-                      {rewriteBlock.isPending
-                        ? "작성 중…"
-                        : `선택한 블록 ${selectedBlocks.length}개 재작성`}
-                    </Button>
-                    <p className="text-[11px] leading-relaxed text-fg-tertiary">
-                      {chartSelected
-                        ? "그래프 블록은 AI 재작성 대상이 아닙니다 - 표로 되돌린 뒤 고치고 다시 바꾸세요."
-                        : "블록 재작성은 이 절이 이미 인용한 근거 안에서만 고칩니다 - 인용 번호·출처가 유지됩니다."}
-                    </p>
-                  </div>
+                  <BlockEvidence
+                    projectId={projectId}
+                    sectionId={sectionId}
+                    blocks={selectedBlocks}
+                  />
                 </div>
               ) : (
-                <div className="flex flex-col gap-3">
-                  <p className="text-xs font-medium text-fg">검토·재작성</p>
-                  <p className="text-xs leading-relaxed text-fg-secondary">
-                    본문에서 블록(문단)을 클릭해 선택하세요. 여러 개를 골라 한 번에 AI 재작성을
-                    지시할 수 있고, 하나만 고르면 직접 편집도 열립니다. 다시 클릭하면 선택이
-                    해제됩니다.
-                  </p>
-                  <div className="flex flex-col gap-2 border-t border-border pt-3">
-                    <Label htmlFor="section-instruction">절 전체 AI 재작성</Label>
-                    <Textarea
-                      id="section-instruction"
-                      value={instruction}
-                      onChange={(e) => setInstruction(e.target.value)}
-                      placeholder="예: 정책 시사점을 강조해서 다시 작성"
-                      className="min-h-[80px] text-xs"
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void onRewriteSection()}
-                      disabled={busy}
-                    >
-                      <Sparkles className="mr-1 h-3.5 w-3.5" />
-                      {rewrite.isPending ? "작성 중…" : "절 전체 재작성"}
-                    </Button>
-                    <p className="text-[11px] leading-relaxed text-fg-tertiary">
-                      절 전체 재작성은 프로젝트 자료에서 근거를 다시 검색해 처음부터 새로 씁니다.
-                    </p>
-                  </div>
-                </div>
+                <p className="text-xs leading-relaxed text-fg-secondary">
+                  본문에서 블록(문단)을 클릭하면 그 블록이 참고한 근거 원문이 여기 표시됩니다. 여러
+                  개를 골라 한 번에 재작성할 수 있고, 하나만 고르면 직접 편집도 열립니다.
+                </p>
               )}
             </aside>
           ) : null}
         </div>
       )}
+      {editable && !editing ? (
+        // 선택 → 지시 → 실행이 가로 한 줄에 놓이도록 하단 띠로 뺐다. 평소에는 화면을
+        // 차지하지 않고, 근거 패널이 세로 전체를 쓴다.
+        <div className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-border bg-bg px-6 py-3">
+          <Label htmlFor="rewrite-instruction" className="text-xs text-fg-secondary">
+            {selectedBlocks.length > 0 ? `블록 ${selectedBlocks.length}개` : "절 전체"} 재작성 지시
+          </Label>
+          <Textarea
+            id="rewrite-instruction"
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            placeholder={
+              selectedBlocks.length > 0
+                ? "예: 더 간결하게, 수치를 앞세워서"
+                : "예: 정책 시사점을 강조해서 다시 작성"
+            }
+            className="h-9 min-h-0 flex-1 resize-none py-2 text-xs"
+            disabled={chartSelected}
+          />
+          <Button
+            size="sm"
+            variant={selectedBlocks.length > 0 ? "default" : "outline"}
+            onClick={() =>
+              void (selectedBlocks.length > 0 ? onRewriteBlocks() : onRewriteSection())
+            }
+            disabled={busy || (selectedBlocks.length > 0 && chartSelected)}
+          >
+            <Sparkles className="mr-1 h-3.5 w-3.5" />
+            {busy
+              ? "작성 중…"
+              : selectedBlocks.length > 0
+                ? `선택 ${selectedBlocks.length}개 재작성`
+                : "절 전체 재작성"}
+          </Button>
+          <p className="w-full text-[11px] leading-relaxed text-fg-tertiary">
+            {chartSelected
+              ? "그래프 블록은 AI 재작성 대상이 아닙니다 - 표로 되돌린 뒤 고치고 다시 바꾸세요."
+              : selectedBlocks.length > 0
+                ? "블록 재작성은 이 절이 이미 인용한 근거 안에서만 고칩니다 - 인용 번호·출처가 유지됩니다."
+                : "절 전체 재작성은 프로젝트 자료에서 근거를 다시 검색해 처음부터 새로 씁니다."}
+          </p>
+        </div>
+      ) : null}
+
       {convertTable !== null && convertIdx !== null ? (
         <ChartConvertDialog
           open
