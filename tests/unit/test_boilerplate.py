@@ -117,3 +117,64 @@ async def test_기존_metadata를_보존한다() -> None:
     metas = await excluded_metadata(_FakeSession(), "pid", [chunk])
     assert metas[0]["header_path"] == ["1장"]
     assert metas[0]["excluded"] == "사이트 메뉴"
+
+
+class TestWebNoise:
+    """영문 자료가 근거의 78%가 되면서 드러난 유형들(2026-08-12 실전 런).
+
+    실제로 보고서가 트위터 공유 URL 청크를 6번 인용했다 - 각주가 공유 버튼을
+    가리키는 상태였다.
+    """
+
+    def test_공유_링크만_늘어놓은_청크는_링크_목록이다(self) -> None:
+        content = (
+            "[https://twitter.com/intent/tweet?text=Short-Form%20Video%20Trends]"
+            "(https://twitter.com/intent/tweet?text=x) "
+            "[https://www.facebook.com/dialog/send?app_id=1405866](https://facebook.com/x)"
+        )
+        assert boilerplate_kind(content) == "링크 목록"
+
+    def test_태그_목록도_링크_목록이다(self) -> None:
+        content = " ".join(
+            f"[태그{i}](https://hrcopinion.co.kr/archives/tag/x{i})" for i in range(8)
+        )
+        assert boilerplate_kind(content) == "링크 목록"
+
+    def test_본문에_링크가_섞인_것은_남긴다(self) -> None:
+        body = (
+            "글로벌 숏폼 시장은 2026년까지 연평균 25.6% 성장할 전망이다. "
+            "자세한 내용은 [보고서](https://example.com/report)에서 확인할 수 있다. " * 3
+        )
+        assert boilerplate_kind(body) is None
+
+    def test_증권사_면책조항을_잡는다(self) -> None:
+        content = (
+            "동 자료의 금융투자분석사는 자료 작성일 현재 동 자료상에 언급된 기업들의 "
+            "금융투자상품 및 권리를 보유하고 있지 않습니다."
+        )
+        assert boilerplate_kind(content) == "면책조항"
+
+    def test_영문_면책조항을_잡는다(self) -> None:
+        content = "All expressions of opinions are subject to change without notice."
+        assert boilerplate_kind(content) == "면책조항"
+
+    def test_영업_문구를_잡는다(self) -> None:
+        content = "Ready for a Next Level of Enterprise Growth? We reply within 24 hours."
+        assert boilerplate_kind(content) == "영업 문구"
+
+    def test_문서_배지를_잡는다(self) -> None:
+        content = "### reStructuredText ``` .. image:: https://zenodo.org/badge/DOI/10.5281/x"
+        assert boilerplate_kind(content) == "문서 메타"
+
+    def test_흔한_단어_하나로_긴_본문을_버리지_않는다(self) -> None:
+        """실측 오탐: '누적 조회수는 500억 회를 초과'가 사이트 메뉴로 잡혔다."""
+        body = (
+            "매일 약 6.2억 명의 사용자가 숏폼 드라마를 소비하며, 히트작의 누적 조회수는 "
+            "500억 회를 초과하는 만큼 이미 중국 콘텐츠 시장의 중심부에 있다. " * 6
+        )
+        assert boilerplate_kind(body) is None
+
+    def test_짧은_페이지_가구는_그대로_잡는다(self) -> None:
+        assert (
+            boilerplate_kind("## 글자 크기 설정 * 가 보통 * 가 크게 - 기사 공유") == "사이트 메뉴"
+        )
