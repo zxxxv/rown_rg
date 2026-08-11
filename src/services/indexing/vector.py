@@ -30,6 +30,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from src.core.config import settings
 from src.db.models.chunk import Chunk as ChunkModel
 from src.db.models.project_source import ProjectSource
+from src.services.indexing._boilerplate import excluded_metadata
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -185,8 +186,10 @@ class VectorIndexingService:
                 await self._embedding_client.embed_batch([c.content for c in batch])
             )
 
-        # 세션 #2: 새 chunks 일괄 INSERT.
+        # 세션 #2: 새 chunks 일괄 INSERT. 근거로 못 쓰는 청크는 여기서 표시한다 —
+        # 지우지 않고 검색에서만 뺀다(원문 대조 화면은 모델이 받은 것을 그대로 보여줘야 한다).
         async with self._session_maker() as session:
+            metas = await excluded_metadata(session, source.project_id, chunks)
             session.add_all(
                 [
                     ChunkModel(
@@ -196,7 +199,7 @@ class VectorIndexingService:
                         content=c.content,
                         embedding=embed_results[i].embedding,
                         chunk_index=c.chunk_index,
-                        metadata_=c.metadata,
+                        metadata_=metas[i],
                     )
                     for i, c in enumerate(chunks)
                 ]
