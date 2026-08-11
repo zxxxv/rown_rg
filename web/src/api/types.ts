@@ -90,11 +90,14 @@ export const ProjectConfigSchema = z.object({
   outline: OutlineSchema.optional(),
   // 품질 모드 - 역할별로 모델이 갈린다(백엔드 stages._models_for):
   //   economy  = 수집·검증 Haiku 4.5 + 본문 GPT-5.4-mini
-  //   standard = 전역 설정 모델(기본 Sonnet 4.6). 파트 계획은 두 모드 다 Sonnet 4.6.
-  model_mode: z.enum(["economy", "standard"]),
+  //   standard = 전역 설정 모델(기본 Sonnet 4.6)
+  //   premium  = 수집·검증 Sonnet 4.6 + 본문 Opus 4.7. 파트 계획은 세 모드 다 Sonnet 4.6.
+  model_mode: z.enum(["economy", "standard", "premium"]),
   // 이 보고서에 적용할 개인 작성 규칙 id 목록(백엔드 stages._selected_rule_ids 소비).
   // optional: 이 필드 도입 전 config가 catch로 통째 초기화되지 않게 한다.
   rules: z.array(z.string()).optional(),
+  // 자료 검색 범위 - 국내 위주/반반/해외 위주. 백엔드 stages._search_scope 소비.
+  search_scope: z.enum(["domestic", "balanced", "global"]).optional(),
   // HyDE 검색 확장 - 백엔드 stages._hyde_enabled_for 소비(없으면 전역 기본 off).
   // optional: 이 필드 도입 전 프로젝트 config가 catch로 통째 초기화되지 않게 한다.
   hyde_enabled: z.boolean().optional(),
@@ -111,6 +114,7 @@ export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 export const DEFAULT_PROJECT_CONFIG: ProjectConfig = {
   preset: null,
   model_mode: "standard",
+  search_scope: "balanced",
   rules: [],
   hyde_enabled: false,
   notification_channels: [],

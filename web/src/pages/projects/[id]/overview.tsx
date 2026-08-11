@@ -63,6 +63,12 @@ const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
   cancelled: "danger",
 };
 
+const MODEL_MODE_LABEL: Record<string, string> = {
+  economy: "절약(Haiku + GPT-mini)",
+  standard: "표준(Sonnet 4.6)",
+  premium: "고급(Sonnet 수집 + Opus 작성)",
+};
+
 const DEPTH_LABEL: Record<string, string> = {
   outline_only: "개요만",
   standard: "표준",
@@ -219,10 +225,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               </Badge>
               <Badge variant="secondary">
                 {/* 역할별로 모델이 다르다 - 'Haiku'로만 적으면 사실과 다르다(본문은 GPT-5.4-mini) */}
-                모델 ·{" "}
-                {project.config.model_mode === "economy"
-                  ? "절약(Haiku + GPT-mini)"
-                  : "표준(Sonnet 4.6)"}
+                모델 · {MODEL_MODE_LABEL[project.config.model_mode] ?? project.config.model_mode}
               </Badge>
             </div>
           </div>

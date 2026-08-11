@@ -48,11 +48,7 @@ SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
   * high — 정부·공공기관(통계청·부처·지자체 등), 학술지·대학·국책/공인 연구기관, 국제기구
   * medium — 주요 언론사 보도, 산업 협회·시장조사기관 리포트, 기업 공식 발표(IR·백서)
   * low — 개인 블로그·커뮤니티·위키, 출처 불명 집계 사이트, 광고성 콘텐츠
-- 출처는 국내·해외를 함께 모은다. 국내는 정부·공공기관·국책연구기관을, 해외는
-  주요국 정부기관·국제기구(OECD·IEA·EU·IEEE 등)·해외 학술지/시장조사기관을 본다.
-- **검색 횟수의 절반 이상을 영어 질의로 하라**. 주제가 한국어라고 한국어로만 검색하면
-  해외 1차 자료가 통째로 빠진다(실측: 지역 설정을 풀어도 10건 중 8건이 국내였다).
-  한국어 질의로 국내 기관을 찾았으면, 같은 주제를 영어로 다시 검색해 해외 자료를 채워라.
+- {scope_rule}
 - 글로벌 비교·기술 동향·주요국 정책이 주제에 있으면 최소 3개국 이상의 1차 자료를 모은다.
 - 가능하면 최근 3년 이내 자료를 우선한다(최신성).
 
@@ -69,6 +65,31 @@ SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
 - sections 값은 반드시 입력 목차의 항목 문자열과 정확히 일치시켜라."""
 
 
+# 검색 범위 — 프로젝트가 고른다(국내 제도·통계가 본질인 보고서와 해외 기술 동향이
+# 본질인 보고서는 정답이 다르다). (지역 힌트, 프롬프트 지시문).
+SEARCH_SCOPES: dict[str, tuple[str | None, str]] = {
+    "domestic": (
+        "KR",
+        "국내 자료를 우선한다. 정부·공공기관·국책연구기관·주요 언론을 중심으로 모으고, "
+        "해외 자료는 비교가 꼭 필요할 때만 보조로 쓴다.",
+    ),
+    "balanced": (
+        None,
+        "국내와 해외를 절반씩 모은다. **검색 횟수의 절반 이상을 영어 질의로 하라** — "
+        "주제가 한국어라고 한국어로만 검색하면 해외 1차 자료가 통째로 빠진다"
+        "(실측: 지역 설정을 풀어도 한국어 질의만 하면 10건 중 8건이 국내였다). "
+        "해외는 주요국 정부기관·국제기구(OECD·IEA·EU·IEEE 등)·해외 학술지를 본다.",
+    ),
+    "global": (
+        None,
+        "해외 자료를 우선한다. **검색의 2/3 이상을 영어 질의로 하고** 주요국 정부기관·"
+        "국제기구·해외 학술지/시장조사기관의 1차 자료를 먼저 모은다. "
+        "국내 자료는 대조·적용 맥락으로 보조한다.",
+    ),
+}
+DEFAULT_SEARCH_SCOPE = "balanced"
+
+
 class ResearchSpec(BaseModel):
     topic: str
     report_type: str
@@ -79,6 +100,8 @@ class ResearchSpec(BaseModel):
     # 싣고 매칭에는 쓰지 않는다 — 목차에 있는 방향·핵심포인트·분석 관점이 수집 단계로
     # 전달되지 않아 '예산 산출' 같은 절이 빈손으로 남던 문제(2026-08-09 실측).
     briefs: list[str] = []
+    # 검색 범위(domestic|balanced|global) — 프로젝트 설정에서 온다.
+    scope: str = DEFAULT_SEARCH_SCOPE
 
 
 class CollectedSource(BaseModel):
@@ -129,16 +152,17 @@ class WebResearchService:
             },
             ensure_ascii=False,
         )
+        country, scope_rule = SEARCH_SCOPES.get(spec.scope, SEARCH_SCOPES[DEFAULT_SEARCH_SCOPE])
         request = CompletionRequest(
             model=model,
-            system=SYSTEM_PROMPT,
+            system=SYSTEM_PROMPT.replace("{scope_rule}", scope_rule),
             messages=[Message(role="user", content=user)],
             max_tokens=max_tokens,
             web_search=WebSearchConfig(
                 max_uses=max_uses,
                 max_fetch_uses=max_fetch_uses,
                 fetch_pages=True,
-                user_country=settings.research_user_country or None,
+                user_country=settings.research_user_country or country,
                 allowed_domains=allowed_domains,
             ),
         )

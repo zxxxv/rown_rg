@@ -28,6 +28,12 @@ export interface ProjectConfigFormProps {
   submitting?: boolean;
 }
 
+const MODEL_MODE_LABEL: Record<string, string> = {
+  economy: "절약(Haiku + GPT-mini)",
+  standard: "표준(Sonnet 4.6)",
+  premium: "고급(Sonnet 수집 + Opus 작성)",
+};
+
 const EMPTY_DEFAULTS: ProjectFormValues = {
   title: "",
   topic: "",
@@ -141,9 +147,15 @@ export function ProjectConfigForm({
             {/* 자료 출처 3종(자동 검색·라이브러리·업로드) 안내는 뺐다 - 라이브러리와
                 업로드가 '준비 중'으로 적혀 있었지만 실제로는 자료 검토 단계에서 되는
                 기능이다. 거짓 라벨을 지우고 실제 스위치인 HyDE만 남긴다(2026-08-10). */}
-            <div className="flex flex-col gap-3 border-t border-border p-4">
-              <h3 className="text-sm font-semibold text-fg">검색 품질</h3>
-              <HydeToggle />
+            <div className="flex flex-col gap-6 border-t border-border p-4">
+              <div className="flex flex-col gap-3">
+                <h3 className="text-sm font-semibold text-fg">자료 검색 범위</h3>
+                <SearchScopePicker />
+              </div>
+              <div className="flex flex-col gap-3">
+                <h3 className="text-sm font-semibold text-fg">검색 품질</h3>
+                <HydeToggle />
+              </div>
             </div>
           </details>
         </div>
@@ -153,10 +165,7 @@ export function ProjectConfigForm({
             <div className="flex flex-wrap gap-1.5">
               <Badge variant="secondary">프리셋 · {presetLabel(watchedConfig.preset)}</Badge>
               <Badge variant="secondary">
-                모델 ·{" "}
-                {watchedConfig.model_mode === "economy"
-                  ? "절약(Haiku + GPT-mini)"
-                  : "표준(Sonnet 4.6)"}
+                모델 · {MODEL_MODE_LABEL[watchedConfig.model_mode] ?? watchedConfig.model_mode}
               </Badge>
             </div>
             <div className="flex items-center gap-2">
@@ -187,10 +196,7 @@ export function ProjectConfigForm({
                     : "미구성 (필수)"}
                 </Badge>
                 <Badge variant="secondary">
-                  모델 ·{" "}
-                  {watchedConfig.model_mode === "economy"
-                    ? "절약(Haiku + GPT-mini)"
-                    : "표준(Sonnet 4.6)"}
+                  모델 · {MODEL_MODE_LABEL[watchedConfig.model_mode] ?? watchedConfig.model_mode}
                 </Badge>
               </div>
             </div>
@@ -290,6 +296,47 @@ function NotificationChannels() {
 }
 
 /** HyDE 검색 확장 토글 - 실스위치(백엔드 stages._hyde_enabled_for가 소비). */
+// 국내 제도·통계가 본질인 보고서와 해외 기술 동향이 본질인 보고서는 정답이 다르다 -
+// 한쪽으로 고정하지 않고 프로젝트마다 고르게 한다(2026-08-11).
+const SEARCH_SCOPES = [
+  { value: "domestic" as const, label: "국내 위주", hint: "정부·공공기관·국책연구기관 중심" },
+  { value: "balanced" as const, label: "국내·해외 반반", hint: "영어 질의를 절반 이상 섞습니다" },
+  { value: "global" as const, label: "해외 위주", hint: "주요국 기관·국제기구·해외 학술지 우선" },
+];
+
+function SearchScopePicker() {
+  const { control } = useFormContext<ProjectFormValues>();
+  return (
+    <Controller
+      name="config.search_scope"
+      control={control}
+      render={({ field }) => (
+        <div className="flex flex-wrap gap-2">
+          {SEARCH_SCOPES.map((opt) => {
+            const active = (field.value ?? "balanced") === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => field.onChange(opt.value)}
+                className={cn(
+                  "flex flex-col gap-0.5 rounded border px-3 py-2 text-left transition-colors",
+                  active
+                    ? "border-accent bg-bg-info"
+                    : "border-border bg-bg hover:border-fg-tertiary",
+                )}
+              >
+                <span className="text-sm font-medium text-fg">{opt.label}</span>
+                <span className="text-xs text-fg-tertiary">{opt.hint}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    />
+  );
+}
+
 function HydeToggle() {
   const { control } = useFormContext<ProjectFormValues>();
   return (

@@ -6,11 +6,12 @@ import type { ProjectFormValues } from "./schema";
 // 역할별로 다른 모델을 쓴다(멀티 프로바이더):
 //   economy  = 수집·검증 Haiku 4.5 + 본문 GPT-5.4-mini
 //   standard = 수집·검증·본문 전역 설정 모델(기본 Sonnet 4.6)
+//   premium  = 수집·검증 Sonnet 4.6 + 본문 Opus 4.7(사용자 요청: 검색은 sonnet, 작성만 opus)
 //   파트 계획은 두 모드 모두 Sonnet 4.6(_PLAN_MODEL) - 절당 1콜이라 비용이 무시할 수준.
 // 라벨을 'Haiku'로만 적어두면 사실과 다르다(2026-08-10 실측: 절약 런의 본문은 전부
 // gpt-5.4-mini였다).
 const MODES: {
-  value: "standard" | "economy";
+  value: "standard" | "economy" | "premium";
   label: string;
   model: string;
   hint: string;
@@ -20,6 +21,12 @@ const MODES: {
     label: "표준 (품질 우선)",
     model: "Sonnet 4.6",
     hint: "수집·본문·검증 모두 Sonnet 4.6. 납품용 - 페르소나·분량 목표를 온전히 실현합니다.",
+  },
+  {
+    value: "premium",
+    label: "고급 (품질 최우선)",
+    model: "수집 Sonnet 4.6 + 본문 Opus 4.7",
+    hint: "본문만 상위 모델로 씁니다. 수집은 도구를 도는 루프라 모델을 올려도 회수량이 크게 늘지 않지만, 본문은 모델 품질이 문장에 그대로 남습니다. 표준 대비 작성 비용이 약 1.7배입니다.",
   },
   {
     value: "economy",

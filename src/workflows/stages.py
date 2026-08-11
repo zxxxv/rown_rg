@@ -195,16 +195,30 @@ _ECONOMY_WRITE_MODEL = "gpt-5.4-mini-2026-03-17"
 # 1콜·600토큰이라 비용이 무시할 수준이라, 절약 모드에서도 상위 모델을 쓴다.
 # (Sonnet 5는 같은 역할에서 계획 실패 1/2회 관측 — 안정성 때문에 4.6 유지)
 _PLAN_MODEL = "claude-sonnet-4-6"
+# 고급 모드 — 수집은 Sonnet, 본문만 Opus. 수집은 도구를 여러 번 도는 루프라 상위
+# 모델을 써도 회수량이 크게 늘지 않는 반면, 본문은 모델 품질이 그대로 문장에 남는다
+# (사용자 요청 2026-08-11: "검색은 sonnet, 글 작성만 opus").
+_PREMIUM_RESEARCH_MODEL = "claude-sonnet-4-6"
+_PREMIUM_WRITE_MODEL = "claude-opus-4-7"
 
 
 def _models_for(state: ProjectState) -> dict[str, str]:
     """프로젝트 품질 모드(config.model_mode) → 역할별 모델.
 
+    premium: 수집·검증은 Sonnet 4.6, 본문은 Opus 4.7(품질 우선).
     economy: 수집·검증은 Haiku, 본문은 gpt-5.4-mini(비용 우선). standard: 전역 설정
     (DB 오버라이드→env, 기본 Sonnet 4.6). 두 모드 모두 파트 계획만 _PLAN_MODEL.
     RAPTOR(gemini)·임베딩은 모드와 무관.
     """
     mode = state.options.get("model_mode") if isinstance(state.options, dict) else None
+    if mode == "premium":
+        return {
+            "planner": _PREMIUM_RESEARCH_MODEL,
+            "research": _PREMIUM_RESEARCH_MODEL,
+            "write": _PREMIUM_WRITE_MODEL,
+            "write_plan": _PLAN_MODEL,
+            "verify": _PREMIUM_RESEARCH_MODEL,
+        }
     if mode == "economy":
         return {
             "planner": _ECONOMY_MODEL,
@@ -300,6 +314,18 @@ async def _collect_chapter(
         )
 
 
+def _search_scope(state: ProjectState) -> str:
+    """검색 범위(국내/반반/해외) — 프로젝트 옵션에서 온다.
+
+    국내 제도·통계가 본질인 보고서와 해외 기술 동향이 본질인 보고서는 정답이 달라
+    한쪽으로 고정할 수 없다(2026-08-11). 값이 없거나 모르면 '반반'.
+    """
+    from src.services.research.web_research import DEFAULT_SEARCH_SCOPE, SEARCH_SCOPES
+
+    raw = state.options.get("search_scope") if isinstance(state.options, dict) else None
+    return raw if raw in SEARCH_SCOPES else DEFAULT_SEARCH_SCOPE
+
+
 async def _collect_sources(
     state: ProjectState,
     *,
@@ -366,6 +392,7 @@ async def _collect_sources(
             spec = ResearchSpec(
                 topic=topic,
                 report_type=state.preset or "blank",
+                scope=_search_scope(state),
                 outline=section_titles,
                 briefs=[
                     _section_brief(sec)
