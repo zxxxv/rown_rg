@@ -1,4 +1,3 @@
-import { Coins, Zap } from "lucide-react";
 import type { MyTokenUsage } from "@/api/types";
 import { cn } from "@/lib/utils";
 
@@ -6,8 +5,9 @@ import { cn } from "@/lib/utils";
 // 한도는 토큰이 아니라 비용(달러)으로 집행된다(clients/llm/quota_gate). 그래서 토큰은
 // 사용량만, 비용은 한도 대비로 보여준다 - 없는 상한을 지어내지 않는다.
 //
-// 숫자만 나열하면 "많은 건지 적은 건지"를 읽는 데 매번 계산이 필요하다. 남은 여유를
-// 막대와 색으로 먼저 보이게 하고, 정확한 값은 마우스를 올리면 나온다.
+// 헤더는 본작업이 아니다. 테두리·배경을 두르면 그만큼 시선을 가져가므로 글자만 놓고,
+// 남은 여유는 비용 밑 얇은 선으로만 알린다. 라벨은 흐리게 수치는 진하게 둬서
+// 훑을 때 숫자가 먼저 들어오게 한다. 정확한 값과 기간은 마우스를 올리면 나온다.
 
 /** 17,923,918 → "17.9M". 헤더는 폭이 귀하고, 정확한 값은 툴팁에 있다. */
 function compactTokens(n: number): string {
@@ -17,10 +17,10 @@ function compactTokens(n: number): string {
 }
 
 /** 한도에 가까울수록 눈에 띄게 - 80%부터 주의, 95%부터 경고. */
-function toneOf(ratio: number): { bar: string; text: string; ring: string } {
-  if (ratio >= 0.95) return { bar: "bg-fg-danger", text: "text-fg-danger", ring: "bg-bg-danger" };
-  if (ratio >= 0.8) return { bar: "bg-fg-warning", text: "text-fg-warning", ring: "bg-bg-warning" };
-  return { bar: "bg-accent", text: "text-fg", ring: "bg-bg-secondary" };
+function toneOf(ratio: number): { bar: string; value: string } {
+  if (ratio >= 0.95) return { bar: "bg-fg-danger", value: "text-fg-danger" };
+  if (ratio >= 0.8) return { bar: "bg-fg-warning", value: "text-fg-warning" };
+  return { bar: "bg-accent", value: "text-fg" };
 }
 
 export function UsageMeter({ usage }: { usage: MyTokenUsage }) {
@@ -31,46 +31,40 @@ export function UsageMeter({ usage }: { usage: MyTokenUsage }) {
   const period = `${usage.period_start} ~ ${usage.period_end}`;
 
   return (
-    <div className="flex items-center gap-1.5">
-      {/* 토큰: 상한이 없는 값이라 막대 없이 수치만. 좁은 화면에서는 접는다. */}
-      <div
-        className="hidden items-center gap-1.5 rounded-full border border-border bg-bg-secondary px-2.5 py-1 sm:flex"
+    // tabular-nums: 값이 바뀔 때 자리폭이 흔들리지 않게(헤더가 미세하게 들썩였다)
+    <div className="flex items-center gap-4 text-xs tabular-nums">
+      {/* 토큰은 상한이 없는 값이라 막대를 붙이지 않는다. 좁은 화면에서는 접는다. */}
+      <span
+        className="hidden items-center gap-1.5 sm:inline-flex"
         title={`이번 달 토큰 ${tokens.toLocaleString()} (${period})\n입력 ${usage.total_input_tokens.toLocaleString()} / 출력 ${usage.total_output_tokens.toLocaleString()}`}
       >
-        <Zap className="h-3.5 w-3.5 text-fg-tertiary" aria-hidden />
-        <span className="font-mono text-xs text-fg">{compactTokens(tokens)}</span>
-        <span className="text-[11px] text-fg-tertiary">토큰</span>
-      </div>
+        <span className="text-fg-tertiary">토큰</span>
+        <span className="font-medium text-fg-secondary">{compactTokens(tokens)}</span>
+      </span>
 
-      {/* 비용: 실제로 집행되는 한도라 남은 여유를 막대로 보인다. */}
-      <div
-        className={cn(
-          "flex items-center gap-2 rounded-full border border-border px-2.5 py-1",
-          ratio >= 0.8 ? tone.ring : "bg-bg-secondary",
-        )}
+      <span
+        className="flex flex-col gap-1"
         title={
           limit
             ? `이번 달 비용 $${usage.total_cost_usd.toFixed(2)} / 한도 $${limit.toFixed(2)} (${Math.round(ratio * 100)}%)\n${period}`
             : `이번 달 비용 $${usage.total_cost_usd.toFixed(2)} (${period})`
         }
       >
-        <Coins className={cn("h-3.5 w-3.5", ratio >= 0.8 ? tone.text : "text-fg-tertiary")} />
-        <span className="font-mono text-xs text-fg">${usage.total_cost_usd.toFixed(2)}</span>
+        <span className="flex items-baseline gap-1.5">
+          <span className="text-fg-tertiary">비용</span>
+          <span className={cn("font-medium", tone.value)}>${usage.total_cost_usd.toFixed(2)}</span>
+          {limit ? <span className="text-fg-tertiary">/ ${limit.toFixed(0)}</span> : null}
+        </span>
         {limit ? (
-          <>
-            <span className="font-mono text-[11px] text-fg-tertiary">/ ${limit.toFixed(0)}</span>
+          // 밑줄 자리의 잔량선 - 숫자를 읽지 않아도 여유가 보인다.
+          <span className="block h-[3px] w-full overflow-hidden rounded-full bg-border" aria-hidden>
             <span
-              className="hidden h-1.5 w-16 overflow-hidden rounded-full bg-border md:block"
-              aria-hidden
-            >
-              <span
-                className={cn("block h-full rounded-full transition-[width]", tone.bar)}
-                style={{ width: `${Math.max(ratio * 100, 2)}%` }}
-              />
-            </span>
-          </>
+              className={cn("block h-full rounded-full transition-[width]", tone.bar)}
+              style={{ width: `${Math.max(ratio * 100, 2)}%` }}
+            />
+          </span>
         ) : null}
-      </div>
+      </span>
     </div>
   );
 }
