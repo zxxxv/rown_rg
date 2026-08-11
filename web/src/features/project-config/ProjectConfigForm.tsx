@@ -131,6 +131,9 @@ export function ProjectConfigForm({
           <Section number={6} title="알림">
             <NotificationChannels />
           </Section>
+          <Section number={7} title="검색 옵션">
+            <SearchScopePicker />
+          </Section>
 
           {/* 필수 결정은 위 5개로 끝. 기능 토글 6종은 제거됨(2026-08-04) -
               출처 태깅·약어집은 파이프라인 기본 동작. 남은 실스위치는 HyDE뿐. */}
@@ -147,15 +150,9 @@ export function ProjectConfigForm({
             {/* 자료 출처 3종(자동 검색·라이브러리·업로드) 안내는 뺐다 - 라이브러리와
                 업로드가 '준비 중'으로 적혀 있었지만 실제로는 자료 검토 단계에서 되는
                 기능이다. 거짓 라벨을 지우고 실제 스위치인 HyDE만 남긴다(2026-08-10). */}
-            <div className="flex flex-col gap-6 border-t border-border p-4">
-              <div className="flex flex-col gap-3">
-                <h3 className="text-sm font-semibold text-fg">자료 검색 범위</h3>
-                <SearchScopePicker />
-              </div>
-              <div className="flex flex-col gap-3">
-                <h3 className="text-sm font-semibold text-fg">검색 품질</h3>
-                <HydeToggle />
-              </div>
+            <div className="flex flex-col gap-3 border-t border-border p-4">
+              <h3 className="text-sm font-semibold text-fg">검색 품질</h3>
+              <HydeToggle />
             </div>
           </details>
         </div>
