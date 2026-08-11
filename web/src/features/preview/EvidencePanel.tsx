@@ -258,3 +258,68 @@ function EvidenceCard({ item }: { item: EvidenceChunk }) {
     </li>
   );
 }
+
+// ─── 블록 단위 근거 ───
+// 절 전체 목록은 본문 맨 아래에 있어 읽는 자리에서 멀다. 블록을 고르면 그 블록이 문 근거만
+// 우측 패널에 띄운다 - 절에 출처가 12건이어도 한 블록이 쓰는 건 보통 1~3건이라, 좁혀 보여야
+// 대조가 실제로 일어난다.
+
+const MARK_RE = /\[(\d+)\]|\(출처\s*([\d,\s]+)\)/g;
+
+function markerNumbers(text: string): Set<number> {
+  const out = new Set<number>();
+  for (const m of text.matchAll(MARK_RE)) {
+    const raw = m[1] ?? m[2] ?? "";
+    for (const token of raw.split(",")) {
+      const n = Number.parseInt(token.trim(), 10);
+      if (!Number.isNaN(n)) out.add(n);
+    }
+  }
+  return out;
+}
+
+export function BlockEvidence({
+  projectId,
+  sectionId,
+  blocks,
+}: {
+  projectId: string;
+  sectionId: string;
+  /** 선택된 블록 본문들 - 여기 등장하는 인용 번호만 추린다 */
+  blocks: string[];
+}) {
+  const query = useSectionEvidence(projectId, sectionId);
+  const data = query.data;
+  if (!data) return null;
+
+  const numbers = markerNumbers(blocks.join("\n"));
+  const items = data.items.filter((i) => i.cited && i.number !== null && numbers.has(i.number));
+  // 문장은 본문에서 그대로 잘라낸 것이라 블록 안에 들어 있다 - 번호보다 정확히 좁혀진다.
+  const claims = data.claims.filter((c) => blocks.some((b) => b.includes(c.claim)));
+  const flagged = claims.filter((c) => c.status !== "aligned");
+
+  if (items.length === 0 && claims.length === 0) {
+    return <p className="text-xs text-fg-tertiary">이 블록에는 인용 표기가 없습니다.</p>;
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <p className="text-xs font-medium text-fg">이 블록의 근거 {items.length}건</p>
+        {flagged.length > 0 ? (
+          <Badge variant="outline" className="border-fg-warning/40 bg-bg-warning">
+            확인 필요 {flagged.length}
+          </Badge>
+        ) : null}
+      </div>
+      {flagged.length > 0 ? <ClaimTable claims={flagged} chunks={data.items} /> : null}
+      {items.length > 0 ? (
+        <ul className="flex flex-col gap-2">
+          {items.map((item) => (
+            <EvidenceCard key={item.chunk_id} item={item} />
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}

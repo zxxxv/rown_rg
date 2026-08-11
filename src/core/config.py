@@ -198,6 +198,9 @@ class Settings(BaseSettings):
     # PM 검증 — assemble 직후 챕터당 1콜, 문서 횡단 일관성 경고 리포트(차단 아님).
     pm_verify_enabled: bool = True
     verify_model: str = "claude-sonnet-4-6"  # 테스트 시 .env로 haiku 교체
+    # 근거 동봉 판정 — 어휘 겹침이 건져 올린 의심 문장만 LLM에 근거와 함께 넘겨
+    # 뒷받침 여부를 확인한다(의역 오탐 제거). 끄면 겹침 판정만으로 경고한다.
+    claim_verify_enabled: bool = True
 
     @property
     def is_production(self) -> bool:

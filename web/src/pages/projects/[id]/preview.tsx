@@ -42,7 +42,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
-import { EvidencePanel } from "@/features/preview/EvidencePanel";
+import { BlockEvidence, EvidencePanel } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -989,6 +989,15 @@ function SectionView({
                       <X className="h-3.5 w-3.5" />
                       선택 해제
                     </Button>
+                  </div>
+
+                  {/* 근거를 읽는 자리 옆에 둔다 - 절 전체 목록은 본문 맨 아래라 멀다 */}
+                  <div className="border-t border-border pt-3">
+                    <BlockEvidence
+                      projectId={projectId}
+                      sectionId={sectionId}
+                      blocks={selectedBlocks}
+                    />
                   </div>
 
                   <div className="flex flex-col gap-2 border-t border-border pt-3">

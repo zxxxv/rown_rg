@@ -193,7 +193,7 @@ async def run_pm_verify(state: ProjectState, *, model: str | None = None) -> int
     try:
         from src.services.qa.evidence_findings import evidence_findings
 
-        rows.extend(await evidence_findings(state.project_id))
+        rows.extend(await evidence_findings(state.project_id, model=model, user_id=state.user_id))
     except Exception:
         logger.warning("pm_verify.evidence_failed", project_id=str(state.project_id), exc_info=True)
     await persist_findings(state.project_id, rows)

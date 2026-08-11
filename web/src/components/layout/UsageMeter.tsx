@@ -2,19 +2,13 @@ import type { MyTokenUsage } from "@/api/types";
 import { cn } from "@/lib/utils";
 
 // ─── 헤더 사용량 표시 ───
-// 한도는 토큰이 아니라 비용(달러)으로 집행된다(clients/llm/quota_gate). 그래서 토큰은
-// 사용량만, 비용은 한도 대비로 보여준다 - 없는 상한을 지어내지 않는다.
+// 한도는 토큰이 아니라 비용(달러)으로 집행된다(clients/llm/quota_gate). 헤더에는 그
+// 집행 단위만 둔다 - 토큰 수는 한도와 무관해서 헤더에서 판단에 쓰이지 않는다
+// (사용 내역은 마이페이지에서 입력·출력·모델별로 본다).
 //
 // 헤더는 본작업이 아니다. 테두리·배경을 두르면 그만큼 시선을 가져가므로 글자만 놓고,
 // 남은 여유는 비용 밑 얇은 선으로만 알린다. 라벨은 흐리게 수치는 진하게 둬서
 // 훑을 때 숫자가 먼저 들어오게 한다. 정확한 값과 기간은 마우스를 올리면 나온다.
-
-/** 17,923,918 → "17.9M". 헤더는 폭이 귀하고, 정확한 값은 툴팁에 있다. */
-function compactTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 10_000) return `${Math.round(n / 1_000)}K`;
-  return n.toLocaleString();
-}
 
 /** 한도에 가까울수록 눈에 띄게 - 80%부터 주의, 95%부터 경고. */
 function toneOf(ratio: number): { bar: string; value: string } {
@@ -24,7 +18,6 @@ function toneOf(ratio: number): { bar: string; value: string } {
 }
 
 export function UsageMeter({ usage }: { usage: MyTokenUsage }) {
-  const tokens = usage.total_input_tokens + usage.total_output_tokens;
   const limit = usage.cost_limit_usd;
   const ratio = limit && limit > 0 ? Math.min(usage.total_cost_usd / limit, 1) : 0;
   const tone = toneOf(ratio);
@@ -32,16 +25,7 @@ export function UsageMeter({ usage }: { usage: MyTokenUsage }) {
 
   return (
     // tabular-nums: 값이 바뀔 때 자리폭이 흔들리지 않게(헤더가 미세하게 들썩였다)
-    <div className="flex items-center gap-4 text-xs tabular-nums">
-      {/* 토큰은 상한이 없는 값이라 막대를 붙이지 않는다. 좁은 화면에서는 접는다. */}
-      <span
-        className="hidden items-center gap-1.5 sm:inline-flex"
-        title={`이번 달 토큰 ${tokens.toLocaleString()} (${period})\n입력 ${usage.total_input_tokens.toLocaleString()} / 출력 ${usage.total_output_tokens.toLocaleString()}`}
-      >
-        <span className="text-fg-tertiary">토큰</span>
-        <span className="font-medium text-fg-secondary">{compactTokens(tokens)}</span>
-      </span>
-
+    <div className="flex items-center text-xs tabular-nums">
       <span
         className="flex flex-col gap-1"
         title={
