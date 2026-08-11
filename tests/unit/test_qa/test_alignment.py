@@ -111,3 +111,36 @@ class TestAlignSection:
         content = "국내 생산 능력은 42.7% 확대된 것으로 나타났음 [1]"
         [claim] = align_section(content, {cid: chunk}, {1: [cid]})
         assert claim.ungrounded == ["42.7%"]
+
+
+class TestCrossLingual:
+    """한글 주장 + 영문 근거는 어휘 겹침으로 판정할 수 없다.
+
+    실측(2026-08-12, 14절 1,455주장): 영문 근거 866건의 겹침 성적이 일치 1%·불일치 89%로
+    사실상 정보량 0이었다. 수치·영문 토큰만으로 채점하도록 바꿔 보니 이번엔 반대로
+    '일치' 판정의 40%가 근거 없는 문장이었다 - 겹침 1.00짜리도 포함이다.
+    그래서 점수는 대목을 가리키는 데만 쓰고 판정은 LLM으로 넘긴다.
+    """
+
+    def test_영문_근거는_점수가_높아도_판정하지_않는다(self) -> None:
+        cid = uuid4()
+        claim = "MRFR는 2025~2035년 연평균성장률을 30.33%로 제시하며 가장 높은 성장률을 전망함 [1]"
+        chunks = {cid: "MRFR projects a CAGR of 30.33% for the 2025-2035 period."}
+        (result,) = align_section(claim, chunks, {1: [cid]})
+        assert result.status == "crosslingual"
+        assert result.span is not None  # 어디를 보면 되는지는 여전히 가리킨다
+
+    def test_한글_근거는_그대로_판정한다(self) -> None:
+        cid = uuid4()
+        claim = "숏폼 시장은 2026년 1,350억 달러로 성장할 전망임 [1]"
+        chunks = {cid: "글로벌 숏폼 시장은 2026년 1,350억 달러 규모로 성장할 것으로 전망된다."}
+        (result,) = align_section(claim, chunks, {1: [cid]})
+        assert result.status == "aligned"
+
+    def test_영문_문장은_애초에_주장으로_보지_않는다(self) -> None:
+        """보고서 본문은 한국어다 - 종결형이 없는 영문 줄은 주장 단위가 아니다.
+        교차언어 판정이 필요한 경우는 '한글 주장 + 영문 근거' 한 방향뿐이다."""
+        cid = uuid4()
+        claim = "The market will reach 135 billion dollars by 2026, growing at 25.6% CAGR [1]"
+        chunks = {cid: "The short-form market reaches 135 billion dollars by 2026."}
+        assert align_section(claim, chunks, {1: [cid]}) == []

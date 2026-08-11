@@ -80,7 +80,9 @@ def suspicious_indices(claims: list[ClaimAlignment]) -> list[int]:
     return [
         i
         for i, c in enumerate(claims)
-        if c.numbers and (c.status in ("weak", "unmatched") or c.ungrounded)
+        # crosslingual은 '겹침으로 못 쟀다'는 뜻이라 반드시 판정으로 넘긴다 - 영문 근거가
+        # 근거 풀의 78%를 차지하는 보고서에서는 이게 판정 대상의 대부분이 된다.
+        if c.numbers and (c.status in ("weak", "unmatched", "crosslingual") or c.ungrounded)
     ]
 
 
@@ -106,6 +108,8 @@ def findings_from_claims(
     verified = bool(supported or refuted)
 
     out: list[dict[str, Any]] = []
+    # crosslingual은 여기 넣지 않는다 - 겹침으로 못 잰 것을 "근거에서 확인되지 않는다"고
+    # 알리면 거짓 경고다. 판정을 받았다면 refuted로 들어와 정상적으로 잡힌다.
     unmatched = [
         c
         for i, c in enumerate(claims)

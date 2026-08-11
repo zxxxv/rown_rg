@@ -97,14 +97,31 @@ def _weighted_tokens(text: str) -> dict[str, float]:
 
 
 def overlap_score(claim: str, span: str) -> float:
-    """주장 문장이 이 대목에 얼마나 담겨 있는가 (0~1).
+    """주장 문장이 이 대목에 얼마나 담겨 있는가 (0~1). 비교할 게 없으면 -1.
 
     분모는 주장 쪽 가중치 합이다 — 근거가 길다고 점수가 깎이면 안 된다(긴 청크에
     짧은 근거 한 줄이 정답인 경우가 흔하다).
+
+    **근거가 영문이면 한글 2-gram을 분모에서 뺀다.** 한글 주장의 가중치는 대부분
+    한글 2-gram이 차지하는데 영문 근거에는 그게 있을 수 없다. 그대로 재면 점수가
+    구조적으로 0.1 아래에 깔려 근거를 제대로 옮겨 쓴 문장까지 "불일치"가 된다
+    (2026-08-12 실측: 영문 근거 866건 중 일치 1%·불일치 89%, 한글 근거는 67%/14%).
+    수치와 영문 고유명사는 번역돼도 그대로 남으므로 그것만으로 잰다.
+
+    **이 점수로 "뒷받침된다"를 선언하지는 않는다.** 교차언어에서는 남는 토큰이 수치와
+    영문 고유명사뿐이라, 그것만 맞아도 1.00이 나온다. 실측(2026-08-12, 표본 20)에서
+    그렇게 '일치'가 된 문장의 **40%가 실제로는 근거 없음**이었다 - "CAGR 30.33%로
+    제시하며 가장 높은 성장률을 전망함"은 30.33%만 근거에 있고 '가장 높은'은 없다.
+    한글로 덧붙인 해석이 통째로 미검증으로 남는다. 그래서 점수는 '어디를 보면 되는가'를
+    가리키는 데만 쓰고, 판정은 align_section이 crosslingual로 넘긴다.
     """
     claim_tokens = _weighted_tokens(claim)
     if not claim_tokens:
         return 0.0
+    if not _HANGUL_RUN_RE.search(span):
+        claim_tokens = {t: w for t, w in claim_tokens.items() if not t.startswith("k:")}
+        if not claim_tokens:
+            return 0.0
     span_tokens = _weighted_tokens(span)
     hit = sum(w for t, w in claim_tokens.items() if t in span_tokens)
     return hit / sum(claim_tokens.values())
@@ -144,6 +161,9 @@ class EvidenceSpan:
     end: int
     text: str
     score: float
+    # 이 대목의 언어로 주장을 검증할 수 있는가. 한글 주장 + 외국어 근거는 False -
+    # 겹침 점수는 대목을 가리키는 데만 쓰고 뒷받침 판정은 LLM에 넘긴다.
+    comparable: bool = True
 
 
 @dataclass
@@ -157,11 +177,14 @@ class ClaimAlignment:
 
     @property
     def status(self) -> str:
-        """aligned=대목 특정 · weak=겹침 희박 · unmatched=못 찾음 · uncited=표기 없음."""
+        """aligned=대목 특정 · weak=겹침 희박 · unmatched=못 찾음 · uncited=표기 없음
+        · crosslingual=근거가 외국어라 겹침으로는 판정 불가(LLM 판정 대상)."""
         if not self.numbers:
             return "uncited"
         if self.span is None:
             return "unmatched"
+        if not self.span.comparable:
+            return "crosslingual"
         if self.span.score >= ALIGNED_THRESHOLD:
             return "aligned"
         return "weak" if self.span.score >= WEAK_THRESHOLD else "unmatched"
@@ -191,7 +214,10 @@ def align_section(
                 if not chunk:
                     continue
                 cited_text.append(chunk)
+                # 한글 주장을 외국어 근거로 재는 경우 - 점수는 대목을 가리키는 데만 쓴다.
+                claim_has_hangul = bool(_HANGUL_RUN_RE.search(bare))
                 for start, end, span_text in _spans(chunk):
+                    comparable = not (claim_has_hangul and not _HANGUL_RUN_RE.search(span_text))
                     score = overlap_score(bare, span_text)
                     if best is None or score > best.score:
                         best = EvidenceSpan(
@@ -201,6 +227,7 @@ def align_section(
                             end=end,
                             text=span_text.strip(),
                             score=round(score, 3),
+                            comparable=comparable,
                         )
         out.append(
             ClaimAlignment(
