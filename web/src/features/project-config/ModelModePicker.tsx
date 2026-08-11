@@ -14,25 +14,33 @@ const MODES: {
   value: "standard" | "economy" | "premium";
   label: string;
   model: string;
+  cost: string;
+  quality: string;
   hint: string;
 }[] = [
   {
     value: "standard",
     label: "표준 (품질 우선)",
     model: "Sonnet 4.6",
-    hint: "수집·본문·검증 모두 Sonnet 4.6. 납품용 - 페르소나·분량 목표를 온전히 실현합니다.",
+    cost: "14절 보고서 한 편 약 $3~5",
+    quality: "그대로 납품하지 않고 사람이 한 번 훑는 초안",
+    hint: "인용한 근거가 그 문장을 실제로 뒷받침하는 비율이 실측 약 50%였습니다(1절·표본 20). 실패는 주로 근거에 없는 수치·날짜를 지어내는 형태라, 표와 수치는 검토 화면에서 확인하세요.",
   },
   {
     value: "premium",
     label: "고급 (품질 최우선)",
     model: "수집 Sonnet 4.6 + 본문 Opus 5",
-    hint: "본문과 파트 계획만 상위 모델로 씁니다. 수집은 도구를 도는 루프라 모델을 올려도 회수량이 크게 늘지 않지만, 본문은 모델 품질이 문장에 그대로 남습니다. 표준 대비 작성 비용이 약 1.7배입니다.",
+    cost: "한 편 약 $5~7 (본문 단가가 표준의 1.6배)",
+    quality: "검토 부담이 가장 적은 납품 초안",
+    hint: "같은 실측에서 근거 뒷받침 비율 80%. 남은 실패도 수치 창작이 아니라 근거보다 세게 단정하는 쪽이라 고치기 쉽습니다. 같은 자료에서 더 많이 끌어씁니다(근거 활용률 0.91 대 0.75). 수집은 도구를 도는 루프라 모델을 올려도 회수량이 늘지 않아 표준과 같습니다.",
   },
   {
     value: "economy",
     label: "절약 (저비용)",
     model: "Haiku 4.5 + GPT-5.4-mini",
-    hint: "수집·검증은 Haiku, 본문은 GPT-5.4-mini. 테스트·초안용 - 비용이 1/5 수준입니다.",
+    cost: "한 편 약 $2~3 (본문 단가가 표준의 0.4배)",
+    quality: "구조와 흐름만 보는 테스트·초안",
+    hint: "근거가 빈약한 절에서 파트 구성이 무너져 내용이 얕아집니다(그래서 파트 계획만 Sonnet 4.6으로 돌립니다). 문장은 읽을 만하지만 사실 확인을 전부 사람이 한다는 전제에서만 쓰세요.",
   },
 ];
 
@@ -89,6 +97,8 @@ export function ModelModePicker({ disabled }: ModelModePickerProps) {
                 <div className="flex flex-1 flex-col gap-1">
                   <span className="text-sm font-semibold text-fg">{m.label}</span>
                   <span className="font-mono text-xs text-fg-secondary">{m.model}</span>
+                  <span className="text-xs font-medium text-fg-secondary">{m.cost}</span>
+                  <span className="text-xs text-fg-secondary">{m.quality}</span>
                   <p className="text-xs text-fg-tertiary">{m.hint}</p>
                 </div>
               </label>
