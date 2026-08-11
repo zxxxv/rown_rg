@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 
@@ -203,3 +204,34 @@ class TestBgeRerankerV2M3ClientReal:
             return sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
 
         assert rank_order(single) == rank_order(batched), "배치 분할로 순위가 바뀜"
+
+
+class TestDoesNotBlockEventLoop:
+    """리랭킹은 절당 85~103초(실측)다. 이벤트 루프에서 돌리면 그동안 절 단위 병렬
+    작성도, 다른 절의 LLM 응답 수신도 통째로 멈춘다(2026-08-12 검증 런에서 리랭킹
+    로그가 완전히 직렬이었다)."""
+
+    @pytest.mark.asyncio
+    async def test_score_pairs_yields_to_other_coroutines(self) -> None:
+        client = object.__new__(BgeRerankerV2M3Client)
+        client._batch_size = 1
+        client._max_length = 512
+        client._score_batch = lambda _q, chunk: (  # type: ignore[method-assign]
+            time.sleep(0.05) or np.zeros(len(chunk), dtype=np.float32)
+        )
+
+        ticks = 0
+
+        async def _ticker() -> None:
+            nonlocal ticks
+            for _ in range(40):
+                await asyncio.sleep(0.005)
+                ticks += 1
+
+        task = asyncio.create_task(_ticker())
+        scores = await client.score_pairs("질의", ["a", "b", "c", "d"])
+        task.cancel()
+
+        assert len(scores) == 4
+        # 동기로 돌면 0.2초 동안 루프가 멈춰 티커가 한 번도 못 돈다.
+        assert ticks > 0, "리랭킹이 이벤트 루프를 막고 있다"
