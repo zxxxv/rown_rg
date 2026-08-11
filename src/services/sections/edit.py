@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 from uuid import UUID
 
 from src.clients.llm.base import CompletionRequest, LLMClient, Message
@@ -16,7 +17,8 @@ from src.clients.llm.token_tracker import token_context
 from src.core import app_settings
 from src.core.types import SectionDraft, SectionPlan
 from src.services.generation.candidates import generate_section_candidates
-from src.services.generation.writer_context import build_writer_context
+from src.services.generation.split_writer import generate_section_split, plan_part_count
+from src.services.generation.writer_context import build_writer_context, scale_for_evidence
 from src.services.retrieval.section import SectionRetriever
 
 
@@ -27,26 +29,53 @@ async def regenerate_section(
     instruction: str = "",
     client: LLMClient | None = None,
     model: str | None = None,
+    plan_model: str | None = None,
+    analyst_catalog: dict[str, Any] | None = None,
+    rules: list[str] | None = None,
     user_id: UUID | None = None,
     project_id: UUID | None = None,
 ) -> SectionDraft:
     """한 섹션을 검색→생성으로 재작성해 SectionDraft 1개를 반환한다.
 
-    instruction이 있으면 작성 방향에 최우선으로 얹는다. 인용([번호])·근거 제한 등
-    기본 작성 규칙은 WriterContext가 그대로 유지한다.
+    작성 루프(workflows/write_loop)와 같은 조건으로 쓴다 — 배정된 페르소나·분량 목표를
+    얹고, 목표가 단일 호출 한계를 넘으면 분할 생성한다. 조건이 다르면 재작성한 절만
+    짧고 성격이 달라진다(2026-08-11: 재작성이 페르소나·분량을 통째로 잃고 있었다).
+
+    instruction이 있으면 작성 방향에 최우선으로 얹는다. 인용·근거 제한 등 기본 작성
+    규칙은 WriterContext가 그대로 유지한다.
     """
-    ctx = build_writer_context(section)
+    ctx = build_writer_context(section, analyst_catalog, rules)
     if instruction.strip():
         extra = f"편집 지시(최우선 반영): {instruction.strip()}"
         guidance = f"{ctx.guidance}\n\n{extra}" if ctx.guidance else extra
         ctx = replace(ctx, guidance=guidance)
 
     chunks = await retrieve(section)
+    # 재료가 목표에 못 미치면 목표를 내린다 — 검색 뒤라야 실제 근거 수를 안다.
+    ctx = scale_for_evidence(ctx, sum(1 for c in chunks if not c.is_summary))
+    write_model = model or app_settings.get_str("write_model")
+
+    n_parts = plan_part_count(ctx.min_chars)
+    if n_parts > 1:
+        split = await generate_section_split(
+            section,
+            chunks,
+            n_parts=n_parts,
+            model=write_model,
+            plan_model=plan_model,
+            client=client,
+            context=ctx,
+            user_id=user_id,
+            project_id=project_id,
+        )
+        if split is not None:
+            return split
+
     drafts = await generate_section_candidates(
         section,
         chunks,
         n=1,
-        model=model or app_settings.get_str("write_model"),
+        model=write_model,
         client=client,
         context=ctx,
         user_id=user_id,

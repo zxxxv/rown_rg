@@ -96,32 +96,42 @@ export function VerifyReportCard({
 
   if (collapsible && !open) {
     // 접힌 한 줄 - 편집 화면에서 경고가 본작업을 가리지 않게 하고, 필요할 때만 편다.
+    // 재검증은 펼치지 않고도 눌러야 한다: 고치고 나서 하는 일이 "다시 확인"이라
+    // 접힌 상태가 그 시점의 기본 화면이다(버튼 중첩은 invalid HTML이라 형제로 둔다).
     return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
+      <div
         className={cn(
-          "flex w-full flex-wrap items-center gap-2 rounded border p-3 text-left text-sm transition-colors",
+          "flex flex-wrap items-center gap-2 rounded border p-3 text-sm",
           criticalCount > 0
-            ? "border-fg-danger/40 bg-bg-danger hover:border-fg-danger"
-            : "border-fg-warning/40 bg-bg-warning hover:border-fg-warning",
+            ? "border-fg-danger/40 bg-bg-danger"
+            : "border-fg-warning/40 bg-bg-warning",
         )}
       >
-        {criticalCount > 0 ? (
-          <ShieldAlert className="h-4 w-4 shrink-0 text-fg-danger" aria-hidden />
-        ) : (
-          <AlertTriangle className="h-4 w-4 shrink-0 text-fg-warning" aria-hidden />
-        )}
-        <span className="font-medium text-fg">PM 검증 경고 {findings.length}건</span>
-        {criticalCount > 0 ? (
-          // 총 건수만으론 심각한 게 섞였는지 알 수 없다 - critical은 별도 배지로 분리
-          <Badge variant="destructive" className="shrink-0">
-            critical {criticalCount}
-          </Badge>
-        ) : null}
-        <span className="text-xs text-fg-tertiary">펼쳐서 항목을 누르면 해당 절로 이동합니다</span>
-        <ChevronDown className="ml-auto h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
-      </button>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left"
+        >
+          {criticalCount > 0 ? (
+            <ShieldAlert className="h-4 w-4 shrink-0 text-fg-danger" aria-hidden />
+          ) : (
+            <AlertTriangle className="h-4 w-4 shrink-0 text-fg-warning" aria-hidden />
+          )}
+          <span className="font-medium text-fg">PM 검증 경고 {findings.length}건</span>
+          {criticalCount > 0 ? (
+            // 총 건수만으론 심각한 게 섞였는지 알 수 없다 - critical은 별도 배지로 분리
+            <Badge variant="destructive" className="shrink-0">
+              critical {criticalCount}
+            </Badge>
+          ) : null}
+          {done.length > 0 ? (
+            <span className="text-xs text-fg-tertiary">처리함 {done.length}건</span>
+          ) : null}
+          <span className="text-xs text-fg-tertiary">펼쳐서 항목을 누르면 해당 절로 이동</span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
+        </button>
+        {rerunButton}
+      </div>
     );
   }
 

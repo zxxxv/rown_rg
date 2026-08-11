@@ -89,16 +89,32 @@ def _normalize_number(token: str) -> str:
     return token.replace(",", "").rstrip("%")
 
 
+def _is_year(token: str) -> bool:
+    """1900~2099의 네 자리 정수 — 연도 표기로 본다."""
+    if "." in token or "%" in token:
+        return False
+    digits = token.replace(",", "")
+    return len(digits) == 4 and digits.isdigit() and 1900 <= int(digits) <= 2099
+
+
 def _significant_numbers(text: str) -> list[str]:
     """본문에서 '사실 주장'으로 볼 만한 숫자만 추출.
 
     구조적 소수(1개·2장 등 한 자리)는 오탐이 많아 건너뛰고, 두 자리 이상이거나
     소수/퍼센트를 포함한 토큰만 검사 대상으로 삼는다.
+
+    연도(2029)는 뺀다. 원문은 같은 해를 '29년·2029.·`24~`26처럼 다르게 적어 부분문자열
+    매칭이 자주 빗나가는데, 화면에는 "근거에 없는 수치"로 뜬다(2026-08-11 실측: 경고
+    5건 중 3건이 연도). 연도 창작은 근거 동봉 판정이 문맥으로 본다 — 거기서 잡는 편이
+    정확하고, 여기서 잡으면 진짜 신호가 노이즈에 묻힌다. pm_verify가 중복 인용 검사에서
+    연도를 뺀 것과 같은 이유다.
     """
     out: list[str] = []
     for m in _NUMBER_RE.finditer(text):
         token = m.group()
         digits = _normalize_number(token).replace(".", "")
+        if _is_year(token):
+            continue
         if "." in token or "%" in token or len(digits) >= 2:
             out.append(token)
     return out
@@ -114,7 +130,9 @@ def ungrounded_numbers(content: str, cited_content: str) -> list[str]:
     haystack = cited_content.replace(",", "")
     out: list[str] = []
     seen: set[str] = set()
-    for token in _significant_numbers(content):
+    # 제목·표 줄은 주장이 아니다 - 소제목 번호("1.1 사업 배경")가 수치로 잡혀 화면에
+    # 올라왔다. 주장 단위로 좁혀 본다(근거 추적·미인용 검사와 같은 눈금).
+    for token in _significant_numbers("\n".join(claim_units(content))):
         norm = _normalize_number(token)
         if norm in seen:
             continue

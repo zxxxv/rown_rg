@@ -104,31 +104,31 @@ class TestRenderable:
 
 class TestNumericGrounded:
     def test_number_present_in_evidence_passes(self):
-        draft = _draft("매출은 1,234억 원이다.")
+        draft = _draft("지난해 매출은 1,234억 원으로 집계된 것으로 나타났다.")
         result = check_numeric_grounded(draft, cited_content="자료에 따르면 1,234억 원 규모")
         assert result.passed is True
         assert result.severity is CheckSeverity.SOFT
 
     def test_fabricated_number_flagged(self):
-        draft = _draft("성장률은 42.7%에 달했다.")
+        draft = _draft("올해 성장률은 42.7%에 달한 것으로 집계됐다.")
         result = check_numeric_grounded(draft, cited_content="성장률은 낮았다.")
         assert result.passed is False
         assert "42.7" in result.detail
 
     def test_comma_normalization(self):
         # 본문은 콤마 있음, 근거는 콤마 없음 — 정규화 후 매칭돼야.
-        draft = _draft("총액 1,000,000")
+        draft = _draft("사업 총액은 1,000,000원 규모로 편성된 것으로 확인됐다.")
         result = check_numeric_grounded(draft, cited_content="총액 1000000 확인")
         assert result.passed is True
 
     def test_single_digits_ignored(self):
         # 한 자리 구조적 숫자(1개·2장)는 검사 대상이 아님 — 근거가 비어도 통과.
-        draft = _draft("1개의 사례와 2가지 방법")
+        draft = _draft("본 조사는 1개의 사례와 2가지 방법을 대상으로 수행됐다.")
         result = check_numeric_grounded(draft, cited_content="")
         assert result.passed is True
 
     def test_multiple_ungrounded_deduped_in_count(self):
-        draft = _draft("42.7% 그리고 다시 42.7% 그리고 별도로 99.9%")
+        draft = _draft("성장률은 42.7%였고 다시 42.7%로 유지됐으며 점유율은 99.9%에 달했다.")
         result = check_numeric_grounded(draft, cited_content="근거 없음")
         # 42.7이 두 번 나와도 1건으로 집계 → 총 2건.
         assert result.passed is False
@@ -239,7 +239,7 @@ class TestRunSectionGate:
         uncited = _chunk("매출 88억")
         draft = SectionDraft(
             section_id=uuid4(),
-            content="매출은 88억 원이다. " * 20,
+            content="지난해 매출은 88억 원으로 집계된 것으로 나타났다. " * 20,
             cited_chunk_ids=[cited.chunk_id],
         )
         report = run_section_gate(draft, [cited, uncited], min_chars=10)

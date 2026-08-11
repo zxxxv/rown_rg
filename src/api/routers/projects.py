@@ -1427,7 +1427,7 @@ async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID
 # 경로. 편집 결과는 resume 시 overlay_working_copy가 payload 후보보다 우선 반영한다.
 
 
-# 본문 인용 마커 — 작성기(_extract_cited_ids)와 같은 [N] 규약.
+# 본문 인용 마커 - 작성기(_extract_cited_ids)와 같은 [N] 규약.
 _CITE_NUM_RE = re.compile(r"\[(\d+)\]")
 
 # config 안에서 폼이 건드리지 않는 내부 키 - 옵션 전체 교체 때 살려 둔다.
@@ -1757,12 +1757,56 @@ async def update_section_content(
     )
 
 
+def _plan_for_row(project: Project, row: Section) -> SectionPlan:
+    """저장된 절 → 작성 계획. 확정 목차(config.outline)에서 방향·핵심논점·에이전트를 되살린다.
+
+    제목만 담아 넘기면 재작성이 페르소나도 분량 목표도 없이 쓴다 - 같은 절인데 처음
+    작성한 글과 성격이 달라진다. 번호는 목차 배열 위치에서 파생되므로 위치로 찾는다.
+    """
+    plan = SectionPlan(
+        section_id=row.id,
+        chapter_number=row.chapter_number,
+        section_number=row.section_number,
+        title=row.title,
+    )
+    outline = (project.config or {}).get("outline")
+    if not isinstance(outline, dict):
+        return plan
+    chapters = outline.get("chapters")
+    if not isinstance(chapters, list) or not 1 <= row.chapter_number <= len(chapters):
+        return plan
+    sections = (chapters[row.chapter_number - 1] or {}).get("sections")
+    if not isinstance(sections, list) or not 1 <= row.section_number <= len(sections):
+        return plan
+    spec = sections[row.section_number - 1]
+    if not isinstance(spec, dict):
+        return plan
+    return plan.model_copy(
+        update={
+            "direction": str(spec.get("direction") or ""),
+            "key_points": [str(p) for p in (spec.get("key_points") or []) if str(p).strip()],
+            "analysts": [str(a) for a in (spec.get("analysts") or []) if str(a).strip()],
+        }
+    )
+
+
 async def _default_section_rewriter(
     project: Project, plan: SectionPlan, instruction: str
 ) -> SectionDraft:
-    """실검색+실LLM으로 한 섹션 재작성. write 파이프라인의 검색기·생성기를 재사용한다."""
+    """실검색+실LLM으로 한 섹션 재작성. write 파이프라인의 검색기·생성기를 재사용한다.
+
+    모델·페르소나·규칙을 작성 루프와 같은 방식으로 푼다. 전에는 전역 기본 모델로 쓰고
+    페르소나·분량 목표를 통째로 잃었다 - 고급 모드를 골라도 재작성만 표준 모델이었고,
+    그 절만 짧고 성격이 달라졌다(2026-08-11).
+    """
     from src.services.sections.edit import regenerate_section
-    from src.workflows.stages import _default_retriever_factory
+    from src.workflows.stages import (
+        _analyst_catalog,
+        _default_retriever_factory,
+        _models_for,
+        _rule_texts,
+        _selected_rule_ids,
+    )
 
     state = ProjectState(
         project_id=project.id,
@@ -1771,11 +1815,16 @@ async def _default_section_rewriter(
         preset=project.preset,
         options=project.config,
     )
+    models = _models_for(state)
     retrieve = _default_retriever_factory(state)
     return await regenerate_section(
         section=plan,
         retrieve=retrieve,
         instruction=instruction,
+        model=models["write"],
+        plan_model=models["write_plan"],
+        analyst_catalog=await _analyst_catalog(project.owner_id),
+        rules=await _rule_texts(project.owner_id, _selected_rule_ids(state)),
         user_id=project.owner_id,
         project_id=project.id,
     )
@@ -1800,13 +1849,7 @@ async def rewrite_section(
     """
     project = await _get_authorized_project(project_id, session, current_user)
     row = await _get_section(session, project.id, section_id)
-    plan = SectionPlan(
-        section_id=row.id,
-        chapter_number=row.chapter_number,
-        section_number=row.section_number,
-        title=row.title,
-    )
-    draft = await _section_rewriter(project, plan, data.instruction)
+    draft = await _section_rewriter(project, _plan_for_row(project, row), data.instruction)
     content = draft.content
     # 근거 추적 기록 — 재작성은 작성 루프 밖 경로라 그냥 두면 이 절만 추적이 반쪽이 된다
     # (실린 근거 수를 모르고, 마커→청크 대응도 복원할 수 없다).
