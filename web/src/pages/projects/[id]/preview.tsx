@@ -221,17 +221,24 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
         <div
           className={cn(
             "grid grid-cols-1 gap-4",
-            evidenceOpen ? "" : "min-[1200px]:grid-cols-[240px_minmax(0,1fr)]",
+            // 트리를 접는 건 자리가 없을 때뿐이다. 좌측 내비(180) + 트리(240) + 본문(~900)
+            // + 드로어(560)가 1,880px쯤 필요하니, 그보다 넓으면 셋 다 그대로 둔다.
+            evidenceOpen
+              ? "min-[1900px]:grid-cols-[240px_minmax(0,1fr)]"
+              : "min-[1200px]:grid-cols-[240px_minmax(0,1fr)]",
           )}
         >
           {/* 트리는 내부 스크롤 없이 아래로 쭉 펼친다 - 목차 전체가 한눈에 보이고
                 페이지 스크롤 하나로 탐색한다(사용자 요청, 2026-08-04).
                 근거 드로어가 열려 있는 동안에는 접어 본문에 자리를 내준다. */}
-          {evidenceOpen ? null : (
-            <aside className="self-start rounded border border-border bg-bg">
-              <SectionTree tree={tree} selectedId={selectedId} onSelect={selectNode} />
-            </aside>
-          )}
+          <aside
+            className={cn(
+              "self-start rounded border border-border bg-bg",
+              evidenceOpen && "hidden min-[1900px]:block",
+            )}
+          >
+            <SectionTree tree={tree} selectedId={selectedId} onSelect={selectNode} />
+          </aside>
 
           <main className="rounded border border-border bg-bg">
             {selectedId && sectionFindings.length > 0 ? (
@@ -1003,7 +1010,7 @@ function SectionView({
           <div
             className={cn(
               "min-w-0 px-6 py-4 transition-[padding] duration-200",
-              editable && selectedBlocks.length > 0 && "xl:pr-[440px] 2xl:pr-[600px]",
+              editable && selectedBlocks.length > 0 && "xl:pr-[480px] 2xl:pr-[600px]",
             )}
           >
             {(rewrite.isPending || rewriteBlock.isPending) && (
