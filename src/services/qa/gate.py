@@ -134,7 +134,11 @@ def ungrounded_numbers(content: str, cited_content: str) -> list[str]:
     seen: set[str] = set()
     # 제목·표 줄은 주장이 아니다 - 소제목 번호("1.1 사업 배경")가 수치로 잡혀 화면에
     # 올라왔다. 주장 단위로 좁혀 본다(근거 추적·미인용 검사와 같은 눈금).
-    for token in _significant_numbers("\n".join(claim_units(content))):
+    # 인용 마커 자체도 걷어낸다 - "(출처 31)"의 31이 수치로 잡혀 "근거에서 확인되지
+    # 않는 수치 1개: 31"이 떴다(2026-08-12 검증 런 화면). 출처 번호는 주장이 아니고,
+    # 마커가 많이 붙은 절일수록 경고가 늘어 진짜 신호를 덮는다.
+    units = [MARK_RE.sub(" ", u) for u in claim_units(content)]
+    for token in _significant_numbers("\n".join(units)):
         norm = _normalize_number(token)
         if norm in seen:
             continue
