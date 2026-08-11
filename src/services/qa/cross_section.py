@@ -1,0 +1,176 @@
+"""절 간 중복·떠 있는 상호참조 — 병렬 작성이 남기는 결함을 결정적으로 잡는다.
+
+절을 병렬로 쓰면 각 절은 자기 근거만 본다. 같은 자료가 여러 절의 검색 상위에 걸리면
+같은 문장이 여러 절에 그대로 실린다. 실측(완료 보고서 3건)에서 이게 실제 결함이었다 -
+"글로벌 숏폼 시장은 2021년 432억 달러에서 2026년 1,350억 달러로 연평균 25.6% 성장"이
+2.1·2.2·3.2·4.2 네 절에 거의 그대로 있었고, AI 반도체 보고서에서는 시장 전망 문장과
+TSRI 설명 문장이 통째로 두 번씩 나왔다.
+
+**LLM을 쓰지 않는다.** pm_verify 재측정이 같은 본문·temperature=0에서 44→54건으로
+흔들렸고 카테고리 라벨은 몇 배로 요동했다. 이 검사는 작성에 되먹임할 수도 있는 신호라
+노이즈가 본문을 오염시킨다. 어휘 겹침(alignment.overlap_score)만으로 충분하다는 것도
+실측으로 확인했다 - 임계 0.8 이상은 전부 진짜 중복이었다.
+
+임베딩도 안 쓴다. 설계 초안은 BGE-M3로 주장을 정규화하려 했지만, 실제 결함이 '의역된
+같은 주장'이 아니라 '거의 그대로 복사된 문장'이라 글자 2-gram 겹침으로 잡힌다.
+모델 로드도, API 비용도 0이다.
+"""
+
+from __future__ import annotations
+
+import re
+from collections import defaultdict
+from typing import NamedTuple
+
+from src.services.qa.alignment import _weighted_tokens
+from src.services.qa.gate import claim_units
+
+# 같은 문장이 통째로 복사된 수준. 실측에서 이 위는 전부 진짜 중복이었다.
+DUPLICATE_THRESHOLD = 0.80
+# 같은 사실을 다시 쓴 수준. 한 절에 한두 건은 자연스러워 건수로 판단한다.
+SIMILAR_THRESHOLD = 0.65
+# 너무 짧은 문장은 우연히 겹친다("이에 따른 대응이 필요함").
+_MIN_UNIT_CHARS = 30
+# 후보 생성에 쓸 토큰의 문서 빈도 상한 비율. 흔한 글자쌍("있다")으로 후보를 만들면
+# 전수 비교와 다를 게 없어진다. 중복 문장은 드문 토큰(수치·영문·고유어)을 공유한다.
+_MAX_DF_RATIO = 0.05
+_MIN_MAX_DF = 3
+# 후보 폭발 방어 — 35절 보고서에서 주장 단위가 3,000건을 넘는다.
+_MAX_PAIRS = 400_000
+
+
+class DuplicatePair(NamedTuple):
+    """중복으로 묶인 두 절의 주장 한 쌍. score는 0~1."""
+
+    score: float
+    first_ref: str
+    first_text: str
+    second_ref: str
+    second_text: str
+
+
+def _units_by_section(sections: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """[(절 번호, 본문)] → [(절 번호, 주장 문장)]. 제목·표·구분선은 claim_units가 뺀다."""
+    out: list[tuple[str, str]] = []
+    for ref, content in sections:
+        for unit in claim_units(content or ""):
+            if len(unit) >= _MIN_UNIT_CHARS:
+                out.append((ref, unit))
+    return out
+
+
+def _candidate_pairs(token_sets: list[dict[str, float]]) -> set[tuple[int, int]]:
+    """드문 토큰을 공유하는 쌍만 추린다.
+
+    전수 비교는 3,000건이면 450만 쌍이라 QA 한 번에 몇 분이 든다. 중복 문장은 수치나
+    영문 약어 같은 드문 토큰을 반드시 공유하므로, 그 토큰의 등장 목록 안에서만 쌍을
+    만들면 결과가 같으면서 훨씬 싸다.
+    """
+    n = len(token_sets)
+    postings: dict[str, list[int]] = defaultdict(list)
+    for i, tokens in enumerate(token_sets):
+        for token in tokens:
+            postings[token].append(i)
+
+    max_df = max(_MIN_MAX_DF, int(n * _MAX_DF_RATIO))
+    pairs: set[tuple[int, int]] = set()
+    for ids in postings.values():
+        if len(ids) < 2 or len(ids) > max_df:
+            continue
+        for a in range(len(ids)):
+            for b in range(a + 1, len(ids)):
+                pairs.add((ids[a], ids[b]))
+                if len(pairs) >= _MAX_PAIRS:
+                    return pairs
+    return pairs
+
+
+def _similarity(a: dict[str, float], b: dict[str, float]) -> float:
+    """두 문장의 겹침 — 양방향 중 큰 쪽.
+
+    짧은 문장이 긴 문장에 통째로 들어간 경우가 실제 중복의 전형이다(개조식 요약 한 줄이
+    다른 절에서 문장으로 풀어 쓰인다). 한쪽 분모로만 재면 그 경우를 놓친다.
+    """
+    if not a or not b:
+        return 0.0
+    small, large = (a, b) if len(a) <= len(b) else (b, a)
+    hit = sum(w for t, w in small.items() if t in large)
+    return max(hit / sum(a.values()), hit / sum(b.values()))
+
+
+def duplicate_pairs(
+    sections: list[tuple[str, str]], *, threshold: float = SIMILAR_THRESHOLD
+) -> list[DuplicatePair]:
+    """절 간 중복 문장 쌍을 점수 내림차순으로. 같은 절 안의 반복은 보지 않는다.
+
+    Args:
+        sections: [(절 번호 "2.1", 본문)] — 목차 순서대로.
+        threshold: 이 점수 이상만 돌려준다.
+    """
+    units = _units_by_section(sections)
+    if len(units) < 2:
+        return []
+    token_sets = [_weighted_tokens(text) for _ref, text in units]
+
+    out: list[DuplicatePair] = []
+    for i, j in _candidate_pairs(token_sets):
+        if units[i][0] == units[j][0]:
+            continue
+        score = _similarity(token_sets[i], token_sets[j])
+        if score >= threshold:
+            first, second = (i, j) if _ref_key(units[i][0]) <= _ref_key(units[j][0]) else (j, i)
+            out.append(
+                DuplicatePair(
+                    round(score, 3),
+                    units[first][0],
+                    units[first][1],
+                    units[second][0],
+                    units[second][1],
+                )
+            )
+    out.sort(key=lambda p: (-p.score, p.first_ref, p.second_ref))
+    return out
+
+
+def _ref_key(ref: str) -> tuple[int, int]:
+    parts = ref.split(".")
+    try:
+        return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+    except ValueError:
+        return (0, 0)
+
+
+# 본문이 다른 절을 가리키는 표기.
+_XREF_SECTION_RE = re.compile(r"(?<![\d.])(\d{1,2})\.(\d{1,2})\s*절")
+# 장 참조는 반드시 "제N장"이어야 한다. "N장"만 받으면 수량이 걸린다 - 실측에서
+# "추론 보드 10장~20장 구성"이 없는 장 참조로 잡혔다(2026-08-12).
+_XREF_CHAPTER_RE = re.compile(r"제\s*(\d{1,2})\s*장")
+# 앞을 가리키는 말. 보고서 첫 절에 나오면 가리킬 대상이 없다.
+_BACKREF_RE = re.compile(r"앞서|앞 절|전술한|위에서 (?:살펴|언급|서술)|상기한")
+
+
+def dangling_references(sections: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """실재하지 않는 절·장을 가리키는 문구를 찾는다. [(절 번호, 설명)]
+
+    병렬 작성에서는 각 절이 다른 절의 최종 번호를 모른 채 쓰인다. 목차가 바뀌거나
+    모델이 번호를 지어내면 "3.4절에서 살펴본 바와 같이"가 남는데, 그 절이 없다.
+    """
+    known_sections = {ref for ref, _ in sections}
+    known_chapters = {ref.split(".")[0] for ref in known_sections}
+    first_ref = min(known_sections, key=_ref_key) if known_sections else ""
+
+    out: list[tuple[str, str]] = []
+    for ref, content in sections:
+        text = content or ""
+        for m in _XREF_SECTION_RE.finditer(text):
+            target = f"{int(m.group(1))}.{int(m.group(2))}"
+            if target not in known_sections:
+                out.append((ref, f"없는 절을 가리킴: {m.group()}"))
+        for m in _XREF_CHAPTER_RE.finditer(text):
+            if m.group(1) not in known_chapters:
+                out.append((ref, f"없는 장을 가리킴: {m.group()}"))
+        if ref == first_ref:
+            found = _BACKREF_RE.search(text)
+            if found:
+                out.append((ref, f"첫 절인데 앞을 가리킴: {found.group()}"))
+    return out
