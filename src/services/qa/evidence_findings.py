@@ -23,6 +23,11 @@ from src.db.models.section import Section
 from src.db.session import async_session_maker
 from src.services.qa.alignment import ClaimAlignment, align_section
 from src.services.qa.claim_verify import verify_claims
+from src.services.qa.cross_section import (
+    DUPLICATE_THRESHOLD,
+    dangling_references,
+    duplicate_pairs,
+)
 from src.services.qa.design_coverage import findings_for_section as coverage_findings
 from src.services.sections.evidence import marker_chunk_ids
 
@@ -160,6 +165,64 @@ def findings_from_claims(
     return out
 
 
+# 절 하나에서 이만큼 겹치면 사람이 봐야 한다. 개조식 보고서는 한두 문장이 비슷한 게
+# 자연스러워(같은 정책을 여러 각도로 다룬다) 건수로 가른다.
+_DUP_MIN = 3
+_DUP_CRITICAL = 8
+
+
+def cross_section_findings(sections: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    """절 간 중복·떠 있는 참조 → 경고 행. 뒤에 오는 절에 책임을 묻는다.
+
+    절을 병렬로 쓰면 각 절은 자기 근거만 본다. 같은 자료가 여러 절의 상위에 걸리면 같은
+    문장이 여러 절에 실린다 - 실측에서 시장 전망 한 문장이 네 절에 거의 그대로 있었다.
+    경고를 뒤 절에 붙이는 이유: 앞 절이 원본이고 고칠 곳은 뒤라서다(요약·결론 절이 앞
+    본문을 그대로 옮겨 오는 게 전형이다).
+    """
+    out: list[dict[str, Any]] = []
+    by_section: dict[str, list[Any]] = {}
+    for pair in duplicate_pairs(sections, threshold=DUPLICATE_THRESHOLD):
+        by_section.setdefault(pair.second_ref, []).append(pair)
+
+    for ref, pairs in by_section.items():
+        if len(pairs) < _DUP_MIN:
+            continue
+        sources = sorted({p.first_ref for p in pairs}, key=lambda r: [int(x) for x in r.split(".")])
+        out.append(
+            _finding(
+                _ref_chapter(ref),
+                ref,
+                "critical" if len(pairs) >= _DUP_CRITICAL else "warning",
+                "절 간 중복",
+                f"앞 절({', '.join(sources[:4])}{' 외' if len(sources) > 4 else ''})에"
+                f" 이미 있는 문장 {len(pairs)}건"
+                f' (예: "{pairs[0].second_text[:_SAMPLE_CHARS]}…")',
+            )
+        )
+
+    dangling: dict[str, list[str]] = {}
+    for ref, why in dangling_references(sections):
+        dangling.setdefault(ref, []).append(why)
+    for ref, whys in dangling.items():
+        out.append(
+            _finding(
+                _ref_chapter(ref),
+                ref,
+                "warning",
+                "떠 있는 참조",
+                f"{whys[0]}" + (f" 외 {len(whys) - 1}건" if len(whys) > 1 else ""),
+            )
+        )
+    return out
+
+
+def _ref_chapter(ref: str) -> int:
+    try:
+        return int(ref.split(".")[0])
+    except ValueError:
+        return 0
+
+
 def findings_for_section(
     row: Section, chunk_texts: dict[UUID, str], *, renumbered: bool
 ) -> list[dict[str, Any]]:
@@ -247,6 +310,12 @@ async def evidence_findings(
             )
         )
         out.extend(_coverage_findings(row, chapters, chunk_texts))
+    # 절 간 중복은 절 하나만 봐서는 안 보인다 — 전부 모은 뒤 한 번에 본다.
+    out.extend(
+        cross_section_findings(
+            [(f"{r.chapter_number}.{r.section_number}", r.content or "") for r in rows]
+        )
+    )
     logger.info(
         "evidence_findings.done", project_id=str(project_id), n=len(out), verified=n_verified
     )
