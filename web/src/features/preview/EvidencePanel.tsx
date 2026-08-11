@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useSectionEvidence } from "@/api/sections";
 import type { ClaimAlignment, EvidenceChunk } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
+import { textFragmentUrl } from "./sourceLink";
 
 // ─── 근거 추적 ───
 // 출처 표기만 있으면 "이 자료 어딘가"까지만 알 수 있어, 사람이 원본을 열어 다시 찾아야
@@ -83,7 +84,9 @@ export function EvidencePanel({ projectId, sectionId }: EvidencePanelProps) {
                 </p>
               ) : null}
 
-              {data.claims.length > 0 ? <ClaimTable claims={data.claims} /> : null}
+              {data.claims.length > 0 ? (
+                <ClaimTable claims={data.claims} chunks={data.items} />
+              ) : null}
 
               {cited.length > 0 ? (
                 <ul className="flex flex-col gap-2">
@@ -138,8 +141,9 @@ const CLAIM_STATUS: Record<string, { label: string; cls: string }> = {
 };
 
 /** 문장별 대조표 - 기본은 확인이 필요한 문장만 보여준다(대목이 특정된 문장은 볼 이유가 적다). */
-function ClaimTable({ claims }: { claims: ClaimAlignment[] }) {
+function ClaimTable({ claims, chunks }: { claims: ClaimAlignment[]; chunks: EvidenceChunk[] }) {
   const [showAll, setShowAll] = useState(false);
+  const urlOf = new Map(chunks.map((c) => [c.chunk_id, c.url]));
   const needsCheck = claims.filter((c) => c.status !== "aligned");
   const shown = showAll ? claims : needsCheck;
 
@@ -190,9 +194,26 @@ function ClaimTable({ claims }: { claims: ClaimAlignment[] }) {
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-fg">{c.claim}</p>
                 {c.span_text ? (
-                  <p className="mt-1 border-l-2 border-border-info pl-2 text-xs leading-relaxed text-fg-secondary">
-                    {c.span_text}
-                  </p>
+                  <div className="mt-1 border-l-2 border-border-info pl-2">
+                    <p className="text-xs leading-relaxed text-fg-secondary">{c.span_text}</p>
+                    {(() => {
+                      // 원문에서 이 대목으로 바로 뛰는 링크(브라우저 텍스트 프래그먼트).
+                      const jump = textFragmentUrl(
+                        c.chunk_id ? (urlOf.get(c.chunk_id) ?? null) : null,
+                        c.span_text,
+                      );
+                      return jump ? (
+                        <a
+                          href={jump}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-fg-info hover:underline"
+                        >
+                          원문에서 이 대목 보기 <ExternalLink className="h-3 w-3" />
+                        </a>
+                      ) : null;
+                    })()}
+                  </div>
                 ) : null}
               </li>
             );
