@@ -189,6 +189,36 @@ class TestSectionsApi:
         assert body["source_ids"] == [str(cited)]
         assert body["qa_status"] == "passed"
 
+    async def test_chart_block_is_not_rewritten_by_ai(
+        self,
+        test_client: AsyncClient,
+        super_admin_user,
+        super_admin_token: str,
+        test_session: AsyncSession,
+    ) -> None:
+        """그래프 블록은 AI 재작성 대상이 아니다 — 모델이 펜스 안 수치를 고쳐 쓰면 근거와 끊긴다.
+
+        표를 그래프로 바꾼 것은 사람이고, 그 수치는 이미 근거에 매여 게이트를 통과한 값이다.
+        고칠 게 있으면 표로 되돌린 뒤 고치는 경로만 연다(LLM은 호출조차 하지 않는다).
+        """
+        project = await _make_project(test_session, super_admin_user.id)
+        await test_session.commit()
+        rows = await _seed_sections(test_session, project.id)
+        row = rows[0]
+        chart = "```chart\ntype: bar\nx: 미국 | 한국\nseries: 투자액 = 120 | 30\n```"
+        row.content = f"배경 본문 [1]\n\n{chart}"
+        await test_session.commit()
+
+        resp = await test_client.post(
+            f"/api/v1/projects/{project.id}/sections/{row.id}/rewrite-block",
+            headers=_auth(super_admin_token),
+            json={"block": chart, "instruction": "더 간결하게"},
+        )
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["error"]["code"] == "BLOCK_IS_CHART"
+        await test_session.refresh(row)
+        assert chart in row.content  # 본문은 손대지 않는다
+
     async def test_sections_cascade_on_project_delete(
         self,
         test_client: AsyncClient,

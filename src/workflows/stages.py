@@ -954,6 +954,19 @@ async def assemble(state: ProjectState) -> ProjectState:
         except Exception:
             # 설명은 장식 — 실패해도 풀네임만으로 렌더를 계속한다.
             logger.warning("assemble.glossary_failed", project_id=str(pid), exc_info=True)
+        # 요약문 — 장별 압축을 LLM 1콜(최저가)로 만들어 config에 영속화(재렌더 공용).
+        try:
+            from src.services.export.summary import build_summary, persist_summary
+
+            summary = await build_summary(state)
+            if summary:
+                await persist_summary(state.project_id, summary)
+                state = state.model_copy(
+                    update={"options": {**(state.options or {}), "summary": summary}}
+                )
+        except Exception:
+            # 요약문은 전문(前文) 보조 — 실패해도 렌더를 계속한다.
+            logger.warning("assemble.summary_failed", project_id=str(pid), exc_info=True)
         # 표지 작성자 — 소유자 이름. 실패해도 작성자 줄만 빠진다(렌더는 계속).
         if not state.author:
             try:

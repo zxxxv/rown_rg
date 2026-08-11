@@ -9,10 +9,52 @@ import {
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { EvidenceChunk, SectionCitation } from "@/api/types";
+import { cn } from "@/lib/utils";
+import { ChartBlock } from "./ChartBlock";
 import { CitationHoverCard } from "./SourceHoverCard";
 
-// 본문 인용 마커 - 백엔드 작성 규약([N], 숫자만)과 동일.
+// 직접 인용 마커 - 원문을 그대로 옮긴 문장에만 붙는다(백엔드 src/core/citations.py와 동일 규약).
+// 문장 안에 그대로 남겨 배지로 렌더한다 - 어느 문장이 원문 그대로인지 보여야 하기 때문.
 const CITE_PATTERN = /\[(\d{1,3})\]/g;
+
+// 참고 표기 - 자료를 참고해 다시 쓴 문장에 붙는다. "(출처 3)"과 "(출처 3, 7)" 둘 다 받는다.
+// 본문에 흘리지 않고 블록 우상단에 모아 보인다 - 문장마다 번호가 붙으면 읽기를 방해하고,
+// 직접 인용과도 구분이 안 됐다(2026-08-11).
+const SOURCE_MARK_RE = /[^\S\n]*\(출처\s*(\d{1,3}(?:\s*,\s*\d{1,3})*)\s*\)/g;
+
+function stripSourceMarks(md: string): string {
+  return md.replace(SOURCE_MARK_RE, "");
+}
+
+/** 본문이 참고한 출처 번호 - 첫 등장 순서, 중복 없이. */
+function sourceNumbers(md: string): number[] {
+  const out: number[] = [];
+  for (const match of md.matchAll(SOURCE_MARK_RE)) {
+    for (const part of match[1].split(",")) {
+      const n = Number(part.trim());
+      if (!out.includes(n)) out.push(n);
+    }
+  }
+  return out;
+}
+
+// 표 제목 줄 - 표 바로 위에 오는 "표: 제목". 번호(<표 2-1>)는 장 전체를 알아야 매길 수 있어
+// 조립 단계(HWPX)에서만 붙는다 - 프리뷰는 절 단위로 렌더돼 장 번호를 모른다.
+const TABLE_CAPTION_RE = /^(?:\[\s*표[^\]]*\]|<\s*표[^>]*>|표\s*[\d-]*\s*[:：])\s*(.+)$/;
+
+// 단위 줄 - 표 제목과 표 사이 "(단위: 백만 원)" 단독 줄(작성 규칙). 우측 정렬 소자로 렌더.
+const TABLE_UNIT_RE = /^[（(]\s*단위\s*[:：][^)）]*[)）]$/;
+
+// 표 아래 출처 줄 - "(출처 3)"/"(출처 3, 7)" 단독. 실서지 "출처: 제목"으로 풀어 표 밑에 남긴다
+// (HWPX 조립과 같은 규칙 - 캡션 위·출처 아래가 공공 보고서 실측 관례).
+const TABLE_SOURCE_RE = /^(?:[※*]\s*)?[（(]\s*출처\s*(\d{1,3}(?:\s*,\s*\d{1,3})*)\s*[)）]$/;
+
+// 연도 어깨점 정규화 - ‘24 / `24 / '24 혼용을 오른쪽 홑따옴표(U+2019) 하나로(백엔드와 동일).
+const YEAR_QUOTE_RE = /[‘'`´](?=\d{2}(?:년|[.~∼]))/g;
+
+function normalizeYearQuotes(md: string): string {
+  return md.replace(YEAR_QUOTE_RE, "’");
+}
 
 type CitationMap = Map<number, SectionCitation>;
 // 인용 번호 -> 그 번호가 실제로 가리킨 근거 원문. 없으면 호버 카드는 출처 이름만 보여준다.
@@ -79,6 +121,9 @@ function stripInventedMarkers(md: string): string {
 
 // 개조식 pseudo-마커(□ ㅇ ○ ◦)는 마크다운 문법이 아니라 평범한 문단 텍스트로 렌더된다.
 // 문단 선두 글자를 읽어 위계(들여쓰기·간격)를 살린다. '-'/'*'는 실제 마크다운 목록이라 건드리지 않는다.
+// 마커 문단은 내어쓰기(첫 줄만 -1.5em 당기고 그만큼 왼쪽 여백)로 렌더해, 두 줄 이상으로
+// 넘어가도 둘째 줄이 마커 아래가 아니라 본문 글머리에 붙는다(HWPX 출력과 같은 규칙).
+// '-' 목록은 ul에서 마커를 절대배치해 이미 같은 효과가 난다.
 const OUTLINE_PARA_RE = /^\s*([□ㅇ○◦])\s/;
 
 function outlineMarker(node: unknown): string | null {
@@ -87,6 +132,109 @@ function outlineMarker(node: unknown): string | null {
   if (first?.type !== "text" || typeof first.value !== "string") return null;
   const m = OUTLINE_PARA_RE.exec(first.value);
   return m ? m[1] : null;
+}
+
+/** 문단이 텍스트 한 덩어리면 그 원문을, 아니면 null(링크·강조가 섞이면 제외). */
+function plainText(node: unknown): string | null {
+  const el = node as { children?: Array<{ type?: string; value?: string }> } | undefined;
+  const children = el?.children ?? [];
+  if (children.length !== 1) return null;
+  const first = children[0];
+  if (first?.type !== "text" || typeof first.value !== "string") return null;
+  return first.value.trim();
+}
+
+/** 문단이 표 제목이면 번호를 뗀 제목 문구를, 아니면 null. */
+function tableCaption(node: unknown): string | null {
+  const text = plainText(node);
+  if (text === null) return null;
+  const m = TABLE_CAPTION_RE.exec(text);
+  return m ? m[1].trim() : null;
+}
+
+// 머리행에서 표 제목을 세울 때 분류축으로 못 쓰는 일반어 - 백엔드 report.py와 같은 정의.
+const GENERIC_HEADERS = new Set([
+  "구분",
+  "항목",
+  "분류",
+  "내용",
+  "비고",
+  "번호",
+  "순번",
+  "값",
+  "단계",
+  "특징",
+]);
+const CAPTION_MAX_COLS = 3;
+
+/** 표 머리행으로 제목을 세운다 - 제목 줄이 없는 옛 본문의 폴백(백엔드와 같은 규칙). */
+function captionFromHeaders(headers: string[]): string | null {
+  const cols = headers.map((h) => h.trim()).filter(Boolean);
+  if (cols.length < 2) return null;
+  if (GENERIC_HEADERS.has(cols[0])) {
+    const rest = cols.slice(1).filter((c) => !GENERIC_HEADERS.has(c));
+    return rest.length > 0 ? rest.slice(0, CAPTION_MAX_COLS - 1).join("·") : null;
+  }
+  return `${cols[0]}별 ${cols.slice(1, CAPTION_MAX_COLS).join("·")}`;
+}
+
+function tableCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\||\|$/g, "")
+    .split("|")
+    .map((c) => c.replace(/\*\*/g, "").trim());
+}
+
+// 제목 줄이 없는 표 위에 "표: 제목"을 끼워 넣는다 - 한글 파일에는 머리행으로 세운 제목이
+// 붙는데 화면에는 없어서 둘이 어긋났다. 번호([표 2-1])는 장 전체를 알아야 매길 수 있어
+// 조립 단계에만 붙는다 - 프리뷰는 절 단위로 렌더돼 장 번호를 모른다.
+function addTableCaptions(md: string): string {
+  const lines = md.split("\n");
+  const out: string[] = [];
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) inFence = !inFence;
+    const startsTable = !inFence && /^\s*\|/.test(line) && !/^\s*\|/.test(lines[i - 1] ?? "");
+    if (startsTable) {
+      const prev = [...out].reverse().find((l) => l.trim() !== "") ?? "";
+      if (!TABLE_CAPTION_RE.test(prev.trim())) {
+        const caption = captionFromHeaders(tableCells(line));
+        if (caption !== null) {
+          if (out.length > 0 && out[out.length - 1].trim() !== "") out.push("");
+          out.push(`표: ${caption}`, "");
+        }
+      }
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
+// 표 바로 다음의 (출처 n) 단독 줄을 실서지 "출처: 제목"으로 바꾼다. 여기서 못 푼
+// (출처 n)은 이후 stripSourceMarks가 걷어내 우상단 배지로만 남는다.
+function resolveTableSources(md: string, citations: CitationMap): string {
+  const lines = md.split("\n");
+  const out: string[] = [];
+  let inFence = false;
+  let lastContent = "";
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) inFence = !inFence;
+    const m = !inFence ? TABLE_SOURCE_RE.exec(line.trim()) : null;
+    if (m && lastContent.startsWith("|")) {
+      const names = m[1]
+        .split(",")
+        .map((part) => Number(part.trim()))
+        .map((n) => citations.get(n)?.title?.trim() || `자료 ${n}`);
+      out.push(`출처: ${names.join("; ")}`);
+      lastContent = out[out.length - 1];
+      continue;
+    }
+    out.push(line);
+    if (line.trim() !== "") lastContent = line.trim();
+  }
+  return out.join("\n");
 }
 
 // 개조식 문단 마커(□ ㅇ 등) 앞에 빈 줄을 보장한다 - 단일 줄바꿈은 마크다운에서 공백으로
@@ -138,11 +286,40 @@ function buildComponents(citations: CitationMap, evidence: EvidenceMap): Compone
       </h4>
     ),
     p: ({ children, node, ...props }) => {
+      const caption = tableCaption(node);
+      if (caption !== null) {
+        // 표 제목 - 아래 여백을 줄여 뒤따르는 표에 붙여 놓는다(본문처럼 떠 있지 않게).
+        return (
+          <p className="mb-1 mt-5 text-sm font-semibold text-fg-secondary" {...props}>
+            {caption}
+          </p>
+        );
+      }
+      const single = plainText(node);
+      if (single !== null && TABLE_UNIT_RE.test(single)) {
+        // 단위 줄 - 표 위 우측 정렬 소자(HWPX 렌더와 같은 관례).
+        return (
+          <p className="mb-1 text-right text-xs text-fg-tertiary" {...props}>
+            {single}
+          </p>
+        );
+      }
+      if (single !== null && /^출처\s*[:：]/.test(single)) {
+        // 표 하단 출처 줄 - 표에 붙여 작은 글자로(캡션 위·출처 아래 관례).
+        return (
+          <p className="-mt-3 mb-4 text-xs text-fg-tertiary" {...props}>
+            {single}
+          </p>
+        );
+      }
       const marker = outlineMarker(node);
       if (marker === "□") {
         // 대주제 - 굵게 + 위 간격으로 논리 묶음의 머리로 도드라지게.
         return (
-          <p className="mb-2 mt-6 font-semibold leading-7 text-fg" {...props}>
+          <p
+            className="mb-2 mt-6 pl-[1.5em] indent-[-1.5em] font-semibold leading-7 text-fg"
+            {...props}
+          >
             {walk(children)}
           </p>
         );
@@ -150,7 +327,10 @@ function buildComponents(citations: CitationMap, evidence: EvidenceMap): Compone
       if (marker) {
         // ㅇ/○/◦ - 상위 개조식 항목: 들여쓰고 위에 간격을 줘 그룹을 분리한다.
         return (
-          <p className="mb-1 mt-4 pl-4 leading-7 text-fg" {...props}>
+          <p
+            className="mb-1 mt-4 pl-[calc(1rem+1.5em)] indent-[-1.5em] leading-7 text-fg"
+            {...props}
+          >
             {walk(children)}
           </p>
         );
@@ -228,11 +408,22 @@ function buildComponents(citations: CitationMap, evidence: EvidenceMap): Compone
         {walk(children)}
       </a>
     ),
-    code: ({ children, ...props }) => (
-      <code className="rounded-sm bg-bg-secondary px-1 font-mono text-[13px]" {...props}>
-        {walk(children)}
-      </code>
-    ),
+    code: ({ children, className, ...props }) => {
+      // ```chart 펜스는 코드가 아니라 그림이다 - 스펙을 읽어 SVG로 그린다.
+      if (className === "language-chart") {
+        return <ChartBlock source={String(children)} />;
+      }
+      return (
+        <code
+          className={cn("rounded-sm bg-bg-secondary px-1 font-mono text-[13px]", className)}
+          {...props}
+        >
+          {walk(children)}
+        </code>
+      );
+    },
+    // 차트 펜스는 <pre>로 감싸지 않는다 - figure가 이미 블록이라 이중 여백이 생긴다.
+    pre: ({ children }) => <>{children}</>,
     hr: () => <hr className="my-6 border-border" />,
   };
 }
@@ -267,10 +458,38 @@ export function MarkdownContent({ content, citations, evidence }: MarkdownConten
     () => buildComponents(citationMap, evidenceMap),
     [citationMap, evidenceMap],
   );
-  // 발명 인용 마커 제거 후, 개조식 마커(□ ㅇ) 줄을 독립 문단으로 분리해 위계·간격을 살린다.
-  const prepared = useMemo(() => prepareOutline(stripInventedMarkers(content)), [content]);
+  // 표 하단 (출처 n)을 먼저 실서지 줄로 풀어야 배지·걷어내기에 휩쓸리지 않는다.
+  const resolved = useMemo(
+    () => resolveTableSources(stripInventedMarkers(content), citationMap),
+    [content, citationMap],
+  );
+  // 참고 표기는 본문에서 떼어 우상단 배지로 모은다 - 매핑이 있는 번호만(없으면 호버할 게 없다).
+  // 표 하단 출처로 풀린 번호는 표 밑에 이미 보이므로 배지에서 자연히 빠진다.
+  const badgeNumbers = useMemo(
+    () => sourceNumbers(resolved).filter((n) => citationMap.has(n)),
+    [resolved, citationMap],
+  );
+  // 남은 참고 표기를 걷어내고 연도 어깨점을 정규화한 뒤, 개조식 마커(□ ㅇ) 줄을 독립
+  // 문단으로 분리해 위계·간격을 살린다. 직접 인용 [n]은 본문에 그대로 남아 배지로 렌더된다.
+  const prepared = useMemo(
+    () => prepareOutline(addTableCaptions(normalizeYearQuotes(stripSourceMarks(resolved)))),
+    [resolved],
+  );
   return (
     <div className="prose-doc">
+      {badgeNumbers.length > 0 ? (
+        // float로 띄워 본문이 배지 아래로 흐르게 한다 - 블록 우상단에 얹힌 모양이 된다.
+        <div className="float-right ml-3 flex flex-wrap items-center gap-1">
+          {badgeNumbers.map((n) => (
+            <CitationHoverCard
+              key={`src-${n}`}
+              number={n}
+              citation={citationMap.get(n) as SectionCitation}
+              evidence={evidenceMap.get(n)}
+            />
+          ))}
+        </div>
+      ) : null}
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {prepared}
       </ReactMarkdown>

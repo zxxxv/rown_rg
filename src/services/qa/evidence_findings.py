@@ -18,10 +18,12 @@ from sqlalchemy import select
 
 from src.core.config import settings
 from src.db.models.chunk import Chunk
+from src.db.models.project import Project
 from src.db.models.section import Section
 from src.db.session import async_session_maker
 from src.services.qa.alignment import ClaimAlignment, align_section
 from src.services.qa.claim_verify import verify_claims
+from src.services.qa.design_coverage import findings_for_section as coverage_findings
 from src.services.sections.evidence import marker_chunk_ids
 
 logger = structlog.get_logger(__name__)
@@ -194,6 +196,15 @@ async def evidence_findings(
         wanted: set[UUID] = set()
         for row in rows:
             wanted.update(u for u in (row.source_ids or []) if u)
+            # 목차 이행 검사는 인용본이 아니라 '실렸던 근거 전체'를 봐야 한다 —
+            # 자료가 있었는데 안 쓴 것과 애초에 없던 것을 가르는 게 그 검사의 핵심이다.
+            for raw in (row.meta or {}).get("pool_chunk_ids") or []:
+                try:
+                    wanted.add(UUID(str(raw)))
+                except (ValueError, TypeError):
+                    continue
+        project = await session.get(Project, project_id)
+        chapters = ((project.config or {}).get("outline") or {}).get("chapters") or []
         chunk_texts: dict[UUID, str] = {}
         if wanted:
             chunk_texts = {
@@ -235,7 +246,35 @@ async def evidence_findings(
                 row, claims, comparable=comparable, supported=supported, refuted=refuted
             )
         )
+        out.extend(_coverage_findings(row, chapters, chunk_texts))
     logger.info(
         "evidence_findings.done", project_id=str(project_id), n=len(out), verified=n_verified
     )
     return out
+
+
+def _coverage_findings(
+    row: Section, chapters: list[Any], chunk_texts: dict[UUID, str]
+) -> list[dict[str, Any]]:
+    """목차 지시 이행 검사 — 확정 목차가 없으면(자유 주제) 건너뛴다."""
+    try:
+        spec = chapters[row.chapter_number - 1]["sections"][row.section_number - 1]
+    except (IndexError, KeyError, TypeError):
+        return []
+    pool = [str(x) for x in ((row.meta or {}).get("pool_chunk_ids") or [])] or [
+        str(x) for x in (row.source_ids or [])
+    ]
+    texts: list[str] = []
+    for raw in pool:
+        try:
+            texts.append(chunk_texts.get(UUID(raw), ""))
+        except (ValueError, TypeError):
+            continue
+    return coverage_findings(
+        row.chapter_number,
+        row.section_number,
+        row.content or "",
+        str(spec.get("direction") or ""),
+        [str(k) for k in (spec.get("key_points") or [])],
+        "\n".join(t for t in texts if t),
+    )

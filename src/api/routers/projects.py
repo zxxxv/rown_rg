@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -51,6 +50,8 @@ from src.api.schemas.section import (
     UngroundedNumbers,
 )
 from src.api.uploads import read_validated_upload
+from src.core.charts import has_chart_fence
+from src.core.citations import numbers_in_order
 from src.core.clock import now as clock_now
 from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
@@ -76,6 +77,7 @@ from src.db.models.user_prompt import UserPrompt
 from src.db.models.verify_finding import VerifyFinding
 from src.db.session import async_session_maker
 from src.prompts import list_presets, load_preset
+from src.services.export.report import export_file_pattern, export_filename
 from src.services.generation.planner import MAX_SECTIONS
 from src.services.indexing.vector import SourceInput
 from src.services.prompts import resolve_analysts
@@ -635,9 +637,10 @@ async def delete_project(
     # ORM 관계는 lazy="raise"라 session.delete()의 관계 로딩을 피하고
     # DB FK CASCADE에 맡기는 Core DELETE를 쓴다.
     await session.execute(delete(Project).where(Project.id == project.id))
-    export_path = Path(settings.export_dir) / f"{project.id}.hwpx"
+    # 렌더 버전이 파일명에 붙으므로 남은 버전을 전부 훑어 지운다(옛 버전 잔재 포함).
     try:
-        export_path.unlink(missing_ok=True)
+        for stale in Path(settings.export_dir).glob(export_file_pattern(project.id)):
+            stale.unlink(missing_ok=True)
     except OSError:
         # 파일 잠금 등으로 못 지워도 삭제 자체는 성공 처리(다음 삭제/정리 때 재시도)
         logger.warning("project.export_cleanup_failed", project_id=str(project.id))
@@ -1257,7 +1260,7 @@ async def download_export(
     가장 안전하다. 재렌더 실패 시 조립 시점 파일로 폴백, 그것도 없으면 404.
     """
     project = await _get_authorized_project(project_id, session, current_user)
-    path = Path(settings.export_dir) / f"{project.id}.hwpx"
+    path = Path(settings.export_dir) / export_filename(project.id)
     rows = await _load_sections(session, project.id)
     # 이미 렌더된 파일이 마지막 편집보다 새것이면 다시 만들 이유가 없다. 35절 보고서
     # 재렌더는 수십 초라, 매번 돌리면 클릭 후 한참 아무 일도 안 일어나는 것처럼 보인다
@@ -1427,9 +1430,6 @@ async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID
 # 경로. 편집 결과는 resume 시 overlay_working_copy가 payload 후보보다 우선 반영한다.
 
 
-# 본문 인용 마커 - 작성기(_extract_cited_ids)와 같은 [N] 규약.
-_CITE_NUM_RE = re.compile(r"\[(\d+)\]")
-
 # config 안에서 폼이 건드리지 않는 내부 키 - 옵션 전체 교체 때 살려 둔다.
 _INTERNAL_CONFIG_KEYS = ("cancelled_from", "verify_resolved")
 
@@ -1440,19 +1440,12 @@ _MAX_UNCITED_SAMPLES = 20
 
 
 def _citation_numbers(content: str) -> list[int]:
-    """본문의 [N] 인용 번호를 등장 순서대로 중복 없이 추출.
+    """본문의 출처 번호를 등장 순서대로 중복 없이 추출((출처 n)·[n] 모두).
 
     작성 시점 cited_chunk_ids(→sections.source_ids)가 바로 이 순서로 저장되므로
-    (candidates._extract_cited_ids), 위치 대응이 곧 [N]↔출처 매핑이다.
+    (candidates._extract_cited_ids), 위치 대응이 곧 번호↔출처 매핑이다.
     """
-    numbers: list[int] = []
-    seen: set[int] = set()
-    for m in _CITE_NUM_RE.finditer(content):
-        n = int(m.group(1))
-        if n not in seen:
-            seen.add(n)
-            numbers.append(n)
-    return numbers
+    return numbers_in_order(content)
 
 
 def _citations_from_numbers(
@@ -1931,6 +1924,14 @@ async def rewrite_section_block(
         raise ValidationError(
             message="지정한 블록을 본문에서 찾을 수 없습니다(본문이 갱신됐을 수 있음)",
             code="BLOCK_NOT_FOUND",
+        )
+    if has_chart_fence(data.block):
+        # 차트 펜스는 사람이 표를 보고 바꾼 것이고, 그 수치는 이미 근거에 매여 게이트를
+        # 통과한 값이다. 모델에게 다시 쓰게 하면 값·계열을 지어내 근거와 끊긴다 —
+        # 고칠 게 있으면 표로 되돌린 뒤 고치고 다시 바꾸는 경로만 연다.
+        raise ValidationError(
+            message="그래프 블록은 AI 재작성 대상이 아닙니다 - 표로 되돌린 뒤 수정하세요",
+            code="BLOCK_IS_CHART",
         )
     new_block = await _block_rewriter(project, row, data)
     if not new_block.strip():

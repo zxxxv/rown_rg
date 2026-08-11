@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowLeft,
+  BarChart3,
   CheckCircle2,
   ExternalLink,
   Eye,
@@ -9,6 +10,7 @@ import {
   Pencil,
   Save,
   Sparkles,
+  Table2,
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -42,8 +44,11 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
+import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
+import { chartFallbackTable } from "@/features/preview/chartSpec";
 import { BlockEvidence, EvidencePanel } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
+import { findTable, isTableCaption, type MarkdownTable } from "@/features/preview/tableToChart";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
@@ -603,9 +608,43 @@ function ChapterSectionBlock({
 }
 
 /** 마크다운 본문 → 블록 목록. 빈 줄 경계로 나누되 각 블록은 원문의 정확한
- * 부분 문자열로 유지한다 - 블록 치환(직접 편집·AI 재작성)의 전제 조건. */
+ * 부분 문자열로 유지한다 - 블록 치환(직접 편집·AI 재작성)의 전제 조건.
+ *
+ * 두 가지를 붙여 둔다.
+ * - 코드펜스(```chart 등)는 빈 줄이 들어 있어도 통째로 한 블록이다. 반으로 잘린 펜스는
+ *   그래프로 그려지지도, 표로 되돌려지지도 않는다.
+ * - **표 제목 줄은 표와 한 블록이다.** 제목은 표 위 문단으로 따로 쓰이지만 표의 일부다.
+ *   떼어 놓으면 제목만 고르면 그래프 변환이 안 열리고, 표만 바꾸면 그림 위에 "표:"가
+ *   남으며, 렌더러는 제목 없는 표로 보고 머리행으로 제목을 하나 더 지어낸다(제목 2개).
+ *
+ * 블록은 줄 범위를 잘라 만든다 - 사이 빈 줄까지 그대로 품어야 원문 부분 문자열로 남는다. */
 function splitBlocks(content: string): string[] {
-  return content.split(/\n{2,}/).filter((b) => b.trim().length > 0);
+  const lines = content.split("\n");
+  const ranges: Array<[number, number]> = [];
+  let start = -1;
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*```/.test(lines[i])) inFence = !inFence;
+    if (!inFence && lines[i].trim() === "") {
+      if (start >= 0) ranges.push([start, i]);
+      start = -1;
+      continue;
+    }
+    if (start < 0) start = i;
+  }
+  if (start >= 0) ranges.push([start, lines.length]);
+
+  const text = ([a, b]: [number, number]) => lines.slice(a, b).join("\n");
+  const merged: Array<[number, number]> = [];
+  for (const range of ranges) {
+    const prev = merged[merged.length - 1];
+    if (prev && isTableCaption(text(prev)) && /^\s*\|/.test(lines[range[0]])) {
+      prev[1] = range[1]; // 제목 줄부터 표 끝까지 한 덩어리로
+      continue;
+    }
+    merged.push(range);
+  }
+  return merged.map(text);
 }
 
 function SectionView({
@@ -643,6 +682,8 @@ function SectionView({
   // 쓰기 불편하다는 실사용 지적, 2026-08-09).
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [instruction, setInstruction] = useState("");
+  // 표→그래프 변환 중인 블록 위치 - 대화상자에서 유형·축을 고르고 저장한다.
+  const [convertIdx, setConvertIdx] = useState<number | null>(null);
 
   const blocks = useMemo(() => (data ? splitBlocks(data.content) : []), [data]);
   // 문서 순서로 정렬 - 재작성은 위에서 아래로 처리해야 결과가 예측 가능하다.
@@ -655,6 +696,15 @@ function SectionView({
     [selectedIdx, blocks],
   );
   const singleBlock = selectedBlocks.length === 1 ? selectedBlocks[0] : null;
+  // 그래프 블록은 AI 재작성에서 뺀다 - 모델이 펜스 안 수치를 고쳐 쓰면 근거와 끊긴다
+  // (백엔드도 같은 이유로 막는다). 고칠 게 있으면 표로 되돌린 뒤 고친다.
+  const chartSelected = selectedBlocks.some((b) => b.includes("```chart"));
+  // 변환 대상 블록은 제목 줄까지 품고 있다(splitBlocks가 표 제목을 표에 붙여 둔다).
+  const convertBlock = convertIdx === null ? "" : (blocks[convertIdx] ?? "");
+  const convertTable = useMemo<MarkdownTable | null>(
+    () => (convertBlock ? findTable(convertBlock) : null),
+    [convertBlock],
+  );
 
   if (contentQuery.isLoading) {
     return (
@@ -762,6 +812,31 @@ function SectionView({
     if (failed.length > 0)
       toast.error(`${failed.length}개 실패`, { description: failed.join(" · ") });
     clearBlockSelection();
+  };
+
+  // 원문 조각 하나를 다른 마크다운으로 갈아 끼우고 저장한다(표↔그래프 교환의 공통 경로).
+  const replaceBlock = async (target: string, next: string, done: string) => {
+    if (!target) return;
+    try {
+      await save.mutateAsync(data.content.replace(target, () => next));
+      toast.success(done);
+      clearBlockSelection();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "저장에 실패했습니다.";
+      toast.error("저장 실패", { description: msg });
+    }
+  };
+
+  // 그래프를 표로 되돌린다 - 변환할 때 펜스 안에 넣어 둔 원본 표를 그대로 꺼낸다.
+  const onRevertToTable = async (idx: number) => {
+    const table = chartFallbackTable(blocks[idx] ?? "");
+    if (!table) {
+      toast.error("되돌릴 표가 없습니다", {
+        description: "원본 표가 보관되지 않은 그래프입니다 - 블록 편집으로 고쳐 주세요.",
+      });
+      return;
+    }
+    await replaceBlock(blocks[idx], table, "표로 되돌렸습니다.");
   };
 
   const onRewriteSection = async () => {
@@ -935,6 +1010,8 @@ function SectionView({
                   )}
                 >
                   {editingIdx === idx ? (
+                    // biome-ignore lint/a11y/noStaticElementInteractions: 편집 중 부모(블록 선택)로 클릭이 새지 않게 막는 껍데기 - 그 자체는 조작 대상이 아니다
+                    // biome-ignore lint/a11y/useKeyWithClickEvents: 키보드로는 부모 선택이 발동하지 않아 막을 것이 없다
                     <div className="flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
                       <Textarea
                         value={blockDraft}
@@ -965,18 +1042,51 @@ function SectionView({
                         evidence={evidenceQuery.data?.items}
                       />
                       {selectedIdx.has(idx) && selectedIdx.size === 1 ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="mt-1 h-7 px-2 text-xs"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            startBlockEdit(idx);
-                          }}
-                          disabled={busy}
-                        >
-                          <Pencil className="mr-1 h-3 w-3" />이 블록 편집
-                        </Button>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startBlockEdit(idx);
+                            }}
+                            disabled={busy}
+                          >
+                            <Pencil className="mr-1 h-3 w-3" />이 블록 편집
+                          </Button>
+                          {/* 표를 그래프로 바꾸는 것은 사람이 판단한다 - 표를 담은 블록에만 연다 */}
+                          {findTable(block) !== null ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConvertIdx(idx);
+                              }}
+                              disabled={busy}
+                            >
+                              <BarChart3 className="mr-1 h-3 w-3" />
+                              그래프로 바꾸기
+                            </Button>
+                          ) : null}
+                          {block.includes("```chart") ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void onRevertToTable(idx);
+                              }}
+                              disabled={busy}
+                            >
+                              <Table2 className="mr-1 h-3 w-3" />
+                              표로 되돌리기
+                            </Button>
+                          ) : null}
+                        </div>
                       ) : null}
                     </>
                   )}
@@ -1020,16 +1130,22 @@ function SectionView({
                       onChange={(e) => setInstruction(e.target.value)}
                       placeholder="예: 더 간결하게, 수치를 앞세워서"
                       className="min-h-[80px] text-xs"
+                      disabled={chartSelected}
                     />
-                    <Button size="sm" onClick={() => void onRewriteBlocks()} disabled={busy}>
+                    <Button
+                      size="sm"
+                      onClick={() => void onRewriteBlocks()}
+                      disabled={busy || chartSelected}
+                    >
                       <Sparkles className="mr-1 h-3.5 w-3.5" />
                       {rewriteBlock.isPending
                         ? "작성 중…"
                         : `선택한 블록 ${selectedBlocks.length}개 재작성`}
                     </Button>
                     <p className="text-[11px] leading-relaxed text-fg-tertiary">
-                      블록 재작성은 이 절이 이미 인용한 근거 안에서만 고칩니다 - 인용 번호·출처가
-                      유지됩니다.
+                      {chartSelected
+                        ? "그래프 블록은 AI 재작성 대상이 아닙니다 - 표로 되돌린 뒤 고치고 다시 바꾸세요."
+                        : "블록 재작성은 이 절이 이미 인용한 근거 안에서만 고칩니다 - 인용 번호·출처가 유지됩니다."}
                     </p>
                   </div>
                 </div>
@@ -1069,6 +1185,19 @@ function SectionView({
           ) : null}
         </div>
       )}
+      {convertTable !== null && convertIdx !== null ? (
+        <ChartConvertDialog
+          open
+          onOpenChange={(open) => (open ? undefined : setConvertIdx(null))}
+          table={convertTable}
+          block={convertBlock}
+          busy={busy}
+          onConvert={(fence) => {
+            setConvertIdx(null);
+            void replaceBlock(convertBlock, fence, "표를 그래프로 바꿨습니다.");
+          }}
+        />
+      ) : null}
     </article>
   );
 }

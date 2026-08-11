@@ -16,6 +16,20 @@
       "order": 6
     },
     {
+      "id": "설치운영계획보고서",
+      "file": "설치운영계획보고서.json",
+      "label": "설치운영계획보고서",
+      "builtIn": false,
+      "order": 6
+    },
+    {
+      "id": "성과분석보고서",
+      "file": "성과분석보고서.json",
+      "label": "성과분석보고서",
+      "builtIn": false,
+      "order": 6
+    },
+    {
       "id": "예비타당성조사",
       "file": "예비타당성조사.json",
       "label": "예비타당성조사",
@@ -33,6 +47,13 @@
       "id": "조사분석보고서",
       "file": "조사분석보고서.json",
       "label": "조사분석보고서",
+      "builtIn": false,
+      "order": 6
+    },
+    {
+      "id": "특화단지기획보고서",
+      "file": "특화단지기획보고서.json",
+      "label": "특화단지기획보고서",
       "builtIn": false,
       "order": 6
     }
