@@ -35,6 +35,17 @@ def _embed_result(text: str) -> MagicMock:
     return m
 
 
+def _empty_hashes() -> MagicMock:
+    """청크 INSERT 직전의 '기존 본문 해시 조회' 응답 - 중복 없음.
+
+    색인기는 근거로 못 쓰는 청크(보일러플레이트·내용 중복)를 metadata.excluded로
+    표시하려고 세션 #2에서 해시를 한 번 읽는다(_boilerplate.excluded_metadata).
+    """
+    result = MagicMock()
+    result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    return result
+
+
 def _fake_session_maker(session_mock: MagicMock) -> MagicMock:
     """Return an async_sessionmaker stub that yields the same session per call."""
     maker = MagicMock()
@@ -145,6 +156,7 @@ class TestPipelineOrdering:
         session2 = MagicMock()
         session2.commit = AsyncMock()
         session2.add_all = MagicMock()
+        session2.execute = AsyncMock(return_value=_empty_hashes())
 
         maker_call_count = {"n": 0}
 
@@ -279,6 +291,7 @@ class TestEmbeddingOrderAlignment:
         session2 = MagicMock()
         session2.commit = AsyncMock()
         session2.add_all = MagicMock(side_effect=_capture)
+        session2.execute = AsyncMock(return_value=_empty_hashes())
 
         calls = iter([session1, session2])
 
@@ -356,6 +369,7 @@ class TestDeleteBeforeInsertOrdering:
         session1.commit = AsyncMock(side_effect=lambda: call_log.append("commit1"))
 
         session2 = MagicMock()
+        session2.execute = AsyncMock(return_value=_empty_hashes())
         session2.add_all = MagicMock(side_effect=lambda _rows: call_log.append("add_all"))
         session2.commit = AsyncMock(side_effect=lambda: call_log.append("commit2"))
 
