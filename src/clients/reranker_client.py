@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -104,10 +105,16 @@ class BgeRerankerV2M3Client(RerankerClient):
         )
         t0 = time.perf_counter()
 
+        # ONNX 추론은 스레드로 내보낸다. 여기서 그냥 돌리면 절당 85~103초(실측,
+        # 패시지 64개) 동안 **이벤트 루프 전체가 멈춘다** - 절 단위 병렬 작성
+        # (write_section_concurrency)도, 다른 절의 LLM 응답 수신도 그 사이 아무것도
+        # 진행되지 않는다. 실제로 2026-08-12 검증 런의 리랭킹 로그가 완전히 직렬이었다.
+        # 임베딩 클라이언트는 처음부터 to_thread를 썼는데 여기만 빠져 있었다.
+        # ORT의 InferenceSession.run은 스레드 안전하고 추론 중 GIL을 놓는다.
         scores: list[float] = []
         for start in range(0, len(passages), self._batch_size):
             chunk = passages[start : start + self._batch_size]
-            logits = self._score_batch(query, chunk)
+            logits = await asyncio.to_thread(self._score_batch, query, chunk)
             scores.extend(self._sigmoid(logits).tolist())
 
         logger.info(
