@@ -23,6 +23,7 @@ from src.services.qa.gate import (
     gate_candidates,
     run_section_gate,
     uncited_units,
+    ungrounded_numbers,
 )
 
 
@@ -366,3 +367,18 @@ class TestUncitedClaims:
         result = check_uncited_claims(_draft(content))
         assert result.passed is False
         assert "3건" in (result.detail or "")
+
+
+def test_인용_마커의_출처_번호는_수치가_아니다() -> None:
+    """실측 오탐(2026-08-12 검증 런 화면): "(출처 31)"의 31이 '근거에서 확인되지 않는
+    수치'로 떴다. 출처 번호는 주장이 아니고, 마커가 많은 절일수록 경고가 늘어 진짜
+    신호를 덮는다."""
+    body = "숏폼이 플랫폼 체류 시간의 약 46%를 차지하고 있음 (출처 31)"
+    assert ungrounded_numbers(body, "릴스는 체류 시간의 46%를 차지한다") == []
+    # 마커를 걷어내도 본문의 진짜 수치는 그대로 잡는다.
+    assert ungrounded_numbers(body, "관련 내용 없음") == ["46%"]
+
+
+def test_대괄호_직접인용_마커도_걷어낸다() -> None:
+    body = "글로벌 시장은 2026년까지 1,350억 달러로 성장할 전망임[12]"
+    assert ungrounded_numbers(body, "1350억 달러 규모로 성장") == []
