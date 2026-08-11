@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from src.clients.llm.base import CompletionRequest, LLMClient, Message, WebSearchConfig, WebSource
 from src.clients.llm.factory import create_llm_client
+from src.core.config import settings
 from src.services.research.pdf_fetch import PdfSourceFetcher, looks_like_pdf
 
 logger = structlog.get_logger(__name__)
@@ -47,8 +48,12 @@ SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
   * high — 정부·공공기관(통계청·부처·지자체 등), 학술지·대학·국책/공인 연구기관, 국제기구
   * medium — 주요 언론사 보도, 산업 협회·시장조사기관 리포트, 기업 공식 발표(IR·백서)
   * low — 개인 블로그·커뮤니티·위키, 출처 불명 집계 사이트, 광고성 콘텐츠
-- 한국 맥락이면 공식·정부·학술·주요 언론 등 권위 있는 출처를 우선한다.
-- 글로벌 비교가 필요하면 최소 3개국 이상의 사례를 수집한다.
+- 출처는 국내·해외를 함께 모은다. 국내는 정부·공공기관·국책연구기관을, 해외는
+  주요국 정부기관·국제기구(OECD·IEA·EU·IEEE 등)·해외 학술지/시장조사기관을 본다.
+- **검색 횟수의 절반 이상을 영어 질의로 하라**. 주제가 한국어라고 한국어로만 검색하면
+  해외 1차 자료가 통째로 빠진다(실측: 지역 설정을 풀어도 10건 중 8건이 국내였다).
+  한국어 질의로 국내 기관을 찾았으면, 같은 주제를 영어로 다시 검색해 해외 자료를 채워라.
+- 글로벌 비교·기술 동향·주요국 정책이 주제에 있으면 최소 3개국 이상의 1차 자료를 모은다.
 - 가능하면 최근 3년 이내 자료를 우선한다(최신성).
 
 작업을 마치면 **마지막 메시지에 아래 형식의 JSON만** 출력한다(설명 문장 없이):
@@ -133,7 +138,7 @@ class WebResearchService:
                 max_uses=max_uses,
                 max_fetch_uses=max_fetch_uses,
                 fetch_pages=True,
-                user_country="KR",
+                user_country=settings.research_user_country or None,
                 allowed_domains=allowed_domains,
             ),
         )

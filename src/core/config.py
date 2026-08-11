@@ -87,6 +87,10 @@ class Settings(BaseSettings):
     research_chapter_timeout_seconds: int = 480
     # 자료 풀 권장 하한 = 초기 수집 목표 — 미달이어도 차단하지 않고 게이트에 경고 표시.
     # 40 = 분량 레버(2026-08-06): 절당 근거 공급이 분량의 1차 병목이라 자료 풀을 2배로.
+    # 웹 검색 지역화 힌트(ISO alpha-2). 비우면 지역 편향 없이 전 세계에서 찾는다.
+    # "KR"로 고정돼 있어 국내 자료로 기울었다 — 해외 기관·학술 자료도 같은 무게로
+    # 봐야 하는 보고서(기술 동향·주요국 정책 비교)가 손해였다(2026-08-11).
+    research_user_country: str = ""
     research_min_sources: int = 40
     # '추가 조사' 한 라운드의 신규 출처 목표 — 사람이 누를 때마다 이만큼씩 보충
     research_more_batch: int = 10
