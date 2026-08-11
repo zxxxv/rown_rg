@@ -107,6 +107,12 @@ class RetrievedChunk(BaseModel):
     source_id: UUID
     content: str
     score: float
+    # 이 근거가 '무엇의 어디'인지 - 프롬프트에 함께 실어 모델이 귀속을 정확히 하게 한다.
+    # 본문만 주면 모델은 근거 8이 정부 발표문인지 언론 요약인지 모른 채 인용한다
+    # (2026-08-11 실측: Sonnet 인용 20건 중 10건이 문장을 뒷받침하지 못했고, 그중
+    # 여럿이 없는 날짜·기관을 붙인 귀속 오류였다).
+    source_title: str = ""
+    header_path: list[str] = Field(default_factory=list)
     # RAPTOR 요약 노드 여부 — True면 프롬프트에서 '배경 맥락'으로만 쓰이고
     # [번호] 인용 풀에서 제외된다(인용 무결성은 leaf 청크 계약 유지).
     is_summary: bool = False

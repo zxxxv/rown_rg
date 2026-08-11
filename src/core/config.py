@@ -172,6 +172,10 @@ class Settings(BaseSettings):
 
     # 리랭커 (어댑터 내부 동작 상수는 ClassVar, 운영 토글·경로만 환경 변수)
     reranker_model_path: str = "./models/bge-reranker-v2-m3-onnx-int8"
+    # 색인 임베딩 배치 — 한 자료의 청크를 통째로 넣으면 ONNX가 배치 안 최장 시퀀스에
+    # 맞춰 전부 패딩해 중간 텐서가 폭증한다(실측 14GB). 배치를 끊으면 상한이
+    # batch × max_len로 묶인다. 처리량 손해는 미미하다(같은 총 토큰을 나눠 넣을 뿐).
+    embedding_batch_size: int = 16
     reranker_batch_size: int = 16
     reranker_max_length: int = 512
     reranker_enabled: bool = True

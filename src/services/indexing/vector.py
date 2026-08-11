@@ -27,6 +27,7 @@ from pydantic import BaseModel, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from src.core.config import settings
 from src.db.models.chunk import Chunk as ChunkModel
 from src.db.models.project_source import ProjectSource
 
@@ -173,7 +174,16 @@ class VectorIndexingService:
             )
 
         # 본문 임베딩은 외부 I/O — DB 세션 밖에서. BGE-M3 자체 캐시가 재실행 시 비용을 흡수.
-        embed_results = await self._embedding_client.embed_batch([c.content for c in chunks])
+        # 배치를 끊어 넣는다: 한 번에 넣으면 배치 안 최장 청크에 맞춰 전부 패딩돼
+        # 중간 텐서가 자료 크기에 비례해 부푼다(실측 14GB). 벡터 자체는 청크당 4KB라
+        # 전부 들고 있어도 무해하고, 터지는 건 추론 중간값이다.
+        size = max(1, settings.embedding_batch_size)
+        embed_results = []
+        for start in range(0, len(chunks), size):
+            batch = chunks[start : start + size]
+            embed_results.extend(
+                await self._embedding_client.embed_batch([c.content for c in batch])
+            )
 
         # 세션 #2: 새 chunks 일괄 INSERT.
         async with self._session_maker() as session:

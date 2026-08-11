@@ -31,11 +31,13 @@ DEFAULT_FETCH_K = 30
 
 def hit_to_chunk(hit: SearchHit) -> RetrievedChunk:
     """검색 백엔드 SearchHit을 생성·게이트가 쓰는 RetrievedChunk로 축약."""
+    header = hit.metadata.get("header_path") if isinstance(hit.metadata, dict) else None
     return RetrievedChunk(
         chunk_id=hit.chunk_id,
         source_id=hit.source_id,
         content=hit.content,
         score=hit.score,
+        header_path=[str(h) for h in header] if isinstance(header, list) else [],
     )
 
 
@@ -116,7 +118,7 @@ def make_section_retriever(
         # 같이 늘리지 않으면 파트당 근거가 배정 최소치(3개) 아래로 떨어져 파트가
         # 병합되고, 결국 목표만 크고 쓸 거리는 없는 상태가 된다(2026-08-09).
         k = top_k * max(1, len(section.analysts))
-        return await retrieve_for_section(
+        chunks = await retrieve_for_section(
             section,
             client=client,
             project_id=project_id,
@@ -127,5 +129,40 @@ def make_section_retriever(
             summary_fetcher=summary_fetcher,
             topic=topic,
         )
+        return await _with_source_titles(chunks)
 
     return _retrieve
+
+
+async def _with_source_titles(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """근거에 자료 제목을 채운다 - 프롬프트가 '무엇의 어디'를 함께 보여주기 위함.
+
+    절당 쿼리 1회. 실패는 비치명 - 제목이 없어도 근거 본문은 그대로 쓴다.
+    """
+    ids = {c.source_id for c in chunks if c.source_id}
+    if not ids:
+        return chunks
+    try:
+        from sqlalchemy import select
+
+        from src.db.models.project_source import ProjectSource
+        from src.db.session import async_session_maker
+
+        async with async_session_maker() as session:
+            rows = (
+                await session.execute(
+                    select(ProjectSource.id, ProjectSource.title, ProjectSource.url).where(
+                        ProjectSource.id.in_(ids)
+                    )
+                )
+            ).all()
+        titles = {sid: (title or url or "") for sid, title, url in rows}
+    except Exception:
+        logger.warning("section_retriever.titles_failed", exc_info=True)
+        return chunks
+    return [
+        c.model_copy(update={"source_title": titles.get(c.source_id, "")})
+        if titles.get(c.source_id)
+        else c
+        for c in chunks
+    ]
