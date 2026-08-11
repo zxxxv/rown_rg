@@ -35,11 +35,13 @@ from src.api.schemas.project import (
 )
 from src.api.schemas.section import (
     ChapterNode,
+    EvidenceChunk,
     EvidenceInfo,
     SectionBlockRewriteRequest,
     SectionCitation,
     SectionContentResponse,
     SectionContentUpdate,
+    SectionEvidenceResponse,
     SectionNode,
     SectionRewriteRequest,
     SectionTreeResponse,
@@ -74,7 +76,7 @@ from src.prompts import list_presets, load_preset
 from src.services.generation.planner import MAX_SECTIONS
 from src.services.indexing.vector import SourceInput
 from src.services.prompts import resolve_analysts
-from src.services.qa.gate import ungrounded_numbers
+from src.services.qa.gate import uncited_units, ungrounded_numbers
 from src.workflows import cancel
 from src.workflows.events import emit_error, last_step
 from src.workflows.runner import get_pending_gate, is_running, queue_status, resume_run, start_run
@@ -1301,6 +1303,11 @@ async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID
 # 본문 인용 마커 — 작성기(_extract_cited_ids)와 같은 [N] 규약.
 _CITE_NUM_RE = re.compile(r"\[(\d+)\]")
 
+# 근거 추적 응답 상한 — 안 쓰인 근거는 풀 전체(수십 개)라 목록·본문 길이를 자른다.
+_MAX_UNUSED_EVIDENCE = 40
+_UNUSED_PREVIEW_CHARS = 400
+_MAX_UNCITED_SAMPLES = 20
+
 
 def _citation_numbers(content: str) -> list[int]:
     """본문의 [N] 인용 번호를 등장 순서대로 중복 없이 추출.
@@ -1444,6 +1451,150 @@ async def get_section_content(
         row,
         await _section_citations(session, row, renumbered=_is_renumbered(project)),
         await _ungrounded_numbers(session, row),
+    )
+
+
+def _marker_chunk_ids(
+    row: Section, *, renumbered: bool = False
+) -> tuple[dict[int, list[UUID]], bool]:
+    """본문 인용 번호 → 청크 id. (매핑, 청크까지 되짚을 수 있는가)
+
+    세 갈래다.
+    1. renumber가 남긴 meta.citation_chunks가 있으면 그게 정확한 답이다(전역 번호는
+       자료 단위라 본문만 봐서는 청크를 못 고른다).
+    2. 조립 전 절은 본문 [n]이 아직 검색 풀 인덱스라, 등장 순서 ↔ source_ids 위치
+       대응으로 푼다(작성기 _extract_cited_ids와 같은 규약).
+    3. 조립을 지났는데 기록이 없는 옛 절은 되짚을 수 없다. 재작성 때 못 푼 마커가
+       지워지고 같은 자료의 서로 다른 번호가 합쳐져, 위치 대응이 더는 성립하지 않는다.
+       엉뚱한 원문을 근거라고 보여주느니 대응을 포기한다(빈 매핑 + traceable=False).
+    """
+    recorded = (row.meta or {}).get("citation_chunks")
+    if isinstance(recorded, dict) and recorded:
+        out: dict[int, list[UUID]] = {}
+        for key, ids in recorded.items():
+            try:
+                number = int(key)
+            except (TypeError, ValueError):
+                continue
+            parsed = [UUID(str(i)) for i in ids if _is_uuid(str(i))]
+            if parsed:
+                out[number] = parsed
+        if out:
+            return out, True
+    if renumbered:
+        return {}, False
+
+    numbers = _citation_numbers(row.content or "")
+    cited = [UUID(str(s)) for s in (row.source_ids or [])]
+    positional = {n: [cited[i]] for i, n in enumerate(numbers) if i < len(cited)}
+    return positional, bool(positional)
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+@router.get("/{project_id}/sections/{section_id}/evidence", response_model=SectionEvidenceResponse)
+async def get_section_evidence(
+    project_id: UUID,
+    section_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SectionEvidenceResponse:
+    """이 절의 문장이 어느 근거 원문에서 나왔는지 되짚는다.
+
+    출처 표기(자료 단위)만으로는 검증이 안 된다 - 자료를 열어 사람이 다시 찾아야 한다.
+    여기서는 작성 때 프롬프트에 실린 청크 원문을 그대로 돌려주고, 인용되지 않은 채
+    실려 있던 근거도 함께 내려 "안 보고 쓴 주장"과 "보고도 안 쓴 근거"를 가른다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_section(session, project.id, section_id)
+
+    mapping, traceable = _marker_chunk_ids(row, renumbered=_is_renumbered(project))
+    cited_order: list[UUID] = []
+    number_of: dict[UUID, int] = {}
+    for number in sorted(mapping):
+        for cid in mapping[number]:
+            if cid not in number_of:
+                number_of[cid] = number
+                cited_order.append(cid)
+    if not traceable:
+        # 번호 대응은 포기해도 "이 절이 인용한 근거가 무엇인가"는 정확히 남아 있다.
+        # 번호 없이 목록만 보여준다 - 사람이 대조할 원문은 그대로 쓸모가 있다.
+        cited_order = [UUID(str(s)) for s in (row.source_ids or []) if _is_uuid(str(s))]
+    cited_set = set(cited_order)
+
+    pool_raw = (row.meta or {}).get("pool_chunk_ids")
+    pool = [UUID(s) for s in pool_raw if _is_uuid(str(s))] if isinstance(pool_raw, list) else []
+    unused = [cid for cid in pool if cid not in cited_set][:_MAX_UNUSED_EVIDENCE]
+
+    wanted = cited_order + unused
+    if not wanted:
+        units = uncited_units(row.content or "")
+        return SectionEvidenceResponse(
+            section_id=str(row.id),
+            pool_size=len(pool),
+            uncited_count=len(units),
+            uncited_samples=units[:_MAX_UNCITED_SAMPLES],
+            traceable=False,
+        )
+
+    chunk_rows = (
+        await session.execute(
+            select(
+                Chunk.id, Chunk.content, Chunk.source_id, Chunk.chunk_index, Chunk.metadata_
+            ).where(Chunk.id.in_(wanted))
+        )
+    ).all()
+    by_id = {r[0]: r for r in chunk_rows}
+    source_rows = (
+        await session.execute(
+            select(ProjectSource).where(
+                ProjectSource.id.in_([r[2] for r in chunk_rows if r[2] is not None])
+            )
+        )
+    ).scalars()
+    sources = {s.id: s for s in source_rows}
+
+    items: list[EvidenceChunk] = []
+    for cid in wanted:
+        found = by_id.get(cid)
+        if found is None:
+            continue  # 자료가 삭제된 경우 - 조용히 건너뛴다(본문 마커는 남아 있을 수 있다)
+        _, content, source_id, chunk_index, meta = found
+        src = sources.get(source_id) if source_id else None
+        is_cited = cid in cited_set
+        header = (meta or {}).get("header_path")
+        items.append(
+            EvidenceChunk(
+                number=number_of.get(cid),
+                chunk_id=str(cid),
+                # 인용된 근거는 원문 그대로(대조가 목적), 안 쓰인 근거는 앞부분만.
+                content=content if is_cited else content[:_UNUSED_PREVIEW_CHARS],
+                cited=is_cited,
+                source_id=str(source_id) if source_id else None,
+                source_title=(src.title or src.url) if src else None,
+                url=src.url if src else None,
+                reliability=src.reliability if src else None,
+                header_path=[str(h) for h in header] if isinstance(header, list) else [],
+                chunk_index=chunk_index,
+            )
+        )
+
+    units = uncited_units(row.content or "")
+    return SectionEvidenceResponse(
+        section_id=str(row.id),
+        items=items,
+        pool_size=len(pool),
+        cited_count=sum(1 for i in items if i.cited),
+        unused_count=sum(1 for i in items if not i.cited),
+        uncited_count=len(units),
+        uncited_samples=units[:_MAX_UNCITED_SAMPLES],
+        traceable=traceable,
     )
 
 

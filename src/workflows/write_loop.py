@@ -87,6 +87,9 @@ async def run_write_loop(
             "evidence_count": n_evidence,
             "volume_scaled": scaled.min_chars != ctx.min_chars,
             "min_chars": scaled.min_chars,
+            # 프롬프트에 실린 인용 가능 청크를 그 순서 그대로 남긴다(작성기의 [n] 번호 = 여기 i+1).
+            # 인용된 것만 남기면 "봤는데 안 쓴 근거"와 "안 보고 쓴 주장"을 구분할 수 없다.
+            "pool_chunk_ids": [str(c.chunk_id) for c in chunks if not c.is_summary],
         }
         ctx = scaled
 

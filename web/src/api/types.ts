@@ -255,6 +255,34 @@ export const SectionContentResponseSchema = z.object({
 });
 export type SectionContentResponse = z.infer<typeof SectionContentResponseSchema>;
 
+/** 본문 [n]이 가리킨 근거 조각 - 모델이 프롬프트로 받은 원문 그대로 */
+export const EvidenceChunkSchema = z.object({
+  number: z.number().int().nullable().default(null),
+  chunk_id: z.string(),
+  content: z.string(),
+  cited: z.boolean().default(true),
+  source_id: z.string().nullable().default(null),
+  source_title: z.string().nullable().default(null),
+  url: z.string().nullable().default(null),
+  reliability: z.string().nullable().default(null),
+  header_path: z.array(z.string()).default([]),
+  chunk_index: z.number().int().nullable().default(null),
+});
+export type EvidenceChunk = z.infer<typeof EvidenceChunkSchema>;
+
+/** 절 하나의 근거 추적 - 인용된 근거, 실렸는데 안 쓰인 근거, 근거 표기 없는 주장 */
+export const SectionEvidenceSchema = z.object({
+  section_id: z.string(),
+  items: z.array(EvidenceChunkSchema).default([]),
+  pool_size: z.number().int().nonnegative().default(0),
+  cited_count: z.number().int().nonnegative().default(0),
+  unused_count: z.number().int().nonnegative().default(0),
+  uncited_count: z.number().int().nonnegative().default(0),
+  uncited_samples: z.array(z.string()).default([]),
+  traceable: z.boolean().default(true),
+});
+export type SectionEvidence = z.infer<typeof SectionEvidenceSchema>;
+
 export const LibraryFileMetaSchema = z.object({
   size_bytes: z.number().int().nonnegative(),
   registered_at: z.string(),

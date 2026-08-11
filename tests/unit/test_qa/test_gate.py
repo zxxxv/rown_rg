@@ -19,8 +19,10 @@ from src.services.qa.gate import (
     check_numeric_grounded,
     check_renderable,
     check_structure_complete,
+    check_uncited_claims,
     gate_candidates,
     run_section_gate,
+    uncited_units,
 )
 
 
@@ -218,7 +220,7 @@ class TestRunSectionGate:
             cited_chunk_ids=[chunk.chunk_id],
         )
         report = run_section_gate(draft, [chunk], min_chars=10)
-        assert len(report.results) == 5  # citation_markers 추가(2026-08-05)
+        assert len(report.results) == 6  # citation_markers(2026-08-05)·uncited_claims(2026-08-11)
         assert report.excluded is False
 
     def test_hallucinated_citation_excludes(self):
@@ -321,3 +323,46 @@ class TestCitationMarkers:
         content = "A [배경 맥락] B [배경 맥락] C [배경 맥락]"
         result = check_citation_markers(_draft(content))
         assert "1종" in result.detail
+
+
+# ---------- 무근거 주장 (2026-08-11) ----------
+
+
+class TestUncitedClaims:
+    """마커가 가리키는 근거와의 불일치는 numeric_grounded가 잡지만, 아예 마커가
+    없는 문장은 어떤 검사에도 안 걸렸다. 근거 없이 쓴 대목이 여기서 드러난다."""
+
+    def test_headings_and_short_items_not_counted(self):
+        content = "## 소제목\n\n| 표 | 행 |\n\nㅇ 요약\n\n---\n"
+        assert uncited_units(content) == []
+
+    def test_cited_sentence_not_counted(self):
+        content = "국내 시장은 전년 대비 12% 성장한 것으로 나타났다 [3]."
+        assert uncited_units(content) == []
+
+    def test_uncited_sentence_counted(self):
+        content = "국내 시장은 전년 대비 12% 성장한 것으로 나타났다."
+        assert len(uncited_units(content)) == 1
+
+    def test_bullet_marker_stripped_before_length_check(self):
+        content = "- 반도체 수요는 2027년까지 계속 늘어날 전망이다."
+        assert len(uncited_units(content)) == 1
+
+    def test_mostly_cited_draft_passes(self):
+        content = (
+            "첫 주장이다 [1]. 둘째 주장이다 [2]. 셋째 주장이다 [3]. "
+            "근거 없는 짧은 보충 설명 문장이다."
+        )
+        result = check_uncited_claims(_draft(content))
+        assert result.passed is True
+        assert result.severity == CheckSeverity.SOFT
+
+    def test_mostly_uncited_draft_warns(self):
+        content = (
+            "국내 반도체 시장은 전년 대비 크게 성장한 것으로 파악된다. "
+            "특히 차량용 부문은 공급 부족이 이어질 전망으로 분석된다. "
+            "정부도 이에 맞춰 지원 예산을 확대할 필요가 있다고 판단된다."
+        )
+        result = check_uncited_claims(_draft(content))
+        assert result.passed is False
+        assert "3건" in (result.detail or "")

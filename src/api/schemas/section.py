@@ -78,6 +78,39 @@ class SectionContentResponse(BaseModel):
     evidence: EvidenceInfo = Field(default_factory=EvidenceInfo)
 
 
+class EvidenceChunk(BaseModel):
+    """본문 [n]이 실제로 가리킨 근거 조각 - 모델이 프롬프트로 받은 그 원문이다.
+
+    출처(자료) 단위 표기로는 "이 자료 어딘가"까지만 알 수 있다. 여기서는 청크
+    단위로 내려보내 원문 대목을 직접 대조할 수 있게 한다.
+    """
+
+    number: int | None = None  # 본문 인용 번호. None = 프롬프트에 실렸지만 인용되지 않은 근거
+    chunk_id: str
+    content: str
+    cited: bool = True
+    source_id: str | None = None
+    source_title: str | None = None
+    url: str | None = None
+    reliability: str | None = None
+    header_path: list[str] = Field(default_factory=list, description="원본 문서 안의 소제목 경로")
+    chunk_index: int | None = None  # 원본 문서 안에서의 순번
+
+
+class SectionEvidenceResponse(BaseModel):
+    """절 하나의 근거 추적 결과 - 인용된 근거 + 실렸는데 안 쓰인 근거 + 무근거 신호."""
+
+    section_id: str
+    items: list[EvidenceChunk] = Field(default_factory=list)
+    pool_size: int = 0  # 작성 때 프롬프트에 실린 인용 가능 근거 수(옛 절은 0)
+    cited_count: int = 0
+    unused_count: int = 0
+    uncited_count: int = 0  # 근거 표기가 없는 주장 수
+    uncited_samples: list[str] = Field(default_factory=list)
+    # 마커를 청크까지 되짚을 수 있는가. 옛 절(기록 없음)은 자료 단위까지만 가능하다.
+    traceable: bool = True
+
+
 class SectionRewriteRequest(BaseModel):
     instruction: str = Field(
         "", max_length=2000, description="AI 재작성 지시(빈 문자열이면 근거 기반 단순 재작성)"

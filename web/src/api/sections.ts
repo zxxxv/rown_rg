@@ -3,6 +3,8 @@ import { apiClient } from "@/api/client";
 import {
   type SectionContentResponse,
   SectionContentResponseSchema,
+  type SectionEvidence,
+  SectionEvidenceSchema,
   type SectionTreeResponse,
   SectionTreeResponseSchema,
   type Source,
@@ -14,6 +16,8 @@ export const sectionKeys = {
   tree: (projectId: string) => [...sectionKeys.all, "tree", projectId] as const,
   content: (projectId: string, sectionId: string) =>
     [...sectionKeys.all, "content", projectId, sectionId] as const,
+  evidence: (projectId: string, sectionId: string) =>
+    [...sectionKeys.all, "evidence", projectId, sectionId] as const,
 };
 
 export const sourceRefKeys = {
@@ -55,6 +59,30 @@ export function useSectionContent(projectId: string, sectionId: string | null) {
   });
 }
 
+// ─── 근거 추적 ──────────────────────────────────────────────────────────────
+// 출처 표기는 "이 자료 어딘가"까지만 알려준다. 이 조회는 문장이 나온 청크 원문과
+// 프롬프트에 실렸지만 인용되지 않은 근거까지 함께 돌려줘 창작 여부를 대조하게 한다.
+
+export async function getSectionEvidence(
+  projectId: string,
+  sectionId: string,
+): Promise<SectionEvidence> {
+  const data = await apiClient.get<unknown>(`projects/${projectId}/sections/${sectionId}/evidence`);
+  return SectionEvidenceSchema.parse(data);
+}
+
+export function useSectionEvidence(projectId: string, sectionId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: sectionKeys.evidence(projectId, sectionId ?? ""),
+    queryFn: () => {
+      if (!sectionId) throw new Error("sectionId required");
+      return getSectionEvidence(projectId, sectionId);
+    },
+    enabled: Boolean(projectId && sectionId) && enabled,
+    retry: false,
+  });
+}
+
 // ─── 부분 편집: 수동 저장(PATCH) · AI 재작성(POST) ──────────────────────────
 
 async function invalidateSection(
@@ -65,6 +93,8 @@ async function invalidateSection(
   await Promise.all([
     qc.invalidateQueries({ queryKey: sectionKeys.content(projectId, sectionId) }),
     qc.invalidateQueries({ queryKey: sectionKeys.tree(projectId) }),
+    // 본문이 바뀌면 인용 마커와 무인용 주장 수가 함께 달라진다.
+    qc.invalidateQueries({ queryKey: sectionKeys.evidence(projectId, sectionId) }),
   ]);
 }
 

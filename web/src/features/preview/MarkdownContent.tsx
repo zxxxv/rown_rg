@@ -8,15 +8,17 @@ import {
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { SectionCitation } from "@/api/types";
+import type { EvidenceChunk, SectionCitation } from "@/api/types";
 import { CitationHoverCard } from "./SourceHoverCard";
 
 // 본문 인용 마커 - 백엔드 작성 규약([N], 숫자만)과 동일.
 const CITE_PATTERN = /\[(\d{1,3})\]/g;
 
 type CitationMap = Map<number, SectionCitation>;
+// 인용 번호 -> 그 번호가 실제로 가리킨 근거 원문. 없으면 호버 카드는 출처 이름만 보여준다.
+type EvidenceMap = Map<number, EvidenceChunk>;
 
-function processString(text: string, citations: CitationMap): ReactNode {
+function processString(text: string, citations: CitationMap, evidence: EvidenceMap): ReactNode {
   if (citations.size === 0 || !CITE_PATTERN.test(text)) return text;
   CITE_PATTERN.lastIndex = 0;
   const out: ReactNode[] = [];
@@ -28,7 +30,14 @@ function processString(text: string, citations: CitationMap): ReactNode {
     const citation = citations.get(number);
     if (citation) {
       if (match.index > lastIndex) out.push(text.slice(lastIndex, match.index));
-      out.push(<CitationHoverCard key={`cite-${key++}`} number={number} citation={citation} />);
+      out.push(
+        <CitationHoverCard
+          key={`cite-${key++}`}
+          number={number}
+          citation={citation}
+          evidence={evidence.get(number)}
+        />,
+      );
       lastIndex = match.index + match[0].length;
     }
     match = CITE_PATTERN.exec(text);
@@ -38,14 +47,18 @@ function processString(text: string, citations: CitationMap): ReactNode {
   return <>{out}</>;
 }
 
-function processChildren(children: ReactNode, citations: CitationMap): ReactNode {
+function processChildren(
+  children: ReactNode,
+  citations: CitationMap,
+  evidence: EvidenceMap,
+): ReactNode {
   return Children.map(children, (child) => {
-    if (typeof child === "string") return processString(child, citations);
+    if (typeof child === "string") return processString(child, citations, evidence);
     if (typeof child === "number" || typeof child === "boolean" || child === null) return child;
     if (isValidElement(child)) {
       const el = child as ReactElement<{ children?: ReactNode }>;
       if (el.props?.children !== undefined) {
-        return cloneElement(el, undefined, processChildren(el.props.children, citations));
+        return cloneElement(el, undefined, processChildren(el.props.children, citations, evidence));
       }
       return child;
     }
@@ -98,8 +111,8 @@ function prepareOutline(md: string): string {
   return out.join("\n");
 }
 
-function buildComponents(citations: CitationMap): Components {
-  const walk = (children: ReactNode) => processChildren(children, citations);
+function buildComponents(citations: CitationMap, evidence: EvidenceMap): Components {
+  const walk = (children: ReactNode) => processChildren(children, citations, evidence);
   return {
     h1: ({ children, ...props }) => (
       <h1 className="mb-4 mt-6 text-2xl font-semibold text-fg" {...props}>
@@ -228,9 +241,11 @@ export interface MarkdownContentProps {
   content: string;
   /** 절의 [N] 인용 매핑 - 있으면 본문 마커가 호버 출처 배지로 렌더된다. */
   citations?: SectionCitation[];
+  /** 근거 추적 결과 - 있으면 호버 카드에 그 번호가 가리킨 원문 대목이 함께 뜬다. */
+  evidence?: EvidenceChunk[];
 }
 
-export function MarkdownContent({ content, citations }: MarkdownContentProps) {
+export function MarkdownContent({ content, citations, evidence }: MarkdownContentProps) {
   const citationMap = useMemo<CitationMap>(
     () =>
       new Map(
@@ -240,7 +255,18 @@ export function MarkdownContent({ content, citations }: MarkdownContentProps) {
       ),
     [citations],
   );
-  const components = useMemo(() => buildComponents(citationMap), [citationMap]);
+  const evidenceMap = useMemo<EvidenceMap>(() => {
+    const map: EvidenceMap = new Map();
+    for (const item of evidence ?? []) {
+      // 한 번호에 청크가 여럿이면(같은 자료의 다른 대목) 첫 것만 호버에 띄운다 - 나머지는 근거 패널에서.
+      if (item.number !== null && item.cited && !map.has(item.number)) map.set(item.number, item);
+    }
+    return map;
+  }, [evidence]);
+  const components = useMemo(
+    () => buildComponents(citationMap, evidenceMap),
+    [citationMap, evidenceMap],
+  );
   // 발명 인용 마커 제거 후, 개조식 마커(□ ㅇ) 줄을 독립 문단으로 분리해 위계·간격을 살린다.
   const prepared = useMemo(() => prepareOutline(stripInventedMarkers(content)), [content]);
   return (

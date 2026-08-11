@@ -29,6 +29,7 @@ import {
   useRewriteSection,
   useSaveSection,
   useSectionContent,
+  useSectionEvidence,
 } from "@/api/sections";
 import type { ChapterNode, SectionCitation, SectionNode, SectionStatus } from "@/api/types";
 import { useVerifyReport } from "@/api/verify";
@@ -41,6 +42,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
+import { EvidencePanel } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -61,6 +63,7 @@ const WARNING_LABEL: Record<string, string> = {
   numeric_grounded: "수치 근거",
   citation_resolves: "인용 해석",
   citation_markers: "인용 표기",
+  uncited_claims: "무근거 주장",
   renderable: "렌더 가능",
 };
 
@@ -624,6 +627,8 @@ function SectionView({
   const data = contentQuery.data;
   const error = contentQuery.error;
 
+  // 본문 마커에 근거 원문을 붙이려면 절과 함께 받아야 한다(패널과 같은 캐시를 쓴다).
+  const evidenceQuery = useSectionEvidence(projectId, sectionId);
   const save = useSaveSection(projectId, sectionId);
   const rewrite = useRewriteSection(projectId, sectionId);
   const rewriteBlock = useRewriteBlock(projectId, sectionId);
@@ -943,7 +948,11 @@ function SectionView({
                     </div>
                   ) : (
                     <>
-                      <MarkdownContent content={block} citations={data.citations} />
+                      <MarkdownContent
+                        content={block}
+                        citations={data.citations}
+                        evidence={evidenceQuery.data?.items}
+                      />
                       {selectedIdx.has(idx) && selectedIdx.size === 1 ? (
                         <Button
                           variant="outline"
@@ -964,6 +973,8 @@ function SectionView({
               ))}
             </div>
             <CitationList citations={data.citations} />
+            {/* 출처 목록은 "이 자료"까지, 근거 추적은 "이 대목"까지 알려준다 - 창작 검증의 시작점 */}
+            <EvidencePanel projectId={projectId} sectionId={sectionId} />
           </div>
 
           {/* 우측: 검토·재작성 패널 - 완료 후에만 (작성 중에는 읽기 전용) */}

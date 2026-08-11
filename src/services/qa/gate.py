@@ -36,6 +36,7 @@ _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
 # 비표준 인용 마커 — 대괄호 표기 중 정상 [n]이 아닌 것(2026-08-05 실측:
 # '[배경자료 제공됨]', '[배경 맥락]', '[근거 없음 - …]' 등 모델이 발명한 표기).
 # 마크다운 링크 [텍스트](url)와 그림/표 캡션([그림 1-1])은 정상 표기라 제외한다.
+_CITE_MARKER_RE = re.compile(r"\[\d+\]")
 _BRACKET_RE = re.compile(r"\[([^\[\]\n]{1,40})\](?!\()")
 _ALLOWED_BRACKET_RE = re.compile(r"^(?:\d+|그림\s?[\d\-. ]+|표\s?[\d\-. ]+)$")
 
@@ -143,6 +144,85 @@ def check_numeric_grounded(draft: SectionDraft, cited_content: str) -> GateResul
     )
 
 
+# 문장 분리 — 마침표·물음표·느낌표 뒤 공백. 개조식은 줄 자체가 한 단위라 줄 먼저 나눈다.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# 본문이 아닌 줄: 제목·표·인용블록·구분선.
+_NON_CLAIM_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|\||>|[-*_]{3,}\s*$)")
+# 글머리 기호(개조식) — 판정에서 떼어내고 길이를 잰다. 'ㅇ'·'ㅁ'은 한글 자모 마커다.
+_BULLET_RE = re.compile(r"^\s*(?:[-*•‣◦○□▪ㅇㅁ]|\d+[.)]|[가-힣][.)])\s+")
+# 주장으로 볼 최소 길이 — 이보다 짧은 줄은 소제목·나열 항목이라 인용을 요구하지 않는다.
+_MIN_CLAIM_CHARS = 25
+# 서술을 끝맺는 꼬리 — 개조식 소제목("…확보 전략 제언")과 주장("…취약성에서 발생하고 있음")을
+# 가르는 실측 기준(2026-08-11, 예타 6.2절). 제목은 명사로 끝나고 주장은 종결형으로 끝난다.
+# 이 검사는 사람에게 보내는 경고라 재현율보다 정밀도가 중요하다 — 애매하면 세지 않는다.
+_CLAIM_TAILS: tuple[str, ...] = (
+    "다",
+    "음",
+    "임",
+    "함",
+    "됨",
+    "짐",
+    "필요",
+    "전망",
+    "예상",
+    "우려",
+    "가능",
+    "요구",
+    "시급",
+    "중요",
+)
+_SENTENCE_END_RE = re.compile(r"[.!?]\s*$")
+
+
+def uncited_units(content: str) -> list[str]:
+    """인용 마커가 없는 주장 단위(문장·개조식 항목) 목록.
+
+    게이트와 화면이 같은 판정을 쓰도록 분리했다(ungrounded_numbers와 같은 규약).
+    제목·표·구분선과 짧은 나열 항목은 세지 않는다 — 그것까지 세면 개조식 보고서는
+    항상 절반이 '미인용'으로 나와 신호가 죽는다.
+    """
+    out: list[str] = []
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or _NON_CLAIM_LINE_RE.match(line):
+            continue
+        body = _BULLET_RE.sub("", line)
+        for unit in _SENTENCE_SPLIT_RE.split(body):
+            unit = unit.strip()
+            if len(unit) < _MIN_CLAIM_CHARS:
+                continue
+            if not _SENTENCE_END_RE.search(unit) and not unit.endswith(_CLAIM_TAILS):
+                continue  # 명사로 끝나면 소제목 — 인용을 요구하지 않는다
+            if _CITE_MARKER_RE.search(unit):
+                continue
+            out.append(unit)
+    return out
+
+
+def check_uncited_claims(draft: SectionDraft) -> GateResult:
+    """근거 마커가 붙지 않은 주장이 지나치게 많은지.
+
+    마커가 가리키는 청크와 본문이 어긋나는 것은 numeric_grounded가 잡지만, 아예
+    마커가 없는 문장은 어떤 검사에도 안 걸려 그대로 통과했다. 모델이 근거 없이
+    쓴 대목이 여기서 드러난다. 개조식 특성상 이어지는 항목은 마커를 생략하는 게
+    자연스러워 SOFT — 비율이 절반을 넘을 때만 사람에게 알린다.
+    """
+    units = uncited_units(draft.content)
+    total = len(units) + len(_CITE_MARKER_RE.findall(draft.content))
+    ratio = len(units) / total if total else 0.0
+    passed = len(units) < 3 or ratio <= 0.5
+    detail = None
+    if not passed:
+        preview = " / ".join(u[:30] for u in units[:2])
+        detail = f"근거 표기 없는 주장 {len(units)}건({ratio:.0%}): {preview}"
+    return GateResult(
+        check="uncited_claims",
+        severity=CheckSeverity.SOFT,
+        passed=passed,
+        detail=detail,
+    )
+
+
 def check_citation_markers(draft: SectionDraft) -> GateResult:
     """인용 표기가 표준([n])인지 — 모델이 발명한 '[배경자료 제공됨]'류 마커 검출.
 
@@ -214,6 +294,7 @@ def run_section_gate(
         check_renderable(draft),
         check_citation_markers(draft),
         check_numeric_grounded(draft, cited_content),
+        check_uncited_claims(draft),
         check_bounds(
             draft,
             min_chars=min_chars,

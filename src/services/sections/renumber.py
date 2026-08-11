@@ -57,6 +57,37 @@ def renumber_content(
     return re.sub(r"([ \t]*)\[(\d+)\]", _sub, content)
 
 
+def citation_chunk_map(
+    content: str,
+    cited_chunk_ids: list[UUID],
+    chunk_to_global: dict[UUID, int],
+) -> dict[int, list[UUID]]:
+    """전역 번호 → 그 번호가 실제로 가리킨 청크들 (순수 함수).
+
+    전역 번호는 자료(source) 단위라 한 자료의 서로 다른 청크가 같은 번호로 합쳐진다.
+    그러면 재작성된 본문만 봐서는 "이 문장이 원문 어느 대목에서 나왔는지"를 되짚을 수
+    없다(로컬 번호는 사라지고, 못 푼 마커는 삭제된다). 재작성과 같은 자리에서 매핑을
+    떠 절 meta에 남긴다 — 이게 근거 추적의 유일한 원천이다.
+    """
+    order: list[int] = []
+    for m in _CITE_RE.finditer(content):
+        n = int(m.group(1))
+        if n not in order:
+            order.append(n)
+    out: dict[int, list[UUID]] = {}
+    for i, _n in enumerate(order):
+        if i >= len(cited_chunk_ids):
+            break
+        cid = cited_chunk_ids[i]
+        g = chunk_to_global.get(cid)
+        if g is None:
+            continue
+        bucket = out.setdefault(g, [])
+        if cid not in bucket:
+            bucket.append(cid)
+    return out
+
+
 async def _adopted_source_order(project_id: UUID) -> dict[UUID, int]:
     """채택 자료 source_id → 전역 번호(1부터, created_at 순)."""
     from sqlalchemy import select
@@ -114,17 +145,22 @@ async def renumber_state(state: ProjectState) -> ProjectState:
         return state
 
     new_sets = []
+    meta: dict[UUID, dict] = {}
     for cset in state.section_candidates:
         chosen = state.section_selections.get(cset.section_id)
         new_cands = []
         for cand in cset.candidates:
             if cand.candidate_id == chosen:
+                cited = list(cand.draft.cited_chunk_ids)
+                # 매핑은 재작성 전 본문(로컬 번호) 기준으로만 뜰 수 있다 — 순서 주의.
+                mapping = citation_chunk_map(cand.draft.content, cited, chunk_to_global)
+                prior = dict(state.section_meta.get(cset.section_id) or {})
+                prior["citation_chunks"] = {
+                    str(g): [str(c) for c in cids] for g, cids in sorted(mapping.items())
+                }
+                meta[cset.section_id] = prior
                 new_draft = cand.draft.model_copy(
-                    update={
-                        "content": renumber_content(
-                            cand.draft.content, list(cand.draft.cited_chunk_ids), chunk_to_global
-                        )
-                    }
+                    update={"content": renumber_content(cand.draft.content, cited, chunk_to_global)}
                 )
                 cand = cand.model_copy(update={"draft": new_draft})
             new_cands.append(cand)
@@ -134,4 +170,4 @@ async def renumber_state(state: ProjectState) -> ProjectState:
         project_id=str(state.project_id),
         n_chunks=len(chunk_to_global),
     )
-    return state.model_copy(update={"section_candidates": new_sets})
+    return state.model_copy(update={"section_candidates": new_sets}).with_section_meta(meta)
