@@ -46,6 +46,9 @@ _SEARCH_SQL = text(
     FROM chunks
     WHERE project_id = :project_id
       AND track = :track
+    -- 근거로 못 쓰는 청크(사이트 메뉴·그림 껍데기·중복 등)는 검색에서 뺀다.
+    -- 지우지 않고 표시만 하므로 원문 대조 화면에는 그대로 남는다.
+      AND coalesce(metadata->>'excluded', '') = ''
       AND source_id NOT IN (
           SELECT id FROM project_sources
           WHERE project_id = :project_id AND is_included = false

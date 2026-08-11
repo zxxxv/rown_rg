@@ -299,7 +299,12 @@ export function BlockEvidence({
   const flagged = claims.filter((c) => c.status !== "aligned");
 
   if (items.length === 0 && claims.length === 0) {
-    return <p className="text-xs text-fg-tertiary">이 블록에는 인용 표기가 없습니다.</p>;
+    // 근거가 없으면 그 사실만 한 줄로 알린다 - 빈 패널이 본문 폭을 먹으면 손해다.
+    return (
+      <p className="rounded border border-border bg-bg px-2.5 py-2 text-xs text-fg-secondary">
+        이 블록에는 인용 표기가 없습니다 - 근거 없이 쓰였을 수 있습니다.
+      </p>
+    );
   }
 
   return (

@@ -972,9 +972,11 @@ function SectionView({
             "grid grid-cols-1",
             // 작성 중에는 편집·재작성 패널을 아예 두지 않는다 - 초안이 재생성으로
             // 갈아치워질 수 있고, 절 전체 재작성은 작성 루프와 자원을 다툰다.
-            // 근거 패널이 300px면 인용 원문이 세로로 길게 흘러 읽을 수가 없다.
-            // 검토의 본작업이 "본문 옆에서 근거를 읽는 것"이라 폭을 본문에서 떼어 준다.
-            editable && "xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_520px]",
+            // 근거 칸은 블록을 골랐을 때만 연다. 늘 자리를 잡아 두면 근거가 0건인 절에서도
+            // 본문만 좁아진다(2026-08-12 지적). 평소엔 본문이 전체 폭을 쓴다.
+            editable &&
+              selectedBlocks.length > 0 &&
+              "xl:grid-cols-[minmax(0,1fr)_440px] 2xl:grid-cols-[minmax(0,1fr)_560px]",
           )}
         >
           {/* 중앙: 블록 본문 - 클릭해 선택하면 우측 패널에서 편집·재작성 */}
@@ -1103,9 +1105,9 @@ function SectionView({
           {/* 우측: 근거 전용 - 검토의 본작업은 "본문 옆에서 근거를 읽는 것"이다.
               재작성 지시는 짧고 가끔 쓰는 것이라 아래 띠로 내렸다(2026-08-12 지적:
               근거 패널이 눌려 원문을 읽을 수 없었다). */}
-          {editable ? (
+          {editable && selectedBlocks.length > 0 ? (
             <aside className="border-t border-border bg-bg-secondary px-4 py-4 xl:border-l xl:border-t-0">
-              {selectedBlocks.length > 0 ? (
+              {
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-xs font-medium text-fg">
@@ -1122,12 +1124,7 @@ function SectionView({
                     blocks={selectedBlocks}
                   />
                 </div>
-              ) : (
-                <p className="text-xs leading-relaxed text-fg-secondary">
-                  본문에서 블록(문단)을 클릭하면 그 블록이 참고한 근거 원문이 여기 표시됩니다. 여러
-                  개를 골라 한 번에 재작성할 수 있고, 하나만 고르면 직접 편집도 열립니다.
-                </p>
-              )}
+              }
             </aside>
           ) : null}
         </div>
