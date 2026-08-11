@@ -201,6 +201,10 @@ class Settings(BaseSettings):
     # 근거 동봉 판정 — 어휘 겹침이 건져 올린 의심 문장만 LLM에 근거와 함께 넘겨
     # 뒷받침 여부를 확인한다(의역 오탐 제거). 끄면 겹침 판정만으로 경고한다.
     claim_verify_enabled: bool = True
+    # 판정은 "이 근거가 이 문장을 담고 있나"만 묻는 짧은 일이라 상위 모델이 필요 없다.
+    # 실측(2026-08-11, 의역·창작수치·의미반전·과잉단정 4종): flash-lite와 Haiku 4.5가
+    # 똑같이 4/4. 단가는 1/4($0.25 vs $1 입력)라 기본을 이쪽에 둔다.
+    claim_verify_model: str = "gemini-3.1-flash-lite"
 
     @property
     def is_production(self) -> bool:

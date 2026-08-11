@@ -193,7 +193,8 @@ async def run_pm_verify(state: ProjectState, *, model: str | None = None) -> int
     try:
         from src.services.qa.evidence_findings import evidence_findings
 
-        rows.extend(await evidence_findings(state.project_id, model=model, user_id=state.user_id))
+        # 판정 모델은 따로 둔다 - 문서 횡단 검증과 달리 짧은 대조라 저가 모델로 충분하다
+        rows.extend(await evidence_findings(state.project_id, user_id=state.user_id))
     except Exception:
         logger.warning("pm_verify.evidence_failed", project_id=str(state.project_id), exc_info=True)
     await persist_findings(state.project_id, rows)

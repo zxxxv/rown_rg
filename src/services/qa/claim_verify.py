@@ -140,7 +140,7 @@ async def verify_claims(
     if not claims:
         return {}
     client = client or get_llm_client()
-    model = model or settings.verify_model
+    model = model or settings.claim_verify_model or settings.verify_model
     system = f"{load_workflow_role('claim_verify_system')}\n\n{_FORMAT}"
     request = CompletionRequest(
         messages=[Message(role="user", content=build_prompt(claims, chunk_texts))],
