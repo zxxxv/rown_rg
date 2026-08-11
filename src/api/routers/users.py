@@ -31,6 +31,8 @@ from src.db.models.limit_request import LimitRequest
 from src.db.models.project import Project
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
+from src.db.models.user_limit import UserLimit
+from src.services.quota_settings import get_role_default_limit_usd
 
 logger = structlog.get_logger(__name__)
 
@@ -104,6 +106,19 @@ async def my_token_usage(
         for r in model_rows
     ]
 
+    # 한도는 게이트(clients/llm/quota_gate._fetch_usage)와 같은 규칙으로 푼다:
+    # user_quotas 행이 있으면 그 값, 없으면 역할 기본값.
+    custom_limit = (
+        await session.execute(
+            select(UserLimit.monthly_limit_usd).where(UserLimit.user_id == current_user.id)
+        )
+    ).scalar_one_or_none()
+    cost_limit = (
+        custom_limit
+        if custom_limit is not None
+        else await get_role_default_limit_usd(session, current_user.role)
+    )
+
     return MyTokenUsageResponse(
         period_start=period_start.date(),
         period_end=today.date(),
@@ -111,6 +126,7 @@ async def my_token_usage(
         total_output_tokens=sum(m.output_tokens for m in by_model),
         total_cost_usd=sum((m.cost_usd for m in by_model), Decimal("0")),
         request_count=sum(m.request_count for m in by_model),
+        cost_limit_usd=cost_limit,
         daily=daily,
         by_model=by_model,
     )

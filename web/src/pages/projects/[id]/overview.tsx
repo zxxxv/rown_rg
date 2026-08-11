@@ -89,7 +89,6 @@ export default function OverviewPage() {
     <AppShell
       user={user ? { name: user.name, role: user.role } : null}
       onLogout={() => void logout()}
-      tokenUsage={{ used: 1_240_000, limit: 5_000_000 }}
     >
       <div className="flex flex-col gap-6">
         <Button

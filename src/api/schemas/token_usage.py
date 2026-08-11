@@ -74,5 +74,8 @@ class MyTokenUsageResponse(BaseModel):
     total_output_tokens: int
     total_cost_usd: Decimal
     request_count: int
+    # 실제로 집행되는 한도는 비용(달러)이다 - 토큰 수로 막지 않는다(clients/llm/quota_gate).
+    # 화면이 "토큰 x / y" 같은 없는 상한을 지어내지 않도록 여기서 진짜 한도를 내려보낸다.
+    cost_limit_usd: Decimal | None = None
     daily: list[TokenUsageDailyPoint]
     by_model: list[TokenUsageByModel]

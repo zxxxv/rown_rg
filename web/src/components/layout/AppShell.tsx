@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import { Link, Outlet, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { useMyTokenUsage } from "@/api/profile";
 import type { UserRole } from "@/components/auth/RequireAuth";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Button } from "@/components/ui/button";
@@ -10,12 +11,11 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 
 export interface AppShellProps {
   user: { name: string; role: UserRole } | null;
-  tokenUsage?: { used: number; limit: number };
   onLogout?: () => void;
   children?: ReactNode;
 }
 
-export function AppShell({ user, tokenUsage, onLogout, children }: AppShellProps) {
+export function AppShell({ user, onLogout, children }: AppShellProps) {
   // 접기는 사용자가 정한다 - 좁은 화면에서 자동으로 접으면 라벨이 사라져 원하는
   // 모습이 아니게 된다(2026-08-10). 폭 절약은 사이드바 자체를 좁혀서 한다.
   const [collapsed, setCollapsed] = useState(false);
@@ -24,6 +24,10 @@ export function AppShell({ user, tokenUsage, onLogout, children }: AppShellProps
   const [params] = useSearchParams();
   const role = user?.role ?? "viewer";
   const demoMode = params.get("demo") === "1";
+  // 화면에 박아둔 숫자(1,240,000 / 5,000,000)는 아무 데이터도 아니었다 - 이번 달
+  // 실사용량을 직접 읽는다(5분 캐시라 페이지마다 요청이 늘지 않는다).
+  const usage = useMyTokenUsage().data;
+  const tokenTotal = usage ? usage.total_input_tokens + usage.total_output_tokens : 0;
 
   return (
     <div className="flex min-h-screen bg-bg">
@@ -74,11 +78,19 @@ export function AppShell({ user, tokenUsage, onLogout, children }: AppShellProps
               </button>
             ) : null}
 
-            {tokenUsage ? (
-              <div className="flex items-center gap-2 font-mono text-xs text-fg-secondary">
-                <span>토큰</span>
-                <span className="text-fg">
-                  {tokenUsage.used.toLocaleString()} / {tokenUsage.limit.toLocaleString()}
+            {usage ? (
+              // 한도는 토큰이 아니라 비용(달러)으로 집행된다(clients/llm/quota_gate).
+              // 토큰에 상한을 붙여 보여주면 없는 규칙을 지어내는 것이라 사용량만 적는다.
+              <div className="flex items-center gap-3 font-mono text-xs text-fg-secondary">
+                <span className="hidden sm:inline">
+                  토큰 <span className="text-fg">{tokenTotal.toLocaleString()}</span>
+                </span>
+                <span>
+                  비용{" "}
+                  <span className="text-fg">
+                    ${usage.total_cost_usd.toFixed(2)}
+                    {usage.cost_limit_usd !== null ? ` / $${usage.cost_limit_usd.toFixed(0)}` : ""}
+                  </span>
                 </span>
               </div>
             ) : null}

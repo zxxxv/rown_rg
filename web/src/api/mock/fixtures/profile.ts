@@ -28,6 +28,7 @@ export const MY_TOKEN_USAGE: MyTokenUsage = {
   total_input_tokens: totalInput,
   total_output_tokens: totalOutput,
   total_cost_usd: totalCost,
+  cost_limit_usd: 50,
   request_count: 142,
   daily,
   by_model: [

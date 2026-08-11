@@ -278,7 +278,6 @@ export default function PreviewPage() {
     <AppShell
       user={user ? { name: user.name, role: user.role } : null}
       onLogout={() => void logout()}
-      tokenUsage={{ used: 1_240_000, limit: 5_000_000 }}
     >
       <Button
         variant="ghost"

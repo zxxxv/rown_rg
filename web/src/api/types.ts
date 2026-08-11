@@ -431,6 +431,8 @@ export const MyTokenUsageSchema = z.object({
   total_output_tokens: z.number().int().nonnegative(),
   total_cost_usd: z.coerce.number().nonnegative(),
   request_count: z.number().int().nonnegative(),
+  /** 실제로 집행되는 한도는 비용(달러)이다 - 토큰 수로 막지 않는다 */
+  cost_limit_usd: z.coerce.number().nonnegative().nullable().default(null),
   daily: z.array(TokenUsageDailyPointSchema),
   by_model: z.array(TokenUsageByModelSchema),
 });
