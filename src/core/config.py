@@ -191,6 +191,15 @@ class Settings(BaseSettings):
     hyde_enabled: bool = False
     hyde_model: str = "gemini-3.1-flash-lite"  # 실작동 최저가(2026-08-04 실측 승계)
 
+    # 다국어 검색 — 한글 질의로 dense 상위 20에 영문 청크가 0건이었다(2026-08-11 실측.
+    # 같은 뜻의 영문 질의로는 6~12건). 영문 자료를 모아 색인해 놓고 안 쓰는 상태라
+    # 질의를 번역해 한 번 더 검색하고 순위를 합친다(색인은 그대로 — 원문 대조 유지).
+    multilingual_search_enabled: bool = True
+    # 근거 풀에 한글 없는 청크가 이 비율 미만이면 번역 콜 자체를 걸지 않는다.
+    # 국내 자료만 있는 프로젝트가 대다수라 무조건 켜면 절마다 헛콜이 붙는다.
+    multilingual_min_foreign_ratio: float = 0.05
+    multilingual_query_model: str = "gemini-3.1-flash-lite"  # 실작동 최저가
+
     # RAPTOR 요약 트리 — 인덱싱 후 의미 클러스터링 요약을 쌓아 검색 맥락으로 제공.
     # 트리 깊이는 depth_mode가 결정(indexing/raptor.DEPTH_LEVELS). 빌드 실패는 비치명.
     raptor_enabled: bool = True

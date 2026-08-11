@@ -17,6 +17,7 @@ from src.services.retrieval.base import SearchClient, SearchHit, Track
 
 if TYPE_CHECKING:
     from src.clients.reranker_client import RerankerClient
+    from src.services.retrieval._multilingual import QueryTranslator
     from src.services.retrieval._raptor import SummaryFetcher
 
 logger = structlog.get_logger(__name__)
@@ -39,6 +40,45 @@ def hit_to_chunk(hit: SearchHit) -> RetrievedChunk:
         score=hit.score,
         header_path=[str(h) for h in header] if isinstance(header, list) else [],
     )
+
+
+async def _merged_with_translation(
+    hits: list[SearchHit],
+    translate: QueryTranslator,
+    query: str,
+    *,
+    context: str,
+    client: SearchClient,
+    project_id: UUID,
+    track: Track,
+    width: int,
+) -> list[SearchHit]:
+    """번역 질의로 한 번 더 검색해 순위를 합친다. 실패는 원 결과 그대로.
+
+    한글 질의로는 영문 청크가 dense 상위에 아예 안 올라온다(실측 0/20). 색인을 이중으로
+    만들지 않고 질의 쪽에서 푸는 방식이라 원문 대조가 그대로 유지된다.
+    """
+    try:
+        translated = await translate(query, context)
+        if not translated or translated == query:
+            return hits
+        second = await client.search(translated, project_id, track, width)
+        if not second:
+            return hits
+        from src.services.retrieval._multilingual import merge_rankings
+
+        merged = merge_rankings(hits, second)
+    except Exception:
+        logger.warning("retrieval.translate_merge_failed", project_id=str(project_id))
+        return hits
+    logger.info(
+        "retrieval.translated",
+        project_id=str(project_id),
+        query=query,
+        translated=translated,
+        added=len(merged) - len(hits),
+    )
+    return merged[: max(width, len(hits))]
 
 
 def _section_query(section: SectionPlan) -> str:
@@ -70,6 +110,7 @@ async def retrieve_for_section(
     fetch_k: int = DEFAULT_FETCH_K,
     summary_fetcher: SummaryFetcher | None = None,
     topic: str | None = None,
+    translate: QueryTranslator | None = None,
 ) -> list[RetrievedChunk]:
     """한 섹션의 근거 청크를 검색해 RetrievedChunk 리스트로 반환.
 
@@ -83,14 +124,27 @@ async def retrieve_for_section(
     """
     query = _section_query(section)
     anchored = _rerank_query(section, topic)
-    if reranker is None:
-        hits = await client.search(query, project_id, track, top_k)
-    else:
+    width = max(fetch_k, top_k) if reranker is not None else top_k
+    hits = await client.search(query, project_id, track, width)
+    if translate is not None:
+        hits = await _merged_with_translation(
+            hits,
+            translate,
+            query,
+            # 번역기에 넘길 문맥 — 제목만 주면 '시장 규모'가 무엇의 시장인지 모른다.
+            context=anchored,
+            client=client,
+            project_id=project_id,
+            track=track,
+            width=width,
+        )
+    if reranker is not None:
         # lazy import: _reranking → reranker_client 체인의 무거운 의존을 사용 시점으로 미룬다.
         from src.services.retrieval._reranking import rerank_hits
 
-        wide = await client.search(query, project_id, track, max(fetch_k, top_k))
-        hits = await rerank_hits(reranker, anchored, wide, top_k=top_k)
+        hits = await rerank_hits(reranker, anchored, hits, top_k=top_k)
+    else:
+        hits = hits[:top_k]
     chunks = [hit_to_chunk(h) for h in hits]
     if summary_fetcher is not None:
         try:
@@ -110,6 +164,7 @@ def make_section_retriever(
     fetch_k: int = DEFAULT_FETCH_K,
     summary_fetcher: SummaryFetcher | None = None,
     topic: str | None = None,
+    translate: QueryTranslator | None = None,
 ) -> SectionRetriever:
     """프로젝트·검색기에 바인딩된 SectionRetriever를 만든다 (write 루프 주입용)."""
 
@@ -128,6 +183,7 @@ def make_section_retriever(
             fetch_k=max(fetch_k, k * 2),
             summary_fetcher=summary_fetcher,
             topic=topic,
+            translate=translate,
         )
         return await _with_source_titles(chunks)
 

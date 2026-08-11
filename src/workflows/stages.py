@@ -675,6 +675,21 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
 
         reranker = get_reranker_client()
 
+    # 다국어 검색 — 근거 풀에 외국어 자료가 있을 때만 번역 콜을 건다. 국내 자료만 있는
+    # 프로젝트가 대다수라 무조건 켜면 절마다 헛콜이 하나씩 붙는다. 판단은 첫 검색
+    # 시점에 한 번(여기는 동기 팩토리라 DB를 못 본다).
+    translator = None
+    if settings.multilingual_search_enabled:
+        from src.services.retrieval._multilingual import make_gated_translator
+
+        translator = make_gated_translator(
+            async_session_maker,
+            state.project_id,
+            model=settings.multilingual_query_model,
+            min_foreign_ratio=settings.multilingual_min_foreign_ratio,
+            user_id=state.user_id,
+        )
+
     summary_fetcher = None
     if settings.raptor_enabled:
         from src.services.retrieval._raptor import make_summary_fetcher
@@ -687,6 +702,7 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
         state.project_id,
         reranker=reranker,
         summary_fetcher=summary_fetcher,
+        translate=translator,
         # 주제 앵커 — 재채점·RAPTOR 검색이 절 제목만으로 표류하지 않게(주제 표류 실측 대응)
         topic=state.topic,
         # 절당 근거 공급량 — 분량의 1차 병목 레버(config.retrieval_top_k)
