@@ -199,13 +199,16 @@ _PLAN_MODEL = "claude-sonnet-4-6"
 # 모델을 써도 회수량이 크게 늘지 않는 반면, 본문은 모델 품질이 그대로 문장에 남는다
 # (사용자 요청 2026-08-11: "검색은 sonnet, 글 작성만 opus").
 _PREMIUM_RESEARCH_MODEL = "claude-sonnet-4-6"
-_PREMIUM_WRITE_MODEL = "claude-opus-4-7"
+_PREMIUM_WRITE_MODEL = "claude-opus-5"
+# 고급 모드는 파트 계획도 Opus로 쓴다(사용자 결정 2026-08-11). 절당 1콜·수백 토큰이라
+# 비용 영향은 미미한데, 파트 소주제 구성이 문서 구조를 그대로 좌우한다.
+_PREMIUM_PLAN_MODEL = "claude-opus-5"
 
 
 def _models_for(state: ProjectState) -> dict[str, str]:
     """프로젝트 품질 모드(config.model_mode) → 역할별 모델.
 
-    premium: 수집·검증은 Sonnet 4.6, 본문은 Opus 4.7(품질 우선).
+    premium: 수집·검증은 Sonnet 4.6, 본문·파트 계획은 Opus 5(품질 우선).
     economy: 수집·검증은 Haiku, 본문은 gpt-5.4-mini(비용 우선). standard: 전역 설정
     (DB 오버라이드→env, 기본 Sonnet 4.6). 두 모드 모두 파트 계획만 _PLAN_MODEL.
     RAPTOR(gemini)·임베딩은 모드와 무관.
@@ -216,7 +219,7 @@ def _models_for(state: ProjectState) -> dict[str, str]:
             "planner": _PREMIUM_RESEARCH_MODEL,
             "research": _PREMIUM_RESEARCH_MODEL,
             "write": _PREMIUM_WRITE_MODEL,
-            "write_plan": _PLAN_MODEL,
+            "write_plan": _PREMIUM_PLAN_MODEL,
             "verify": _PREMIUM_RESEARCH_MODEL,
         }
     if mode == "economy":

@@ -91,7 +91,7 @@ export const ProjectConfigSchema = z.object({
   // 품질 모드 - 역할별로 모델이 갈린다(백엔드 stages._models_for):
   //   economy  = 수집·검증 Haiku 4.5 + 본문 GPT-5.4-mini
   //   standard = 전역 설정 모델(기본 Sonnet 4.6)
-  //   premium  = 수집·검증 Sonnet 4.6 + 본문 Opus 4.7. 파트 계획은 세 모드 다 Sonnet 4.6.
+  //   premium  = 수집·검증 Sonnet 4.6 + 본문·파트 계획 Opus 5(그 외 모드는 계획만 Sonnet 4.6).
   model_mode: z.enum(["economy", "standard", "premium"]),
   // 이 보고서에 적용할 개인 작성 규칙 id 목록(백엔드 stages._selected_rule_ids 소비).
   // optional: 이 필드 도입 전 config가 catch로 통째 초기화되지 않게 한다.

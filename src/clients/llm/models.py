@@ -51,6 +51,16 @@ class ModelSpec:
 MODELS: tuple[ModelSpec, ...] = (
     # Anthropic (Claude)
     ModelSpec(
+        "claude-opus-5",
+        "anthropic",
+        ModelPricing(Decimal("5"), Decimal("25"), Decimal("0.50")),
+    ),
+    ModelSpec(
+        "claude-opus-4-8",
+        "anthropic",
+        ModelPricing(Decimal("5"), Decimal("25"), Decimal("0.50")),
+    ),
+    ModelSpec(
         "claude-opus-4-7",
         "anthropic",
         ModelPricing(Decimal("5"), Decimal("25"), Decimal("0.50")),

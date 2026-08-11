@@ -66,7 +66,7 @@ const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
 const MODEL_MODE_LABEL: Record<string, string> = {
   economy: "절약(Haiku + GPT-mini)",
   standard: "표준(Sonnet 4.6)",
-  premium: "고급(Sonnet 수집 + Opus 작성)",
+  premium: "고급(Sonnet 수집 + Opus 5 작성)",
 };
 
 const DEPTH_LABEL: Record<string, string> = {
