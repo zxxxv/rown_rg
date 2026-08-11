@@ -238,6 +238,8 @@ export const UngroundedNumbersSchema = z.object({
 export const EvidenceInfoSchema = z.object({
   count: z.number().int().nonnegative().nullable().default(null),
   scarce: z.boolean().default(false),
+  /** 분할 계획이 무너져 단일 호출로 쓴 절 - 짧고 인용이 얇다(재작성 권장 신호) */
+  plan_failed: z.boolean().default(false),
 });
 
 export const SectionContentResponseSchema = z.object({
@@ -251,7 +253,7 @@ export const SectionContentResponseSchema = z.object({
   /** 인용 근거에서 확인되지 않는 수치 - 창작 위험 신호(조회 시점 재계산) */
   ungrounded: UngroundedNumbersSchema.default({ count: 0, samples: [] }),
   /** 근거 부족으로 분량 목표를 내린 절인지 - 본문에는 쓰지 않고 화면에서만 표시 */
-  evidence: EvidenceInfoSchema.default({ count: null, scarce: false }),
+  evidence: EvidenceInfoSchema.default({ count: null, scarce: false, plan_failed: false }),
 });
 export type SectionContentResponse = z.infer<typeof SectionContentResponseSchema>;
 

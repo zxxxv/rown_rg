@@ -40,7 +40,10 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 PART_MAX_TOKENS = 10_000  # 파트 출력 상한 — 실측 파트 산출 2~3.3천자(3~5천 토큰)의 헤드룸
-PLAN_MAX_TOKENS = 600
+# 계획 출력 상한 — 600은 Sonnet 기준이었다. Opus는 소제목을 1.7배 길게 써서 6개를
+# 넘기다 상한에 잘렸고, 잘린 JSON은 파서가 통째로 버려 분할이 무너졌다(2026-08-11 실측:
+# 출력 정확히 600 = 상한). 계획은 절당 1콜이라 상한을 올려도 비용이 무의미하다.
+PLAN_MAX_TOKENS = 1_200
 MIN_CHUNKS_PER_PART = 3  # 배정 근거가 이보다 적은 파트는 병합(빈약 파트가 침범 유혹의 원천)
 _NUM_TOKEN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
 _CITE_RE = re.compile(r"\[(\d+)\]")
@@ -234,14 +237,31 @@ async def _plan_subtopics(
         max_tokens=PLAN_MAX_TOKENS,
     )
     response = await client.complete(request)
-    m = re.search(r"\[.*\]", response.content, re.DOTALL)
-    if m is None:
+    return parse_plan_titles(response.content, n_parts)
+
+
+# 잘린 JSON에서도 완성된 항목은 건진다 — 닫는 대괄호를 못 찾으면 통째로 버리던 파서가
+# 상한에 걸린 응답을 0개로 만들었고, 절 하나가 단일 호출로 떨어졌다. 상한을 올려도
+# 언젠가 또 걸리므로 파서 쪽이 근본이다.
+_QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+
+def parse_plan_titles(content: str, n_parts: int) -> list[str]:
+    """계획 응답 → 소주제 목록. JSON이 온전하면 그대로, 잘렸으면 완성된 문자열만."""
+    m = re.search(r"\[.*\]", content, re.DOTALL)
+    if m is not None:
+        try:
+            parsed = json.loads(m.group())
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return [p.strip() for p in parsed if isinstance(p, str) and p.strip()][:n_parts]
+    start = content.find("[")
+    if start < 0:
         return []
-    try:
-        parsed = json.loads(m.group())
-    except json.JSONDecodeError:
-        return []
-    return [p.strip() for p in parsed if isinstance(p, str) and p.strip()][:n_parts]
+    # 마지막 항목은 따옴표가 안 닫혀 잘렸을 수 있다 — 닫힌 것만 취한다.
+    titles = [t.strip() for t in _QUOTED_RE.findall(content[start:]) if t.strip()]
+    return titles[:n_parts]
 
 
 async def _load_chunk_vectors(

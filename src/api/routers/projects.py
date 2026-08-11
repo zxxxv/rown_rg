@@ -1547,6 +1547,7 @@ def _evidence_info(row: Section) -> EvidenceInfo:
     return EvidenceInfo(
         count=count if isinstance(count, int) else None,
         scarce=bool(meta.get("volume_scaled")),
+        plan_failed=bool(meta.get("plan_failed")),
     )
 
 
@@ -1854,6 +1855,7 @@ async def rewrite_section(
     # 근거 추적 기록 — 재작성은 작성 루프 밖 경로라 그냥 두면 이 절만 추적이 반쪽이 된다
     # (실린 근거 수를 모르고, 마커→청크 대응도 복원할 수 없다).
     meta = {**(row.meta or {}), "pool_chunk_ids": [str(c) for c in draft.pool_chunk_ids]}
+    meta["plan_failed"] = draft.split_fallback
     if draft.pool_chunk_ids:
         meta["evidence_count"] = len(draft.pool_chunk_ids)
     try:

@@ -70,6 +70,10 @@ async def regenerate_section(
         )
         if split is not None:
             return split
+        # 분할이 무너져 단일 호출로 간다 - 절이 짧아지고 인용이 준다. 흔적을 남긴다.
+        fell_back = True
+    else:
+        fell_back = False
 
     drafts = await generate_section_candidates(
         section,
@@ -81,7 +85,7 @@ async def regenerate_section(
         user_id=user_id,
         project_id=project_id,
     )
-    return drafts[0]
+    return drafts[0].model_copy(update={"split_fallback": fell_back})
 
 
 _BLOCK_REWRITE_PROMPT = """다음은 보고서의 한 절 전체입니다. \
