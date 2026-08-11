@@ -42,16 +42,29 @@ _MARK_RE = re.compile(r"\(출처\s*(?P<source>\d+(?:\s*,\s*\d+)*)\s*\)|\[(?P<quo
 _NUM_SPLIT_RE = re.compile(r"\s*,\s*")
 
 
-def marker_numbers(text: str) -> list[int]:
-    """문장에 붙은 근거 번호 — 두 표기 모두에서 뽑아 오름차순 중복 제거."""
-    found: set[int] = set()
+def marker_numbers_in_order(text: str) -> list[int]:
+    """근거 번호를 **등장 순서**대로 중복 없이 뽑는다(두 표기 모두).
+
+    순서가 계약이다 — 작성기가 저장한 cited_chunk_ids가 이 순서와 위치로 대응하므로
+    (candidates._extract_cited_ids), 정렬해 버리면 번호↔청크 매핑이 어긋난다.
+    """
+    out: list[int] = []
+    seen: set[int] = set()
     for m in _MARK_RE.finditer(text):
-        raw = m.group("source")
-        if raw:
-            found.update(int(n) for n in _NUM_SPLIT_RE.split(raw.strip()) if n)
-        elif m.group("quote"):
-            found.add(int(m.group("quote")))
-    return sorted(found)
+        raw = m.group("source") or m.group("quote") or ""
+        for token in _NUM_SPLIT_RE.split(raw.strip()):
+            if not token:
+                continue
+            n = int(token)
+            if n not in seen:
+                seen.add(n)
+                out.append(n)
+    return out
+
+
+def marker_numbers(text: str) -> list[int]:
+    """문장에 붙은 근거 번호 — 표시용(오름차순 중복 제거)."""
+    return sorted(marker_numbers_in_order(text))
 
 
 # 청크 안에서 후보 대목을 나누는 단위 — 줄이 길면 문장으로 한 번 더 자른다.

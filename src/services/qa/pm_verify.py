@@ -183,8 +183,19 @@ async def persist_findings(project_id: UUID, rows: list[dict[str, Any]]) -> None
 
 
 async def run_pm_verify(state: ProjectState, *, model: str | None = None) -> int:
-    """stages 진입점 — 검증 후 저장, 경고 수를 돌려준다."""
+    """stages 진입점 — 검증 후 저장, 경고 수를 돌려준다.
+
+    LLM 경고에 근거 대조 경고(결정적)를 합쳐 저장한다. 둘은 보는 축이 다르다 —
+    LLM은 문서 횡단 충돌을, 근거 대조는 "인용한 자리에 그 내용이 없음"을 본다.
+    근거 대조가 실패해도 LLM 경고는 남긴다(부가 신호가 본체를 죽이지 않게).
+    """
     rows = await verify_report(state, model=model)
+    try:
+        from src.services.qa.evidence_findings import evidence_findings
+
+        rows.extend(await evidence_findings(state.project_id))
+    except Exception:
+        logger.warning("pm_verify.evidence_failed", project_id=str(state.project_id), exc_info=True)
     await persist_findings(state.project_id, rows)
     n_critical = sum(1 for r in rows if r["severity"] == "critical")
     logger.info(

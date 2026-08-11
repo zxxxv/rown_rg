@@ -3,12 +3,19 @@ import {
   ArrowRight,
   ChevronDown,
   Loader2,
+  RotateCw,
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import { useState } from "react";
 import { useProject } from "@/api/projects";
-import { useVerifyReport, type VerifyFinding } from "@/api/verify";
+import {
+  useRerunVerify,
+  useResolveFinding,
+  useVerifyReport,
+  useVerifyStatus,
+  type VerifyFinding,
+} from "@/api/verify";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -35,12 +42,36 @@ export function VerifyReportCard({
 }) {
   const query = useVerifyReport(projectId);
   const projectQuery = useProject(projectId);
+  const rerun = useRerunVerify(projectId);
+  const resolve = useResolveFinding(projectId);
+  const running = useVerifyStatus(projectId).data?.running ?? false;
   const [open, setOpen] = useState(false);
+  // 처리한 경고는 기본으로 접는다 - 남은 일만 보이는 게 목록의 목적이다.
+  const [showDone, setShowDone] = useState(false);
 
   if (query.isLoading || query.isError) return null;
-  const findings = query.data ?? [];
+  const all = query.data ?? [];
+  const done = all.filter((f) => f.resolved);
+  const findings = showDone ? all : all.filter((f) => !f.resolved);
 
-  if (findings.length === 0) {
+  const rerunButton = (
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={() => rerun.mutate()}
+      disabled={running || rerun.isPending}
+      title="수정한 내용을 반영해 검증을 다시 실행합니다"
+    >
+      {running || rerun.isPending ? (
+        <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" aria-hidden />
+      ) : (
+        <RotateCw className="mr-1 h-3.5 w-3.5" aria-hidden />
+      )}
+      {running || rerun.isPending ? "검증 중…" : "다시 검증"}
+    </Button>
+  );
+
+  if (all.length === 0) {
     // 빈 결과 ≠ 통과: PM 검증은 조립 단계(완료 직전)에 돌므로, 완료 전에는
     // "아직 검증 전"이다 - 통과로 표시하면 거짓 안심을 준다(2026-08-05 지적).
     const status = projectQuery.data?.status;
@@ -53,9 +84,10 @@ export function VerifyReportCard({
       );
     }
     return (
-      <div className="flex items-center gap-2 rounded border border-border bg-bg p-3 text-sm text-fg-secondary">
+      <div className="flex flex-wrap items-center gap-2 rounded border border-border bg-bg p-3 text-sm text-fg-secondary">
         <ShieldCheck className="h-4 w-4 shrink-0 text-fg-success" aria-hidden />
         PM 검증 경고 없음 - 절 간 수치·용어·법령 시점 교차검사 통과
+        <span className="ml-auto">{rerunButton}</span>
       </div>
     );
   }
@@ -147,11 +179,22 @@ export function VerifyReportCard({
           PM 검증 경고 {findings.length}건{criticalCount > 0 ? ` (critical ${criticalCount})` : ""}
         </h2>
         <span className="text-xs text-fg-tertiary">납품 전 확인 권장 - 편집기에서 수정 가능</span>
+        <div className="ml-auto flex items-center gap-2">
+          {done.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowDone((v) => !v)}
+              className="text-xs text-fg-info hover:underline"
+            >
+              {showDone ? "남은 것만 보기" : `처리함 ${done.length}건 보기`}
+            </button>
+          ) : null}
+          {rerunButton}
+        </div>
         {collapsible ? (
           <Button
             size="sm"
             variant="ghost"
-            className="ml-auto"
             onClick={() => setOpen(false)}
             aria-label="경고 목록 접기"
           >
@@ -166,16 +209,28 @@ export function VerifyReportCard({
             <p className="text-xs font-medium text-fg-secondary">{chapter}장</p>
             <ul className="flex flex-col gap-1.5">
               {items.map((f) => (
-                <li key={f.id}>
+                <li
+                  key={f.id}
+                  className={cn(
+                    "flex items-start gap-2 rounded border border-border bg-bg px-3 py-2",
+                    f.resolved && "opacity-60",
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={f.resolved}
+                    onChange={(e) => resolve.mutate({ id: f.id, resolved: e.target.checked })}
+                    className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-accent"
+                    aria-label={`${f.category} 처리함으로 표시`}
+                  />
                   <button
                     type="button"
                     disabled={!onJump || !f.section_ref}
                     onClick={() => f.section_ref && onJump?.(f.section_ref)}
                     className={cn(
-                      "flex w-full items-start gap-2 rounded border border-border bg-bg px-3 py-2 text-left text-sm",
-                      onJump && f.section_ref
-                        ? "cursor-pointer transition-colors hover:border-accent hover:bg-bg-info"
-                        : "cursor-default",
+                      "flex min-w-0 flex-1 items-start gap-2 text-left text-sm",
+                      onJump && f.section_ref ? "cursor-pointer hover:underline" : "cursor-default",
+                      f.resolved && "line-through",
                     )}
                   >
                     <Badge

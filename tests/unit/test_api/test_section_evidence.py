@@ -10,12 +10,16 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
-from src.api.routers.projects import _marker_chunk_ids
+from src.services.sections.evidence import marker_chunk_ids
 from src.services.sections.renumber import citation_chunk_map
 
 
 def _section(content: str, source_ids: list[UUID], meta: dict | None = None):
     return SimpleNamespace(content=content, source_ids=source_ids, meta=meta or {})
+
+
+def _call(row, *, renumbered: bool = False):
+    return marker_chunk_ids(row.content, row.source_ids, row.meta, renumbered=renumbered)
 
 
 class TestMarkerChunkIds:
@@ -26,7 +30,7 @@ class TestMarkerChunkIds:
             [uuid4()],  # 위치 대응으로 풀면 다른 청크가 나온다 — 기록된 매핑이 우선이어야
             {"citation_chunks": {"3": [str(chunk)]}},
         )
-        mapping, traceable = _marker_chunk_ids(row)
+        mapping, traceable = _call(row)
         assert mapping == {3: [chunk]}
         assert traceable is True
 
@@ -34,28 +38,28 @@ class TestMarkerChunkIds:
         # 전역 번호는 자료 단위 — 같은 자료의 다른 대목이 한 번호로 합쳐진다.
         a, b = uuid4(), uuid4()
         row = _section("[1] 문장.", [], {"citation_chunks": {"1": [str(a), str(b)]}})
-        mapping, _ = _marker_chunk_ids(row)
+        mapping, _ = _call(row)
         assert mapping == {1: [a, b]}
 
     def test_falls_back_to_appearance_order(self):
         # 조립 전: [n]은 절-로컬 번호라 등장 순서 ↔ source_ids 위치로 푼다.
         first, second = uuid4(), uuid4()
         row = _section("먼저 [5]. 다음 [2].", [first, second])
-        mapping, traceable = _marker_chunk_ids(row)
+        mapping, traceable = _call(row)
         assert mapping == {5: [first], 2: [second]}
         assert traceable is True
 
     def test_assembled_without_record_gives_up(self):
         # 조립 후엔 못 푼 마커가 지워지고 같은 자료의 번호가 합쳐져 위치 대응이 깨진다.
         # 엉뚱한 원문을 근거로 내놓느니 대응을 포기한다.
-        mapping, traceable = _marker_chunk_ids(
+        mapping, traceable = _call(
             _section("먼저 [1]. 다음 [2].", [uuid4(), uuid4()]), renumbered=True
         )
         assert mapping == {}
         assert traceable is False
 
     def test_no_markers_is_not_traceable(self):
-        mapping, traceable = _marker_chunk_ids(_section("인용 없는 본문", []))
+        mapping, traceable = _call(_section("인용 없는 본문", []))
         assert mapping == {}
         assert traceable is False
 
@@ -63,7 +67,7 @@ class TestMarkerChunkIds:
         # 숫자 아닌 키·잘못된 uuid가 섞이면 기록을 버리고 위치 대응으로 간다.
         cid = uuid4()
         row = _section("[1] 문장.", [cid], {"citation_chunks": {"x": ["not-a-uuid"]}})
-        mapping, _ = _marker_chunk_ids(row)
+        mapping, _ = _call(row)
         assert mapping == {1: [cid]}
 
 

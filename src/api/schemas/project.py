@@ -153,6 +153,15 @@ class VerifyFindingRead(BaseModel):
     section_ref: str | None = None
     detail: str
     created_at: datetime
+    # 내용 지문 - 재검증이 행을 전량 교체해도 완료 표시가 따라오게 하는 열쇠(id는 매번 바뀐다)
+    key: str = ""
+    resolved: bool = False
+
+
+class VerifyFindingResolve(BaseModel):
+    """경고 하나의 처리 여부 토글."""
+
+    resolved: bool
 
 
 class ProjectRead(ProjectBase):

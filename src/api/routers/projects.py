@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from src.api.schemas.project import (
     SourceIncludeUpdate,
     SourceItemRead,
     VerifyFindingRead,
+    VerifyFindingResolve,
 )
 from src.api.schemas.section import (
     ChapterNode,
@@ -79,6 +81,7 @@ from src.services.indexing.vector import SourceInput
 from src.services.prompts import resolve_analysts
 from src.services.qa.alignment import align_section
 from src.services.qa.gate import uncited_units, ungrounded_numbers
+from src.services.sections.evidence import marker_chunk_ids
 from src.workflows import cancel
 from src.workflows.events import emit_error, last_step
 from src.workflows.runner import get_pending_gate, is_running, queue_status, resume_run, start_run
@@ -599,7 +602,10 @@ async def update_project_config(
     project = await _get_authorized_project(project_id, session, current_user)
     _validate_outline_config(data.config, await _known_analyst_names(session, current_user.id))
     await _validate_rules_config(session, current_user.id, data.config)
-    project.config = data.config
+    # 옵션 교체가 파이프라인이 남긴 내부 키까지 지우면 안 된다 - 취소 복귀 지점과
+    # 검증 경고 완료 표시는 사용자가 폼에서 만지는 값이 아니다.
+    keep = {k: v for k, v in (project.config or {}).items() if k in _INTERNAL_CONFIG_KEYS}
+    project.config = {**keep, **data.config}
     await session.flush()
     await session.refresh(project)
     return project
@@ -1046,7 +1052,7 @@ async def get_verify_report(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
-) -> list[VerifyFinding]:
+) -> list[VerifyFindingRead]:
     """PM 검증 경고 리포트 — assemble 직후 챕터당 1콜 pm_verify의 결과.
 
     차단이 아닌 참고용: 절 간 수치·용어 충돌, 법령 시점 상충(critical),
@@ -1061,7 +1067,126 @@ async def get_verify_report(
             .order_by(VerifyFinding.chapter_number, VerifyFinding.created_at)
         )
     ).scalars()
-    return list(rows)
+    resolved = _resolved_keys(project)
+    return [_to_finding_read(row, resolved) for row in rows]
+
+
+# 재검증이 도는 프로젝트 - 단일 워커 전제(진행 WebSocket과 같은 가정).
+_VERIFYING: set[UUID] = set()
+_VERIFY_TASKS: set[asyncio.Task] = set()
+
+
+def _finding_key(chapter: int, category: str, section_ref: str | None, detail: str) -> str:
+    """경고의 지문 - 재검증이 행을 전량 교체해도 '완료 표시'가 살아남게 하는 열쇠.
+
+    id는 매번 새로 생기므로 쓸 수 없다. 내용이 같으면 같은 경고로 본다.
+    """
+    raw = f"{chapter}|{category}|{section_ref or ''}|{detail}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _resolved_keys(project: Project) -> set[str]:
+    raw = (project.config or {}).get("verify_resolved")
+    return {str(k) for k in raw} if isinstance(raw, list) else set()
+
+
+def _to_finding_read(row: VerifyFinding, resolved: set[str]) -> VerifyFindingRead:
+    key = _finding_key(row.chapter_number, row.category, row.section_ref, row.detail)
+    return VerifyFindingRead(
+        id=row.id,
+        chapter_number=row.chapter_number,
+        severity=row.severity,
+        category=row.category,
+        section_ref=row.section_ref,
+        detail=row.detail,
+        created_at=row.created_at,
+        key=key,
+        resolved=key in resolved,
+    )
+
+
+async def _reverify_in_background(project_id: UUID) -> None:
+    """저장된 본문으로 PM 검증을 다시 돌린다(요청 밖).
+
+    챕터당 1콜이라 35절 보고서는 수십 초~수 분이 걸린다 - 요청 안에서 처리하면
+    프론트가 타임아웃으로 실패로 읽는다(업로드 색인에서 겪은 것과 같은 문제).
+    """
+    from src.services.qa.pm_verify import run_pm_verify
+    from src.workflows.stages import _models_for
+
+    try:
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                return
+            rows = await _load_sections(session, project_id)
+        if not rows:
+            return
+        state = _state_for_export(project, rows)
+        await run_pm_verify(state, model=_models_for(state)["verify"])
+    except Exception:
+        logger.warning("verify.rerun_failed", project_id=str(project_id), exc_info=True)
+    finally:
+        _VERIFYING.discard(project_id)
+
+
+@router.post("/{project_id}/verify-report", status_code=status.HTTP_202_ACCEPTED)
+async def rerun_verify_report(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> dict[str, bool]:
+    """PM 검증 다시 실행 - 편집으로 고친 뒤 남은 경고를 다시 보기 위한 경로.
+
+    검증은 조립 때 한 번만 돌아서, 지적을 고쳐도 경고가 그대로 남아 있었다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    if project.id in _VERIFYING:
+        return {"started": False, "running": True}
+    _VERIFYING.add(project.id)
+    task = asyncio.create_task(_reverify_in_background(project.id))
+    _VERIFY_TASKS.add(task)
+    task.add_done_callback(_VERIFY_TASKS.discard)
+    return {"started": True, "running": True}
+
+
+@router.get("/{project_id}/verify-report/status")
+async def verify_report_status(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> dict[str, bool]:
+    """재검증이 도는 중인지 - 화면이 폴링을 멈출 시점을 안다."""
+    project = await _get_authorized_project(project_id, session, current_user)
+    return {"running": project.id in _VERIFYING}
+
+
+@router.patch("/{project_id}/verify-report/{finding_id}", response_model=VerifyFindingRead)
+async def resolve_verify_finding(
+    project_id: UUID,
+    finding_id: UUID,
+    data: VerifyFindingResolve,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> VerifyFindingRead:
+    """경고 하나를 '처리함'으로 표시(또는 해제).
+
+    표시는 행이 아니라 지문에 붙인다 - 재검증은 행을 전량 교체하므로 id에 붙이면
+    다시 돌리는 순간 사라진다. 같은 내용의 경고가 다시 나오면 표시도 따라온다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await session.get(VerifyFinding, finding_id)
+    if row is None or row.project_id != project.id:
+        raise NotFoundError(message="검증 경고를 찾을 수 없습니다", code="FINDING_NOT_FOUND")
+    key = _finding_key(row.chapter_number, row.category, row.section_ref, row.detail)
+    keys = _resolved_keys(project)
+    if data.resolved:
+        keys.add(key)
+    else:
+        keys.discard(key)
+    project.config = {**(project.config or {}), "verify_resolved": sorted(keys)}
+    await session.flush()
+    return _to_finding_read(row, keys)
 
 
 def _state_for_export(project: Project, rows: list[Section], author: str = "") -> ProjectState:
@@ -1305,6 +1430,9 @@ async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID
 # 본문 인용 마커 — 작성기(_extract_cited_ids)와 같은 [N] 규약.
 _CITE_NUM_RE = re.compile(r"\[(\d+)\]")
 
+# config 안에서 폼이 건드리지 않는 내부 키 - 옵션 전체 교체 때 살려 둔다.
+_INTERNAL_CONFIG_KEYS = ("cancelled_from", "verify_resolved")
+
 # 근거 추적 응답 상한 — 안 쓰인 근거는 풀 전체(수십 개)라 목록·본문 길이를 자른다.
 _MAX_UNUSED_EVIDENCE = 40
 _UNUSED_PREVIEW_CHARS = 400
@@ -1456,42 +1584,6 @@ async def get_section_content(
     )
 
 
-def _marker_chunk_ids(
-    row: Section, *, renumbered: bool = False
-) -> tuple[dict[int, list[UUID]], bool]:
-    """본문 인용 번호 → 청크 id. (매핑, 청크까지 되짚을 수 있는가)
-
-    세 갈래다.
-    1. renumber가 남긴 meta.citation_chunks가 있으면 그게 정확한 답이다(전역 번호는
-       자료 단위라 본문만 봐서는 청크를 못 고른다).
-    2. 조립 전 절은 본문 [n]이 아직 검색 풀 인덱스라, 등장 순서 ↔ source_ids 위치
-       대응으로 푼다(작성기 _extract_cited_ids와 같은 규약).
-    3. 조립을 지났는데 기록이 없는 옛 절은 되짚을 수 없다. 재작성 때 못 푼 마커가
-       지워지고 같은 자료의 서로 다른 번호가 합쳐져, 위치 대응이 더는 성립하지 않는다.
-       엉뚱한 원문을 근거라고 보여주느니 대응을 포기한다(빈 매핑 + traceable=False).
-    """
-    recorded = (row.meta or {}).get("citation_chunks")
-    if isinstance(recorded, dict) and recorded:
-        out: dict[int, list[UUID]] = {}
-        for key, ids in recorded.items():
-            try:
-                number = int(key)
-            except (TypeError, ValueError):
-                continue
-            parsed = [UUID(str(i)) for i in ids if _is_uuid(str(i))]
-            if parsed:
-                out[number] = parsed
-        if out:
-            return out, True
-    if renumbered:
-        return {}, False
-
-    numbers = _citation_numbers(row.content or "")
-    cited = [UUID(str(s)) for s in (row.source_ids or [])]
-    positional = {n: [cited[i]] for i, n in enumerate(numbers) if i < len(cited)}
-    return positional, bool(positional)
-
-
 def _is_uuid(value: str) -> bool:
     try:
         UUID(value)
@@ -1516,7 +1608,9 @@ async def get_section_evidence(
     project = await _get_authorized_project(project_id, session, current_user)
     row = await _get_section(session, project.id, section_id)
 
-    mapping, traceable = _marker_chunk_ids(row, renumbered=_is_renumbered(project))
+    mapping, traceable = marker_chunk_ids(
+        row.content or "", list(row.source_ids or []), row.meta, renumbered=_is_renumbered(project)
+    )
     cited_order: list[UUID] = []
     number_of: dict[UUID, int] = {}
     for number in sorted(mapping):

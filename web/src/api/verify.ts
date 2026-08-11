@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
 
@@ -13,6 +13,9 @@ export const VerifyFindingSchema = z.object({
   section_ref: z.string().nullish(),
   detail: z.string(),
   created_at: z.string(),
+  /** 내용 지문 - 재검증이 행을 갈아치워도 완료 표시가 따라온다(id는 매번 바뀐다) */
+  key: z.string().default(""),
+  resolved: z.boolean().default(false),
 });
 export type VerifyFinding = z.infer<typeof VerifyFindingSchema>;
 
@@ -29,9 +32,71 @@ export async function getVerifyReport(projectId: string): Promise<VerifyFinding[
 }
 
 export function useVerifyReport(projectId: string, enabled = true) {
+  const running = useVerifyStatus(projectId, enabled).data?.running ?? false;
   return useQuery({
     queryKey: verifyKeys.report(projectId),
     queryFn: () => getVerifyReport(projectId),
     enabled: Boolean(projectId) && enabled,
+    // 재검증이 도는 동안만 따라간다 - 끝나면 스스로 멈춘다.
+    refetchInterval: running ? 4000 : false,
+  });
+}
+
+// ─── 재검증 ───
+// 검증은 조립 때 한 번만 돌아서, 지적을 고쳐도 경고가 그대로 남아 있었다.
+// 챕터당 1콜이라 수십 초~수 분이 걸린다 - 요청 밖에서 돌리고 상태를 폴링한다.
+
+export function useVerifyStatus(projectId: string, enabled = true) {
+  return useQuery({
+    queryKey: [...verifyKeys.report(projectId), "status"],
+    queryFn: async () => {
+      const data = await apiClient.get<unknown>(`projects/${projectId}/verify-report/status`);
+      return z.object({ running: z.boolean() }).parse(data);
+    },
+    enabled: Boolean(projectId) && enabled,
+    refetchInterval: (query) => (query.state.data?.running ? 4000 : false),
+  });
+}
+
+export function useRerunVerify(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...verifyKeys.report(projectId), "rerun"],
+    mutationFn: () => apiClient.post<unknown>(`projects/${projectId}/verify-report`, { json: {} }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: verifyKeys.report(projectId) });
+    },
+  });
+}
+
+export function useResolveFinding(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { id: string; resolved: boolean }) => {
+      const data = await apiClient.patch<unknown>(
+        `projects/${projectId}/verify-report/${input.id}`,
+        { json: { resolved: input.resolved } },
+      );
+      return VerifyFindingSchema.parse(data);
+    },
+    // 체크박스는 즉시 반응해야 한다 - 서버 왕복을 기다리면 눌린 것 같지가 않다.
+    onMutate: async ({ id, resolved }) => {
+      const key = verifyKeys.report(projectId);
+      await qc.cancelQueries({ queryKey: key });
+      const previous = qc.getQueryData<VerifyFinding[]>(key);
+      if (previous) {
+        qc.setQueryData<VerifyFinding[]>(
+          key,
+          previous.map((f) => (f.id === id ? { ...f, resolved } : f)),
+        );
+      }
+      return { previous };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.previous) qc.setQueryData(verifyKeys.report(projectId), ctx.previous);
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: verifyKeys.report(projectId) });
+    },
   });
 }
