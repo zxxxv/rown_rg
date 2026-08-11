@@ -97,11 +97,35 @@ class EvidenceChunk(BaseModel):
     chunk_index: int | None = None  # 원본 문서 안에서의 순번
 
 
+class ClaimAlignmentRead(BaseModel):
+    """본문 문장 하나 ↔ 그 문장이 나온 근거 대목.
+
+    청크(수백~수천 자)까지만 알려주면 사람이 다시 읽어야 한다. 어휘 겹침으로 청크
+    안의 줄까지 좁히고, 못 좁히면 그 사실을 status로 돌려준다(LLM 판정 아님).
+    """
+
+    claim: str
+    numbers: list[int] = Field(default_factory=list)
+    # aligned(대목 특정) | weak(겹침 약함, 추정) | unmatched(근거에서 못 찾음) | uncited(표기 없음)
+    status: str
+    chunk_id: str | None = None
+    span_start: int | None = None  # 청크 본문 안에서의 문자 위치 - 화면이 그 대목만 강조한다
+    span_end: int | None = None
+    span_text: str | None = None
+    score: float = 0.0
+    ungrounded: list[str] = Field(default_factory=list)  # 이 문장에서 근거에 없는 수치
+
+
 class SectionEvidenceResponse(BaseModel):
     """절 하나의 근거 추적 결과 - 인용된 근거 + 실렸는데 안 쓰인 근거 + 무근거 신호."""
 
     section_id: str
     items: list[EvidenceChunk] = Field(default_factory=list)
+    claims: list[ClaimAlignmentRead] = Field(default_factory=list)
+    # 문장별 상태 집계 - 화면 배지가 이것만 읽는다(목록을 다시 세지 않게)
+    aligned_count: int = 0
+    weak_count: int = 0
+    unmatched_count: int = 0
     pool_size: int = 0  # 작성 때 프롬프트에 실린 인용 가능 근거 수(옛 절은 0)
     cited_count: int = 0
     unused_count: int = 0

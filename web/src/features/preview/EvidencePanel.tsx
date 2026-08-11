@@ -1,7 +1,7 @@
 import { AlertTriangle, ChevronDown, ChevronRight, ExternalLink, FileSearch } from "lucide-react";
 import { useState } from "react";
 import { useSectionEvidence } from "@/api/sections";
-import type { EvidenceChunk } from "@/api/types";
+import type { ClaimAlignment, EvidenceChunk } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 
 // ─── 근거 추적 ───
@@ -53,6 +53,12 @@ export function EvidencePanel({ projectId, sectionId }: EvidencePanelProps) {
           ) : (
             <div className="flex flex-col gap-3">
               <div className="flex flex-wrap items-center gap-1.5">
+                {!data.traceable ? (
+                  // 배지가 없으면 "왜 이 보고서만 호버가 안 되나"를 매번 묻게 된다.
+                  <Badge variant="outline" className="border-fg-tertiary/40">
+                    구버전 - 문장 단위 추적 미지원
+                  </Badge>
+                ) : null}
                 <Badge variant="secondary">인용된 근거 {data.cited_count}건</Badge>
                 {data.pool_size > 0 ? (
                   <Badge variant="outline">
@@ -72,11 +78,12 @@ export function EvidencePanel({ projectId, sectionId }: EvidencePanelProps) {
                     className="mt-0.5 h-3.5 w-3.5 shrink-0 text-fg-warning"
                     aria-hidden
                   />
-                  이 절은 근거 기록이 남기 전에 작성돼 인용 번호와 원문의 대응을 확정할 수
-                  없습니다. 아래는 이 절이 인용한 근거 목록이며, 다시 작성하면 번호까지
-                  대응됩니다.
+                  이 절은 근거 기록이 남기 전에 작성돼 인용 번호와 원문의 대응을 확정할 수 없습니다.
+                  아래는 이 절이 인용한 근거 목록이며, 다시 작성하면 번호까지 대응됩니다.
                 </p>
               ) : null}
+
+              {data.claims.length > 0 ? <ClaimTable claims={data.claims} /> : null}
 
               {cited.length > 0 ? (
                 <ul className="flex flex-col gap-2">
@@ -120,6 +127,79 @@ export function EvidencePanel({ projectId, sectionId }: EvidencePanelProps) {
         </div>
       ) : null}
     </section>
+  );
+}
+
+const CLAIM_STATUS: Record<string, { label: string; cls: string }> = {
+  aligned: { label: "대목 특정", cls: "border-fg-success/40 bg-bg-success" },
+  weak: { label: "추정", cls: "border-fg-warning/40 bg-bg-warning" },
+  unmatched: { label: "못 찾음", cls: "border-fg-danger/40 bg-bg-danger" },
+  uncited: { label: "근거 표기 없음", cls: "border-fg-tertiary/40" },
+};
+
+/** 문장별 대조표 - 기본은 확인이 필요한 문장만 보여준다(대목이 특정된 문장은 볼 이유가 적다). */
+function ClaimTable({ claims }: { claims: ClaimAlignment[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const needsCheck = claims.filter((c) => c.status !== "aligned");
+  const shown = showAll ? claims : needsCheck;
+
+  return (
+    <div className="flex flex-col gap-2 rounded border border-border px-2.5 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-medium text-fg">
+          문장별 대조 {shown.length}/{claims.length}
+        </p>
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          className="text-[11px] text-fg-info hover:underline"
+        >
+          {showAll ? "확인 필요한 문장만" : "전체 문장 보기"}
+        </button>
+      </div>
+      {shown.length === 0 ? (
+        <p className="text-xs text-fg-tertiary">모든 문장이 원문 대목까지 확인됐습니다.</p>
+      ) : (
+        <ul className="flex max-h-96 flex-col gap-2 overflow-y-auto">
+          {shown.map((c) => {
+            const badge = CLAIM_STATUS[c.status] ?? CLAIM_STATUS.uncited;
+            return (
+              <li key={c.claim} className="rounded border border-border bg-bg px-2.5 py-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge variant="outline" className={badge.cls}>
+                    {badge.label}
+                  </Badge>
+                  {c.numbers.map((n) => (
+                    <span
+                      key={n}
+                      className="rounded-sm bg-bg-info px-1 font-mono text-[10px] text-fg-info"
+                    >
+                      [{n}]
+                    </span>
+                  ))}
+                  {c.status !== "uncited" ? (
+                    <span className="font-mono text-[10px] text-fg-tertiary">
+                      겹침 {Math.round(c.score * 100)}%
+                    </span>
+                  ) : null}
+                  {c.ungrounded.length > 0 ? (
+                    <span className="text-[10px] text-fg-danger">
+                      근거 없는 수치 {c.ungrounded.join(", ")}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-fg">{c.claim}</p>
+                {c.span_text ? (
+                  <p className="mt-1 border-l-2 border-border-info pl-2 text-xs leading-relaxed text-fg-secondary">
+                    {c.span_text}
+                  </p>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 

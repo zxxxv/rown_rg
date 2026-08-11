@@ -35,6 +35,7 @@ from src.api.schemas.project import (
 )
 from src.api.schemas.section import (
     ChapterNode,
+    ClaimAlignmentRead,
     EvidenceChunk,
     EvidenceInfo,
     SectionBlockRewriteRequest,
@@ -76,6 +77,7 @@ from src.prompts import list_presets, load_preset
 from src.services.generation.planner import MAX_SECTIONS
 from src.services.indexing.vector import SourceInput
 from src.services.prompts import resolve_analysts
+from src.services.qa.alignment import align_section
 from src.services.qa.gate import uncited_units, ungrounded_numbers
 from src.workflows import cancel
 from src.workflows.events import emit_error, last_step
@@ -1586,16 +1588,54 @@ async def get_section_evidence(
         )
 
     units = uncited_units(row.content or "")
+    claims = _claim_rows(row, mapping, traceable, {r[0]: r[1] for r in chunk_rows}, cited_order)
     return SectionEvidenceResponse(
         section_id=str(row.id),
         items=items,
+        claims=claims,
         pool_size=len(pool),
         cited_count=sum(1 for i in items if i.cited),
         unused_count=sum(1 for i in items if not i.cited),
         uncited_count=len(units),
         uncited_samples=units[:_MAX_UNCITED_SAMPLES],
+        aligned_count=sum(1 for c in claims if c.status == "aligned"),
+        weak_count=sum(1 for c in claims if c.status == "weak"),
+        unmatched_count=sum(1 for c in claims if c.status == "unmatched"),
         traceable=traceable,
     )
+
+
+def _claim_rows(
+    row: Section,
+    mapping: dict[int, list[UUID]],
+    traceable: bool,
+    chunk_texts: dict[UUID, str],
+    cited_order: list[UUID],
+) -> list[ClaimAlignmentRead]:
+    """문장별 근거 대조 - 마커가 청크까지 안 풀리는 옛 절은 인용 근거 전체를 후보로 둔다.
+
+    후보가 넓어지면 "어느 마커의 근거인지"는 못 말해도 "이 절의 근거 중 이 대목이
+    가장 가깝다"는 말할 수 있다. 되짚기를 포기하는 것보다 사람에게 쓸모가 있다.
+    """
+    numbers = _citation_numbers(row.content or "")
+    marker_chunks = mapping if traceable else {n: cited_order for n in numbers}
+    out: list[ClaimAlignmentRead] = []
+    for a in align_section(row.content or "", chunk_texts, marker_chunks):
+        span = a.span
+        out.append(
+            ClaimAlignmentRead(
+                claim=a.claim,
+                numbers=a.numbers,
+                status=a.status,
+                chunk_id=str(span.chunk_id) if span else None,
+                span_start=span.start if span else None,
+                span_end=span.end if span else None,
+                span_text=span.text if span else None,
+                score=span.score if span else 0.0,
+                ungrounded=a.ungrounded,
+            )
+        )
+    return out
 
 
 @router.patch("/{project_id}/sections/{section_id}", response_model=SectionContentResponse)

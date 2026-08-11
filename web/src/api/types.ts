@@ -270,10 +270,29 @@ export const EvidenceChunkSchema = z.object({
 });
 export type EvidenceChunk = z.infer<typeof EvidenceChunkSchema>;
 
+/** 본문 문장 하나 ↔ 그 문장이 나온 원문 대목(청크 안의 줄) */
+export const ClaimAlignmentSchema = z.object({
+  claim: z.string(),
+  numbers: z.array(z.number().int()).default([]),
+  /** aligned=대목 특정, weak=겹침 약함(추정), unmatched=근거에서 못 찾음, uncited=표기 없음 */
+  status: z.enum(["aligned", "weak", "unmatched", "uncited"]),
+  chunk_id: z.string().nullable().default(null),
+  span_start: z.number().int().nullable().default(null),
+  span_end: z.number().int().nullable().default(null),
+  span_text: z.string().nullable().default(null),
+  score: z.number().default(0),
+  ungrounded: z.array(z.string()).default([]),
+});
+export type ClaimAlignment = z.infer<typeof ClaimAlignmentSchema>;
+
 /** 절 하나의 근거 추적 - 인용된 근거, 실렸는데 안 쓰인 근거, 근거 표기 없는 주장 */
 export const SectionEvidenceSchema = z.object({
   section_id: z.string(),
   items: z.array(EvidenceChunkSchema).default([]),
+  claims: z.array(ClaimAlignmentSchema).default([]),
+  aligned_count: z.number().int().nonnegative().default(0),
+  weak_count: z.number().int().nonnegative().default(0),
+  unmatched_count: z.number().int().nonnegative().default(0),
   pool_size: z.number().int().nonnegative().default(0),
   cited_count: z.number().int().nonnegative().default(0),
   unused_count: z.number().int().nonnegative().default(0),

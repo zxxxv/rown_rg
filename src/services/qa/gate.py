@@ -174,12 +174,12 @@ _CLAIM_TAILS: tuple[str, ...] = (
 _SENTENCE_END_RE = re.compile(r"[.!?]\s*$")
 
 
-def uncited_units(content: str) -> list[str]:
-    """인용 마커가 없는 주장 단위(문장·개조식 항목) 목록.
+def claim_units(content: str) -> list[str]:
+    """본문을 '주장 단위'(문장·개조식 항목)로 자른다 — 인용 여부와 무관하게 전부.
 
-    게이트와 화면이 같은 판정을 쓰도록 분리했다(ungrounded_numbers와 같은 규약).
-    제목·표·구분선과 짧은 나열 항목은 세지 않는다 — 그것까지 세면 개조식 보고서는
-    항상 절반이 '미인용'으로 나와 신호가 죽는다.
+    제목·표·구분선과 짧은 나열 항목, 명사로 끝나는 소제목은 주장이 아니라 제외한다.
+    근거 추적(services/qa/alignment)과 미인용 검사가 같은 단위를 봐야 화면의 숫자와
+    경고가 어긋나지 않는다 — 그래서 분해를 여기 하나로 둔다.
     """
     out: list[str] = []
     for raw_line in content.splitlines():
@@ -189,14 +189,25 @@ def uncited_units(content: str) -> list[str]:
         body = _BULLET_RE.sub("", line)
         for unit in _SENTENCE_SPLIT_RE.split(body):
             unit = unit.strip()
-            if len(unit) < _MIN_CLAIM_CHARS:
+            # 판정은 마커를 뗀 문장으로 한다 — 개조식은 "…성장했음 [3]"처럼 마커로
+            # 끝나는 줄이 대부분이라, 원문 그대로 보면 종결형 검사에서 전부 탈락한다
+            # (2026-08-11 실측: 인용 340개짜리 절의 주장이 0건으로 잡혔다).
+            bare = _CITE_MARKER_RE.sub("", unit).strip()
+            if len(bare) < _MIN_CLAIM_CHARS:
                 continue
-            if not _SENTENCE_END_RE.search(unit) and not unit.endswith(_CLAIM_TAILS):
+            if not _SENTENCE_END_RE.search(bare) and not bare.endswith(_CLAIM_TAILS):
                 continue  # 명사로 끝나면 소제목 — 인용을 요구하지 않는다
-            if _CITE_MARKER_RE.search(unit):
-                continue
             out.append(unit)
     return out
+
+
+def uncited_units(content: str) -> list[str]:
+    """인용 마커가 없는 주장 단위 목록.
+
+    게이트와 화면이 같은 판정을 쓰도록 분리했다(ungrounded_numbers와 같은 규약).
+    그것까지 세면 개조식 보고서는 항상 절반이 '미인용'으로 나와 신호가 죽는다.
+    """
+    return [u for u in claim_units(content) if not _CITE_MARKER_RE.search(u)]
 
 
 def check_uncited_claims(draft: SectionDraft) -> GateResult:
