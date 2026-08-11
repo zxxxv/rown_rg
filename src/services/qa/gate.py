@@ -12,6 +12,7 @@ import re
 from collections.abc import Sequence
 from uuid import UUID
 
+from src.core.citations import MARK_RE
 from src.core.types import (
     CheckSeverity,
     GateResult,
@@ -36,7 +37,8 @@ _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
 # 비표준 인용 마커 — 대괄호 표기 중 정상 [n]이 아닌 것(2026-08-05 실측:
 # '[배경자료 제공됨]', '[배경 맥락]', '[근거 없음 - …]' 등 모델이 발명한 표기).
 # 마크다운 링크 [텍스트](url)와 그림/표 캡션([그림 1-1])은 정상 표기라 제외한다.
-_CITE_MARKER_RE = re.compile(r"\[\d+\]")
+# [n]은 직접 인용 표기라 계속 허용한다 — 참고 표기는 (출처 n)으로 따로 쓴다
+# (src/core/citations.py). 대괄호 남용은 아래 check_quote_marks가 따로 본다.
 _BRACKET_RE = re.compile(r"\[([^\[\]\n]{1,40})\](?!\()")
 _ALLOWED_BRACKET_RE = re.compile(r"^(?:\d+|그림\s?[\d\-. ]+|표\s?[\d\-. ]+)$")
 
@@ -201,9 +203,15 @@ def claim_units(content: str) -> list[str]:
     경고가 어긋나지 않는다 — 그래서 분해를 여기 하나로 둔다.
     """
     out: list[str] = []
+    in_fence = False
     for raw_line in content.splitlines():
         line = raw_line.strip()
-        if not line or _NON_CLAIM_LINE_RE.match(line):
+        if line.startswith("```"):
+            # 코드펜스(차트 스펙 등) 안은 본문이 아니다 — 'type: bar' 같은 줄을
+            # 주장으로 세면 근거 없는 주장 경고가 헛돈다.
+            in_fence = not in_fence
+            continue
+        if in_fence or not line or _NON_CLAIM_LINE_RE.match(line):
             continue
         body = _BULLET_RE.sub("", line)
         for unit in _SENTENCE_SPLIT_RE.split(body):
@@ -211,7 +219,7 @@ def claim_units(content: str) -> list[str]:
             # 판정은 마커를 뗀 문장으로 한다 — 개조식은 "…성장했음 [3]"처럼 마커로
             # 끝나는 줄이 대부분이라, 원문 그대로 보면 종결형 검사에서 전부 탈락한다
             # (2026-08-11 실측: 인용 340개짜리 절의 주장이 0건으로 잡혔다).
-            bare = _CITE_MARKER_RE.sub("", unit).strip()
+            bare = MARK_RE.sub("", unit).strip()
             if len(bare) < _MIN_CLAIM_CHARS:
                 continue
             if not _SENTENCE_END_RE.search(bare) and not bare.endswith(_CLAIM_TAILS):
@@ -226,7 +234,7 @@ def uncited_units(content: str) -> list[str]:
     게이트와 화면이 같은 판정을 쓰도록 분리했다(ungrounded_numbers와 같은 규약).
     그것까지 세면 개조식 보고서는 항상 절반이 '미인용'으로 나와 신호가 죽는다.
     """
-    return [u for u in claim_units(content) if not _CITE_MARKER_RE.search(u)]
+    return [u for u in claim_units(content) if not MARK_RE.search(u)]
 
 
 def check_uncited_claims(draft: SectionDraft) -> GateResult:
@@ -238,7 +246,7 @@ def check_uncited_claims(draft: SectionDraft) -> GateResult:
     자연스러워 SOFT — 비율이 절반을 넘을 때만 사람에게 알린다.
     """
     units = uncited_units(draft.content)
-    total = len(units) + len(_CITE_MARKER_RE.findall(draft.content))
+    total = len(units) + len(MARK_RE.findall(draft.content))
     ratio = len(units) / total if total else 0.0
     passed = len(units) < 3 or ratio <= 0.5
     detail = None

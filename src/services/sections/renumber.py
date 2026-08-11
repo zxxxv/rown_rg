@@ -1,28 +1,46 @@
-"""인용 전역 번호화 — 절-로컬 [n]을 문서 공통(출처장) 번호로 재매핑.
+"""인용 전역 번호화 — 절-로컬 번호를 문서 공통(출처장) 번호로 재매핑.
 
-작성기는 절마다 검색 풀 인덱스로 [1..k]를 매긴다(절-로컬). 그대로 두면 본문 번호와
+작성기는 절마다 검색 풀 인덱스로 1..k를 매긴다(절-로컬). 그대로 두면 본문 번호와
 출처 최종장 번호가 어긋나 독자가 검증할 수 없다(2026-08-05 지적). 조립 시점에
 결정적으로 재작성한다:
 
 - 전역 번호 = 채택(is_included) 자료의 수집 순서(created_at) — 자료 검토 목록·
   출처 최종장과 동일한 순서라, 이후 편집·재렌더에도 흔들리지 않는다.
-- 로컬 [n]의 의미는 작성 규약(candidates._extract_cited_ids)에서 복원한다:
-  본문에 등장한 서로 다른 n의 첫 등장 순서 = cited_chunk_ids 저장 순서.
+- 로컬 번호의 의미는 작성 규약(candidates._extract_cited_ids)에서 복원한다:
+  본문에 등장한 서로 다른 번호의 첫 등장 순서 = cited_chunk_ids 저장 순서.
 - 매핑이 안 되는 마커(범위 밖 환각, 요약 청크)는 제거한다(로컬 번호를 남기면 오독).
+
+표기 문법((출처 n)·[n])은 src/core/citations.py가 단일 진실이다 — 이 모듈은 번호
+체계만 다룬다.
 """
 
 from __future__ import annotations
 
-import re
 from uuid import UUID
 
 import structlog
 
+from src.core.citations import numbers_in_order
+from src.core.citations import renumber as renumber_marks
 from src.core.state import ProjectState
 
 logger = structlog.get_logger(__name__)
 
-_CITE_RE = re.compile(r"\[(\d+)\]")
+
+def _local_to_global(
+    content: str,
+    cited_chunk_ids: list[UUID],
+    chunk_to_global: dict[UUID, int],
+) -> dict[int, int]:
+    """로컬 번호 → 전역 번호. 로컬 n의 첫 등장 순서가 cited_chunk_ids 순서라는 규약을 편다."""
+    mapping: dict[int, int] = {}
+    for i, n in enumerate(numbers_in_order(content)):
+        if i >= len(cited_chunk_ids):
+            break
+        g = chunk_to_global.get(cited_chunk_ids[i])
+        if g is not None:
+            mapping[n] = g
+    return mapping
 
 
 def renumber_content(
@@ -30,31 +48,12 @@ def renumber_content(
     cited_chunk_ids: list[UUID],
     chunk_to_global: dict[UUID, int],
 ) -> str:
-    """본문 [로컬n] → [전역g] 재작성 (순수 함수).
+    """본문 로컬 번호 → 전역 번호 재작성 (순수 함수).
 
     로컬 n(등장 순서 i번째 고유 번호) ↔ cited_chunk_ids[i] ↔ 전역 번호.
-    매핑 없는 마커는 앞 공백과 함께 제거한다.
+    표기 형태((출처 n)·[n])는 그대로 두고 번호만 바꾸며, 매핑 없는 마커는 제거한다.
     """
-    order: list[int] = []
-    for m in _CITE_RE.finditer(content):
-        n = int(m.group(1))
-        if n not in order:
-            order.append(n)
-    local_to_global: dict[int, int] = {}
-    for i, n in enumerate(order):
-        if i < len(cited_chunk_ids):
-            g = chunk_to_global.get(cited_chunk_ids[i])
-            if g is not None:
-                local_to_global[n] = g
-
-    def _sub(m: re.Match[str]) -> str:
-        g = local_to_global.get(int(m.group(2)))
-        if g is None:
-            # 매핑 없는 마커는 앞 공백(개행 제외)과 함께 제거 — 흔적을 남기지 않는다.
-            return ""
-        return f"{m.group(1)}[{g}]"  # 원래 간격 보존
-
-    return re.sub(r"([ \t]*)\[(\d+)\]", _sub, content)
+    return renumber_marks(content, _local_to_global(content, cited_chunk_ids, chunk_to_global))
 
 
 def citation_chunk_map(
@@ -69,13 +68,8 @@ def citation_chunk_map(
     없다(로컬 번호는 사라지고, 못 푼 마커는 삭제된다). 재작성과 같은 자리에서 매핑을
     떠 절 meta에 남긴다 — 이게 근거 추적의 유일한 원천이다.
     """
-    order: list[int] = []
-    for m in _CITE_RE.finditer(content):
-        n = int(m.group(1))
-        if n not in order:
-            order.append(n)
     out: dict[int, list[UUID]] = {}
-    for i, _n in enumerate(order):
+    for i, _n in enumerate(numbers_in_order(content)):
         if i >= len(cited_chunk_ids):
             break
         cid = cited_chunk_ids[i]

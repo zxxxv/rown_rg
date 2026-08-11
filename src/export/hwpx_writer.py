@@ -35,6 +35,10 @@ HEADER_TEXT = "주식회사 로운인사이트"
 MAX_HEADING_LEVEL = 3
 # 개조식 한 수준당 왼쪽 들여쓰기(mm). Paragraph.indent 0=□, 1=ㅇ, 2=-, 3=* 순으로 누적된다.
 OUTLINE_INDENT_MM = 5.0
+# 개조식 글머리 문자 — 이 문자로 시작하는 문단은 마커 폭만큼 내어쓰기해 줄바꿈된 둘째
+# 줄이 본문 글머리에 정렬되게 한다(_hanging_indent_mm).
+OUTLINE_MARKERS: frozenset[str] = frozenset("□ㅇ○◦-*")
+_MM_PER_PT = 25.4 / 72
 # 개조식 문단 간격(pt) — 마커 항목이 붙어 보이지 않도록 문단마다 아래 여백을 준다.
 # 대주제(□, indent 0)는 앞에도 큰 여백을 줘 논리 묶음을 시각적으로 분리한다.
 BODY_SPACING_AFTER_PT = 3.0
@@ -61,6 +65,13 @@ COVER_ORG_SPACE_AFTER_PT = 24.0
 PAGE_WIDTH_MM = 210.0
 # 그림 플레이스홀더 캡션 음영(옅은 하늘색 느낌의 회색) — 데이터 표와 구분한다.
 FIGURE_CAPTION_SHADE = "#DDE7F0"
+# 표 제목 — 표 바로 위 한 줄. 본문보다 작고 굵게 써서 표에 딸린 라벨로 읽히게 한다.
+TABLE_CAPTION_SIZE_PT = 10
+# 표 부속 줄(단위·출처) — 캡션보다 한 단계 작게, 굵기 없이.
+TABLE_NOTE_SIZE_PT = 9
+# 차트 그림 높이(mm) — chart_render의 가로세로비(6.3:3.4)를 본문 폭 160mm에 맞춘 값.
+CHART_HEIGHT_MM = 86.0
+TABLE_CAPTION_SPACE_AFTER_PT = 1.0  # 표와 붙여 한 덩어리로 보이게 아래 여백을 최소로
 # 표 열 폭 배분 시 한 열의 상대 가중치 하한/상한 — 극단적으로 좁거나 넓은 열을 막는다.
 COL_WEIGHT_MIN = 8
 COL_WEIGHT_MAX = 60
@@ -112,10 +123,19 @@ class Paragraph:
 
 @dataclass(frozen=True)
 class Table:
-    """표 블록. 첫 행은 머리행(headers), 이후 rows."""
+    """표 블록. 첫 행은 머리행(headers), 이후 rows.
+
+    caption은 표 바로 위에 붙는 제목이다(예 "<표 2-1> 주요국 SMR 개발 현황"). 비어 있으면
+    제목 없이 표만 렌더한다 — 약어 정리표처럼 이미 헤딩이 붙은 표가 그렇다.
+    unit은 캡션과 표 사이 우측 정렬 한 줄(예 "(단위: 백만 원)"), source는 표 바로 아래
+    한 줄(예 "출처: 과기정통부(2024), …") — 실측한 공공 보고서 관례(캡션 위·출처 아래)다.
+    """
 
     headers: list[str]
     rows: list[list[str]]
+    caption: str = ""
+    unit: str = ""
+    source: str = ""
 
 
 @dataclass(frozen=True)
@@ -126,8 +146,20 @@ class Figure:
     설명을 적은 자리표시자를 페이지에 배치한다(작성 규칙의 2페이지당 시각자료 1개).
     """
 
-    caption: str  # 예: "[그림 1-1] 원격경제 서비스 분류 체계"
+    caption: str  # 예: "<그림 1-1> 원격경제 서비스 분류 체계"
     description: str  # 추천 시각자료 설명(무엇을, 어떤 형식으로)
+
+
+@dataclass(frozen=True)
+class Chart:
+    """본문 차트 — 스펙을 PNG로 그려 그림으로 넣는다(자리표시자가 아닌 실제 그림).
+
+    이미지 바이트는 렌더 시점에 만든다. 그리지 못하면(폰트 없음 등) 호출부가
+    원본 표로 되돌리므로, 여기까지 온 차트는 그릴 수 있다고 본다.
+    """
+
+    spec: object  # src.core.charts.ChartSpec — 순환 import를 피해 느슨하게 받는다
+    caption: str  # 예: "<그림 2-1> 주요국 SMR 투자 현황"
 
 
 @dataclass(frozen=True)
@@ -135,7 +167,7 @@ class PageBreak:
     """쪽 나눔 — 다음 블록이 새 페이지에서 시작한다(챕터 경계 등)."""
 
 
-Block = Cover | Heading | Paragraph | Table | Figure | PageBreak
+Block = Cover | Heading | Paragraph | Table | Figure | Chart | PageBreak
 
 # 표 머리행 음영(옅은 회색) — 본문 행과 시각적으로 구분한다.
 TABLE_HEADER_SHADE = "#E6E6E6"
@@ -190,6 +222,10 @@ def build_report(
             prev_indent = block.indent
         elif isinstance(block, Figure):
             _add_figure(doc, block)
+            para = None
+            prev_indent = None
+        elif isinstance(block, Chart):
+            _add_chart(doc, block)
             para = None
             prev_indent = None
         else:
@@ -310,14 +346,32 @@ def _add_body(doc: HwpxDocument, text: str, indent: int = 0, group_start: bool =
         # 문단마다 아래 여백을 줘 개조식 항목들이 붙어 보이지 않게 한다(가독성).
         "spacing_after_pt": BODY_SPACING_AFTER_PT,
     }
-    if indent > 0:
+    # 마커 폭만큼 왼쪽 여백을 더 주고 첫 줄만 그만큼 당겨(음수) 내어쓰기를 만든다.
+    # 이러면 항목이 두 줄 이상으로 넘어가도 둘째 줄이 마커 아래가 아니라 본문 글머리에
+    # 맞춰 정렬돼, 마커 하나가 어디까지를 묶는지 눈으로 따라갈 수 있다(2026-08-11 지적).
+    hanging = _hanging_indent_mm(text)
+    if indent > 0 or hanging:
         # 개조식 수준만큼 왼쪽 여백을 줘 계층 들여쓰기를 표현한다.
-        fmt["indent_left_mm"] = indent * OUTLINE_INDENT_MM
+        fmt["indent_left_mm"] = indent * OUTLINE_INDENT_MM + hanging
+    if hanging:
+        fmt["first_line_indent_mm"] = -hanging
     if indent == 0 or group_start:
         # 대주제(□)·서술 문단, 또는 새 ㅇ 그룹 시작 앞에 여백을 줘 논리 묶음 사이를 벌린다.
         fmt["spacing_before_pt"] = GROUP_SPACING_BEFORE_PT
     doc.set_paragraph_format(**fmt)
     return para
+
+
+def _hanging_indent_mm(text: str) -> float:
+    """개조식 마커와 뒤따르는 공백이 차지하는 폭(mm). 마커로 시작하지 않으면 0.
+
+    이 폭이 곧 내어쓰기 양이다 — 왼쪽 여백에 더하고 첫 줄에서 같은 값을 빼면 마커만
+    왼쪽으로 튀어나오고 본문은 한 줄로 이어져 보인다.
+    """
+    if len(text) < 2 or text[0] not in OUTLINE_MARKERS or text[1] != " ":
+        return 0.0
+    # _text_width는 반각을 1, 전각을 2로 세므로 반각 하나가 글자 크기의 절반에 해당한다.
+    return _text_width(text[:2]) * (BODY_SIZE_PT * _MM_PER_PT / 2)
 
 
 def _text_width(text: str) -> int:
@@ -334,6 +388,9 @@ def _is_wide(ch: str) -> bool:
         or 0xAC00 <= o <= 0xD7A3  # Hangul Syllables
         or 0xF900 <= o <= 0xFAFF  # CJK 호환 한자
         or 0xFF00 <= o <= 0xFF60  # 전각 영숫자·기호
+        # 도형 기호(□ ○ ◦ 등)는 유니코드상 East Asian Ambiguous지만 한글 폰트에서는
+        # 전각으로 그려진다. 개조식 글머리로 쓰이므로 전각으로 세야 내어쓰기가 맞는다.
+        or 0x25A0 <= o <= 0x25FF  # Geometric Shapes
     )
 
 
@@ -398,7 +455,36 @@ def _align_cells_left(doc: HwpxDocument, tbl, n_rows: int, n_cols: int) -> None:
                 continue
 
 
+def _add_table_caption(doc: HwpxDocument, caption: str) -> None:
+    """표 제목 한 줄 — 표 바로 위에 붙인다(그림은 캡션이 박스 안, 표는 박스 밖)."""
+    char_id = doc.ensure_run_style(font=HEADING_FONT, size=TABLE_CAPTION_SIZE_PT, bold=True)
+    para = doc.add_paragraph(caption, char_pr_id_ref=char_id, inherit_style=False)
+    doc.set_paragraph_format(
+        paragraph_index=doc.paragraphs.index(para),
+        line_spacing_percent=LINE_SPACING_PERCENT,
+        spacing_before_pt=GROUP_SPACING_BEFORE_PT,
+        spacing_after_pt=TABLE_CAPTION_SPACE_AFTER_PT,
+    )
+
+
+def _add_table_note(doc: HwpxDocument, text: str, *, align: str, after_pt: float) -> None:
+    """표 부속 한 줄 — 단위(표 위, 우측 정렬)·출처(표 아래, 좌측 정렬)에 쓴다."""
+    char_id = doc.ensure_run_style(font=HEADING_FONT, size=TABLE_NOTE_SIZE_PT)
+    para = doc.add_paragraph(text, char_pr_id_ref=char_id, inherit_style=False)
+    doc.set_paragraph_format(
+        paragraph_index=doc.paragraphs.index(para),
+        alignment=align,
+        line_spacing_percent=LINE_SPACING_PERCENT,
+        spacing_after_pt=after_pt,
+    )
+
+
 def _add_table(doc: HwpxDocument, table: Table) -> None:
+    if table.caption:
+        _add_table_caption(doc, table.caption)
+    if table.unit:
+        # 단위 줄은 실측 관례대로 캡션과 표 사이 우측 정렬로 붙인다.
+        _add_table_note(doc, table.unit, align="RIGHT", after_pt=TABLE_CAPTION_SPACE_AFTER_PT)
     n_rows = len(table.rows) + 1
     n_cols = len(table.headers)
     # width=본문 폭: 표가 페이지를 넘지 않게 하고, 긴 셀은 열 폭 안에서 줄바꿈된다.
@@ -415,6 +501,36 @@ def _add_table(doc: HwpxDocument, table: Table) -> None:
             tbl.set_cell_text(row_idx, col, value)
     _fit_table_width(tbl, table.headers, table.rows)
     _align_cells_left(doc, tbl, n_rows, n_cols)
+    if table.source:
+        # 출처는 표 바로 아래 좌측 정렬 — 캡션 위·출처 아래가 실측 관례다.
+        _add_table_note(doc, table.source, align="LEFT", after_pt=BODY_SPACING_AFTER_PT)
+
+
+def _add_chart(doc: HwpxDocument, chart: Chart) -> None:
+    """차트 — 캡션을 그림 위에 달고, 스펙을 PNG로 그려 가운데 정렬 그림으로 넣는다.
+
+    캡션이 그림 **위**인 것은 실납품 보고서 실측 관례다(2026-08-11, 샘플 6종 중 5종이
+    표·그림 모두 캡션 위 + 출처 아래).
+    """
+    from src.export.chart_render import render_png  # 지연 import — 렌더 시점에만 필요
+
+    char_id = doc.ensure_run_style(font=HEADING_FONT, size=TABLE_CAPTION_SIZE_PT, bold=True)
+    para = doc.add_paragraph(chart.caption, char_pr_id_ref=char_id, inherit_style=False)
+    doc.set_paragraph_format(
+        paragraph_index=doc.paragraphs.index(para),
+        alignment="CENTER",
+        line_spacing_percent=LINE_SPACING_PERCENT,
+        spacing_before_pt=GROUP_SPACING_BEFORE_PT,
+        spacing_after_pt=TABLE_CAPTION_SPACE_AFTER_PT,
+    )
+    png = render_png(chart.spec)
+    doc.add_picture(
+        png,
+        "png",
+        width_mm=PAGE_WIDTH_MM - MARGIN_MM["left"] - MARGIN_MM["right"],
+        height_mm=CHART_HEIGHT_MM,
+        align="CENTER",
+    )
 
 
 def _add_figure(doc: HwpxDocument, figure: Figure) -> None:

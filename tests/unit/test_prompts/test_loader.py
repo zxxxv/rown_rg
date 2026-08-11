@@ -31,8 +31,9 @@ WORKFLOW_ROLES = [
 
 
 def test_list_analysts_index_order():
+    # 23종 = 이관 21종 + 신설 2종(a22 성과분석·a23 입지분석, 2026-08-11 샘플 실측 반영).
     ids = [a.id for a in list_analysts()]
-    assert ids == [f"a{i:02d}" for i in range(1, 22)]
+    assert ids == [f"a{i:02d}" for i in range(1, 24)]
 
 
 def test_load_analyst_by_id_and_name():
@@ -59,21 +60,25 @@ def test_unknown_analyst_raises():
 # ---------- presets ----------
 
 
-def test_list_presets_five():
+def test_list_presets_eight():
     names = {p.name for p in list_presets()}
     assert names == {
         "경영컨설팅보고서",
         "산업동향보고서",
+        "설치운영계획보고서",
+        "성과분석보고서",
         "예비타당성조사",
         "정책기획보고서",
         "조사분석보고서",
+        "특화단지기획보고서",
     }
 
 
 def test_preset_structure_feasibility_study():
+    # 실납품 예타 실측 구조(2026-08-11) 반영: 7장, 추진 과제(5장) 확장 배분.
     preset = load_preset("예비타당성조사")
     assert len(preset.chapters) == 7
-    assert sum(len(ch.sections) for ch in preset.chapters) == 35
+    assert sum(len(ch.sections) for ch in preset.chapters) == 34
     assert preset.domain_context
 
 

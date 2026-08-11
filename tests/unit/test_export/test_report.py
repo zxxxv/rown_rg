@@ -25,10 +25,29 @@ from src.export.hwpx_writer import (
 )
 from src.services.export.report import (
     REFERENCES_HEADING,
+    _figures_needed,
+    export_filename,
     export_report,
     markdown_to_blocks,
     report_blocks,
 )
+
+
+class TestFiguresNeeded:
+    """분량이 요구하는 시각자료 수에서 표·차트가 채우고 남은 만큼이 그림 자리표시자가 된다."""
+
+    def test_short_section_needs_one_visual(self):
+        assert _figures_needed("짧은 절", visual_count=0) == 1
+        assert _figures_needed("짧은 절", visual_count=1) == 0
+
+    def test_two_pages_need_two_visuals(self):
+        content = "가" * 3000  # 1,500자당 1개 → 2개 필요
+        assert _figures_needed(content, visual_count=0) == 2
+        assert _figures_needed(content, visual_count=1) == 1
+        assert _figures_needed(content, visual_count=2) == 0
+
+    def test_surplus_visuals_do_not_go_negative(self):
+        assert _figures_needed("짧은 절", visual_count=5) == 0
 
 
 class TestGroupStartSpacing:
@@ -127,6 +146,53 @@ class TestMarkdownToBlocks:
         blocks = markdown_to_blocks(md)
         assert blocks == [Table(headers=["구분", "값"], rows=[["Society", "자료"]])]
 
+    def test_chart_fence_becomes_chart_block(self):
+        md = (
+            "ㅇ 투자 규모는 아래와 같음\n\n"
+            "```chart\ntype: bar\ntitle: 주요국 투자\nx: 미국 | 한국\n"
+            "series: 투자액 = 120 | 30\n```\n"
+        )
+        blocks = markdown_to_blocks(md)
+        assert [type(b).__name__ for b in blocks] == ["Paragraph", "Chart"]
+        assert blocks[1].spec.title == "주요국 투자"
+        assert blocks[1].spec.series[0].values == (120.0, 30.0)
+
+    def test_unrenderable_chart_falls_back_to_original_table(self):
+        # 값 개수가 x축과 어긋나 그릴 수 없다 - 보관해 둔 원본 표로 되돌린다.
+        md = (
+            "```chart\ntype: bar\nx: 미국 | 한국 | 중국\nseries: 투자액 = 120 | 30\n"
+            "table: |\n  | 국가 | 투자액 |\n  |---|---|\n  | 미국 | 120 |\n```\n"
+        )
+        blocks = markdown_to_blocks(md)
+        assert blocks == [Table(headers=["국가", "투자액"], rows=[["미국", "120"]], caption="")]
+
+    def test_unrenderable_chart_without_table_is_dropped(self):
+        # 되돌릴 표도 없으면 아무것도 남기지 않는다 - 스펙 원문이 본문에 노출되면 안 된다.
+        md = "```chart\ntype: bar\nx: 미국 | 한국 | 중국\nseries: 투자액 = 120 | 30\n```\n"
+        assert markdown_to_blocks(md) == []
+
+    def test_table_caption_absorbed_from_preceding_line(self):
+        # "표: 제목" 줄은 문단으로 남기지 않고 표의 caption으로 흡수한다(제목이 떠 있지 않게).
+        md = "표: 주요국 개발 현황\n\n| 국가 | 노형 |\n|---|---|\n| 미국 | NuScale |\n"
+        assert markdown_to_blocks(md) == [
+            Table(headers=["국가", "노형"], rows=[["미국", "NuScale"]], caption="주요국 개발 현황")
+        ]
+
+    def test_table_caption_accepts_model_numbering_but_drops_it(self):
+        # 모델이 번호까지 쓴 변형도 제목만 취한다 — 번호는 장 단위로 다시 매기기 때문.
+        md = "[표 2-1] 주요국 현황\n| 국가 |\n|---|\n| 미국 |\n"
+        blocks = markdown_to_blocks(md)
+        assert blocks == [Table(headers=["국가"], rows=[["미국"]], caption="주요국 현황")]
+
+    def test_sentence_referring_to_table_is_not_a_caption(self):
+        # "표 3.1에서 보듯이"류 서술은 제목이 아니다 — 문단으로 남아야 내용이 유실되지 않는다.
+        md = "표 3.1에서 보듯이 격차가 큼\n| 국가 |\n|---|\n| 미국 |\n"
+        blocks = markdown_to_blocks(md)
+        assert blocks == [
+            Paragraph(text="표 3.1에서 보듯이 격차가 큼"),
+            Table(headers=["국가"], rows=[["미국"]], caption=""),
+        ]
+
 
 def _state_with_selected_drafts() -> ProjectState:
     plan = [
@@ -138,8 +204,8 @@ def _state_with_selected_drafts() -> ProjectState:
     for section, body in zip(
         plan,
         [
-            "고령화율은 17.1%로 상승했다. [1] 이는 전년 대비 증가다. [2]",
-            "## 세부 분석\n\n비용편익 비율은 1.2로 타당성이 있다. [1]",
+            "고령화율은 17.1%로 상승했다. (출처 1) 이는 전년 대비 증가다. (출처 2)",
+            "## 세부 분석\n\n비용편익 비율은 1.2로 타당성이 있다. (출처 1)",
         ],
         strict=True,
     ):
@@ -230,9 +296,21 @@ class TestReportBlocks:
         assert Heading(level=2, text="2.1 분석") in blocks
         assert Heading(level=3, text="세부 분석") in blocks
         body_texts = [b.text for b in blocks if isinstance(b, Paragraph)]
-        # 인용 [n]은 전역 번호(출처장과 일치)라 본문에 유지된다(2026-08-05 정책 전환).
-        assert any("[1]" in t for t in body_texts)
-        assert any("17.1%" in t for t in body_texts)
+        # 참고 표기 (출처 n)은 본문에서 걷어낸다 — 참고해 재작성한 문장에 번호를 인쇄할
+        # 이유가 없다(2026-08-11). 출처는 참고문헌 최종장으로만 밝힌다.
+        assert not any("출처 1" in t or "출처 2" in t for t in body_texts)
+        assert any("고령화율은 17.1%로 상승했다." in t for t in body_texts)
+        # 마커만 빠지고 문장은 그대로 — 앞 공백까지 걷어 "했다 ." 같은 자국을 남기지 않는다.
+        assert any(t == "고령화율은 17.1%로 상승했다. 이는 전년 대비 증가다." for t in body_texts)
+
+    def test_direct_quote_marker_survives_export(self):
+        """직접 인용 [n]은 원문을 그대로 옮긴 문장이라 납품물에도 남는다."""
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="인용")]
+        body = 'ㅇ 보고서는 "재편이 불가피"라고 밝힘 [2]\nㅇ 시장은 확대됨 (출처 2)'
+        blocks = report_blocks(_state("직접 인용", plan, [body]))
+        texts = [b.text for b in blocks if isinstance(b, Paragraph)]
+        assert any('"재편이 불가피"라고 밝힘 [2]' in t for t in texts)
+        assert any(t == "ㅇ 시장은 확대됨" for t in texts)
 
     def test_toc_lists_chapters_and_sections(self):
         """목차는 장(제N장)과 절(N.N)을 함께 계층으로 나열한다."""
@@ -333,8 +411,8 @@ class TestReportBlocks:
         assert texts.count("1.1 개요") == 1
         assert any("실제 내용" in t for t in texts)
 
-    def test_figure_placeholder_only_for_tableless_sections(self):
-        """표 있는 절엔 그림 없음, 표 없는 절엔 추천 시각자료 자리표시자 1개."""
+    def test_short_section_with_table_needs_no_figure(self):
+        """짧은 절은 시각자료 1개면 충분하다 - 표가 있으면 그림은 안 붙는다."""
         plan = [
             SectionPlan(chapter_number=1, section_number=1, title="표있음"),
             SectionPlan(chapter_number=1, section_number=2, title="표없음"),
@@ -342,8 +420,137 @@ class TestReportBlocks:
         bodies = ["| 구분 | 값 |\n|---|---|\n| A | 1 |\n", "ㅇ 표 없는 서술 절임"]
         blocks = report_blocks(_state("자료 출처 검증", plan, bodies))
         captions = [b.caption for b in blocks if isinstance(b, Figure)]
-        assert any("[그림 1-2]" in c for c in captions)  # 표 없는 절 → 그림
-        assert not any("[그림 1-1]" in c for c in captions)  # 표 있는 절 → 그림 없음
+        # 그림은 표 없는 절 하나에서만 나오고, 번호는 장 단위로 1부터 센다.
+        assert captions == ["<그림 1-1> 표없음"]
+
+    def test_long_section_gets_figure_even_with_table(self):
+        """긴 절은 표가 있어도 그림이 함께 붙는다 - 표만 빽빽해지지 않게(2026-08-11)."""
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="긴 절")]
+        body = "| 구분 | 값 |\n|---|---|\n| A | 1 |\n\n" + ("ㅇ 서술이 매우 긴 절임\n\n" * 300)
+        blocks = report_blocks(_state("분량 기준", plan, [body]))
+        figures = [b.caption for b in blocks if isinstance(b, Figure)]
+        assert figures and figures[0] == "<그림 1-1> 긴 절"
+
+    def test_figures_numbered_per_chapter_like_tables(self):
+        """그림 번호도 장 안에서 이어지고 장이 바뀌면 1로 돌아간다."""
+        plan = [
+            SectionPlan(chapter_number=1, section_number=1, title="가"),
+            SectionPlan(chapter_number=1, section_number=2, title="나"),
+            SectionPlan(chapter_number=2, section_number=1, title="다"),
+        ]
+        blocks = report_blocks(_state("그림 번호", plan, ["ㅇ 서술임"] * 3))
+        assert [b.caption for b in blocks if isinstance(b, Figure)] == [
+            "<그림 1-1> 가",
+            "<그림 1-2> 나",
+            "<그림 2-1> 다",
+        ]
+
+    def test_table_captions_numbered_per_chapter(self):
+        """표 번호는 장 안에서 이어지고 장이 바뀌면 1로 돌아간다."""
+        plan = [
+            SectionPlan(chapter_number=1, section_number=1, title="현황"),
+            SectionPlan(chapter_number=1, section_number=2, title="전망"),
+            SectionPlan(chapter_number=2, section_number=1, title="과제"),
+        ]
+        bodies = [
+            "표: 국가별 투자\n| 국가 | 액수 |\n|---|---|\n| 미국 | 1 |\n",
+            "표: 연도별 추이\n| 연도 | 값 |\n|---|---|\n| 2024년 | 2 |\n",
+            "표: 주요 과제\n| 과제 | 비고 |\n|---|---|\n| 인력 | 3 |\n",
+        ]
+        blocks = report_blocks(_state("표 번호", plan, bodies))
+        captions = [b.caption for b in blocks if isinstance(b, Table) and b.headers[0] != "약어"]
+        assert captions == [
+            "<표 1-1> 국가별 투자",
+            "<표 1-2> 연도별 추이",
+            "<표 2-1> 주요 과제",
+        ]
+
+    def test_table_without_caption_uses_headers(self):
+        """제목이 없으면 머리행으로 세운다 - 절 제목만 쓰면 한 절의 표가 다 같은 이름이 된다."""
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="투자 현황")]
+        body = "| 국가 | 투자액 | 시점 |\n|---|---|---|\n| 미국 | 1 | 2030년 |\n"
+        blocks = report_blocks(_state("제목 누락", plan, [body]))
+        table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] != "약어")
+        assert table.caption == "<표 1-1> 국가별 투자액·시점"
+
+    def test_generic_first_header_falls_back_to_section_title(self):
+        """'구분'처럼 뜻 없는 첫 열은 분류축이 못 된다 - 절 제목을 앞에 두고 나머지 열을 잇는다."""
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="투자 현황")]
+        body = "| 구분 | 정책 프로그램 | 예산 |\n|---|---|---|\n| A | 가 | 1 |\n"
+        blocks = report_blocks(_state("일반어 머리행", plan, [body]))
+        table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] != "약어")
+        assert table.caption == "<표 1-1> 투자 현황: 정책 프로그램·예산"
+
+    def test_single_column_table_keeps_section_title(self):
+        """열이 하나뿐이면 머리행으로 제목을 세울 수 없다."""
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="투자 현황")]
+        blocks = report_blocks(_state("한 열", plan, ["| 국가 |\n|---|\n| 미국 |\n"]))
+        table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] != "약어")
+        assert table.caption == "<표 1-1> 투자 현황"
+
+    def test_table_unit_line_absorbed(self):
+        """제목과 표 사이 "(단위: …)" 단독 줄은 표의 단위 줄로 흡수된다(작성 규칙 3종 세트)."""
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="예산")]
+        body = "표: 연차별 예산\n(단위: 백만 원)\n| 연차 | 금액 |\n|---|---|\n| 1차 | 100 |\n"
+        blocks = report_blocks(_state("단위 줄", plan, [body]))
+        table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] != "약어")
+        assert table.caption == "<표 1-1> 연차별 예산"
+        assert table.unit == "(단위: 백만 원)"
+        # 단위 줄이 본문 문단으로 남지 않는다.
+        assert not any(isinstance(b, Paragraph) and "단위" in b.text for b in blocks)
+
+    def test_table_source_line_becomes_bibliography(self):
+        """표 바로 아래 (출처 n) 단독 줄은 걷어내지 않고 실서지 출처 줄로 변환된다."""
+        sources = [
+            SourceRef(
+                id=uuid4(), source_type=SourceType.WEB_SEARCH, title="정부 통계", url="https://x"
+            )
+        ]
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="현황")]
+        body = "표: 국가별 현황\n| 국가 | 값 |\n|---|---|\n| 미국 | 1 |\n\n(출처 1)\n"
+        blocks = report_blocks(_state("표 출처", plan, [body], sources))
+        table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] != "약어")
+        assert table.source == "출처: 정부 통계"
+        # 표 밖 본문에는 출처 표기가 남지 않는다(참고문헌 목록 제외).
+        body_end = blocks.index(Heading(level=1, text=REFERENCES_HEADING))
+        assert not any(isinstance(b, Paragraph) and "출처 1" in b.text for b in blocks[:body_end])
+
+    def test_year_quote_normalized(self):
+        """연도 어깨점 혼용(‘24·`24)은 오른쪽 홑따옴표(’24)로 정규화된다."""
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="연혁")]
+        blocks = report_blocks(_state("연도", plan, ["ㅇ ‘24년 실적은 `23년 대비 증가함"]))
+        texts = [b.text for b in blocks if isinstance(b, Paragraph)]
+        assert any("’24년" in t and "’23년" in t for t in texts)
+
+    def test_visual_index_lists_numbered_captions(self):
+        """표 목차·그림 목차가 본문 캡션 그대로 목차 뒤에 나열된다."""
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="현황")]
+        body = "표: 국가별 투자\n| 국가 | 액수 |\n|---|---|\n| 미국 | 1 |\n"
+        blocks = report_blocks(_state("표 목차", plan, [body]))
+        table_index = blocks.index(Heading(level=1, text="표 목차"))
+        first_chapter = blocks.index(Heading(level=1, text="제1장"))
+        assert blocks.index(Heading(level=1, text="목차")) < table_index < first_chapter
+        entries = [
+            b.text for b in blocks[table_index + 1 : first_chapter] if isinstance(b, Paragraph)
+        ]
+        assert "<표 1-1> 국가별 투자" in entries
+
+    def test_summary_page_rendered_between_cover_and_toc(self):
+        """config에 저장된 요약(summary)은 표지 뒤·목차 앞 요약문 페이지로 렌더된다."""
+        summary = {
+            "chapters": [{"number": 1, "title": "개요", "lines": ["(배경) 고령화가 가속됨"]}]
+        }
+        state = _state_with_selected_drafts().model_copy(update={"options": {"summary": summary}})
+        blocks = report_blocks(state)
+        summary_idx = blocks.index(Heading(level=1, text="요약문"))
+        toc_idx = blocks.index(Heading(level=1, text="목차"))
+        assert 0 < summary_idx < toc_idx
+        texts = [b.text for b in blocks[summary_idx:toc_idx] if isinstance(b, Paragraph)]
+        assert "(배경) 고령화가 가속됨" in texts
+
+    def test_no_summary_page_without_stored_summary(self):
+        blocks = report_blocks(_state_with_selected_drafts())
+        assert not any(isinstance(b, Heading) and b.text == "요약문" for b in blocks)
 
     def test_sources_final_chapter(self):
         sources = [
@@ -367,6 +574,8 @@ class TestReportBlocks:
         entries = [b.text for b in blocks[src_idx + 1 :] if isinstance(b, Paragraph)]
         assert any("웹 자료 제목" in t and "https://ex.com/a" in t for t in entries)
         assert any("업로드 문서" in t for t in entries)
+        # 본문에서는 [n]을 걷어내도 참고문헌 목록의 번호는 남는다 — 목록 번호이지 인용이 아니다.
+        assert entries[0].startswith("[1] ")
 
     def test_no_sources_chapter_when_pool_empty(self):
         blocks = report_blocks(_state_with_selected_drafts())  # sources 없음
@@ -377,6 +586,7 @@ class TestExportReport:
     def test_writes_hwpx_file(self, tmp_path: Path):
         state = _state_with_selected_drafts()
         path = export_report(state, output_dir=tmp_path)
-        assert path == tmp_path / f"{state.project_id}.hwpx"
+        # 파일명에 렌더 버전이 붙는다 — 코드가 바뀌면 옛 산출물이 캐시로 재사용되지 않게.
+        assert path == tmp_path / export_filename(state.project_id)
         assert path.exists()
         assert path.stat().st_size > 0

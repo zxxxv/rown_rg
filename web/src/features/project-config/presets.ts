@@ -17,9 +17,12 @@ export function presetLabel(preset: string | null | undefined): string {
 /** 백엔드 카탈로그 프리셋 id → 로컬 기본 옵션 매핑(없으면 보수적 기본값). */
 const CATALOG_DEFAULT_KEY: Record<string, Preset> = {
   예비타당성조사: "preliminary_feasibility",
+  설치운영계획보고서: "preliminary_feasibility",
+  특화단지기획보고서: "preliminary_feasibility",
   경영컨설팅보고서: "business_review",
   정책기획보고서: "policy_research",
   산업동향보고서: "policy_research",
+  성과분석보고서: "policy_research",
   조사분석보고서: "policy_research",
 };
 
