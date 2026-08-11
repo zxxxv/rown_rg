@@ -13,7 +13,7 @@ import {
   Table2,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
@@ -105,6 +105,11 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
     [snapshotQuery.data],
   );
 
+  // 근거 드로어가 열리면 절 트리를 접는다 - 1440px 화면에서 좌측 내비(180) + 트리(240)
+  // + 드로어(460)가 본문을 560px까지 밀어낸다(실측). 근거를 대조하는 동안 트리는 쓰지
+  // 않으므로 그 자리를 내주면 본문이 온전히 남는다.
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const handleEvidenceOpenChange = useCallback((open: boolean) => setEvidenceOpen(open), []);
   const tree = sectionsQuery.data?.tree ?? [];
   const selectedId = params.get("section") ?? findFirstViewable(tree);
   // 선택된 id가 '장'이면 장 통합 뷰(하위 절 이어 보기), 아니면 절 본문.
@@ -213,12 +218,20 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 min-[1200px]:grid-cols-[240px_minmax(0,1fr)]">
+        <div
+          className={cn(
+            "grid grid-cols-1 gap-4",
+            evidenceOpen ? "" : "min-[1200px]:grid-cols-[240px_minmax(0,1fr)]",
+          )}
+        >
           {/* 트리는 내부 스크롤 없이 아래로 쭉 펼친다 - 목차 전체가 한눈에 보이고
-                페이지 스크롤 하나로 탐색한다(사용자 요청, 2026-08-04) */}
-          <aside className="self-start rounded border border-border bg-bg">
-            <SectionTree tree={tree} selectedId={selectedId} onSelect={selectNode} />
-          </aside>
+                페이지 스크롤 하나로 탐색한다(사용자 요청, 2026-08-04).
+                근거 드로어가 열려 있는 동안에는 접어 본문에 자리를 내준다. */}
+          {evidenceOpen ? null : (
+            <aside className="self-start rounded border border-border bg-bg">
+              <SectionTree tree={tree} selectedId={selectedId} onSelect={selectNode} />
+            </aside>
+          )}
 
           <main className="rounded border border-border bg-bg">
             {selectedId && sectionFindings.length > 0 ? (
@@ -260,6 +273,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
                 contentQuery={contentQuery}
                 qaWarnings={qaWarnings}
                 editable={!isGenerating}
+                onEvidenceOpenChange={handleEvidenceOpenChange}
               />
             ) : (
               <EmptyState
@@ -653,11 +667,14 @@ function SectionView({
   contentQuery,
   qaWarnings,
   editable,
+  onEvidenceOpenChange,
 }: {
   projectId: string;
   sectionId: string;
   contentQuery: ReturnType<typeof useSectionContent>;
   qaWarnings: QaSelectWarning[];
+  /** 근거 드로어가 열리고 닫힐 때 알린다 - 부모가 절 트리를 접어 자리를 내준다. */
+  onEvidenceOpenChange?: (open: boolean) => void;
   /** 생성이 끝나야 편집·재작성을 연다 - 작성 중 초안은 재생성으로 갈아치워질 수 있고,
    *  절 전체 재작성은 검색까지 다시 돌아 작성 루프와 자원을 다툰다(2026-08-09). */
   editable: boolean;
@@ -696,6 +713,13 @@ function SectionView({
     [selectedIdx, blocks],
   );
   const singleBlock = selectedBlocks.length === 1 ? selectedBlocks[0] : null;
+  // 드로어가 뜨는 조건과 정확히 같은 식을 부모에 알린다 - 부모는 이때 절 트리를 접어
+  // 자리를 내준다. 절을 옮기거나 화면을 떠날 때도 반드시 닫힘으로 되돌린다.
+  const drawerOpen = editable && selectedBlocks.length > 0;
+  useEffect(() => {
+    onEvidenceOpenChange?.(drawerOpen);
+    return () => onEvidenceOpenChange?.(false);
+  }, [drawerOpen, onEvidenceOpenChange]);
   // 그래프 블록은 AI 재작성에서 뺀다 - 모델이 펜스 안 수치를 고쳐 쓰면 근거와 끊긴다
   // (백엔드도 같은 이유로 막는다). 고칠 게 있으면 표로 되돌린 뒤 고친다.
   const chartSelected = selectedBlocks.some((b) => b.includes("```chart"));
@@ -967,20 +991,21 @@ function SectionView({
           />
         </div>
       ) : (
-        <div
-          className={cn(
-            "grid grid-cols-1",
-            // 작성 중에는 편집·재작성 패널을 아예 두지 않는다 - 초안이 재생성으로
-            // 갈아치워질 수 있고, 절 전체 재작성은 작성 루프와 자원을 다툰다.
-            // 근거 칸은 블록을 골랐을 때만 연다. 늘 자리를 잡아 두면 근거가 0건인 절에서도
-            // 본문만 좁아진다(2026-08-12 지적). 평소엔 본문이 전체 폭을 쓴다.
-            editable &&
-              selectedBlocks.length > 0 &&
-              "xl:grid-cols-[minmax(0,1fr)_440px] 2xl:grid-cols-[minmax(0,1fr)_560px]",
-          )}
-        >
-          {/* 중앙: 블록 본문 - 클릭해 선택하면 우측 패널에서 편집·재작성 */}
-          <div className="min-w-0 px-6 py-4">
+        <div>
+          {/* 근거는 그리드 칸이 아니라 화면 오른쪽 드로어로 연다. 칸으로 두면 근거가
+              0건인 절에서도 본문이 늘 좁아지고, 스크롤이 본문과 엮여 긴 근거를 읽는
+              동안 본문 위치를 잃는다(2026-08-12 지적).
+
+              드로어가 열린 동안에는 그 폭만큼 오른쪽 여백을 준다. 겹쳐 띄우기만 하면
+              본문 오른쪽이 잘려 정작 대조할 문장이 안 보인다(첫 구현에서 실제로 잘렸다).
+              1440px 화면에서 본문과 460px 패널이 둘 다 온전할 자리는 없다 - 열었을 때만
+              양보하고, 닫으면 즉시 전체 폭으로 돌아온다. */}
+          <div
+            className={cn(
+              "min-w-0 px-6 py-4 transition-[padding] duration-200",
+              editable && selectedBlocks.length > 0 && "xl:pr-[440px] 2xl:pr-[600px]",
+            )}
+          >
             {(rewrite.isPending || rewriteBlock.isPending) && (
               <div className="mb-3 flex items-center gap-2 rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
                 <Sparkles className="h-4 w-4 animate-pulse" />
@@ -1102,29 +1127,27 @@ function SectionView({
             <EvidencePanel projectId={projectId} sectionId={sectionId} />
           </div>
 
-          {/* 우측: 근거 전용 - 검토의 본작업은 "본문 옆에서 근거를 읽는 것"이다.
-              재작성 지시는 짧고 가끔 쓰는 것이라 아래 띠로 내렸다(2026-08-12 지적:
-              근거 패널이 눌려 원문을 읽을 수 없었다). */}
+          {/* 오른쪽 드로어: 근거 전용. 화면에 고정돼 본문 위로 뜨므로 본문 폭이 안 줄고,
+              스크롤도 본문과 따로 논다 - 긴 근거를 읽는 동안 본문 위치를 잃지 않는다. */}
           {editable && selectedBlocks.length > 0 ? (
-            <aside className="border-t border-border bg-bg-secondary px-4 py-4 xl:border-l xl:border-t-0">
-              {
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-medium text-fg">
-                      블록 {selectedBlocks.length}개 선택됨
-                    </p>
-                    <Button variant="ghost" size="sm" onClick={clearBlockSelection} disabled={busy}>
-                      <X className="h-3.5 w-3.5" />
-                      선택 해제
-                    </Button>
-                  </div>
-                  <BlockEvidence
-                    projectId={projectId}
-                    sectionId={sectionId}
-                    blocks={selectedBlocks}
-                  />
-                </div>
-              }
+            <aside
+              aria-label="선택한 블록의 근거"
+              className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[92vw] flex-col border-l border-border bg-bg-secondary shadow-xl sm:w-[460px] 2xl:w-[560px]"
+            >
+              <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+                <p className="text-xs font-medium text-fg">블록 {selectedBlocks.length}개의 근거</p>
+                <Button variant="ghost" size="sm" onClick={clearBlockSelection} disabled={busy}>
+                  <X className="h-3.5 w-3.5" />
+                  닫기
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+                <BlockEvidence
+                  projectId={projectId}
+                  sectionId={sectionId}
+                  blocks={selectedBlocks}
+                />
+              </div>
             </aside>
           ) : null}
         </div>
