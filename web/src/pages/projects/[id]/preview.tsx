@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ExternalLink,
   Eye,
+  FileSearch,
   Loader2,
   Pencil,
   Save,
@@ -46,7 +47,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
 import { chartFallbackTable } from "@/features/preview/chartSpec";
-import { BlockEvidence, EvidencePanel } from "@/features/preview/EvidencePanel";
+import {
+  BlockEvidence,
+  EvidencePanel,
+  partitionBlockEvidence,
+} from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { findTable, isTableCaption, type MarkdownTable } from "@/features/preview/tableToChart";
 import { useAuth } from "@/hooks/useAuth";
@@ -720,9 +725,21 @@ function SectionView({
     [selectedIdx, blocks],
   );
   const singleBlock = selectedBlocks.length === 1 ? selectedBlocks[0] : null;
+  // 근거 드로어 - 선택과 분리된 별도 상태. 블록 선택(재작성 대상 고르기)만으로 열면
+  // 근거 0건 블록에서도 빈 패널이 떠 불편하다(2026-08-12 사용자 지적). 근거 있는
+  // 블록의 '근거 N' 표시를 사용자가 클릭했을 때만 그 블록의 근거를 연다.
+  const [evidenceIdx, setEvidenceIdx] = useState<number | null>(null);
+  const evidenceBlock = evidenceIdx !== null ? (blocks[evidenceIdx] ?? null) : null;
+  // 블록별 '이 블록의 근거' 수 - 표시(배지) 유무의 원천. 드로어(BlockEvidence)와
+  // 같은 분류를 쓴다(문장 정렬로 좁힌 primary - 같은 번호에 딸려 온 다른 대목 제외).
+  const evidenceCounts = useMemo(() => {
+    const data = evidenceQuery.data;
+    if (!data) return [] as number[];
+    return blocks.map((block) => partitionBlockEvidence([block], data).primary.length);
+  }, [blocks, evidenceQuery.data]);
   // 드로어가 뜨는 조건과 정확히 같은 식을 부모에 알린다 - 부모는 이때 절 트리를 접어
-  // 자리를 내준다. 절을 옮기거나 화면을 떠날 때도 반드시 닫힘으로 되돌린다.
-  const drawerOpen = editable && selectedBlocks.length > 0;
+  // 본문을 넓힌다. 절을 옮기거나 화면을 떠날 때도 반드시 닫힘으로 되돌린다.
+  const drawerOpen = evidenceBlock !== null;
   useEffect(() => {
     onEvidenceOpenChange?.(drawerOpen);
     return () => onEvidenceOpenChange?.(false);
@@ -1003,16 +1020,12 @@ function SectionView({
               0건인 절에서도 본문이 늘 좁아지고, 스크롤이 본문과 엮여 긴 근거를 읽는
               동안 본문 위치를 잃는다(2026-08-12 지적).
 
-              드로어가 열린 동안에는 그 폭만큼 오른쪽 여백을 준다. 겹쳐 띄우기만 하면
-              본문 오른쪽이 잘려 정작 대조할 문장이 안 보인다(첫 구현에서 실제로 잘렸다).
-              1440px 화면에서 본문과 460px 패널이 둘 다 온전할 자리는 없다 - 열었을 때만
-              양보하고, 닫으면 즉시 전체 폭으로 돌아온다. */}
-          <div
-            className={cn(
-              "min-w-0 px-6 py-4 transition-[padding] duration-200",
-              editable && selectedBlocks.length > 0 && "xl:pr-[480px] 2xl:pr-[600px]",
-            )}
-          >
+              본문에 오른쪽 여백 보정은 주지 않는다 - 드로어 폭만큼 밀면 본문이 절반으로
+              줄어든다(2026-08-12 사용자 지적: 사이드에서 열릴 거면 본문을 축소하지 말 것).
+              드로어는 사용자가 '근거 N' 표시를 눌렀을 때만 뜨므로, 열려 있는 동안 본문
+              오른쪽 일부가 가려지는 것은 감수한다(부모가 절 트리를 접어 본문을 왼쪽으로
+              넓혀 주는 보정만 유지). */}
+          <div className="min-w-0 px-6 py-4">
             {(rewrite.isPending || rewriteBlock.isPending) && (
               <div className="mb-3 flex items-center gap-2 rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
                 <Sparkles className="h-4 w-4 animate-pulse" />
@@ -1072,6 +1085,28 @@ function SectionView({
                     </div>
                   ) : (
                     <>
+                      {/* 근거 있는 블록에만 표시를 달고, 눌렀을 때만 드로어를 연다 -
+                          근거 0건 블록에서 빈 패널이 뜨는 불편을 없앤다(2026-08-12). */}
+                      {(evidenceCounts[idx] ?? 0) > 0 ? (
+                        <button
+                          type="button"
+                          title="이 블록이 인용한 근거 원문을 오른쪽 패널로 봅니다"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEvidenceIdx((v) => (v === idx ? null : idx));
+                          }}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          className={cn(
+                            "absolute -top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors",
+                            evidenceIdx === idx
+                              ? "border-accent bg-bg-info text-fg-info"
+                              : "border-border bg-bg text-fg-tertiary hover:border-border-strong hover:text-fg-secondary",
+                          )}
+                        >
+                          <FileSearch className="h-3 w-3" aria-hidden />
+                          근거 {evidenceCounts[idx]}
+                        </button>
+                      ) : null}
                       <MarkdownContent
                         content={block}
                         citations={data.citations}
@@ -1135,15 +1170,16 @@ function SectionView({
           </div>
 
           {/* 오른쪽 드로어: 근거 전용. 화면에 고정돼 본문 위로 뜨므로 본문 폭이 안 줄고,
-              스크롤도 본문과 따로 논다 - 긴 근거를 읽는 동안 본문 위치를 잃지 않는다. */}
-          {editable && selectedBlocks.length > 0 ? (
+              스크롤도 본문과 따로 논다 - 긴 근거를 읽는 동안 본문 위치를 잃지 않는다.
+              블록 선택(재작성)과는 무관하게 '근거 N' 표시 클릭으로만 열고 닫는다. */}
+          {evidenceBlock !== null ? (
             <aside
               aria-label="선택한 블록의 근거"
               className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[92vw] flex-col border-l border-border bg-bg-secondary shadow-xl sm:w-[460px] 2xl:w-[560px]"
             >
               <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-                <p className="text-xs font-medium text-fg">블록 {selectedBlocks.length}개의 근거</p>
-                <Button variant="ghost" size="sm" onClick={clearBlockSelection} disabled={busy}>
+                <p className="text-xs font-medium text-fg">블록 근거</p>
+                <Button variant="ghost" size="sm" onClick={() => setEvidenceIdx(null)}>
                   <X className="h-3.5 w-3.5" />
                   닫기
                 </Button>
@@ -1152,7 +1188,7 @@ function SectionView({
                 <BlockEvidence
                   projectId={projectId}
                   sectionId={sectionId}
-                  blocks={selectedBlocks}
+                  blocks={[evidenceBlock]}
                 />
               </div>
             </aside>
