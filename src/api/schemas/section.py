@@ -46,13 +46,6 @@ class SectionCitation(BaseModel):
     reliability: str | None = None  # high | medium | low (수집기 기록값)
 
 
-class UngroundedNumbers(BaseModel):
-    """인용 근거에서 확인되지 않는 수치 — 조회 시점 재계산(편집 결과가 즉시 반영)."""
-
-    count: int = 0
-    samples: list[str] = Field(default_factory=list, description="앞부분 표본(최대 12개)")
-
-
 class EvidenceInfo(BaseModel):
     """이 절이 쓸 수 있었던 근거의 양 — 작성 시점에 기록(sections.meta).
 
@@ -74,9 +67,6 @@ class SectionContentResponse(BaseModel):
     qa_status: str
     level: int
     citations: list[SectionCitation] = Field(default_factory=list)
-    # 인용 근거에 없는 수치 — 창작 위험 신호. 예타 실증(2026-08-09)에서 자료 없는 절이
-    # 예산·계수를 지어내고 인용만 붙이는 사례가 나와, 절 화면에 직접 노출한다.
-    ungrounded: UngroundedNumbers = Field(default_factory=UngroundedNumbers)
     evidence: EvidenceInfo = Field(default_factory=EvidenceInfo)
 
 

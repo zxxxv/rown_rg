@@ -940,22 +940,6 @@ function SectionView({
         </div>
       </header>
 
-      {data.ungrounded.count > 0 ? (
-        // 인용은 붙었지만 그 근거에 없는 수치 - 예타 실증에서 자료 없는 절이 예산·계수를
-        // 지어내고 인용만 단 사례가 나왔다(2026-08-09). 사람이 가장 먼저 봐야 할 신호다.
-        <div className="flex flex-col gap-1 border-b border-fg-danger/30 bg-bg-danger px-6 py-3">
-          <p className="flex items-center gap-1.5 text-xs font-medium text-fg">
-            <AlertTriangle className="h-3.5 w-3.5 text-fg-danger" aria-hidden />
-            근거에서 확인되지 않는 수치 {data.ungrounded.count}개 - 인용이 붙어 있어도 원자료에 없는
-            값일 수 있습니다
-          </p>
-          <p className="text-xs text-fg-secondary">
-            {data.ungrounded.samples.join(", ")}
-            {data.ungrounded.count > data.ungrounded.samples.length ? " …" : ""}
-          </p>
-        </div>
-      ) : null}
-
       {data.evidence.plan_failed ? (
         // 분할 계획이 무너지면 절이 단일 호출로 떨어져 짧아지고 인용이 준다.
         // 지금까지 아무 신호가 없어 그 절이 조용히 보고서에 실렸다(2026-08-11).

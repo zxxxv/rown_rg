@@ -57,7 +57,6 @@ const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
     source_ids: ["src_kostat_2024", "src_kdi_aging", "src_audit_gtx"],
     qa_status: "passed",
     level: 2,
-    ungrounded: { count: 0, samples: [] },
     evidence: { count: 24, scarce: false, plan_failed: false },
     citations: [
       {
@@ -88,7 +87,6 @@ const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
     source_ids: ["src_moef_preliminary", "src_bok_econ", "src_audit_gtx"],
     qa_status: "passed",
     level: 2,
-    ungrounded: { count: 0, samples: [] },
     evidence: { count: 24, scarce: false, plan_failed: false },
     citations: [
       {
@@ -131,7 +129,6 @@ export function buildSectionContent(
     source_ids: [],
     qa_status: "passed",
     level: sectionId.includes(".") ? 2 : 1,
-    ungrounded: { count: 0, samples: [] },
     evidence: { count: 24, scarce: false, plan_failed: false },
     citations: [],
   };

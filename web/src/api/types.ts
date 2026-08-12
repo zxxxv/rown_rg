@@ -229,11 +229,6 @@ export const SectionCitationSchema = z.object({
 });
 export type SectionCitation = z.infer<typeof SectionCitationSchema>;
 
-export const UngroundedNumbersSchema = z.object({
-  count: z.number().int().nonnegative().default(0),
-  samples: z.array(z.string()).default([]),
-});
-
 /** 절이 쓸 수 있었던 근거의 양 - 작성 시점 기록(옛 절은 count=null) */
 export const EvidenceInfoSchema = z.object({
   count: z.number().int().nonnegative().nullable().default(null),
@@ -250,8 +245,6 @@ export const SectionContentResponseSchema = z.object({
   qa_status: z.enum(["passed", "failed", "pending"]),
   level: z.number().int().min(1).max(4),
   citations: z.array(SectionCitationSchema).default([]),
-  /** 인용 근거에서 확인되지 않는 수치 - 창작 위험 신호(조회 시점 재계산) */
-  ungrounded: UngroundedNumbersSchema.default({ count: 0, samples: [] }),
   /** 근거 부족으로 분량 목표를 내린 절인지 - 본문에는 쓰지 않고 화면에서만 표시 */
   evidence: EvidenceInfoSchema.default({ count: null, scarce: false, plan_failed: false }),
 });
