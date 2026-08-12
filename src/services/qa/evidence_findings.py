@@ -28,6 +28,7 @@ from src.services.qa.cross_section import (
     dangling_references,
     duplicate_pairs,
 )
+from src.services.qa.design_coverage import coverage_terms, judge_covered
 from src.services.qa.design_coverage import findings_for_section as coverage_findings
 from src.services.sections.evidence import marker_chunk_ids
 
@@ -313,7 +314,17 @@ async def evidence_findings(
                 row, claims, comparable=comparable, supported=supported, refuted=refuted
             )
         )
-        out.extend(_coverage_findings(row, chapters, chunk_texts))
+        out.extend(
+            await _coverage_findings(
+                row,
+                chapters,
+                chunk_texts,
+                judge=use_llm,
+                model=model,
+                user_id=user_id,
+                project_id=project_id,
+            )
+        )
     # 절 간 중복은 절 하나만 봐서는 안 보인다 — 전부 모은 뒤 한 번에 본다.
     out.extend(
         cross_section_findings(
@@ -326,10 +337,21 @@ async def evidence_findings(
     return out
 
 
-def _coverage_findings(
-    row: Section, chapters: list[Any], chunk_texts: dict[UUID, str]
+async def _coverage_findings(
+    row: Section,
+    chapters: list[Any],
+    chunk_texts: dict[UUID, str],
+    *,
+    judge: bool,
+    model: str | None,
+    user_id: UUID | None,
+    project_id: UUID,
 ) -> list[dict[str, Any]]:
-    """목차 지시 이행 검사 — 확정 목차가 없으면(자유 주제) 건너뛴다."""
+    """목차 지시 이행 검사 — 확정 목차가 없으면(자유 주제) 건너뛴다.
+
+    이행 여부는 LLM이 판정한다. 어휘 겹침은 '단어가 있는가'만 재서 정밀도 25%·
+    재현율 33%였다(2026-08-12 실측). 판정이 실패하면 어휘로 폴백한다.
+    """
     try:
         spec = chapters[row.chapter_number - 1]["sections"][row.section_number - 1]
     except (IndexError, KeyError, TypeError):
@@ -343,11 +365,24 @@ def _coverage_findings(
             texts.append(chunk_texts.get(UUID(raw), ""))
         except (ValueError, TypeError):
             continue
+    key_points = [str(k) for k in (spec.get("key_points") or [])]
+    verdict: dict[str, bool] = {}
+    if judge:
+        terms = coverage_terms(str(spec.get("direction") or ""), key_points)
+        verdict = await judge_covered(
+            terms,
+            row.content or "",
+            section_ref=f"{row.chapter_number}.{row.section_number}",
+            model=model or settings.claim_verify_model or settings.verify_model,
+            user_id=user_id,
+            project_id=project_id,
+        )
     return coverage_findings(
         row.chapter_number,
         row.section_number,
         row.content or "",
         str(spec.get("direction") or ""),
-        [str(k) for k in (spec.get("key_points") or [])],
+        key_points,
         "\n".join(t for t in texts if t),
+        verdict=verdict,
     )

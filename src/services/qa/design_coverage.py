@@ -18,7 +18,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import structlog
+
 from src.services.qa.alignment import overlap_score
+
+logger = structlog.get_logger(__name__)
 
 # 항목 나열 구분자 — 목차 지시문이 실제로 쓰는 기호(2026-08-11 실측).
 _SPLIT_RE = re.compile(r"[·ㆍ,、]")
@@ -99,12 +103,16 @@ def findings_for_section(
     direction: str,
     key_points: list[str] | None,
     pool_text: str,
+    verdict: dict[str, bool] | None = None,
 ) -> list[dict[str, Any]]:
     """미반영 항목을 원인별로 갈라 경고 행으로 만든다 (순수 함수 — 테스트 대상)."""
     terms = coverage_terms(direction, key_points)
     if not terms:
         return []
-    missing = [t for t in terms if not covered(t, content)]
+    # 판정을 받았으면 그걸 따른다 - 어휘 겹침은 표기 흔들림만 흡수할 뿐 내용 유무를
+    # 못 가른다(실측 정밀도 25%·재현율 33%). 판정이 없으면(모델 실패) 어휘로 폴백.
+    verdict = verdict or {}
+    missing = [t for t in terms if not verdict.get(t, covered(t, content))]
     if not missing:
         return []
 
@@ -147,3 +155,69 @@ def findings_for_section(
             }
         )
     return out
+
+
+# ── 이행 판정을 LLM으로 ─────────────────────────────────────────────────────
+# 어휘 겹침으로 '다뤘는가'를 재던 방식은 **실측에서 신뢰할 수 없었다**(2026-08-12,
+# 목차 지시 항목 37개): 경고 정밀도 25% · 재현율 33%. 사용자에게 뜬 경고 4건 중
+# 진짜는 1건이었다. 원인은 교차언어 근거 대조와 같은 부류다 - 어휘 겹침은 "단어가
+# 있는가"를 재지 "내용이 있는가"를 못 잰다.
+#   '리스크'      → 본문엔 "위험 요인"으로 서술 → 미반영으로 오판(거짓 경고)
+#   '시간적 범위' → 문구만 있고 내용 없음      → 다뤘다고 오판(놓침)
+# 항목이 절당 2~3개뿐이라 전부 판정에 넘겨도 절당 1콜이다.
+
+_JUDGE_SYSTEM = (
+    "너는 보고서 검토자다. 목차가 지시한 항목을 본문이 실제로 다뤘는지 판정하라.\n"
+    "- '다뤘다'는 그 항목에 대해 내용이 서술된 것이다. 단어만 스쳐 지나가면 안 다룬 것이다.\n"
+    "- 표현이 달라도 내용이 있으면 다룬 것이다('주민 수용성' = '지역사회 수용도').\n"
+    '항목마다 {"term": "...", "covered": true/false} 로 JSON 배열만 출력하라.'
+)
+_JUDGE_MAX_TOKENS = 1500
+_JUDGE_BODY_CHARS = 14000
+
+
+async def judge_covered(
+    terms: list[str],
+    content: str,
+    *,
+    section_ref: str,
+    model: str,
+    user_id: Any = None,
+    project_id: Any = None,
+    client: Any = None,
+) -> dict[str, bool]:
+    """항목별 이행 여부를 LLM에 묻는다. 실패하면 빈 dict — 호출부가 어휘 판정으로 폴백."""
+    import json
+
+    from src.clients.llm.base import CompletionRequest, Message
+    from src.clients.llm.factory import get_llm_client
+    from src.clients.llm.token_tracker import token_context
+
+    if not terms or not content.strip():
+        return {}
+    prompt = (
+        f"[절] {section_ref}\n[목차가 지시한 항목] {', '.join(terms)}\n"
+        f"[본문]\n{content[:_JUDGE_BODY_CHARS]}"
+    )
+    try:
+        with token_context(user_id=user_id, project_id=project_id, operation="qa.coverage_judge"):
+            response = await (client or get_llm_client()).complete(
+                CompletionRequest(
+                    model=model,
+                    system=_JUDGE_SYSTEM,
+                    messages=[Message(role="user", content=prompt)],
+                    max_tokens=_JUDGE_MAX_TOKENS,
+                    cache_key=None,
+                )
+            )
+        raw = response.content.strip()
+        start, end = raw.find("["), raw.rfind("]")
+        if start < 0 or end <= start:
+            return {}
+        items = json.loads(raw[start : end + 1])
+    except Exception:
+        logger.warning("design_coverage.judge_failed", section_ref=section_ref, exc_info=True)
+        return {}
+    return {
+        str(i["term"]): bool(i.get("covered")) for i in items if isinstance(i, dict) and "term" in i
+    }
