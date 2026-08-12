@@ -135,7 +135,7 @@ class TestPartTail:
             ["이미 다룬 소제목"],
             ["45.52", "9.21%"],
         )
-        assert "[3][7]" in tail
+        assert "3, 7번" in tail  # 허용 근거 목록 - 출처 표기는 (출처 n)이라 대괄호를 안 쓴다
         assert "파트 2/3" in tail
         assert "이미 다룬 소제목" in tail
         assert "45.52" in tail

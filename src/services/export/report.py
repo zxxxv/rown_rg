@@ -59,7 +59,7 @@ _KST = timezone(timedelta(hours=9))
 # 렌더 규칙을 바꿀 때마다 올린다. 다운로드는 "본문이 파일보다 새것인가"로만 재렌더를
 # 판단하는데, 코드를 고쳐도 본문 수정 시각은 그대로라 옛 파일이 그대로 내려갔다
 # (2026-08-11 지적). 버전을 파일명에 섞어 새 코드가 옛 산출물을 집지 않게 한다.
-EXPORT_RENDER_VERSION = 3
+EXPORT_RENDER_VERSION = 5
 
 
 def export_filename(project_id: UUID | str) -> str:
@@ -223,15 +223,27 @@ def _number_visuals(
         if isinstance(block, Table):
             table_no += 1
             title = block.caption or _caption_from_headers(block.headers, fallback_title)
-            blocks[i] = replace(block, caption=f"<표 {chapter}-{table_no}> {title}")
+            blocks[i] = replace(
+                block,
+                caption=f"<표 {chapter}-{table_no}> {title}",
+                caption_bookmark=f"rown_t{chapter}_{table_no}",
+            )
         elif isinstance(block, Figure):
             figure_no += 1
-            blocks[i] = replace(block, caption=f"<그림 {chapter}-{figure_no}> {block.caption}")
+            blocks[i] = replace(
+                block,
+                caption=f"<그림 {chapter}-{figure_no}> {block.caption}",
+                caption_bookmark=f"rown_f{chapter}_{figure_no}",
+            )
         elif isinstance(block, Chart):
             # 차트도 그림이다 — 자리표시자와 같은 번호 흐름을 쓴다.
             figure_no += 1
             title = getattr(block.spec, "title", "") or fallback_title
-            blocks[i] = replace(block, caption=f"<그림 {chapter}-{figure_no}> {title}")
+            blocks[i] = replace(
+                block,
+                caption=f"<그림 {chapter}-{figure_no}> {title}",
+                caption_bookmark=f"rown_f{chapter}_{figure_no}",
+            )
     return table_no, figure_no
 
 
@@ -400,6 +412,11 @@ def _attach_table_sources(blocks: list[Block], titles: dict[int, str]) -> None:
         i += 1
 
 
+# "(출처 n)"을 걷어내면 "- 출처:"처럼 라벨만 남는 줄이 생긴다 — 가리키는 것이 없어진
+# 껍데기라 통째로 버린다(2026-08-12 지적: 표 밑에 빈 '출처:'만 떠 있었다).
+_BARE_SOURCE_LABEL_RE = re.compile(r"^[□ㅇ○◦\-*※\s]*(?:출처|자료|참고)\s*[:：]?\s*$")
+
+
 def _strip_citation_blocks(blocks: list[Block]) -> list[Block]:
     """블록들에서 참고 표기 (출처 n)을 걷어낸다 — 문단·표 제목·셀 전부.
 
@@ -410,7 +427,7 @@ def _strip_citation_blocks(blocks: list[Block]) -> list[Block]:
     for block in blocks:
         if isinstance(block, Paragraph):
             text = _strip_citations(block.text).strip()
-            if not text:
+            if not text or _BARE_SOURCE_LABEL_RE.match(text):
                 continue
             out.append(replace(block, text=text))
         elif isinstance(block, Table):
@@ -444,19 +461,33 @@ def _drop_duplicate_lead_heading(md: str, chapter: int, section: int) -> str:
 # 약어 정리표 배치 — 한 단(段)에 15줄, 두 단을 나란히(=한 표에 30개). 넘치면 다음 표로.
 # 3열 한 줄짜리는 본문 폭을 다 쓰면서 내용이 몇 글자뿐이라 페이지가 비어 보였다
 # (2026-08-10 지적). 두 단으로 접어 폭을 절반씩 쓴다.
-_GLOSSARY_ROWS_PER_COLUMN = 15
+# 한 표에 담을 행 수(단 하나 기준) — 설명이 두세 줄로 접히는 행을 감안해 한 쪽에 들어갈
+# 만큼만 잡는다. 넘치면 표가 쪽을 걸쳐 잘리고 제목만 남은 빈 쪽이 생긴다.
+_GLOSSARY_ROWS_PER_COLUMN = 10
 _GLOSSARY_HEADERS = ["약어", "전체 명칭", "설명", "약어", "전체 명칭", "설명"]
+# 약어 표 열 폭은 내용이 아니라 **고정 비율**로 준다. 표마다 내용으로 계산하면 쪽을
+# 넘길 때마다 열 폭이 달라져 같은 표가 여러 모양으로 보인다(2026-08-12 지적).
+_GLOSSARY_WEIGHTS = [14, 20, 16, 14, 20, 16]
 
 
 def _glossary_tables(entries: list[list[str]]) -> list[Table]:
-    """약어 목록 → 2단 표들. 30개마다 새 표(=다음 줄)로 넘어간다."""
+    """약어 목록 → 2단 표들. 한 표가 한 쪽에 들어가도록 행 수를 묶는다.
+
+    행 수를 줄인 이유가 있다. 표는 남은 자리에 안 들어가면 통째로 다음 쪽으로 밀리는데,
+    그러면 "약어 정리" 제목만 남은 빈 쪽이 생기고 표는 쪽을 걸쳐 잘린다(2026-08-12 지적).
+    설명이 길어 두세 줄로 접히는 행이 섞이므로 여유를 두고 잡는다.
+
+    마지막 표는 남은 항목을 좌우로 **반씩** 나눈다 — 왼쪽부터 채우면 오른쪽 절반이
+    통째로 빈 표가 나온다.
+    """
     per_table = _GLOSSARY_ROWS_PER_COLUMN * 2
     tables: list[Table] = []
     for start in range(0, len(entries), per_table):
         chunk = entries[start : start + per_table]
-        left, right = chunk[:_GLOSSARY_ROWS_PER_COLUMN], chunk[_GLOSSARY_ROWS_PER_COLUMN:]
+        half = (len(chunk) + 1) // 2
+        left, right = chunk[:half], chunk[half:]
         rows = [left[i] + (right[i] if i < len(right) else ["", "", ""]) for i in range(len(left))]
-        tables.append(Table(headers=_GLOSSARY_HEADERS, rows=rows))
+        tables.append(Table(headers=_GLOSSARY_HEADERS, rows=rows, column_weights=_GLOSSARY_WEIGHTS))
     return tables
 
 
@@ -510,6 +541,18 @@ def _cover_block(state: ProjectState) -> Cover:
         subtitle=_cover_subtitle(state),
         author=f"작성자  {state.author}" if state.author else "",
     )
+
+
+# 목차 줄과 본문 제목을 잇는 책갈피 이름. 한컴 상호참조가 이름으로 표적을 찾으므로
+# 문서 안에서 유일하고 안정적이어야 한다 — 제목 글자가 아니라 번호로 짓는다(제목이
+# 바뀌거나 같은 제목이 두 번 나와도 안 흔들린다).
+_REFERENCES_BOOKMARK = "rown_ref"
+
+
+def _toc_bookmark(chapter_number: int, section_number: int | None = None) -> str:
+    if section_number is None:
+        return f"rown_ch{chapter_number}"
+    return f"rown_s{chapter_number}_{section_number}"
 
 
 def _chapter_heading_text(chapter_number: int, ch_titles: dict[int, str]) -> str:
@@ -607,22 +650,21 @@ def _summary_blocks(state: ProjectState, ch_titles: dict[int, str]) -> list[Bloc
 def _visual_index_blocks(body: list[Block]) -> list[Block]:
     """표 목차·그림 목차 — 본문에 매겨진 캡션을 그대로 나열한다(실측 전 샘플 보유).
 
-    쪽번호는 레이아웃 엔진 부재로 생략한다(목차와 동일한 제약). 캡션 없는 표(약어
-    정리표)는 번호 접두가 없어 자연히 빠진다.
+    쪽번호는 목차와 같은 방식이다 — 본문 캡션에 심은 책갈피를 가리키는 필드를 두고
+    값은 문서를 여는 한컴이 채운다. 캡션 없는 표(약어 정리표)는 번호 접두가 없어
+    자연히 빠진다.
     """
-    table_caps = [b.caption for b in body if isinstance(b, Table) and b.caption.startswith("<표")]
-    figure_caps = [
-        b.caption
-        for b in body
-        if isinstance(b, Figure | Chart) and str(b.caption).startswith("<그림")
-    ]
+    tables = [(b.caption, b.caption_bookmark) for b in body if isinstance(b, Table)]
+    figures = [(str(b.caption), b.caption_bookmark) for b in body if isinstance(b, Figure | Chart)]
+    table_caps = [(cap, mark) for cap, mark in tables if cap.startswith("<표")]
+    figure_caps = [(cap, mark) for cap, mark in figures if cap.startswith("<그림")]
     blocks: list[Block] = []
     if table_caps:
         blocks += [PageBreak(), Heading(level=1, text="표 목차")]
-        blocks += [Paragraph(text=cap, indent=1) for cap in table_caps]
+        blocks += [Paragraph(text=cap, indent=1, page_ref=mark) for cap, mark in table_caps]
     if figure_caps:
         blocks += [PageBreak(), Heading(level=1, text="그림 목차")]
-        blocks += [Paragraph(text=cap, indent=1) for cap in figure_caps]
+        blocks += [Paragraph(text=cap, indent=1, page_ref=mark) for cap, mark in figure_caps]
     return blocks
 
 
@@ -694,12 +736,18 @@ def report_blocks(
                 flush_glossary()  # 앞 장의 약어 정리를 그 장 끝에 배치
             body.append(PageBreak())  # 챕터는 항상 새 쪽에서 시작
             ch_text = _chapter_heading_text(plan.chapter_number, ch_titles)
-            body.append(Heading(level=1, text=ch_text))
+            body.append(Heading(level=1, text=ch_text, bookmark=_toc_bookmark(plan.chapter_number)))
             current_chapter = plan.chapter_number
             chapter_table_no = 0
             chapter_figure_no = 0
         title = f"{plan.chapter_number}.{plan.section_number} {plan.title}"
-        body.append(Heading(level=2, text=title))
+        body.append(
+            Heading(
+                level=2,
+                text=title,
+                bookmark=_toc_bookmark(plan.chapter_number, plan.section_number),
+            )
+        )
         content = _drop_duplicate_lead_heading(
             contents[plan.section_id], plan.chapter_number, plan.section_number
         )
@@ -724,13 +772,24 @@ def report_blocks(
     toc_chapter: int | None = None
     for plan in rendered:
         if plan.chapter_number != toc_chapter:
-            blocks.append(Paragraph(text=_chapter_heading_text(plan.chapter_number, ch_titles)))
+            blocks.append(
+                Paragraph(
+                    text=_chapter_heading_text(plan.chapter_number, ch_titles),
+                    page_ref=_toc_bookmark(plan.chapter_number),
+                )
+            )
             toc_chapter = plan.chapter_number
         entry = f"{plan.chapter_number}.{plan.section_number}  {plan.title}"
-        blocks.append(Paragraph(text=entry, indent=1))
+        blocks.append(
+            Paragraph(
+                text=entry,
+                indent=1,
+                page_ref=_toc_bookmark(plan.chapter_number, plan.section_number),
+            )
+        )
     # 참고문헌은 계획에 없는 최종장이라 목차에도 따로 실어야 본문과 어긋나지 않는다.
     if state.sources:
-        blocks.append(Paragraph(text=REFERENCES_HEADING))
+        blocks.append(Paragraph(text=REFERENCES_HEADING, page_ref=_REFERENCES_BOOKMARK))
     blocks.extend(_visual_index_blocks(body))
 
     blocks.extend(body)
@@ -738,9 +797,11 @@ def report_blocks(
     # 최종장: 참고문헌 — 프로젝트 자료 풀을 번호 목록으로 정리한다(자료 없으면 생략).
     if state.sources:
         blocks.append(PageBreak())
-        blocks.append(Heading(level=1, text=REFERENCES_HEADING))
+        blocks.append(Heading(level=1, text=REFERENCES_HEADING, bookmark=_REFERENCES_BOOKMARK))
         for i, src in enumerate(state.sources, start=1):
-            blocks.append(Paragraph(text=_source_entry(i, src), indent=1))
+            # 왼쪽 정렬 — 서지 줄에는 줄바꿈이 안 되는 긴 URL이 들어 있어, 양쪽 정렬이면
+            # 그 앞줄의 글자 사이가 벌어져 문단이 성글게 흩어진다(2026-08-12 지적).
+            blocks.append(Paragraph(text=_source_entry(i, src), indent=1, align="LEFT"))
     return blocks
 
 
