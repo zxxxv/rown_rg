@@ -988,9 +988,9 @@ async def upload_project_source(
     채택(is_included) 기본 참. 나중에 제외하면 검색 시점에 자동으로 근거에서 빠진다.
     """
     project = await _get_authorized_project(project_id, session, current_user)
+    # 빈 파일 검사는 read_validated_upload가 한다(라이브러리 업로드와 같은 검증을 쓰려고
+    # 공용 검증기로 올렸다 - 한쪽에만 있어서 0바이트 파일이 라이브러리로 들어왔다).
     safe_name, content = await read_validated_upload(file, max_bytes=MAX_SOURCE_UPLOAD_BYTES)
-    if not content:
-        raise ValidationError(message="빈 파일입니다.", code="EMPTY_UPLOAD")
     dest_dir = Path(settings.library_dir) / "project_sources" / str(project.id)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{uuid4()}_{safe_name}"
