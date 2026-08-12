@@ -59,7 +59,7 @@ _KST = timezone(timedelta(hours=9))
 # 렌더 규칙을 바꿀 때마다 올린다. 다운로드는 "본문이 파일보다 새것인가"로만 재렌더를
 # 판단하는데, 코드를 고쳐도 본문 수정 시각은 그대로라 옛 파일이 그대로 내려갔다
 # (2026-08-11 지적). 버전을 파일명에 섞어 새 코드가 옛 산출물을 집지 않게 한다.
-EXPORT_RENDER_VERSION = 5
+EXPORT_RENDER_VERSION = 6
 
 
 def export_filename(project_id: UUID | str) -> str:
@@ -610,43 +610,6 @@ _SOURCE_TYPE_LABEL: dict[SourceType, str] = {
 REFERENCES_HEADING = "참고문헌"
 
 
-def _summary_blocks(state: ProjectState, ch_titles: dict[int, str]) -> list[Block]:
-    """요약문 페이지 — 조립 시 생성해 config에 저장한 장별 압축(summary)을 렌더한다.
-
-    실측 관례(2026-08-11): 요약문은 표지 뒤·목차 앞에 놓이고, 장마다 "(라벨) 한 문장"
-    몇 줄로 본문을 압축한다. 저장된 요약이 없으면(옛 프로젝트·생성 실패) 통째로 생략한다.
-    """
-    options = state.options if isinstance(state.options, dict) else {}
-    summary = options.get("summary")
-    chapters = summary.get("chapters") if isinstance(summary, dict) else None
-    if not isinstance(chapters, list):
-        return []
-    blocks: list[Block] = []
-    for ch in chapters:
-        if not isinstance(ch, dict):
-            continue
-        number, lines = ch.get("number"), ch.get("lines")
-        if not isinstance(lines, list):
-            continue
-        texts = [line.strip() for line in lines if isinstance(line, str) and line.strip()]
-        if not texts:
-            continue
-        title = str(ch.get("title") or "").strip()
-        if not title and isinstance(number, int):
-            title = ch_titles.get(number, "")
-        head_parts: list[str] = []
-        if isinstance(number, int):
-            head_parts.append(f"{number}.")
-        if title:
-            head_parts.append(title)
-        if head_parts:
-            blocks.append(Heading(level=2, text=" ".join(head_parts)))
-        blocks.extend(Paragraph(text=_clean_inline(t), indent=1) for t in texts)
-    if not blocks:
-        return []
-    return [PageBreak(), Heading(level=1, text="요약문"), *blocks]
-
-
 def _visual_index_blocks(body: list[Block]) -> list[Block]:
     """표 목차·그림 목차 — 본문에 매겨진 캡션을 그대로 나열한다(실측 전 샘플 보유).
 
@@ -765,8 +728,8 @@ def report_blocks(
         _collect_abbreviations(contents[plan.section_id], chapter_abbrs)
     flush_glossary()  # 마지막 장
 
-    # 전문(前文): 요약문 → 목차 → 표·그림 목차.
-    blocks.extend(_summary_blocks(state, ch_titles))
+    # 전문(前文): 목차 → 표·그림 목차. (요약문은 r6에서 제거 — 최종 산출물에
+    # 싣지 않기로 함, 2026-08-13 사용자 결정. 옛 config["summary"]는 그냥 무시된다.)
     blocks.append(PageBreak())
     blocks.append(Heading(level=1, text="목차"))
     toc_chapter: int | None = None

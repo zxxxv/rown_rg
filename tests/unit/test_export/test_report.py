@@ -558,21 +558,13 @@ class TestReportBlocks:
         ]
         assert "<표 1-1> 국가별 투자" in entries
 
-    def test_summary_page_rendered_between_cover_and_toc(self):
-        """config에 저장된 요약(summary)은 표지 뒤·목차 앞 요약문 페이지로 렌더된다."""
+    def test_no_summary_page_even_with_stored_summary(self):
+        """요약문은 r6에서 제거 — 옛 프로젝트의 config["summary"]가 남아 있어도 렌더하지 않는다."""
         summary = {
             "chapters": [{"number": 1, "title": "개요", "lines": ["(배경) 고령화가 가속됨"]}]
         }
         state = _state_with_selected_drafts().model_copy(update={"options": {"summary": summary}})
         blocks = report_blocks(state)
-        summary_idx = blocks.index(Heading(level=1, text="요약문"))
-        toc_idx = blocks.index(Heading(level=1, text="목차"))
-        assert 0 < summary_idx < toc_idx
-        texts = [b.text for b in blocks[summary_idx:toc_idx] if isinstance(b, Paragraph)]
-        assert "(배경) 고령화가 가속됨" in texts
-
-    def test_no_summary_page_without_stored_summary(self):
-        blocks = report_blocks(_state_with_selected_drafts())
         assert not any(isinstance(b, Heading) and b.text == "요약문" for b in blocks)
 
     def test_sources_final_chapter(self):
