@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import hashlib
+import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -25,6 +26,23 @@ if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
 logger = structlog.get_logger(__name__)
+
+
+def _session_options(ort):
+    """ONNX Runtime 세션 옵션 — CPU 메모리 아레나를 끈다.
+
+    기본 아레나 할당자는 한 번 커지면 **OS에 돌려주지 않는다**. 배치 안 최장 시퀀스에
+    맞춘 패딩으로 중간 텐서가 부풀면(실측 피크 14GB) 그 크기를 프로세스가 계속 붙든다.
+    실제로 운영 서버가 CPU 0.2% idle 상태에서 29.4GB/31GB를 점유했다(2026-08-12).
+    런이 죽어도 안 줄어들어 다음 런이 OOM으로 죽는다.
+
+    아레나를 끄면 할당마다 malloc/free가 돌아 추론이 조금 느려지지만, 우리는 요청당
+    수백 ms 단위 추론을 하루 수천 번 도는 게 아니라 배치 색인을 가끔 돈다 - 메모리를
+    돌려받는 쪽이 훨씬 값어치 있다.
+    """
+    opts = ort.SessionOptions()
+    opts.enable_cpu_mem_arena = False
+    return opts
 
 
 class EmbeddingResult(BaseModel):
@@ -219,13 +237,26 @@ class BgeM3Client(EmbeddingClient):
         t0 = time.perf_counter()
         self._session = ort.InferenceSession(
             str(resolved_path / "model.onnx"),
+            sess_options=_session_options(ort),
             providers=providers,
         )
         self._tokenizer = AutoTokenizer.from_pretrained(str(resolved_path))
+        # HF fast tokenizer는 Rust 백엔드라 스레드 안전하지 않다. 여러 스레드에서 동시에
+        # 부르면 "RuntimeError: Already borrowed"로 죽는다(2026-08-12 실전 런: 자료 41개
+        # 중 4개만 색인되고 파이프라인이 3시간 넘게 멈췄다). 임베딩은 asyncio.to_thread로
+        # 나가고 청킹은 이벤트 루프에서 같은 토크나이저를 부르므로 실제로 겹친다.
+        # 락을 클라이언트가 소유하고 밖에도 노출한다 - 토크나이저를 빌려 쓰는 쪽
+        # (services/indexing/_chunking)이 같은 락을 잡아야 직렬화가 성립한다.
+        self._tokenizer_lock = threading.Lock()
         logger.info(
             "embedding.client.init.completed",
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
         )
+
+    @property
+    def tokenizer_lock(self) -> threading.Lock:
+        """토크나이저 직렬화 락 — 이 토크나이저를 쓰는 모든 곳이 같은 락을 잡아야 한다."""
+        return self._tokenizer_lock
 
     @property
     def tokenizer(self) -> PreTrainedTokenizerBase:
@@ -411,13 +442,16 @@ class BgeM3Client(EmbeddingClient):
 
     def _encode(self, texts: list[str]) -> np.ndarray:
         """Run one ONNX forward pass and return (N, DIMENSION) L2-normalized vectors."""
-        enc = self._tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            return_tensors="np",
-            max_length=self._max_length,
-        )
+        # 토큰화만 락으로 묶는다 - ONNX 추론은 스레드 안전하고 시간의 대부분을 차지하므로
+        # 그것까지 직렬화하면 병렬화가 통째로 무의미해진다.
+        with self._tokenizer_lock:
+            enc = self._tokenizer(
+                texts,
+                padding=True,
+                truncation=True,
+                return_tensors="np",
+                max_length=self._max_length,
+            )
         outputs = self._session.run(
             None,
             {
