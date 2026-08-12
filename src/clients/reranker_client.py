@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -15,6 +16,23 @@ if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
 logger = structlog.get_logger(__name__)
+
+
+def _session_options(ort):
+    """ONNX Runtime 세션 옵션 — CPU 메모리 아레나를 끈다.
+
+    기본 아레나 할당자는 한 번 커지면 **OS에 돌려주지 않는다**. 배치 안 최장 시퀀스에
+    맞춘 패딩으로 중간 텐서가 부풀면(실측 피크 14GB) 그 크기를 프로세스가 계속 붙든다.
+    실제로 운영 서버가 CPU 0.2% idle 상태에서 29.4GB/31GB를 점유했다(2026-08-12).
+    런이 죽어도 안 줄어들어 다음 런이 OOM으로 죽는다.
+
+    아레나를 끄면 할당마다 malloc/free가 돌아 추론이 조금 느려지지만, 우리는 요청당
+    수백 ms 단위 추론을 하루 수천 번 도는 게 아니라 배치 색인을 가끔 돈다 - 메모리를
+    돌려받는 쪽이 훨씬 값어치 있다.
+    """
+    opts = ort.SessionOptions()
+    opts.enable_cpu_mem_arena = False
+    return opts
 
 
 class RerankerClient(ABC):
@@ -68,9 +86,15 @@ class BgeRerankerV2M3Client(RerankerClient):
         t0 = time.perf_counter()
         self._session = ort.InferenceSession(
             str(resolved_path / "model.onnx"),
+            sess_options=_session_options(ort),
             providers=["CPUExecutionProvider"],
         )
         self._tokenizer = AutoTokenizer.from_pretrained(str(resolved_path))
+        # 리랭킹은 asyncio.to_thread로 나가고 절 단위 병렬 작성이 여러 개를 동시에
+        # 부른다. HF fast tokenizer는 Rust 백엔드라 동시 호출 시 "Already borrowed"로
+        # 죽는다(2026-08-12 색인에서 실제로 터졌다). 토큰화만 직렬화한다 - ONNX 추론은
+        # 스레드 안전하고 시간의 대부분이라 그것까지 묶으면 병렬화가 무의미해진다.
+        self._tokenizer_lock = threading.Lock()
         logger.info(
             "reranker.client.init.completed",
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
@@ -133,15 +157,16 @@ class BgeRerankerV2M3Client(RerankerClient):
             (no sigmoid applied).
         """
         queries = [query] * len(passages)
-        enc = self._tokenizer(
-            queries,
-            passages,
-            padding=True,
-            # passage만 자르고 query는 보존 — cross-encoder에서 query 절단은 의미 손상이 큼.
-            truncation="only_second",
-            max_length=self._max_length,
-            return_tensors="np",
-        )
+        with self._tokenizer_lock:
+            enc = self._tokenizer(
+                queries,
+                passages,
+                padding=True,
+                # passage만 자르고 query는 보존 — cross-encoder에서 query 절단은 의미 손상이 크다.
+                truncation="only_second",
+                max_length=self._max_length,
+                return_tensors="np",
+            )
         outputs = self._session.run(
             None,
             {

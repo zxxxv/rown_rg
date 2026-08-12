@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from threading import Lock
 from typing import Any, ClassVar
 from uuid import UUID
 
@@ -197,6 +198,10 @@ class ChunkingService:
         )
         # 모델 두 번 로딩 방지 — BgeM3Client가 이미 가지고 있는 토크나이저를 재사용.
         self._tokenizer = embedding_client.tokenizer
+        # 같은 토크나이저를 임베딩 클라이언트도 쓴다(그쪽은 asyncio.to_thread 안에서).
+        # HF fast tokenizer는 Rust 백엔드라 동시 호출 시 "Already borrowed"로 죽으므로
+        # **같은 락**을 잡아야 한다 - 여기서 새 락을 만들면 직렬화가 성립하지 않는다.
+        self._tokenizer_lock = getattr(embedding_client, "tokenizer_lock", None) or Lock()
 
     async def chunk_markdown(self, markdown: str, source_id: UUID) -> list[Chunk]:
         """Chunk a markdown document into a list of :class:`Chunk`.
@@ -401,7 +406,8 @@ class ChunkingService:
     def _estimate_tokens(self, text: str) -> int:
         # special_tokens 제외 — BGE-M3 [CLS][SEP] 두 개를 더 빼는 게 정확하지만 청킹용
         # 추정치라 무시할 만함.
-        return len(self._tokenizer.encode(text, add_special_tokens=False))
+        with self._tokenizer_lock:
+            return len(self._tokenizer.encode(text, add_special_tokens=False))
 
     def _make_chunk(
         self,
