@@ -120,13 +120,24 @@ export function PromptDialog({
   const nameError = overLimit(name, 255);
   const catError = overLimit(cat, 100);
   const descriptionError = overLimit(description, 500);
+  // 본문·칸 합계 상한 - 백엔드 MAX_PROMPT_CHARS와 동일. 이 본문은 절 작성 콜마다
+  // system에 통째로 실리므로, 문서 통붙여넣기를 저장 전에 걸러낸다.
+  const CONTENT_MAX = 20000;
+  const contentError = freeform ? overLimit(content, CONTENT_MAX) : null;
+  const sectionsTotal = Object.values(sections).reduce((n, v) => n + v.length, 0);
+  const sectionsError =
+    !freeform && sectionsTotal > CONTENT_MAX
+      ? `칸 내용 합계는 최대 ${CONTENT_MAX.toLocaleString()}자까지 입력할 수 있습니다 (현재 ${sectionsTotal.toLocaleString()}자)`
+      : null;
   const valid =
     name.trim() !== "" &&
     (freeform ? content.trim() !== "" : hasSections) &&
     volumeError === null &&
     nameError === null &&
     catError === null &&
-    descriptionError === null;
+    descriptionError === null &&
+    contentError === null &&
+    sectionsError === null;
 
   /** 시스템 원문을 폼에 채워 넣는다. 빈 칸에서 페르소나를 쓰라는 건 무리다. */
   const copyFrom = (ref: string) => {
@@ -347,6 +358,7 @@ export function PromptDialog({
                   />
                 </div>
               ))}
+              {sectionsError ? <p className="text-xs text-fg-danger">{sectionsError}</p> : null}
               <button
                 type="button"
                 className="self-start text-xs text-fg-tertiary underline"
@@ -362,14 +374,19 @@ export function PromptDialog({
                 id="prompt-content"
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                className="min-h-[240px] font-mono text-sm"
+                className={cn(
+                  "min-h-[240px] font-mono text-sm",
+                  contentError && "border-fg-danger focus-visible:ring-fg-danger",
+                )}
                 placeholder={
                   kind === "agent"
                     ? "이 분석가의 전문성·관점·작성 지침을 적으세요."
                     : "적용할 문체·서식 규칙을 적으세요."
                 }
                 disabled={pending}
+                aria-invalid={contentError !== null}
               />
+              {contentError ? <p className="text-xs text-fg-danger">{contentError}</p> : null}
               {kind === "agent" ? (
                 <button
                   type="button"

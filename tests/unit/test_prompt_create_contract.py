@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from src.api.schemas.prompt import PersonalPromptCreate
+from src.api.schemas.prompt import MAX_PROMPT_CHARS, PersonalPromptCreate, PersonalPromptUpdate
 
 
 class TestBodyOrSections:
@@ -47,3 +47,33 @@ class TestBodyOrSections:
         with pytest.raises(ValidationError) as exc:
             PersonalPromptCreate(kind="rule", name="빈 규칙", content="")
         assert "규칙 본문" in str(exc.value)
+
+
+class TestPromptCharCap:
+    """본문·칸 합계 상한(MAX_PROMPT_CHARS) — 절 작성 콜마다 실리는 텍스트라
+    문서 통붙여넣기(2026-08-12 QA 계기)를 저장 전에 걸러야 비용 상방이 닫힌다."""
+
+    def test_content_at_cap_is_valid(self):
+        PersonalPromptCreate(kind="agent", name="경계값", content="가" * MAX_PROMPT_CHARS)
+
+    def test_content_over_cap_rejected(self):
+        with pytest.raises(ValidationError):
+            PersonalPromptCreate(
+                kind="agent", name="긴 본문", content="가" * (MAX_PROMPT_CHARS + 1)
+            )
+
+    def test_sections_total_over_cap_rejected(self):
+        """칸은 개별이 아니라 합계로 잰다 — 서버가 하나로 조합하는 텍스트이므로."""
+        half = "가" * (MAX_PROMPT_CHARS // 2 + 1)
+        with pytest.raises(ValidationError) as exc:
+            PersonalPromptCreate(
+                kind="agent",
+                name="긴 칸",
+                content="",
+                spec={"sections": {"mission": half, "method": half}},
+            )
+        assert "칸 내용 합계" in str(exc.value)
+
+    def test_update_content_over_cap_rejected(self):
+        with pytest.raises(ValidationError):
+            PersonalPromptUpdate(content="가" * (MAX_PROMPT_CHARS + 1))

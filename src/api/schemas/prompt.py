@@ -13,6 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 PromptKind = Literal["agent", "rule"]
 
+# 프롬프트 본문(및 칸 합계) 상한. 시스템 페르소나 최대치(약 2천자)의 10배 - 정상
+# 용례는 안 막고 문서 통붙여넣기 사고만 거른다. 이 본문은 절 작성 콜마다 system에
+# 통째로 실리므로(비용은 입력량이 좌우) 상한 없이는 비용 상방이 열린다.
+MAX_PROMPT_CHARS = 20_000
+
 
 class PromptSpec(BaseModel):
     """프롬프트 텍스트로 표현할 수 없는 구조화 설정(에이전트 전용).
@@ -37,6 +42,11 @@ class PromptSpec(BaseModel):
             raise ValueError("목표 분량은 최소·최대를 함께 지정해야 합니다")
         if lo is not None and hi is not None and lo >= hi:
             raise ValueError("목표 분량의 최소는 최대보다 작아야 합니다")
+        total = sum(len(v) for v in self.sections.values())
+        if total > MAX_PROMPT_CHARS:
+            raise ValueError(
+                f"칸 내용 합계는 {MAX_PROMPT_CHARS:,}자까지 입력할 수 있습니다 (현재 {total:,}자)"
+            )
         return self
 
 
@@ -45,7 +55,7 @@ class PersonalPromptCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     # 에이전트는 칸(spec.sections)만 채워도 된다 — 서버가 본문을 조합한다(_check_body).
     # min_length로 강제하면 칸 입력 흐름이 조합 로직에 닿기 전에 잘린다.
-    content: str = Field("", description="프롬프트/규칙 본문")
+    content: str = Field("", max_length=MAX_PROMPT_CHARS, description="프롬프트/규칙 본문")
     # 덮어쓸 시스템 항목(에이전트 id/name 또는 조각 이름). None이면 새 개인 항목.
     base_ref: str | None = Field(None, max_length=100)
     cat: str | None = Field(None, max_length=100)
@@ -65,7 +75,7 @@ class PersonalPromptCreate(BaseModel):
 
 class PersonalPromptUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
-    content: str | None = Field(None, min_length=1)
+    content: str | None = Field(None, min_length=1, max_length=MAX_PROMPT_CHARS)
     cat: str | None = Field(None, max_length=100)
     description: str | None = Field(None, max_length=500)
     spec: PromptSpec | None = None
