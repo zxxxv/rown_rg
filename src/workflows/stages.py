@@ -353,10 +353,11 @@ async def _collect_chapter(
 
 
 def _search_scope(state: ProjectState) -> str:
-    """검색 범위(국내/반반/해외) — 프로젝트 옵션에서 온다.
+    """검색 범위(국내/해외/모두) — 프로젝트 옵션에서 온다.
 
     국내 제도·통계가 본질인 보고서와 해외 기술 동향이 본질인 보고서는 정답이 달라
-    한쪽으로 고정할 수 없다(2026-08-11). 값이 없거나 모르면 '반반'.
+    한쪽으로 고정할 수 없다(2026-08-11). 값이 없거나 모르면 '모두'(개편 전 기본과
+    같은 행동 — 신규 프로젝트는 폼이 항상 값을 쓴다).
     """
     from src.services.research.web_research import DEFAULT_SEARCH_SCOPE, SEARCH_SCOPES
 

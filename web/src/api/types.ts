@@ -96,8 +96,9 @@ export const ProjectConfigSchema = z.object({
   // 이 보고서에 적용할 개인 작성 규칙 id 목록(백엔드 stages._selected_rule_ids 소비).
   // optional: 이 필드 도입 전 config가 catch로 통째 초기화되지 않게 한다.
   rules: z.array(z.string()).optional(),
-  // 자료 검색 범위 - 국내 위주/반반/해외 위주. 백엔드 stages._search_scope 소비.
-  search_scope: z.enum(["domestic", "balanced", "global"]).optional(),
+  // 자료 검색 범위 - 국내/해외 체크박스(국내만=domestic, 해외만=global, 둘 다=all).
+  // balanced는 체크박스 개편(2026-08-13) 전 값 - 읽기 호환용, 저장 시 all로 바뀐다.
+  search_scope: z.enum(["domestic", "balanced", "global", "all"]).optional(),
   // HyDE 검색 확장 - 백엔드 stages._hyde_enabled_for 소비(없으면 전역 기본 off).
   // optional: 이 필드 도입 전 프로젝트 config가 catch로 통째 초기화되지 않게 한다.
   hyde_enabled: z.boolean().optional(),
@@ -114,7 +115,7 @@ export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 export const DEFAULT_PROJECT_CONFIG: ProjectConfig = {
   preset: null,
   model_mode: "standard",
-  search_scope: "balanced",
+  search_scope: "domestic",
   rules: [],
   hyde_enabled: false,
   notification_channels: [],

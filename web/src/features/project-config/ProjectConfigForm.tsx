@@ -295,10 +295,11 @@ function NotificationChannels() {
 /** HyDE 검색 확장 토글 - 실스위치(백엔드 stages._hyde_enabled_for가 소비). */
 // 국내 제도·통계가 본질인 보고서와 해외 기술 동향이 본질인 보고서는 정답이 다르다 -
 // 한쪽으로 고정하지 않고 프로젝트마다 고르게 한다(2026-08-11).
-const SEARCH_SCOPES = [
-  { value: "domestic" as const, label: "국내 위주", hint: "정부·공공기관·국책연구기관 중심" },
-  { value: "balanced" as const, label: "국내·해외 반반", hint: "영어 질의를 절반 이상 섞습니다" },
-  { value: "global" as const, label: "해외 위주", hint: "주요국 기관·국제기구·해외 학술지 우선" },
+// 체크박스 다중 선택(2026-08-13 사용자 결정): 국내만/해외만/둘 다. '반반' 프리셋은
+// 폐지 - 비율 지시보다 '둘 다 본다'가 실사용 의도였다. 기본은 국내.
+const SCOPE_REGIONS = [
+  { key: "domestic" as const, label: "국내", hint: "정부·공공기관·국책연구기관·주요 언론" },
+  { key: "global" as const, label: "해외", hint: "주요국 기관·국제기구·해외 학술지" },
 ];
 
 function SearchScopePicker() {
@@ -307,29 +308,48 @@ function SearchScopePicker() {
     <Controller
       name="config.search_scope"
       control={control}
-      render={({ field }) => (
-        <div className="flex flex-wrap gap-2">
-          {SEARCH_SCOPES.map((opt) => {
-            const active = (field.value ?? "balanced") === opt.value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => field.onChange(opt.value)}
+      render={({ field }) => {
+        const value = field.value ?? "domestic";
+        const both = value === "all" || value === "balanced"; // balanced=개편 전 저장값
+        const checked = {
+          domestic: both || value === "domestic",
+          global: both || value === "global",
+        };
+        const toggle = (key: "domestic" | "global", on: boolean) => {
+          const next = { ...checked, [key]: on };
+          if (!next.domestic && !next.global) return; // 최소 하나는 남긴다
+          field.onChange(
+            next.domestic && next.global ? "all" : next.domestic ? "domestic" : "global",
+          );
+        };
+        return (
+          <div className="flex flex-wrap gap-2">
+            {SCOPE_REGIONS.map((opt) => (
+              <label
+                key={opt.key}
+                htmlFor={`search-scope-${opt.key}`}
                 className={cn(
-                  "flex flex-col gap-0.5 rounded border px-3 py-2 text-left transition-colors",
-                  active
+                  "flex cursor-pointer items-start gap-3 rounded border px-3 py-2 transition-colors",
+                  checked[opt.key]
                     ? "border-accent bg-bg-info"
                     : "border-border bg-bg hover:border-fg-tertiary",
                 )}
               >
-                <span className="text-sm font-medium text-fg">{opt.label}</span>
-                <span className="text-xs text-fg-tertiary">{opt.hint}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
+                <Checkbox
+                  id={`search-scope-${opt.key}`}
+                  checked={checked[opt.key]}
+                  onCheckedChange={(v) => toggle(opt.key, v === true)}
+                  className="mt-0.5"
+                />
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-sm font-medium text-fg">{opt.label}</span>
+                  <span className="text-xs text-fg-tertiary">{opt.hint}</span>
+                </div>
+              </label>
+            ))}
+          </div>
+        );
+      }}
     />
   );
 }
