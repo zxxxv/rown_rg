@@ -60,6 +60,33 @@ def _wait_for_active_workers() -> None:
 atexit.register(_wait_for_active_workers)
 
 
+def _detach_abandoned_worker(
+    worker: threading.Thread, q: queue.Queue[tuple[str, object]], path: Path
+) -> None:
+    """타임아웃으로 버려진 docling 워커의 결과를 버리는 정리 스레드를 띄운다.
+
+    워커 자체는 중간에 못 죽인다(docling 내부라 취소 지점이 없다). 하지만 워커가
+    끝난 뒤 **결과를 붙들고 있는 것**은 막을 수 있다 - 큐에 들어온 마크다운·문서
+    객체를 즉시 꺼내 버리면 그 참조가 사라진다.
+
+    정리 스레드도 데몬이라 종료를 막지 않는다. 하는 일은 큐에서 한 번 꺼내 버리는
+    것뿐이라 비용이 없다.
+    """
+
+    def drain() -> None:
+        try:
+            kind, _payload = q.get()  # 워커가 끝날 때까지 대기 후 결과를 버린다
+            logger.info(
+                "pdf.parse.abandoned_worker_drained",
+                path=str(path),
+                kind=kind,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    threading.Thread(target=drain, daemon=True, name="pdf-docling-drain").start()
+
+
 def _get_docling_converter() -> object:
     """Lazily build a process-wide DocumentConverter with OCR disabled.
 
@@ -366,11 +393,20 @@ class PdfParser(ParserClient):
                 assert isinstance(payload, tuple)
                 return payload  # type: ignore[return-value]
         finally:
-            # 정상 완료/timeout 모두 — atexit이 굳이 기다리지 않도록 추적 해제.
-            # 단, timeout으로 빠져나오는 경우 thread는 계속 daemon으로 살아있음.
+            # 추적 목록에서 **항상** 뺀다. 예전에는 살아 있는 스레드를 남겨 뒀는데,
+            # 그러면 타임아웃된 워커가 프로세스 수명 내내 리스트에 붙들려 GC가 안 된다.
+            # 서버는 끝나지 않으므로 "프로세스 종료 때 정리된다"는 전제가 성립하지 않는다
+            # (2026-08-12: 완성된 런 이후에도 anon 29.3GB가 그대로였다).
             with _workers_lock:
-                if t in _active_docling_workers and not t.is_alive():
+                if t in _active_docling_workers:
                     _active_docling_workers.remove(t)
+            # 타임아웃으로 빠져나온 워커는 아직 변환 중이다. 놔두면 9.6MB PDF의 페이지·
+            # 레이아웃 활성값을 든 채로 끝까지 돌고, 완성 결과를 아무도 안 읽는 큐에
+            # 넣어 그것까지 남는다. 큐를 비워 두는 정리 콜백을 달아 워커가 끝나는 즉시
+            # 결과를 버리게 한다 - 스레드 자체는 중간에 못 죽이지만(외부 라이브러리),
+            # 최소한 결과와 큐가 영구 보관되지는 않는다.
+            if t.is_alive():
+                _detach_abandoned_worker(t, q, path)
 
     @staticmethod
     def _postprocess(markdown: str) -> str:
