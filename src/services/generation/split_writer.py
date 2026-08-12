@@ -29,6 +29,7 @@ import structlog
 
 from src.clients.llm.base import CompletionRequest, LLMClient, Message
 from src.clients.llm.token_tracker import token_context
+from src.core.citations import numbers_in_order
 from src.core.config import settings
 from src.core.types import RetrievedChunk, SectionDraft, SectionPlan
 from src.services.generation.candidates import _build_prompt, _extract_cited_ids
@@ -46,7 +47,6 @@ PART_MAX_TOKENS = 10_000  # 파트 출력 상한 — 실측 파트 산출 2~3.3�
 PLAN_MAX_TOKENS = 1_200
 MIN_CHUNKS_PER_PART = 3  # 배정 근거가 이보다 적은 파트는 병합(빈약 파트가 침범 유혹의 원천)
 _NUM_TOKEN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
-_CITE_RE = re.compile(r"\[(\d+)\]")
 
 _PLAN_SYSTEM = (
     "너는 보고서 절 설계자다. 주어진 절 제목·작성 방향·핵심 포인트·근거 미리보기로 "
@@ -157,7 +157,7 @@ def _part_tail(
 ) -> str:
     """파트별 가변 지시 — 공유 프리픽스 뒤에 별도 메시지로 붙는다(캐시 경계 밖)."""
     others = ", ".join(f"'{t}'" for t in all_titles if t != title)
-    allowed_s = "".join(f"[{n}]" for n in allowed)
+    allowed_s = ", ".join(str(n) for n in allowed)
     # 파트당 목표는 절 목표를 실제 파트 수로 나눈 값이다. 고정값을 쓰면 파트 수가
     # 요청보다 적게 계획됐을 때 그 곱이 곧 천장이 된다 — 실측(2026-08-10): 목표
     # 20,000자 절이 6파트로 계획되자 6×2,250=13,500자에서 정확히 멈췄다.
@@ -168,8 +168,9 @@ def _part_tail(
         f" — 소주제 '{title}'만 {per_part_goal:,}자 안팎으로 집중 작성하라.",
         f"절 전체의 구조나 요약을 만들지 마라. 다른 소주제({others})는 다른 파트가 쓴다"
         " — 그 영역을 침범하거나 미리 요약하지 마라.",
-        f"이 파트에서 인용할 수 있는 근거는 {allowed_s} 뿐이다. 목록에 없는 번호는 인용하지 마라."
-        " 여러 근거를 함께 달 때는 번호를 오름차순으로 쓴다.",
+        f"이 파트에서 쓸 수 있는 근거는 {allowed_s}번 뿐이다. 목록에 없는 번호는 쓰지 마라."
+        " 출처는 문장 끝에 (출처 n)으로 달고, 여러 근거를 함께 달 때는 (출처 n, m)처럼"
+        " 한 괄호에 오름차순으로 모아라.",
         "형식은 절 본문과 동일한 개조식(□ 대주제 → ㅇ 소주제 → - 세부)을 유지하라.",
         # 아래 4줄은 산출물 실독(2026-08-08) 결함 교정 — 지표(형식·무근거)는 통과하는데
         # 심사자가 먼저 지적할 항목들이다.
@@ -184,7 +185,8 @@ def _part_tail(
         " 독자는 근거 꾸러미를 보지 못한다 — 확인된 사실만 단정해서 쓴다.",
         "전문용어·약어는 첫 등장에 한글(영문 원어, 약어) 형식으로 병기하라.",
         "분석 결과는 가능하면 이 파트에 표 1개로 정리하라(마크다운 표, 헤더 포함)."
-        " 표 바로 아래 줄에 '* 출처: [n][m]'를 붙이고, 표 앞에 'table' 같은 표식은 쓰지 마라.",
+        " 표 바로 윗줄에 '표: 제목'을 쓰고 바로 아래 줄에 '* 출처: (출처 n, m)'을 붙여라."
+        " 표 앞에 'table' 같은 표식은 쓰지 마라.",
     ]
     if idx == 1:
         lines.append("절 제목 헤딩과 2~3문장 도입은 이 파트에만 포함하라.")
@@ -206,11 +208,7 @@ def _part_tail(
 def _cite_violations(part_text: str, allowed: Sequence[int], n_citable: int) -> int:
     """허용 목록 밖 인용 수 — 배타 배정 준수 진단(로그 전용, 게이트 아님)."""
     allowed_set = set(allowed)
-    return sum(
-        1
-        for m in _CITE_RE.finditer(part_text)
-        if int(m.group(1)) <= n_citable and int(m.group(1)) not in allowed_set
-    )
+    return sum(1 for n in numbers_in_order(part_text) if n <= n_citable and n not in allowed_set)
 
 
 async def _plan_subtopics(

@@ -15,6 +15,7 @@ from src.core.types import (
     SourceType,
 )
 from src.export.hwpx_writer import (
+    Chart,
     Cover,
     Figure,
     Heading,
@@ -323,6 +324,25 @@ class TestReportBlocks:
         assert "제1장" in toc and "제2장" in toc
         assert any(t.startswith("1.1") for t in toc)
 
+    def test_toc_entries_point_at_body_headings(self):
+        """목차 줄의 쪽번호 필드가 본문 제목의 책갈피와 짝이 맞는다.
+
+        쪽번호 값은 문서를 여는 한컴이 채운다 — 우리가 보장할 것은 "가리키는 이름이
+        실제로 본문에 있다"는 짝맞춤뿐이다. 짝이 어긋나면 한컴은 빈 칸이나 오류를 낸다.
+        """
+        blocks = report_blocks(_state_with_selected_drafts())
+        refs = [b.page_ref for b in blocks if isinstance(b, Paragraph) and b.page_ref]
+        # 표적은 두 곳에 있다 — 본문 제목(목차)과 표·그림 캡션(표 목차·그림 목차).
+        marks = {b.bookmark for b in blocks if isinstance(b, Heading) and b.bookmark}
+        marks |= {
+            b.caption_bookmark
+            for b in blocks
+            if isinstance(b, Table | Figure | Chart) and b.caption_bookmark
+        }
+        assert refs, "목차 줄에 쪽번호 필드가 하나도 없다"
+        assert len(refs) == len(set(refs)), "같은 책갈피를 두 줄이 가리킨다"
+        assert set(refs) <= marks, f"본문에 없는 책갈피를 가리킨다: {set(refs) - marks}"
+
     def test_unselected_section_skipped(self):
         state = _state_with_selected_drafts()
         state = state.model_copy(update={"section_selections": {}})
@@ -342,20 +362,23 @@ class TestReportBlocks:
         glossary_tables = [b for b in blocks if isinstance(b, Table) and b.headers[0] == "약어"]
         assert len(glossary_tables) == 2
         assert glossary_tables[0].headers == ["약어", "전체 명칭", "설명"] * 2
-        # 1장 정리표: SMR·KDI가 첫 등장 순서(오른쪽 단은 15개를 넘지 않아 빈칸).
+        # 남은 항목은 좌우로 반씩 나눈다 - 왼쪽부터 채우면 오른쪽 절반이 통째로 빈
+        # 표가 나온다(2026-08-12 지적). SMR·KDI는 한 행에 나란히 놓인다.
         assert glossary_tables[0].rows == [
-            ["SMR", "Small Modular Reactor", "", "", "", ""],
-            ["KDI", "한국개발연구원", "", "", "", ""],
+            ["SMR", "Small Modular Reactor", "", "KDI", "한국개발연구원", ""],
         ]
-        # 2장 정리표: NEA만.
+        # 2장 정리표: NEA 하나뿐이라 오른쪽 단은 빈칸.
         assert glossary_tables[1].rows == [["NEA", "National Energy Agency", "", "", "", ""]]
+        # 열 폭은 표마다 계산하지 않고 고정한다 - 쪽을 넘길 때마다 폭이 달라지지 않게.
+        assert glossary_tables[0].column_weights == glossary_tables[1].column_weights
+        assert glossary_tables[0].column_weights is not None
 
     def test_glossary_descriptions_from_dict(self):
         """조립 시 생성한 약어 사전(glossary)이 있으면 설명 열이 채워진다."""
         glossary = {"SMR": {"full": "Small Modular Reactor", "desc": "소형 모듈 원자로"}}
         blocks = report_blocks(_state_with_abbreviations(), glossary)
         table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] == "약어")
-        assert ["SMR", "Small Modular Reactor", "소형 모듈 원자로", "", "", ""] in table.rows
+        assert table.rows[0][:3] == ["SMR", "Small Modular Reactor", "소형 모듈 원자로"]
 
     def test_glossary_sits_at_chapter_end_before_next_chapter(self):
         """1장 약어 정리는 1장 본문 뒤·2장 헤딩 앞, 쪽 나눔 뒤(별도 페이지)에 놓인다."""

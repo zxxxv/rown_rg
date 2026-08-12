@@ -10,6 +10,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config zlib1g-dev \
     libxml2-dev libxslt1-dev libxmlsec1-dev libxmlsec1-openssl libssl-dev \
+    # 본문 차트를 PNG로 그릴 때 쓰는 한글 폰트 — 없으면 축·범례 라벨이 네모로 깨진다.
+    fonts-nanum \
     && rm -rf /var/lib/apt/lists/*
 
 # 의존성만 먼저 설치 (캐시 활용). pyproject가 README.md를 참조하고 uv가 프로젝트를 빌드하려

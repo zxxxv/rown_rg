@@ -18,11 +18,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from weakref import WeakKeyDictionary
 
 from hwpx import HwpxDocument
+
+from src.export.hwpx_fields import (
+    append_leader_tab,
+    append_page_ref,
+    ensure_toc_tab_pr,
+    set_tab_pr,
+    wrap_bookmark,
+)
 
 # --- 회사 표준 양식 상수 (web ExportPage의 COMPANY_STYLE와 일치시킨다) ---
 BODY_FONT = "함초롬바탕"
@@ -43,6 +51,11 @@ _MM_PER_PT = 25.4 / 72
 # 대주제(□, indent 0)는 앞에도 큰 여백을 줘 논리 묶음을 시각적으로 분리한다.
 BODY_SPACING_AFTER_PT = 3.0
 GROUP_SPACING_BEFORE_PT = 9.0
+# 목차 줄에서 쪽번호 몫으로 비워 두는 오른쪽 자리(mm).
+# 이 여백만큼 글자가 일찍 접히므로, 제목이 길어 두 줄이 되더라도 마지막 줄 끝에 점선과
+# 번호가 들어갈 자리가 남는다. 없으면 제목이 오른쪽 끝까지 차서 번호만 다음 줄로 밀린다
+# (실측: 이 보고서 목차 276줄 중 3줄이 여백 2mm 안쪽까지 차 있었다).
+TOC_NUMBER_RESERVE_MM = 8.0
 
 # 표지 서식 — 제목은 크게, 기관/날짜는 보조. 개요 수준은 부여하지 않는다.
 COVER_TITLE_SIZE_PT = 24
@@ -107,18 +120,31 @@ class Cover:
 
 @dataclass(frozen=True)
 class Heading:
-    """제목 블록. level 1=장, 2=절, 3=항 (글자 크기 단계). 개요 자동번호는 부여하지 않는다."""
+    """제목 블록. level 1=장, 2=절, 3=항 (글자 크기 단계). 개요 자동번호는 부여하지 않는다.
+
+    bookmark를 주면 제목 글자를 책갈피로 감싼다 — 목차 줄의 쪽번호 필드가 가리킬 표적이다.
+    """
 
     level: int
     text: str
+    # 목차와 본문을 잇는 이름일 뿐 내용이 아니다 — 블록 비교에서는 뺀다(Chart.caption과 같은 이유).
+    bookmark: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True)
 class Paragraph:
-    """본문 문단 블록. indent=개조식 들여쓰기 수준(0=□ 대주제, 1=ㅇ, 2=-, 3=*)."""
+    """본문 문단 블록. indent=개조식 들여쓰기 수준(0=□ 대주제, 1=ㅇ, 2=-, 3=*).
+
+    page_ref를 주면 목차 줄로 본다 — 오른쪽 끝까지 점선 탭을 깔고 그 책갈피의
+    쪽번호 필드를 붙인다(값은 문서를 여는 한컴이 채운다).
+    """
 
     text: str
     indent: int = 0
+    page_ref: str = field(default="", compare=False)
+    # 정렬 지정("LEFT" 등). 기본은 문서 기본값(양쪽 정렬)이다 — 줄바꿈이 불가능한 긴
+    # 토큰(URL 등)이 있는 줄은 양쪽 정렬이 앞줄을 늘려 놓으므로 왼쪽 정렬로 지정한다.
+    align: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True)
@@ -136,6 +162,11 @@ class Table:
     caption: str = ""
     unit: str = ""
     source: str = ""
+    # 표 목차 줄이 가리킬 이름. 내용이 아니라 연결용이라 블록 비교에서는 뺀다.
+    caption_bookmark: str = field(default="", compare=False)
+    # 열 폭 비율을 직접 지정한다(미지정 시 내용 비례로 자동 배분). 같은 성격의 표가
+    # 여러 개로 나뉠 때 열 폭이 표마다 달라지지 않게 고정하는 용도다.
+    column_weights: list[int] | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -148,6 +179,7 @@ class Figure:
 
     caption: str  # 예: "<그림 1-1> 원격경제 서비스 분류 체계"
     description: str  # 추천 시각자료 설명(무엇을, 어떤 형식으로)
+    caption_bookmark: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True)
@@ -160,6 +192,7 @@ class Chart:
 
     spec: object  # src.core.charts.ChartSpec — 순환 import를 피해 느슨하게 받는다
     caption: str  # 예: "<그림 2-1> 주요국 SMR 투자 현황"
+    caption_bookmark: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True)
@@ -218,7 +251,11 @@ def build_report(
             # ㅇ(1)이 하위 항목(- *, 2↑) 뒤에 오면 새 그룹 시작으로 봐 앞 간격을 준다
             # (□ 없이 ㅇ만 쓴 문단도 묶음이 벌어지게). □(0)은 _add_body가 늘 그룹 처리.
             group_start = _is_group_start(block.indent, prev_indent)
-            para = _add_body(doc, block.text, block.indent, group_start=group_start)
+            para = _add_body(
+                doc, block.text, block.indent, group_start=group_start, align=block.align
+            )
+            if block.page_ref:
+                _toc_page_ref(doc, para, block.text, block.page_ref)
             prev_indent = block.indent
         elif isinstance(block, Figure):
             _add_figure(doc, block)
@@ -324,7 +361,38 @@ def _add_heading(doc: HwpxDocument, heading: Heading):
         spacing_before_pt=12.0,
         spacing_after_pt=6.0,
     )
+    if heading.bookmark:
+        # 목차의 쪽번호 필드가 가리킬 표적. 값은 한컴이 채운다(hwpx_fields 참고).
+        wrap_bookmark(para, heading.bookmark)
     return para
+
+
+def _toc_page_ref(doc: HwpxDocument, para, text: str, bookmark: str) -> None:
+    """목차 한 줄을 완성한다 — 제목 뒤 점선, 그 끝에 쪽번호 필드.
+
+    쪽번호 몫을 **문단 오른쪽 여백**으로 떼어 두고 탭 자리를 그 앞에 세운다. 제목이 길어
+    두 줄로 접혀도 점선과 번호는 마지막 줄 끝에 자리를 잡는다 — 여백이 없으면 제목이
+    오른쪽 끝까지 차서 번호만 다음 줄로 밀린다.
+
+    탭 위치는 쪽 왼쪽 여백 기준의 절대값이다(문단 들여쓰기와 무관). 실납품 보고서에서
+    들여쓰기가 0·9.5·17mm인 세 수준이 같은 탭 정의 하나를 공유하는 것으로 확인했다.
+
+    탭의 width는 한컴이 다시 계산하는 캐시 값이라 정확할 필요는 없지만, 갱신 전에도
+    점선이 보이도록 남은 폭을 어림해 넣는다(글자 폭은 반각 기준 근사).
+    """
+    content_mm = PAGE_WIDTH_MM - MARGIN_MM["left"] - MARGIN_MM["right"]
+    tab_mm = content_mm - TOC_NUMBER_RESERVE_MM
+    doc.set_paragraph_format(
+        paragraph_index=doc.paragraphs.index(para),
+        indent_right_mm=TOC_NUMBER_RESERVE_MM,
+    )
+    tab_pr_id = ensure_toc_tab_pr(doc, right_margin_mm=tab_mm)
+    set_tab_pr(doc, para, tab_pr_id)
+    # 반각 한 칸 ≈ 글자 크기의 절반. 목차는 본문 글자 크기를 쓴다.
+    text_mm = _text_width(text) * (BODY_SIZE_PT / 2) * _MM_PER_PT
+    remaining_mm = max(tab_mm - text_mm, 0.0)
+    append_leader_tab(para, width_hwp=_mm_to_hwpunit(remaining_mm))
+    append_page_ref(para, bookmark)
 
 
 def _is_group_start(indent: int, prev_indent: int | None) -> bool:
@@ -336,16 +404,24 @@ def _is_group_start(indent: int, prev_indent: int | None) -> bool:
     return indent == 1 and prev_indent is not None and prev_indent >= 2
 
 
-def _add_body(doc: HwpxDocument, text: str, indent: int = 0, group_start: bool = False):
+def _add_body(
+    doc: HwpxDocument,
+    text: str,
+    indent: int = 0,
+    group_start: bool = False,
+    align: str = "",
+):
     char_id = doc.ensure_run_style(font=BODY_FONT, size=BODY_SIZE_PT)
     para = doc.add_paragraph(text, char_pr_id_ref=char_id, inherit_style=False)
     idx = doc.paragraphs.index(para)
-    fmt: dict[str, float | int] = {
+    fmt: dict[str, float | int | str] = {
         "paragraph_index": idx,
         "line_spacing_percent": LINE_SPACING_PERCENT,
         # 문단마다 아래 여백을 줘 개조식 항목들이 붙어 보이지 않게 한다(가독성).
         "spacing_after_pt": BODY_SPACING_AFTER_PT,
     }
+    if align:
+        fmt["alignment"] = align
     # 마커 폭만큼 왼쪽 여백을 더 주고 첫 줄만 그만큼 당겨(음수) 내어쓰기를 만든다.
     # 이러면 항목이 두 줄 이상으로 넘어가도 둘째 줄이 마커 아래가 아니라 본문 글머리에
     # 맞춰 정렬돼, 마커 하나가 어디까지를 묶는지 눈으로 따라갈 수 있다(2026-08-11 지적).
@@ -412,10 +488,15 @@ def _column_weights(headers: list[str], rows: list[list[str]]) -> list[int]:
     return weights
 
 
-def _fit_table_width(tbl, headers: list[str], rows: list[list[str]]) -> None:
-    """표 전체 폭을 본문 폭에 맞추고 열 폭을 내용 비례로 배분한다(페이지 넘침 방지)."""
+def _fit_table_width(
+    tbl, headers: list[str], rows: list[list[str]], weights: list[int] | None = None
+) -> None:
+    """표 전체 폭을 본문 폭에 맞추고 열 폭을 배분한다(페이지 넘침 방지).
+
+    weights를 주면 그대로 쓰고, 없으면 내용 비례로 계산한다.
+    """
     try:
-        tbl.set_column_widths(_column_weights(headers, rows))
+        tbl.set_column_widths(weights or _column_weights(headers, rows))
     except Exception:  # noqa: BLE001 — 폭 배분 실패해도 표 자체는 유효
         pass
 
@@ -455,7 +536,7 @@ def _align_cells_left(doc: HwpxDocument, tbl, n_rows: int, n_cols: int) -> None:
                 continue
 
 
-def _add_table_caption(doc: HwpxDocument, caption: str) -> None:
+def _add_table_caption(doc: HwpxDocument, caption: str, bookmark: str = "") -> None:
     """표 제목 한 줄 — 표 바로 위에 붙인다(그림은 캡션이 박스 안, 표는 박스 밖)."""
     char_id = doc.ensure_run_style(font=HEADING_FONT, size=TABLE_CAPTION_SIZE_PT, bold=True)
     para = doc.add_paragraph(caption, char_pr_id_ref=char_id, inherit_style=False)
@@ -465,6 +546,8 @@ def _add_table_caption(doc: HwpxDocument, caption: str) -> None:
         spacing_before_pt=GROUP_SPACING_BEFORE_PT,
         spacing_after_pt=TABLE_CAPTION_SPACE_AFTER_PT,
     )
+    if bookmark:
+        wrap_bookmark(para, bookmark)  # 표 목차 줄의 쪽번호가 가리킬 표적
 
 
 def _add_table_note(doc: HwpxDocument, text: str, *, align: str, after_pt: float) -> None:
@@ -481,7 +564,7 @@ def _add_table_note(doc: HwpxDocument, text: str, *, align: str, after_pt: float
 
 def _add_table(doc: HwpxDocument, table: Table) -> None:
     if table.caption:
-        _add_table_caption(doc, table.caption)
+        _add_table_caption(doc, table.caption, table.caption_bookmark)
     if table.unit:
         # 단위 줄은 실측 관례대로 캡션과 표 사이 우측 정렬로 붙인다.
         _add_table_note(doc, table.unit, align="RIGHT", after_pt=TABLE_CAPTION_SPACE_AFTER_PT)
@@ -499,7 +582,7 @@ def _add_table(doc: HwpxDocument, table: Table) -> None:
     for row_idx, row in enumerate(table.rows, start=1):
         for col, value in enumerate(row):
             tbl.set_cell_text(row_idx, col, value)
-    _fit_table_width(tbl, table.headers, table.rows)
+    _fit_table_width(tbl, table.headers, table.rows, table.column_weights)
     _align_cells_left(doc, tbl, n_rows, n_cols)
     if table.source:
         # 출처는 표 바로 아래 좌측 정렬 — 캡션 위·출처 아래가 실측 관례다.
@@ -523,6 +606,8 @@ def _add_chart(doc: HwpxDocument, chart: Chart) -> None:
         spacing_before_pt=GROUP_SPACING_BEFORE_PT,
         spacing_after_pt=TABLE_CAPTION_SPACE_AFTER_PT,
     )
+    if chart.caption_bookmark:
+        wrap_bookmark(para, chart.caption_bookmark)  # 그림 목차 줄이 가리킬 표적
     png = render_png(chart.spec)
     doc.add_picture(
         png,
@@ -538,6 +623,11 @@ def _add_figure(doc: HwpxDocument, figure: Figure) -> None:
     note = "※ 실제 이미지는 확정 후 삽입되는 자리표시자입니다."
     tbl = doc.add_table(3, 1, width=_page_content_width_hwp())
     tbl.set_cell_text(0, 0, figure.caption)
+    if figure.caption_bookmark:
+        # 자리표시자는 캡션이 박스 첫 칸 안에 있다 — 그 칸의 문단을 책갈피로 감싼다.
+        cell_paras = tbl.cell(0, 0).paragraphs
+        if cell_paras:
+            wrap_bookmark(cell_paras[0], figure.caption_bookmark)
     tbl.set_cell_text(1, 0, f"추천 시각자료: {figure.description}")
     tbl.set_cell_text(2, 0, note)
     try:

@@ -49,6 +49,7 @@ from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.user import User
 from src.prompts import catalog_file_stat, list_analysts, list_components
+from src.services.export.report import export_filename
 from src.services.prompts import list_personal
 
 router = APIRouter(prefix="/library", tags=["library"])
@@ -191,8 +192,8 @@ def _project_folder(
     base = f"proj-{pid}"
     children: list[LibraryTreeFolder | LibraryTreeFile] = []
 
-    # 완성본 — export가 렌더된 프로젝트만(결정적 경로 <export_dir>/<id>.hwpx).
-    export_path = Path(settings.export_dir) / f"{pid}.hwpx"
+    # 완성본 — export가 렌더된 프로젝트만(결정적 경로 <export_dir>/<id>.r<버전>.hwpx).
+    export_path = Path(settings.export_dir) / export_filename(pid)
     if export_path.is_file():
         children.append(
             LibraryTreeFile(
