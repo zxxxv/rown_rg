@@ -1,7 +1,7 @@
 import { AlertTriangle, ChevronDown, ChevronRight, ExternalLink, FileSearch } from "lucide-react";
 import { useState } from "react";
 import { useSectionEvidence } from "@/api/sections";
-import type { ClaimAlignment, EvidenceChunk } from "@/api/types";
+import type { ClaimAlignment, EvidenceChunk, SectionEvidence } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
 import { textFragmentUrl } from "./sourceLink";
 
@@ -266,7 +266,8 @@ function EvidenceCard({ item }: { item: EvidenceChunk }) {
 
 const MARK_RE = /\[(\d+)\]|\(출처\s*([\d,\s]+)\)/g;
 
-function markerNumbers(text: string): Set<number> {
+/** 본문 텍스트에 등장하는 인용 번호 집합 - 블록별 근거 유무 판정(표시·패널)의 공통 원천. */
+export function markerNumbers(text: string): Set<number> {
   const out = new Set<number>();
   for (const m of text.matchAll(MARK_RE)) {
     const raw = m[1] ?? m[2] ?? "";
@@ -276,6 +277,26 @@ function markerNumbers(text: string): Set<number> {
     }
   }
   return out;
+}
+
+/** 블록 근거 분류 - 배지 카운트(preview)와 패널(BlockEvidence)이 같은 기준을 쓴다.
+
+전역 인용 번호는 자료 단위라, 번호로만 거르면 같은 자료의 다른 블록용 대목(예: 미국
+블록에 일본 문단)까지 딸려 온다(2026-08-12 실측: 6.1절 미국 블록 카드 5장 중 실제
+근거는 2장). 문장 정렬(claims)이 청크까지 특정한 것을 primary로, 나머지 같은 번호
+청크는 related로 가른다. 정렬 정보가 없으면(정렬 실패·구버전) 종전대로 전부 primary. */
+export function partitionBlockEvidence(
+  blocks: string[],
+  data: SectionEvidence,
+): { primary: EvidenceChunk[]; related: EvidenceChunk[]; claims: ClaimAlignment[] } {
+  const numbers = markerNumbers(blocks.join("\n"));
+  const items = data.items.filter((i) => i.cited && i.number !== null && numbers.has(i.number));
+  // 문장은 본문에서 그대로 잘라낸 것이라 블록 안에 들어 있다 - 번호보다 정확히 좁혀진다.
+  const claims = data.claims.filter((c) => blocks.some((b) => b.includes(c.claim)));
+  const directIds = new Set(claims.map((c) => c.chunk_id).filter((id): id is string => !!id));
+  const primary = items.filter((i) => directIds.has(i.chunk_id));
+  if (primary.length === 0) return { primary: items, related: [], claims };
+  return { primary, related: items.filter((i) => !directIds.has(i.chunk_id)), claims };
 }
 
 export function BlockEvidence({
@@ -292,13 +313,10 @@ export function BlockEvidence({
   const data = query.data;
   if (!data) return null;
 
-  const numbers = markerNumbers(blocks.join("\n"));
-  const items = data.items.filter((i) => i.cited && i.number !== null && numbers.has(i.number));
-  // 문장은 본문에서 그대로 잘라낸 것이라 블록 안에 들어 있다 - 번호보다 정확히 좁혀진다.
-  const claims = data.claims.filter((c) => blocks.some((b) => b.includes(c.claim)));
+  const { primary, related, claims } = partitionBlockEvidence(blocks, data);
   const flagged = claims.filter((c) => c.status !== "aligned");
 
-  if (items.length === 0 && claims.length === 0) {
+  if (primary.length === 0 && related.length === 0 && claims.length === 0) {
     // 근거가 없으면 그 사실만 한 줄로 알린다 - 빈 패널이 본문 폭을 먹으면 손해다.
     return (
       <p className="rounded border border-border bg-bg px-2.5 py-2 text-xs text-fg-secondary">
@@ -310,7 +328,7 @@ export function BlockEvidence({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-1.5">
-        <p className="text-xs font-medium text-fg">이 블록의 근거 {items.length}건</p>
+        <p className="text-xs font-medium text-fg">이 블록의 근거 {primary.length}건</p>
         {flagged.length > 0 ? (
           <Badge variant="outline" className="border-fg-warning/40 bg-bg-warning">
             확인 필요 {flagged.length}
@@ -318,12 +336,29 @@ export function BlockEvidence({
         ) : null}
       </div>
       {flagged.length > 0 ? <ClaimTable claims={flagged} chunks={data.items} /> : null}
-      {items.length > 0 ? (
+      {primary.length > 0 ? (
         <ul className="flex flex-col gap-2">
-          {items.map((item) => (
+          {primary.map((item) => (
             <EvidenceCard key={item.chunk_id} item={item} />
           ))}
         </ul>
+      ) : null}
+      {related.length > 0 ? (
+        // 같은 출처 번호에 묶여 있지만 이 블록 문장과 정렬되지 않은 대목 - 다른 블록의
+        // 근거이거나 잡청크다. 대등하게 나열하면 "엉뚱한 근거"로 읽히므로 접어 둔다.
+        <details className="rounded border border-border px-2.5 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-fg">
+            같은 자료의 다른 대목 {related.length}건 보기
+          </summary>
+          <p className="mt-1 text-[11px] leading-relaxed text-fg-tertiary">
+            이 블록과 같은 출처 번호로 인용됐지만, 이 절의 다른 문장을 뒷받침하는 대목입니다.
+          </p>
+          <ul className="mt-2 flex flex-col gap-2">
+            {related.map((item) => (
+              <EvidenceCard key={item.chunk_id} item={item} />
+            ))}
+          </ul>
+        </details>
       ) : null}
     </div>
   );
