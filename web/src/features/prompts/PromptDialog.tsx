@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { clearPromptDraft, readPromptDraft, usePromptDraftSave } from "./usePromptDraft";
 
 // ─── 프롬프트 편집 다이얼로그(공용) ───
 // 프롬프트 관리 화면과 목차 편집기가 같이 쓴다 - 목차를 짜다 관점이 없을 때
@@ -72,29 +73,104 @@ export function PromptDialog({
   const create = useCreatePersonalPrompt();
   const update = useUpdatePersonalPrompt(existing?.id ?? "");
   const system = useListSystemPrompts(kind);
-  const [name, setName] = useState(existing?.name ?? "");
-  const [content, setContent] = useState(existing?.content ?? "");
+  // 신규 작성만 초안을 복원한다(편집은 서버가 진실). 마운트 시 한 번만 읽는다.
+  const [draft] = useState(() => (existing ? null : readPromptDraft(kind)));
+  const [restoredDraft, setRestoredDraft] = useState(draft !== null);
+  const [name, setName] = useState(existing?.name ?? draft?.name ?? "");
+  const [content, setContent] = useState(existing?.content ?? draft?.content ?? "");
   // 에이전트는 칸으로 받아 서버가 한 장으로 조합한다. 21종이 모두 같은 골격
   // (임무·분석 방법론·핵심 산출물)이라 빈 화면에 통째로 쓰게 할 이유가 없다.
-  const [sections, setSections] = useState<Record<string, string>>(existing?.spec?.sections ?? {});
-  const [freeform, setFreeform] = useState(
-    kind === "rule" || Object.keys(existing?.spec?.sections ?? {}).length === 0,
+  const [sections, setSections] = useState<Record<string, string>>(
+    existing?.spec?.sections ?? draft?.sections ?? {},
   );
-  const [cat, setCat] = useState(existing?.cat ?? "");
-  const [description, setDescription] = useState(existing?.description ?? "");
+  const [freeform, setFreeform] = useState(() => {
+    if (kind === "rule") return true;
+    if (draft) return draft.freeform;
+    return Object.keys(existing?.spec?.sections ?? {}).length === 0;
+  });
+  const [cat, setCat] = useState(existing?.cat ?? draft?.cat ?? "");
+  const [description, setDescription] = useState(existing?.description ?? draft?.description ?? "");
   // 빈 칸 = 지정 없음. 시스템 에이전트를 덮어쓸 때 분량까지 건드리면 원본 값
   // (특허분석 2만~6만자 등)이 조용히 깎이므로, 안 적으면 원본을 그대로 승계한다.
   const [minChars, setMinChars] = useState<string>(
-    existing?.spec?.min_chars ? String(existing.spec.min_chars) : "",
+    existing?.spec?.min_chars ? String(existing.spec.min_chars) : (draft?.minChars ?? ""),
   );
   const [maxChars, setMaxChars] = useState<string>(
-    existing?.spec?.max_chars ? String(existing.spec.max_chars) : "",
+    existing?.spec?.max_chars ? String(existing.spec.max_chars) : (draft?.maxChars ?? ""),
   );
   // 무엇을 덮어쓸지는 만들 때만 정한다(생성 시 확정, 이후 불변).
-  const [baseRef, setBaseRef] = useState<string>(existing?.base_ref ?? "");
+  const [baseRef, setBaseRef] = useState<string>(existing?.base_ref ?? draft?.baseRef ?? "");
+  // 쓰는 동안 자동 저장 - 실수로 닫거나 새로고침해도 다시 열면 이어서 쓴다.
+  usePromptDraftSave(kind, !existing, {
+    name,
+    content,
+    sections,
+    freeform,
+    cat,
+    description,
+    minChars,
+    maxChars,
+    baseRef,
+  });
+  const discardDraft = () => {
+    clearPromptDraft(kind);
+    setName("");
+    setContent("");
+    setSections({});
+    setFreeform(true);
+    setCat("");
+    setDescription("");
+    setMinChars("");
+    setMaxChars("");
+    setBaseRef("");
+    setRestoredDraft(false);
+  };
   const pending = create.isPending || update.isPending;
   const hasSections = Object.values(sections).some((v) => v.trim());
-  const valid = name.trim() !== "" && (freeform ? content.trim() !== "" : hasSections);
+  // 서버 규칙(1000~60000자, 최소<최대)과 같은 검증을 저장 전에 한다. 어긋난 채 보내면
+  // 422가 나는데, 그 문구로는 어느 칸이 문제인지 알 수 없었다(2026-08-12 QA 보고).
+  const volumeError = (() => {
+    if (kind !== "agent") return null;
+    const hasMin = minChars.trim() !== "";
+    const hasMax = maxChars.trim() !== "";
+    if (!hasMin && !hasMax) return null;
+    if (!hasMin || !hasMax) return "최소·최대를 함께 적거나 둘 다 비워주세요.";
+    const lo = Number(minChars);
+    const hi = Number(maxChars);
+    if (!Number.isInteger(lo) || !Number.isInteger(hi)) return "정수로 적어주세요.";
+    if (lo < 1000 || hi > 60000) return "1,000~60,000자 범위로 적어주세요.";
+    if (lo >= hi) return "최소는 최대보다 작아야 합니다.";
+    return null;
+  })();
+  // 백엔드 스키마와 같은 글자수 한도(이름 255·분류 100·설명 500). 넘긴 채 보내면
+  // 422가 나므로, 입력하는 동안 어느 칸이 얼마나 넘었는지 미리 알린다.
+  const overLimit = (value: string, max: number) => {
+    const len = value.trim().length;
+    return len > max
+      ? `최대 ${max.toLocaleString()}자까지 입력할 수 있습니다 (현재 ${len.toLocaleString()}자)`
+      : null;
+  };
+  const nameError = overLimit(name, 255);
+  const catError = overLimit(cat, 100);
+  const descriptionError = overLimit(description, 500);
+  // 본문·칸 합계 상한 - 백엔드 MAX_PROMPT_CHARS와 동일. 이 본문은 절 작성 콜마다
+  // system에 통째로 실리므로, 문서 통붙여넣기를 저장 전에 걸러낸다.
+  const CONTENT_MAX = 20000;
+  const contentError = freeform ? overLimit(content, CONTENT_MAX) : null;
+  const sectionsTotal = Object.values(sections).reduce((n, v) => n + v.length, 0);
+  const sectionsError =
+    !freeform && sectionsTotal > CONTENT_MAX
+      ? `칸 내용 합계는 최대 ${CONTENT_MAX.toLocaleString()}자까지 입력할 수 있습니다 (현재 ${sectionsTotal.toLocaleString()}자)`
+      : null;
+  const valid =
+    name.trim() !== "" &&
+    (freeform ? content.trim() !== "" : hasSections) &&
+    volumeError === null &&
+    nameError === null &&
+    catError === null &&
+    descriptionError === null &&
+    contentError === null &&
+    sectionsError === null;
 
   /** 시스템 원문을 폼에 채워 넣는다. 빈 칸에서 페르소나를 쓰라는 건 무리다. */
   const copyFrom = (ref: string) => {
@@ -150,6 +226,7 @@ export function PromptDialog({
           description: description.trim() || null,
           spec,
         });
+        clearPromptDraft(kind); // 저장됐으면 초안은 역할이 끝났다
         toast.success(`${name.trim()} 만들어짐`);
         onSaved?.(created);
       }
@@ -172,6 +249,16 @@ export function PromptDialog({
               : "작성 규칙은 프로젝트 생성 화면에서 선택해야 그 보고서에 적용됩니다."}
           </DialogDescription>
         </DialogHeader>
+        {restoredDraft ? (
+          <div className="flex flex-wrap items-center gap-2 rounded border border-accent/40 bg-bg-info px-3 py-2">
+            <p className="text-xs text-fg-secondary">
+              작성하던 내용을 복원했습니다. 새로 시작하려면 초안을 비우세요.
+            </p>
+            <Button type="button" variant="ghost" size="sm" onClick={discardDraft}>
+              초안 비우기
+            </Button>
+          </div>
+        ) : null}
         <div className="flex flex-col gap-3">
           {!existing ? (
             <div className="flex flex-col gap-1.5">
@@ -223,7 +310,10 @@ export function PromptDialog({
               onChange={(e) => setName(e.target.value)}
               placeholder={meta.placeholder}
               disabled={pending}
+              aria-invalid={nameError !== null}
+              className={cn(nameError && "border-fg-danger focus-visible:ring-fg-danger")}
             />
+            {nameError ? <p className="text-xs text-fg-danger">{nameError}</p> : null}
           </div>
           {kind === "agent" ? (
             <>
@@ -259,10 +349,13 @@ export function PromptDialog({
                     className="w-32"
                     disabled={pending}
                   />
-                  <span className="text-xs text-fg-tertiary">
-                    {Number(minChars) > 0 && Number(maxChars) > Number(minChars)
-                      ? `A4 ${Math.max(1, Math.floor(Number(minChars) / 1500))}~${Math.max(1, Math.floor(Number(maxChars) / 1500))}페이지`
-                      : "최소·최대를 함께 적어주세요"}
+                  <span
+                    className={cn("text-xs", volumeError ? "text-fg-danger" : "text-fg-tertiary")}
+                  >
+                    {volumeError ??
+                      (Number(minChars) > 0 && Number(maxChars) > Number(minChars)
+                        ? `A4 ${Math.max(1, Math.floor(Number(minChars) / 1500))}~${Math.max(1, Math.floor(Number(maxChars) / 1500))}페이지`
+                        : "")}
                   </span>
                 </div>
               </div>
@@ -274,7 +367,10 @@ export function PromptDialog({
                   onChange={(e) => setCat(e.target.value)}
                   placeholder="예: 정책, 시장, 기술"
                   disabled={pending}
+                  aria-invalid={catError !== null}
+                  className={cn(catError && "border-fg-danger focus-visible:ring-fg-danger")}
                 />
+                {catError ? <p className="text-xs text-fg-danger">{catError}</p> : null}
               </div>
             </>
           ) : null}
@@ -286,7 +382,10 @@ export function PromptDialog({
               onChange={(e) => setDescription(e.target.value)}
               placeholder="목록에서 이 항목을 알아볼 설명"
               disabled={pending}
+              aria-invalid={descriptionError !== null}
+              className={cn(descriptionError && "border-fg-danger focus-visible:ring-fg-danger")}
             />
+            {descriptionError ? <p className="text-xs text-fg-danger">{descriptionError}</p> : null}
           </div>
           {kind === "agent" && !freeform ? (
             <div className="flex flex-col gap-3">
@@ -303,6 +402,7 @@ export function PromptDialog({
                   />
                 </div>
               ))}
+              {sectionsError ? <p className="text-xs text-fg-danger">{sectionsError}</p> : null}
               <button
                 type="button"
                 className="self-start text-xs text-fg-tertiary underline"
@@ -318,14 +418,19 @@ export function PromptDialog({
                 id="prompt-content"
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                className="min-h-[240px] font-mono text-sm"
+                className={cn(
+                  "min-h-[240px] font-mono text-sm",
+                  contentError && "border-fg-danger focus-visible:ring-fg-danger",
+                )}
                 placeholder={
                   kind === "agent"
                     ? "이 분석가의 전문성·관점·작성 지침을 적으세요."
                     : "적용할 문체·서식 규칙을 적으세요."
                 }
                 disabled={pending}
+                aria-invalid={contentError !== null}
               />
+              {contentError ? <p className="text-xs text-fg-danger">{contentError}</p> : null}
               {kind === "agent" ? (
                 <button
                   type="button"

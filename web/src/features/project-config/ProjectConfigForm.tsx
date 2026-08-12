@@ -111,6 +111,13 @@ export function ProjectConfigForm({
                 초안 비우기
               </Button>
             </div>
+          ) : !isEdit ? (
+            // 자동 저장은 조용히 돌아서 있는 줄 모른다(2026-08-12 QA: 중간저장 요청).
+            // 한 줄로 알려 안심하고 이탈·새로고침할 수 있게 한다.
+            <p className="text-xs text-fg-tertiary">
+              작성 중인 내용은 이 브라우저에 자동 저장됩니다 - 화면을 나갔다 와도 이어서 쓸 수
+              있습니다.
+            </p>
           ) : null}
           <Section number={1} title="기본 정보" badge={isEdit ? "수정 불가" : undefined}>
             <BasicInfo readOnly={isEdit} />

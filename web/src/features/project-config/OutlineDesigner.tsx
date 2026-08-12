@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, ChevronUp, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, Copy, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 import { useAnalysts } from "@/api/analysts";
@@ -219,6 +219,17 @@ export function OutlineDesigner() {
           onChange={(next) => sync(chapters.map((c, i) => (i === ci ? next : c)))}
           onMove={(delta) => sync(move(chapters, ci, delta))}
           onRemove={() => sync(chapters.filter((_, i) => i !== ci))}
+          onDuplicate={() => {
+            // 같은 구성으로 여러 대상을 분석하는 용례(정책 A/B/C) - 절 구성·방향·
+            // 에이전트 배정까지 통째로 복제해 바로 아래에 넣는다(2026-08-12 QA 요청).
+            const dup: DraftChapter = {
+              _id: draftId(),
+              title: chapter.title.trim() ? `${chapter.title} (복사)` : "",
+              sections: chapter.sections.map((s) => ({ ...s, _id: draftId() })),
+            };
+            sync([...chapters.slice(0, ci + 1), dup, ...chapters.slice(ci + 1)]);
+            setExpandedIds((prev) => new Set(prev).add(dup._id));
+          }}
         />
       ))}
 
@@ -248,6 +259,7 @@ function ChapterEditor({
   onChange,
   onMove,
   onRemove,
+  onDuplicate,
 }: {
   chapter: DraftChapter;
   index: number;
@@ -257,6 +269,7 @@ function ChapterEditor({
   onChange: (next: DraftChapter) => void;
   onMove: (delta: -1 | 1) => void;
   onRemove: () => void;
+  onDuplicate: () => void;
 }) {
   const sectionCount = chapter.sections.filter((s) => s.title.trim()).length;
   return (
@@ -289,6 +302,17 @@ function ChapterEditor({
         {!expanded ? (
           <span className="shrink-0 text-xs text-fg-tertiary">{sectionCount}절</span>
         ) : null}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 shrink-0 p-0"
+          onClick={onDuplicate}
+          aria-label={`${index + 1}장 복사`}
+          title="이 장을 절 구성 그대로 복사해 아래에 추가"
+        >
+          <Copy className="h-3.5 w-3.5" aria-hidden />
+        </Button>
         <RowControls
           canUp={index > 0}
           canDown={index < count - 1}
