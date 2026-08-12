@@ -122,6 +122,90 @@ class TestPersonalPrompts:
         )
         assert resp.status_code == 422
 
+    async def test_sections_only_create_composes_content(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        """칸만 채운 저장 — content는 서버가 조합한다. min_length에 잘리던 결함 회귀 방지
+        (2026-08-12 QA: "저장 실패, 입력을 확인해주세요"만 뜨고 원인 표시 불가)."""
+        resp = await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={
+                "kind": "agent",
+                "name": "칸입력 에이전트",
+                "content": "",
+                "spec": {"sections": {"mission": "규제 동향을 추적한다", "method": "1. 수집"}},
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert "## 임무" in body["content"]
+        assert "규제 동향을 추적한다" in body["content"]
+        # 칸 값은 재편집용으로 spec에 남는다
+        assert body["spec"]["sections"]["mission"] == "규제 동향을 추적한다"
+
+
+class TestValidationErrorEnvelope:
+    """요청 검증 실패(422)가 우리 에러 봉투로, 한국어 필드 경로·이유와 함께 나가는지.
+
+    FastAPI 기본 {detail:[...]}로 새면 프론트 공통 클라이언트가 못 읽어
+    "요청을 처리할 수 없습니다"라는 정체불명 문구가 된다(2026-08-12 QA).
+    """
+
+    async def test_empty_body_names_reason_in_korean(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        resp = await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={"kind": "agent", "name": "빈 에이전트", "content": ""},
+        )
+        assert resp.status_code == 422
+        body = resp.json()
+        assert "detail" not in body
+        assert body["error"]["code"] == "VALIDATION_ERROR"
+        assert "본문 또는 칸" in body["error"]["message"]
+
+    async def test_volume_range_names_field_path(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        resp = await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={
+                "kind": "agent",
+                "name": "분량 오류",
+                "content": "본문",
+                "spec": {"min_chars": 500, "max_chars": 800},
+            },
+        )
+        assert resp.status_code == 422
+        body = resp.json()
+        msg = body["error"]["message"]
+        # 어느 필드가 왜 틀렸는지 문장에 실린다
+        assert "spec.min_chars" in msg
+        assert "1000 이상" in msg
+        fields = body["error"]["details"]["fields"]
+        assert {f["field"] for f in fields} == {"spec.min_chars", "spec.max_chars"}
+
+    async def test_min_over_max_uses_custom_korean_message(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        resp = await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={
+                "kind": "agent",
+                "name": "역전 분량",
+                "content": "본문",
+                "spec": {"min_chars": 20000, "max_chars": 15000},
+            },
+        )
+        assert resp.status_code == 422
+        msg = resp.json()["error"]["message"]
+        assert "최소는 최대보다 작아야" in msg
+        assert "Value error" not in msg
+
 
 class TestSystemCatalog:
     async def test_list_and_get(self, test_client: AsyncClient, worker_token: str) -> None:

@@ -43,12 +43,24 @@ class PromptSpec(BaseModel):
 class PersonalPromptCreate(BaseModel):
     kind: PromptKind = Field(..., description="agent(분석 에이전트) 또는 rule(작성 규칙)")
     name: str = Field(..., min_length=1, max_length=255)
-    content: str = Field(..., min_length=1, description="프롬프트/규칙 본문")
+    # 에이전트는 칸(spec.sections)만 채워도 된다 — 서버가 본문을 조합한다(_check_body).
+    # min_length로 강제하면 칸 입력 흐름이 조합 로직에 닿기 전에 잘린다.
+    content: str = Field("", description="프롬프트/규칙 본문")
     # 덮어쓸 시스템 항목(에이전트 id/name 또는 조각 이름). None이면 새 개인 항목.
     base_ref: str | None = Field(None, max_length=100)
     cat: str | None = Field(None, max_length=100)
     description: str | None = Field(None, max_length=500)
     spec: PromptSpec = Field(default_factory=PromptSpec)
+
+    @model_validator(mode="after")
+    def _check_body(self) -> PersonalPromptCreate:
+        if self.content.strip():
+            return self
+        if self.kind == "agent" and any(v.strip() for v in self.spec.sections.values()):
+            return self
+        if self.kind == "agent":
+            raise ValueError("프롬프트 본문 또는 칸(임무·분석 방법론·핵심 산출물)을 채워주세요")
+        raise ValueError("규칙 본문을 입력해주세요")
 
 
 class PersonalPromptUpdate(BaseModel):

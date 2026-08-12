@@ -94,7 +94,39 @@ export function PromptDialog({
   const [baseRef, setBaseRef] = useState<string>(existing?.base_ref ?? "");
   const pending = create.isPending || update.isPending;
   const hasSections = Object.values(sections).some((v) => v.trim());
-  const valid = name.trim() !== "" && (freeform ? content.trim() !== "" : hasSections);
+  // 서버 규칙(1000~60000자, 최소<최대)과 같은 검증을 저장 전에 한다. 어긋난 채 보내면
+  // 422가 나는데, 그 문구로는 어느 칸이 문제인지 알 수 없었다(2026-08-12 QA 보고).
+  const volumeError = (() => {
+    if (kind !== "agent") return null;
+    const hasMin = minChars.trim() !== "";
+    const hasMax = maxChars.trim() !== "";
+    if (!hasMin && !hasMax) return null;
+    if (!hasMin || !hasMax) return "최소·최대를 함께 적거나 둘 다 비워주세요.";
+    const lo = Number(minChars);
+    const hi = Number(maxChars);
+    if (!Number.isInteger(lo) || !Number.isInteger(hi)) return "정수로 적어주세요.";
+    if (lo < 1000 || hi > 60000) return "1,000~60,000자 범위로 적어주세요.";
+    if (lo >= hi) return "최소는 최대보다 작아야 합니다.";
+    return null;
+  })();
+  // 백엔드 스키마와 같은 글자수 한도(이름 255·분류 100·설명 500). 넘긴 채 보내면
+  // 422가 나므로, 입력하는 동안 어느 칸이 얼마나 넘었는지 미리 알린다.
+  const overLimit = (value: string, max: number) => {
+    const len = value.trim().length;
+    return len > max
+      ? `최대 ${max.toLocaleString()}자까지 입력할 수 있습니다 (현재 ${len.toLocaleString()}자)`
+      : null;
+  };
+  const nameError = overLimit(name, 255);
+  const catError = overLimit(cat, 100);
+  const descriptionError = overLimit(description, 500);
+  const valid =
+    name.trim() !== "" &&
+    (freeform ? content.trim() !== "" : hasSections) &&
+    volumeError === null &&
+    nameError === null &&
+    catError === null &&
+    descriptionError === null;
 
   /** 시스템 원문을 폼에 채워 넣는다. 빈 칸에서 페르소나를 쓰라는 건 무리다. */
   const copyFrom = (ref: string) => {
@@ -223,7 +255,10 @@ export function PromptDialog({
               onChange={(e) => setName(e.target.value)}
               placeholder={meta.placeholder}
               disabled={pending}
+              aria-invalid={nameError !== null}
+              className={cn(nameError && "border-fg-danger focus-visible:ring-fg-danger")}
             />
+            {nameError ? <p className="text-xs text-fg-danger">{nameError}</p> : null}
           </div>
           {kind === "agent" ? (
             <>
@@ -259,10 +294,13 @@ export function PromptDialog({
                     className="w-32"
                     disabled={pending}
                   />
-                  <span className="text-xs text-fg-tertiary">
-                    {Number(minChars) > 0 && Number(maxChars) > Number(minChars)
-                      ? `A4 ${Math.max(1, Math.floor(Number(minChars) / 1500))}~${Math.max(1, Math.floor(Number(maxChars) / 1500))}페이지`
-                      : "최소·최대를 함께 적어주세요"}
+                  <span
+                    className={cn("text-xs", volumeError ? "text-fg-danger" : "text-fg-tertiary")}
+                  >
+                    {volumeError ??
+                      (Number(minChars) > 0 && Number(maxChars) > Number(minChars)
+                        ? `A4 ${Math.max(1, Math.floor(Number(minChars) / 1500))}~${Math.max(1, Math.floor(Number(maxChars) / 1500))}페이지`
+                        : "")}
                   </span>
                 </div>
               </div>
@@ -274,7 +312,10 @@ export function PromptDialog({
                   onChange={(e) => setCat(e.target.value)}
                   placeholder="예: 정책, 시장, 기술"
                   disabled={pending}
+                  aria-invalid={catError !== null}
+                  className={cn(catError && "border-fg-danger focus-visible:ring-fg-danger")}
                 />
+                {catError ? <p className="text-xs text-fg-danger">{catError}</p> : null}
               </div>
             </>
           ) : null}
@@ -286,7 +327,10 @@ export function PromptDialog({
               onChange={(e) => setDescription(e.target.value)}
               placeholder="목록에서 이 항목을 알아볼 설명"
               disabled={pending}
+              aria-invalid={descriptionError !== null}
+              className={cn(descriptionError && "border-fg-danger focus-visible:ring-fg-danger")}
             />
+            {descriptionError ? <p className="text-xs text-fg-danger">{descriptionError}</p> : null}
           </div>
           {kind === "agent" && !freeform ? (
             <div className="flex flex-col gap-3">
