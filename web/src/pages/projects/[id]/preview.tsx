@@ -47,11 +47,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
 import { chartFallbackTable } from "@/features/preview/chartSpec";
-import {
-  BlockEvidence,
-  EvidencePanel,
-  partitionBlockEvidence,
-} from "@/features/preview/EvidencePanel";
+import { BlockEvidence, partitionBlockEvidence } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { findTable, isTableCaption, type MarkdownTable } from "@/features/preview/tableToChart";
 import { useAuth } from "@/hooks/useAuth";
@@ -1165,8 +1161,10 @@ function SectionView({
               ))}
             </div>
             <CitationList citations={data.citations} />
-            {/* 출처 목록은 "이 자료"까지, 근거 추적은 "이 대목"까지 알려준다 - 창작 검증의 시작점 */}
-            <EvidencePanel projectId={projectId} sectionId={sectionId} />
+            {/* 절 단위 근거 패널은 뺐다(2026-08-12 결정). 블록 옆 '근거 N' 배지가 같은
+                정보를 고칠 대상 옆에서 보여주므로, 본문 아래 접이식은 같은 것을 두 번
+                말하는 자리가 됐다. 출처 목록은 남긴다 - 그건 "이 자료"를 세는 것이고
+                배지는 "이 대목"을 가리키는 것이라 층이 다르다. */}
           </div>
 
           {/* 오른쪽 드로어: 근거 전용. 화면에 고정돼 본문 위로 뜨므로 본문 폭이 안 줄고,
