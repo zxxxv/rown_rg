@@ -27,6 +27,7 @@ from sqlalchemy import select
 from src.db.models.chunk import Chunk as ChunkModel
 from src.db.models.project_source import ProjectSource
 from src.services.indexing._boilerplate import excluded_metadata
+from src.services.indexing.exclusion import AUTO_EXCLUDED_KEY
 from src.services.indexing.vector import IndexingResult
 
 if TYPE_CHECKING:
@@ -110,6 +111,11 @@ class WebSourceIndexer:
                             matched_sections or meta.get("matched_sections") or []
                         )
                         meta["page_age"] = page_age or meta.get("page_age")
+                        # 0청크라 자동 제외됐던 껍데기가 실자료로 승격되면 채택도 복구한다
+                        # (사람이 제외한 행에는 auto_excluded가 없어 그대로 남는다).
+                        if (content_md or "").strip() and meta.pop(AUTO_EXCLUDED_KEY, None):
+                            meta.pop("index_error", None)
+                            existing.is_included = True
                         existing.metadata_ = meta
                         existing.title = title or existing.title
                         existing.reliability = reliability or existing.reliability

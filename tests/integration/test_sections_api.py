@@ -240,3 +240,70 @@ class TestSectionsApi:
         )
         # 프로젝트가 사라졌으니 404
         assert gone.status_code == 404
+
+
+class TestDraftCitations:
+    """조립 전(작성 중) 인용 라벨 — 수집 순서 직해석이 아니라 인용 청크의 자료로 푼다.
+
+    실사례(2026-08-12): 이름이 비슷한 0청크 실패 업로드가 수집 순서상 앞자리를 차지해,
+    작성 중 미리보기가 웹 출처 인용에 업로드 이름을 붙였다.
+    """
+
+    async def test_writing_labels_resolve_via_cited_chunks(
+        self,
+        test_client: AsyncClient,
+        super_admin_user,
+        super_admin_token: str,
+        test_session: AsyncSession,
+    ) -> None:
+        from src.db.models.chunk import Chunk
+        from src.db.models.project_source import ProjectSource
+
+        project = await _make_project(test_session, super_admin_user.id)
+        project.status = "writing"  # 조립 전 - 번호는 절-로컬
+        # 수집 순서 1번: 0청크 실패 업로드. 옛 직해석([1]→수집 1번)은 이걸 라벨로 붙였다.
+        dead = ProjectSource(
+            project_id=project.id,
+            source_type="upload",
+            title="AI 반도체 동향(업로드)",
+            upload_path="/tmp/dead.pdf",
+        )
+        web = ProjectSource(
+            project_id=project.id,
+            source_type="web_search",
+            title="AI 반도체 동향(웹)",
+            url="https://example.com/ai",
+        )
+        test_session.add_all([dead, web])
+        await test_session.flush()
+        chunk = Chunk(project_id=project.id, source_id=web.id, track="content", content="근거 본문")
+        test_session.add(chunk)
+        await test_session.flush()
+        row = Section(
+            id=uuid4(),
+            project_id=project.id,
+            chapter_number=1,
+            section_number=1,
+            chapter_title="개요",
+            title="배경",
+            level=2,
+            content="주장 [1] 그리고 요약 근거 [2]",
+            source_ids=[chunk.id],  # 첫 등장 번호 [1] ↔ source_ids[0] 규약
+            qa_status="pending",
+            status="writing",
+        )
+        test_session.add(row)
+        await test_session.commit()
+
+        resp = await test_client.get(
+            f"/api/v1/projects/{project.id}/sections/{row.id}", headers=_auth(super_admin_token)
+        )
+        assert resp.status_code == 200, resp.text
+        citations = resp.json()["citations"]
+        assert [c["number"] for c in citations] == [1, 2]
+        # [1]은 인용 청크가 속한 웹 출처 - 수집 순서 1번(죽은 업로드)이 아니다
+        assert citations[0]["title"] == "AI 반도체 동향(웹)"
+        assert citations[0]["source_id"] == str(web.id)
+        # 매핑 없는 번호(요약 청크 등)는 확정 전 안내 문구
+        assert citations[1]["title"] == "(조립 후 번호가 확정됩니다)"
+        assert citations[1]["source_id"] is None

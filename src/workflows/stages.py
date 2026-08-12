@@ -627,6 +627,14 @@ async def index(state: ProjectState) -> ProjectState:
         )
         if result.chunks_created:
             indexed.append(src.source_id)
+    # 0청크로 끝난 출처(빈 본문·회수 실패 잔재)는 인용될 수 없다 — 채택으로 남기면
+    # 전역 인용 번호 자리를 차지해 출처장에 유령 항목이 실린다. 재수집이 본문을
+    # 채우면 stage()가 자동 제외를 되돌린다.
+    from src.services.indexing.exclusion import auto_exclude_chunkless
+
+    await auto_exclude_chunkless(
+        state.project_id, [s.source_id for s in staged if s.source_id not in set(indexed)]
+    )
     logger.info(
         "indexing.done",
         project_id=str(state.project_id),

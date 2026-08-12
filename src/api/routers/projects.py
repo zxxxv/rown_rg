@@ -78,6 +78,7 @@ from src.db.session import async_session_maker
 from src.prompts import list_presets, load_preset
 from src.services.export.report import export_file_pattern, export_filename
 from src.services.generation.planner import MAX_SECTIONS
+from src.services.indexing.exclusion import apply_index_outcome
 from src.services.indexing.vector import SourceInput
 from src.services.prompts import resolve_analysts
 from src.services.qa.alignment import align_section
@@ -853,6 +854,14 @@ async def _index_in_background(source: SourceInput, error_context: str) -> None:
             else:
                 meta.pop("index_error", None)
             row.metadata_ = meta
+            # 결과 객체가 아니라 DB 청크 수로 판정 — 파싱 실패(indexed=None) 재색인은
+            # 기존 청크를 지우지 않아, 이전에 성공한 자료를 오인 제외하면 안 된다.
+            n_chunks = (
+                await session.execute(
+                    select(func.count()).select_from(Chunk).where(Chunk.source_id == row.id)
+                )
+            ).scalar_one()
+            apply_index_outcome(row, int(n_chunks))
             await session.commit()
 
 
@@ -967,6 +976,7 @@ async def _index_file_source(
         **(row.metadata_ or {}),
         **_index_meta(source, result),
     }
+    apply_index_outcome(row, result.chunks_created)
     await session.flush()
     return row
 
@@ -1460,19 +1470,12 @@ def _citation_numbers(content: str) -> list[int]:
 def _citations_from_numbers(
     numbers: list[int],
     sources_ordered: list[ProjectSource],
-    *,
-    renumbered: bool = True,
 ) -> list[SectionCitation]:
-    """전역 번호 → 채택 자료 목록(수집 순서) 직해석.
+    """전역 번호 → 채택 자료 목록(수집 순서) 직해석 — 조립 후에만 성립.
 
     조립 시 renumber가 본문 번호를 이 순서로 재매핑하므로(출처 최종장과 동일),
     번호 n = sources_ordered[n-1]이다.
-
-    renumbered=False(조립 전)면 본문의 [n]은 아직 그 절이 검색해 온 청크 풀의
-    인덱스라, 채택 자료 수를 넘는 번호가 정상적으로 나온다. 그걸 '출처 불명'으로
-    보여주면 사용자가 오류로 오해하므로(2026-08-10 지적) 문구를 구분한다.
     """
-    unknown = "(출처 불명 - 번호 범위 밖)" if renumbered else "(조립 후 번호가 확정됩니다)"
     citations: list[SectionCitation] = []
     for n in sorted(numbers):
         if 1 <= n <= len(sources_ordered):
@@ -1487,7 +1490,51 @@ def _citations_from_numbers(
                 )
             )
         else:
-            citations.append(SectionCitation(number=n, title=unknown))
+            citations.append(SectionCitation(number=n, title="(출처 불명 - 번호 범위 밖)"))
+    return citations
+
+
+async def _draft_citations(
+    session: AsyncSession, row: Section, numbers: list[int]
+) -> list[SectionCitation]:
+    """조립 전(작성·검토 중) 라벨 — 로컬 번호를 인용 청크의 실제 자료로 푼다.
+
+    조립 전의 [n]은 절-로컬 검색 풀 번호라 수집 순서 직해석이 틀린다 — 그렇게 풀면
+    엉뚱한(이름만 비슷한) 자료가 라벨로 붙는다(2026-08-12 사용자 보고: 0청크 실패
+    업로드가 색인된 웹 출처 라벨을 밀어냄). 작성 규약(candidates._extract_cited_ids:
+    본문 고유 번호의 첫 등장 순서 = source_ids 저장 순서)으로 청크→자료를 직접 푼다.
+    번호 자체는 조립 때 전역 번호로 바뀐다.
+    """
+    cited = list(row.source_ids or [])
+    order = {n: i for i, n in enumerate(numbers)}  # 첫 등장 순서 = cited 인덱스
+    src_by_chunk: dict[UUID, ProjectSource] = {}
+    wanted = [cid for cid in cited[: len(numbers)] if cid]
+    if wanted:
+        pairs = (
+            await session.execute(
+                select(Chunk.id, ProjectSource)
+                .join(ProjectSource, ProjectSource.id == Chunk.source_id)
+                .where(Chunk.id.in_(wanted))
+            )
+        ).all()
+        src_by_chunk = {cid: src for cid, src in pairs}
+    citations: list[SectionCitation] = []
+    for n in sorted(numbers):
+        i = order[n]
+        src = src_by_chunk.get(cited[i]) if i < len(cited) else None
+        if src is None:
+            # 요약(RAPTOR) 청크는 원 자료가 없고, 조립 때 마커가 제거된다.
+            citations.append(SectionCitation(number=n, title="(조립 후 번호가 확정됩니다)"))
+        else:
+            citations.append(
+                SectionCitation(
+                    number=n,
+                    title=src.title or src.url or "(제목 없음)",
+                    url=src.url,
+                    source_id=str(src.id),
+                    reliability=src.reliability,
+                )
+            )
     return citations
 
 
@@ -1503,13 +1550,16 @@ def _is_renumbered(project: Project) -> bool:
 async def _section_citations(
     session: AsyncSession, row: Section, *, renumbered: bool = True
 ) -> list[SectionCitation]:
-    """본문의 전역 인용 번호 [n]을 출처(제목·URL·신뢰도) 목록으로 푼다.
+    """본문의 인용 번호 [n]을 출처(제목·URL·신뢰도) 목록으로 푼다.
 
-    번호 체계 = 채택 자료의 수집 순서(renumber·출처 최종장과 동일 단일 진실).
+    조립 후: 번호 체계 = 채택 자료의 수집 순서(renumber·출처 최종장과 동일 단일 진실).
+    조립 전: 번호가 절-로컬이라 그 직해석이 성립하지 않는다 — 청크 규약으로 푼다.
     """
     numbers = _citation_numbers(row.content or "")
     if not numbers:
         return []
+    if not renumbered:
+        return await _draft_citations(session, row, numbers)
     sources_ordered = (
         (
             await session.execute(
@@ -1524,7 +1574,7 @@ async def _section_citations(
         .scalars()
         .all()
     )
-    return _citations_from_numbers(numbers, list(sources_ordered), renumbered=renumbered)
+    return _citations_from_numbers(numbers, list(sources_ordered))
 
 
 def _evidence_info(row: Section) -> EvidenceInfo:
