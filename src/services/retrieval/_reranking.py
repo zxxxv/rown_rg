@@ -22,6 +22,41 @@ from src.services.retrieval.base import SearchHit
 logger = structlog.get_logger(__name__)
 
 
+# 상위 1위 대비 이 비율 아래는 근거로 싣지 않는다. 절대값(0.05 등)은 질의마다 점수
+# 스케일이 흔들려 어떤 절은 다 통과하고 어떤 절은 다 잘린다.
+_MIN_KEEP = 3
+
+
+def select_relevant(ranked: list[SearchHit], cap: int) -> list[SearchHit]:
+    """리랭커 점수로 '관련 있는 만큼만' 고른다 — 고정 개수가 아니라 분포로 자른다.
+
+    고정 top_k=32는 리랭커 확신 구간을 한참 넘었다(2026-08-12 실측, 14절):
+    절당 점수 0.5 이상이 중앙 15개인데 32개를 채우느라 평균 점수가 0.469까지 내려갔다
+    (sigmoid에서 0.5가 '반반'이다). 선택된 청크 점수의 하위 10%는 0.011이었다 - 리랭커가
+    관련 없다고 판정한 것을 근거랍시고 프롬프트에 실었다는 뜻이다.
+
+    절마다 쓸 만한 근거의 수가 크게 다르다(≥0.5가 최소 0개, 최대 27개). 고정 개수는
+    풍부한 절에서 버리고 빈약한 절에서 노이즈로 채운다. 1위 대비 비율로 자르면 절마다
+    실제 있는 만큼만 가져간다.
+
+    실측 비교(비율 0.10 + 캡 24 vs 고정 32): 평균 점수 0.469→0.746,
+    하위 10% 0.011→0.301, 절당 개수 32→중앙 22.5(최소 4·최대 24).
+
+    최소 _MIN_KEEP개는 남긴다 - 1위 자체가 낮은 절(자료 수집이 비어 있는 절)에서
+    근거가 0개가 되면 그 절은 아예 못 쓴다. 그건 검색이 아니라 수집 공백 문제이고,
+    design_coverage가 '근거 자료에도 없음'으로 따로 알린다.
+    """
+    if not ranked:
+        return []
+    # 1위마저 0이면 신호가 아예 없다. 비율 하한은 0이 되어 전부 통과해 버리므로,
+    # 노이즈를 캡까지 채우지 않도록 최소 개수만 남긴다.
+    if ranked[0].score <= 0:
+        return ranked[: min(_MIN_KEEP, cap)]
+    floor = ranked[0].score * settings.retrieval_score_ratio
+    kept = [h for h in ranked if h.score >= floor][:cap]
+    return kept or ranked[: min(_MIN_KEEP, cap)]
+
+
 def _mmr(ranked: list[SearchHit], top_k: int) -> list[SearchHit]:
     """MMR — 관련성만 보고 뽑던 상위 k를 '관련성 - 이미 뽑은 것과의 중복'으로 다시 고른다.
 
@@ -123,7 +158,7 @@ async def rerank_hits(
         )
 
     rescored.sort(key=lambda h: h.score, reverse=True)
-    result = _mmr(rescored, top_k) if settings.mmr_enabled else rescored[:top_k]
+    result = _mmr(rescored, top_k) if settings.mmr_enabled else select_relevant(rescored, top_k)
 
     logger.info(
         "reranker.rerank_hits.completed",
