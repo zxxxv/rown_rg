@@ -96,6 +96,24 @@ def _weighted_tokens(text: str) -> dict[str, float]:
     return out
 
 
+def weighted_tokens(text: str) -> dict[str, float]:
+    """공개 진입점 - 검색 다양화(MMR)가 같은 자를 쓰도록 노출한다."""
+    return _weighted_tokens(text)
+
+
+def token_similarity(a: dict[str, float], b: dict[str, float]) -> float:
+    """두 토큰 집합의 겹침 - 양방향 중 큰 쪽(0~1).
+
+    짧은 문단이 긴 문단에 통째로 들어간 경우가 실제 중복의 전형이라 한쪽 분모로만
+    재면 놓친다. cross_section._similarity와 같은 계산이다.
+    """
+    if not a or not b:
+        return 0.0
+    small, large = (a, b) if len(a) <= len(b) else (b, a)
+    hit = sum(w for t, w in small.items() if t in large)
+    return max(hit / sum(a.values()), hit / sum(b.values()))
+
+
 def overlap_score(claim: str, span: str) -> float:
     """주장 문장이 이 대목에 얼마나 담겨 있는가 (0~1). 비교할 게 없으면 -1.
 
