@@ -31,6 +31,8 @@ from src.api.schemas.project import (
     ProjectRead,
     SourceIncludeUpdate,
     SourceItemRead,
+    UserPresetRead,
+    UserPresetUpsert,
     VerifyFindingRead,
     VerifyFindingResolve,
 )
@@ -84,6 +86,15 @@ from src.services.prompts import resolve_analysts
 from src.services.qa.alignment import align_section
 from src.services.qa.gate import uncited_units, ungrounded_numbers
 from src.services.sections.evidence import marker_chunk_ids
+from src.services.user_presets import (
+    create_user_preset,
+    delete_user_preset,
+    get_user_preset,
+    list_user_presets,
+    parse_personal_key,
+    personal_preset_key,
+    update_user_preset,
+)
 from src.workflows import cancel
 from src.workflows.events import emit_error, last_step
 from src.workflows.runner import get_pending_gate, is_running, queue_status, resume_run, start_run
@@ -201,12 +212,22 @@ async def _known_analyst_names(session: AsyncSession, owner_id: UUID) -> set[str
     return known
 
 
+def _preset_counts(outline: dict) -> tuple[int, int]:
+    chapters = outline.get("chapters") or []
+    return len(chapters), sum(len(ch.get("sections") or []) for ch in chapters)
+
+
 @presets_router.get("", response_model=list[PresetRead])
 async def get_presets(
-    _: Annotated[User, Depends(get_current_active_user)],
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> list[PresetRead]:
-    """보고서 유형 프리셋 카탈로그. 자유 주제는 preset=None으로 생성하면 된다."""
-    return [
+    """보고서 유형 프리셋 카탈로그 — 시스템(파일) + 내 프리셋(DB) 병합.
+
+    자유 주제는 preset=None으로 생성하면 된다. 개인 프리셋은 scope='personal',
+    id="u:<uuid>"로 실려 시스템 프리셋과 같은 선택 코드 경로를 탄다.
+    """
+    items = [
         PresetRead(
             id=p.id,
             name=p.name,
@@ -216,17 +237,107 @@ async def get_presets(
         )
         for p in list_presets()
     ]
+    for row in await list_user_presets(session, current_user.id):
+        n_ch, n_sec = _preset_counts(row.outline)
+        items.append(
+            PresetRead(
+                id=personal_preset_key(row.id),
+                name=row.name,
+                desc=row.description or "내가 저장한 목차 구성",
+                n_chapters=n_ch,
+                n_sections=n_sec,
+                scope="personal",
+                updated_at=row.updated_at,
+            )
+        )
+    return items
+
+
+@presets_router.post(
+    "/personal", response_model=UserPresetRead, status_code=status.HTTP_201_CREATED
+)
+async def create_personal_preset(
+    data: UserPresetUpsert,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> UserPresetRead:
+    """목차 편집기의 현재 구성을 내 프리셋으로 저장 — 프로젝트 간 구성 재사용."""
+    row = await create_user_preset(
+        session,
+        current_user.id,
+        name=data.name.strip(),
+        description=data.description,
+        outline={"chapters": [ch.model_dump() for ch in data.chapters]},
+    )
+    n_ch, n_sec = _preset_counts(row.outline)
+    return UserPresetRead(
+        id=row.id,
+        key=personal_preset_key(row.id),
+        name=row.name,
+        description=row.description,
+        n_chapters=n_ch,
+        n_sections=n_sec,
+        updated_at=row.updated_at,
+    )
+
+
+@presets_router.put("/personal/{preset_id}", response_model=UserPresetRead)
+async def update_personal_preset(
+    preset_id: UUID,
+    data: UserPresetUpsert,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> UserPresetRead:
+    row = await update_user_preset(
+        session,
+        current_user.id,
+        preset_id,
+        name=data.name.strip(),
+        description=data.description,
+        outline={"chapters": [ch.model_dump() for ch in data.chapters]},
+    )
+    n_ch, n_sec = _preset_counts(row.outline)
+    return UserPresetRead(
+        id=row.id,
+        key=personal_preset_key(row.id),
+        name=row.name,
+        description=row.description,
+        n_chapters=n_ch,
+        n_sections=n_sec,
+        updated_at=row.updated_at,
+    )
+
+
+@presets_router.delete("/personal/{preset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_personal_preset(
+    preset_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> None:
+    await delete_user_preset(session, current_user.id, preset_id)
 
 
 @presets_router.get("/{preset_key}", response_model=PresetDetailRead)
 async def get_preset_detail(
     preset_key: str,
-    _: Annotated[User, Depends(get_current_active_user)],
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> PresetDetailRead:
     """프리셋 전체 골격(챕터·섹션·방향·핵심포인트·담당 에이전트).
 
     생성 화면에서 프리셋을 클릭해 들어가면 이 골격이 목차 편집기의 초기값이 된다.
+    "u:<uuid>"는 내 프리셋 — 시스템과 같은 응답 모양이라 프론트 로드 코드가 같다.
     """
+    personal_id = parse_personal_key(preset_key)
+    if personal_id is not None:
+        row = await get_user_preset(session, current_user.id, personal_id)
+        return PresetDetailRead(
+            id=preset_key,
+            name=row.name,
+            desc=row.description or "",
+            domain_context="",
+            chapters=row.outline.get("chapters") or [],
+        )
     try:
         p = load_preset(preset_key)
     except KeyError:
@@ -296,16 +407,25 @@ async def create_project(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> Project:
     # preset은 파일 카탈로그(src.prompts)가 단일 진실 — 생성 시점에 키를 검증해 확정한다.
-    # None이면 자유 주제(프리셋 없는 일반 목차 설계)로 진행된다.
+    # None이면 자유 주제(프리셋 없는 일반 목차 설계), "u:<uuid>"면 내가 저장한 프리셋.
     if data.preset is not None:
-        try:
-            load_preset(data.preset)
-        except KeyError:
-            available = ", ".join(p.name for p in list_presets())
-            raise ValidationError(
-                message=f"알 수 없는 프리셋입니다: {data.preset} (가능: {available})",
-                code="UNKNOWN_PRESET",
-            ) from None
+        personal_id = parse_personal_key(data.preset)
+        if personal_id is not None:
+            try:
+                await get_user_preset(session, current_user.id, personal_id)
+            except NotFoundError:
+                raise ValidationError(
+                    message=f"알 수 없는 프리셋입니다: {data.preset}", code="UNKNOWN_PRESET"
+                ) from None
+        else:
+            try:
+                load_preset(data.preset)
+            except KeyError:
+                available = ", ".join(p.name for p in list_presets())
+                raise ValidationError(
+                    message=f"알 수 없는 프리셋입니다: {data.preset} (가능: {available})",
+                    code="UNKNOWN_PRESET",
+                ) from None
     # 목차는 사람이 만든다(2026-08-03 확정): AI 목차 설계 경로를 쓰지 않으므로
     # outline 없는 생성은 거부한다 — 실행 시점이 아니라 생성 시점에 막는다.
     if data.config.get("outline") is None:
