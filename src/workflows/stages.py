@@ -56,8 +56,30 @@ def strip_web_frontmatter(md: str) -> str:
 
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
-# 링크·URL·구두점만으로 이뤄진 줄(내비게이션 메뉴·로고 등) — 본문 문장이 없다
-_LINK_ONLY_LINE_RE = re.compile(r"^\s*(?:\[[^\]]*\]\([^)]*\)|https?://\S+|[\s>*#|:•·—–×✕✖-])+\s*$")
+# 링크·URL·구두점만으로 이뤄진 줄(내비게이션 메뉴·로고 등) — 본문 문장이 없다.
+# 정규식으로 링크 전체를 한 번에 매칭하려 하면 링크 텍스트 안의 대괄호에 걸려 실패한다
+# (실측: "[https://twitter.com/intent/tweet?text=...%20[New...]](...)" 형태의 공유 링크가
+# 통과해 1,074자짜리 URL 덩어리가 그대로 임베딩됐고, 보고서가 그걸 6번 인용했다).
+# 링크와 URL을 먼저 걷어낸 뒤 글자가 남는지 보는 편이 튼튼하다. 링크 텍스트는 최소
+# 매칭으로 잡는다 - "](" + URL 이 나올 때까지 밀고 가므로 텍스트 안에 대괄호가 있어도
+# 링크 전체를 삼킨다.
+_MD_LINK_RE = re.compile(r"\[[^\n]*?\]\([^\s)]*\)")
+_URL_RE = re.compile(r"https?://\S+")
+_MD_SYNTAX_RE = re.compile(r"[\s>*#|:•·—–×✕✖\-\[\]()!]+")
+_WORD_RE = re.compile(r"[A-Za-z0-9가-힣]")
+
+
+def _is_link_only(line: str) -> bool:
+    """링크·URL·마크다운 기호를 걷어낸 뒤 글자가 하나도 안 남으면 본문이 아니다.
+
+    링크 라벨까지 함께 지우는 게 핵심이다 - "[홈](/) [소개](/about)" 같은 메뉴 줄은
+    라벨만 남기면 본문처럼 보인다. 반대로 "자세한 내용은 [보고서](url)에서"는 링크를
+    걷어내도 문장이 남아 살아남는다.
+    """
+    rest = _URL_RE.sub(" ", _MD_LINK_RE.sub(" ", line))
+    return not _WORD_RE.search(_MD_SYNTAX_RE.sub("", rest))
+
+
 # 사이트 공통 배너 문구 — 이 마커가 든 줄은 본문이 아니다(정부 누리집 안내 배너,
 # JS 렌더 사이트의 메뉴 자리표시자 'Loading…' 등)
 _BOILERPLATE_MARKERS = (
@@ -94,12 +116,25 @@ def clean_web_markdown(md: str) -> str:
         if any(marker in line for marker in _BOILERPLATE_MARKERS):
             continue
         no_img = _MD_IMAGE_RE.sub("", line)
-        if not no_img.strip():
-            continue
-        if _LINK_ONLY_LINE_RE.match(no_img):
+        # 빈 줄은 문단 경계로 남긴다 - 청킹이 문단을 보고 자를 수 있어야 본문과
+        # 페이지 가구가 한 청크에 안 섞인다.
+        if not no_img.strip() or _is_link_only(no_img):
+            if kept and kept[-1] != "":
+                kept.append("")
             continue
         kept.append(no_img)
     return "\n".join(kept).strip()
+
+
+# 문단 단위로 껍데기를 지워 임베딩 전에 빼는 안은 **실측 후 폐기했다**(2026-08-12).
+# 인용됐던 청크 110개로 검사했더니 12개가 사라졌고, 그중 5개가 진짜 기사 본문이었다 -
+# 해외 규제 동향("덴마크·뉴질랜드 규제 논의", "호주 청소년 SNS 470만 계정 폐쇄")과
+# 국내 플랫폼 생태계 기사가 "알림/로그인/글자크기 설정" 같은 페이지 가구와 같은 문단
+# 덩어리 안에 있었다. 되돌릴 수 없는 제거에서 11% 손실은 받을 수 없다.
+#
+# 여기 남긴 줄 단위 제거(링크·URL·이미지만 있는 줄)는 판정이 명확하고 손실이 관측된
+# 적이 없다. 애매한 것은 색인 뒤 metadata.excluded 표시로 돌린다 - 원본 행이 남아
+# 되돌릴 수 있고, 오탐이 나도 원문 대조 화면이 모델이 받은 것을 그대로 보여준다.
 
 
 def has_usable_content(content_md: str | None) -> bool:

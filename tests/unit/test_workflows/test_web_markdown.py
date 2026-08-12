@@ -152,3 +152,49 @@ class TestHasUsableContent:
     def test_empty_is_not_usable(self):
         assert has_usable_content("") is False
         assert has_usable_content(None) is False
+
+
+class TestLinkOnlyLines:
+    """링크만 있는 줄 판정 - 실측 결함에서 나온 사례들.
+
+    옛 정규식은 링크 전체를 한 번에 매칭하려 해서 링크 텍스트 안의 대괄호에 걸려
+    실패했다. 그 결과 1,074자짜리 공유 URL 덩어리가 통째로 임베딩됐고, 보고서가
+    그것을 6번 인용했다(2026-08-12).
+    """
+
+    def test_링크_텍스트에_대괄호가_있어도_걷어낸다(self) -> None:
+        line = (
+            "[https://twitter.com/intent/tweet?text=%273%20Trends%20[New%20Data]%27]"
+            "(https://twitter.com/intent/tweet?text=x)"
+        )
+        assert clean_web_markdown(line) == ""
+
+    def test_라벨만_있는_메뉴_줄도_걷어낸다(self) -> None:
+        assert clean_web_markdown("* [홈](https://a.com) * [소개](https://a.com/about)") == ""
+
+    def test_본문에_섞인_링크는_남긴다(self) -> None:
+        line = "자세한 내용은 [보고서](https://example.com/report)에서 확인할 수 있다."
+        assert "자세한 내용은" in clean_web_markdown(line)
+
+    def test_제목_줄은_남긴다(self) -> None:
+        assert clean_web_markdown("## 3.1 국내외 시장 규모 및 구조").startswith("##")
+
+    def test_애매한_문단은_색인에서_빼지_않는다(self) -> None:
+        """확실한 것만 지운다 - 문단 단위 제거는 실측에서 본문을 삼켰다(2026-08-12).
+
+        인용됐던 청크 110개 중 12개가 사라졌고 그중 5개가 진짜 기사 본문이었다
+        (해외 규제 동향·국내 플랫폼 생태계). 면책조항 같은 문단은 색인 뒤
+        표시(metadata.excluded)로 돌려 되돌릴 수 있게 한다.
+        """
+        md = (
+            "글로벌 숏폼 시장은 2026년 1,350억 달러로 성장할 전망이다.\n\n"
+            "All expressions of opinions are subject to change without notice."
+        )
+        cleaned = clean_web_markdown(md)
+        assert "1,350억" in cleaned
+        assert "subject to change" in cleaned
+
+    def test_문단_경계를_남긴다(self) -> None:
+        """청킹이 문단을 보고 자를 수 있어야 본문과 페이지 가구가 안 섞인다."""
+        md = "본문 첫 문단이다.\n\n[메뉴](https://a.com)\n\n본문 둘째 문단이다."
+        assert "\n\n" in clean_web_markdown(md)
