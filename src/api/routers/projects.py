@@ -425,6 +425,16 @@ async def run_project(
     current_user: Annotated[User, Depends(enforce_cost_limit)],
 ) -> RunResponse:
     project = await _get_authorized_project(project_id, session, current_user)
+    # 게이트 대기는 '멈춘 런'이 아니다 — 아래 크래시 복구용 재개와 겉모습(작업 단계
+    # status + 살아 있는 태스크 없음)이 같아 /run이 승인 없이 다음 단계로 넘어갔다.
+    # SOURCE_POOL을 건너뛰면 자료 채택·제외가 미반영인 채 작성되고, section_plan도
+    # 미복원(pending payload는 _rehydrate_section_plan이 못 읽음) →
+    # write.plan_fallback으로 목차가 2절(개요·분석)로 붕괴한다. 올바른 경로는 /decide.
+    if await get_pending_gate(session, project.id) is not None:
+        raise ValidationError(
+            message="검토 대기 중입니다 - 검토를 완료(승인)해야 이어서 진행됩니다",
+            code="GATE_PENDING",
+        )
     # 새로 생성된 프로젝트만 실행(thread_id=project_id 재사용 충돌 회피).
     # 주의: 여기서 status를 미리 researching으로 바꾸면 안 된다 — 상태는 척추의
     # 진행 위치라서 선점하면 _execute가 research 단계를 건너뛴다(2026-08-03 실사고:

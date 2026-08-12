@@ -1,9 +1,10 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Download, FileSearch, PlayCircle, Settings2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
-import { useProgressSnapshot } from "@/api/progress";
+import { type PendingGate, progressKeys, useProgressSnapshot } from "@/api/progress";
 import {
   useDeleteProject,
   useProject,
@@ -230,7 +231,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
           </div>
           {/* 주 CTA와 삭제를 한 줄에 - 파괴적 동작이라 ghost로 낮춰 무게 차이를 준다 */}
           <div className="flex items-center gap-2">
-            <PrimaryAction project={project} />
+            <PrimaryAction project={project} pendingGate={usageQuery.data?.pending_gate ?? null} />
             {canDelete ? (
               <Button
                 variant="ghost"
@@ -331,9 +332,17 @@ function Meta({ label, value }: { label: string; value: string }) {
   );
 }
 
-function PrimaryAction({ project }: { project: Project }) {
+function PrimaryAction({
+  project,
+  pendingGate,
+}: {
+  project: Project;
+  pendingGate: PendingGate | null;
+}) {
   // 진행 페이지 폐지 - 시작은 개요에서 바로 실행하고, 진행 관찰은 우측
   // 진행 단계 스테퍼가 담당한다(7초 폴링으로 researching 전이를 따라잡음).
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const run = useRunProject();
   const { download, pending: downloading } = useDownload();
   // 같은 버튼이 '처음 시작'과 '멈춘 런 이어받기' 둘 다를 처리한다 - 안내 문구가
@@ -349,6 +358,15 @@ function PrimaryAction({ project }: { project: Project }) {
         if (err instanceof ApiError && err.code === "ALREADY_RUNNING") {
           toast.info("이미 진행 중입니다", {
             description: "지금 돌고 있는 작업이 끝나면 다음 단계로 넘어갑니다.",
+          });
+          return;
+        }
+        if (err instanceof ApiError && err.code === "GATE_PENDING") {
+          // 스냅샷이 낡아 재개 버튼이 잠깐 남는 레이스 - 서버가 진실이므로 즉시
+          // 갱신해 버튼을 검토 CTA로 바꾸고, 사용자를 검토 완료로 유도한다.
+          void queryClient.invalidateQueries({ queryKey: progressKeys.snapshot(project.id) });
+          toast.info("검토 대기 중입니다", {
+            description: "검토를 완료(승인)하면 다음 단계가 이어서 진행됩니다.",
           });
           return;
         }
@@ -395,6 +413,21 @@ function PrimaryAction({ project }: { project: Project }) {
     return (
       <Button size="lg" variant="outline" disabled>
         보관된 프로젝트
+      </Button>
+    );
+  }
+  // 게이트 대기 - 재개가 아니라 검토 완료(승인)가 다음 행동이다. 여기서 '이어서 진행'을
+  // 누르면 게이트를 건너뛰고 미확정 자료로 본문이 작성되던 버그(2026-08-12)가 있어,
+  // 백엔드도 GATE_PENDING(422)으로 막는다. 재개 버튼은 숨기고 검토 화면 CTA만 노출.
+  if (pendingGate) {
+    const legacyQa = pendingGate.gate === "qa_select";
+    return (
+      <Button
+        size="lg"
+        onClick={() => navigate(`/projects/${project.id}/${legacyQa ? "preview" : "sources"}`)}
+      >
+        <FileSearch className="mr-1 h-4 w-4" />
+        {legacyQa ? "본문 검토 완료하러 가기" : "자료 검토 완료하러 가기"}
       </Button>
     );
   }
