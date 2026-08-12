@@ -4,7 +4,12 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
-import { type PendingGate, progressKeys, useProgressSnapshot } from "@/api/progress";
+import {
+  type PendingGate,
+  progressKeys,
+  useConfirmedStalled,
+  useProgressSnapshot,
+} from "@/api/progress";
 import {
   useDeleteProject,
   useProject,
@@ -148,6 +153,8 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
   const usageQuery = useProgressSnapshot(project.id, true, {
     refetchInterval: terminal ? false : 7_000,
   });
+  // 죽은 런(백엔드 태스크 소실) - 스피너 대신 중단 안내·재개 CTA로 바꾼다.
+  const stalled = useConfirmedStalled(usageQuery.data);
   const tokensUsed = usageQuery.data?.tokens_used ?? 0;
   const costUsed = usageQuery.data?.cost_usd ?? 0;
   const deleteProject = useDeleteProject();
@@ -231,7 +238,11 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
           </div>
           {/* 주 CTA와 삭제를 한 줄에 - 파괴적 동작이라 ghost로 낮춰 무게 차이를 준다 */}
           <div className="flex items-center gap-2">
-            <PrimaryAction project={project} pendingGate={usageQuery.data?.pending_gate ?? null} />
+            <PrimaryAction
+              project={project}
+              pendingGate={usageQuery.data?.pending_gate ?? null}
+              stalled={stalled}
+            />
             {canDelete ? (
               <Button
                 variant="ghost"
@@ -286,7 +297,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
         {/* 우측 기둥은 '지금 무슨 일이 벌어지는가'만 - 사용량·옵션은 헤더로,
             삭제는 페이지 맨 아래로 옮겨 본문 작업공간에 자리를 내줬다. */}
         <aside className="lg:sticky lg:top-6 lg:self-start">
-          <PipelineStepper projectId={project.id} snapshot={usageQuery.data} />
+          <PipelineStepper projectId={project.id} snapshot={usageQuery.data} stalled={stalled} />
         </aside>
       </div>
 
@@ -335,9 +346,11 @@ function Meta({ label, value }: { label: string; value: string }) {
 function PrimaryAction({
   project,
   pendingGate,
+  stalled = false,
 }: {
   project: Project;
   pendingGate: PendingGate | null;
+  stalled?: boolean;
 }) {
   // 진행 페이지 폐지 - 시작은 개요에서 바로 실행하고, 진행 관찰은 우측
   // 진행 단계 스테퍼가 담당한다(7초 폴링으로 researching 전이를 따라잡음).
@@ -434,6 +447,15 @@ function PrimaryAction({
   // 작업 단계 - 정상 실행 중이면 스테퍼가 안내하지만, 프로세스 재시작·자원 고갈로
   // 실행이 사라지면 화면상 '진행 중'인 채 영원히 멈춘다(2026-08-09 실사고). 이어받기
   // 버튼을 항상 열어두고, 실제로 살아 있으면 백엔드가 '이미 실행 중'으로 되돌린다.
+  // 죽은 런이 확정되면(runner_alive=false 연속 관측) 주 CTA로 승격해 즉시 눈에 띈다.
+  if (stalled) {
+    return (
+      <Button size="lg" onClick={startRun} disabled={run.isPending}>
+        <PlayCircle className="mr-1 h-4 w-4" />
+        {run.isPending ? "재개 중…" : "실행이 중단됨 - 이어서 재개"}
+      </Button>
+    );
+  }
   return (
     <Button size="lg" variant="outline" onClick={startRun} disabled={run.isPending}>
       <PlayCircle className="mr-1 h-4 w-4" />

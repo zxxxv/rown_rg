@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import datetime
 
 import structlog
+
+from src.core.clock import now as clock_now
 
 logger = structlog.get_logger(__name__)
 
@@ -86,6 +89,21 @@ def last_step(project_id: uuid.UUID) -> dict | None:
     return _last_steps.get(project_id)
 
 
+# 프로젝트별 마지막 이벤트 시각(단일 워커 전제) — 죽은/고착된 런 판정용. 진행 API가
+# 노출한다. 인메모리라 재시작에 사라지지만, 그때는 runner_alive=False가 먼저 잡는다.
+_last_event_at: dict[uuid.UUID, datetime] = {}
+
+
+def last_event_at(project_id: uuid.UUID) -> datetime | None:
+    """이 프로젝트로 마지막 진행 이벤트를 발행한 시각 — 없으면 None."""
+    return _last_event_at.get(project_id)
+
+
+def _publish(project_id: uuid.UUID, message: dict) -> None:
+    _last_event_at[project_id] = clock_now()
+    progress_broker.publish(project_id, message)
+
+
 # ── emit 헬퍼(no-op safe: 구독자가 없으면 그냥 버려진다) ─────────────────────
 
 
@@ -95,7 +113,7 @@ def emit_phase(project_id: uuid.UUID | None, phase: str, status: str) -> None:
     if status == "completed":
         # 단계 종료 시 세부 단계 잔재 정리 — 다음 단계의 첫 emit_step이 다시 채운다.
         _last_steps.pop(project_id, None)
-    progress_broker.publish(project_id, {"type": "phase", "phase": phase, "status": status})
+    _publish(project_id, {"type": "phase", "phase": phase, "status": status})
 
 
 def emit_step(
@@ -112,14 +130,14 @@ def emit_step(
     if eta_seconds is not None:
         msg["eta_seconds"] = eta_seconds
     _last_steps[project_id] = msg
-    progress_broker.publish(project_id, msg)
+    _publish(project_id, msg)
 
 
 def emit_cost(project_id: uuid.UUID | None, tokens_used: int, cost_usd: float) -> None:
     """누적 토큰·비용. 프론트는 이 값으로 교체 표시하므로 반드시 누적값을 보낸다."""
     if project_id is None:
         return
-    progress_broker.publish(
+    _publish(
         project_id,
         {"type": "cost", "tokens_used": int(tokens_used), "cost_usd": round(float(cost_usd), 6)},
     )
@@ -128,7 +146,7 @@ def emit_cost(project_id: uuid.UUID | None, tokens_used: int, cost_usd: float) -
 def emit_checkpoint(project_id: uuid.UUID | None, checkpoint_id: str, level: int) -> None:
     if project_id is None:
         return
-    progress_broker.publish(
+    _publish(
         project_id,
         {
             "type": "checkpoint",
@@ -142,4 +160,4 @@ def emit_checkpoint(project_id: uuid.UUID | None, checkpoint_id: str, level: int
 def emit_error(project_id: uuid.UUID | None, code: str, message: str) -> None:
     if project_id is None:
         return
-    progress_broker.publish(project_id, {"type": "error", "code": code, "message": message})
+    _publish(project_id, {"type": "error", "code": code, "message": message})

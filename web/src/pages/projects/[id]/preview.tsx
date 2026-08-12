@@ -24,7 +24,7 @@ import {
   useDecideQaSelect,
 } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
-import { progressKeys, useProgressSnapshot } from "@/api/progress";
+import { progressKeys, useConfirmedStalled, useProgressSnapshot } from "@/api/progress";
 import { useProject } from "@/api/projects";
 import {
   useProjectSections,
@@ -98,6 +98,8 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   const snapshotQuery = useProgressSnapshot(projectId, true, {
     refetchInterval: isGenerating ? 7000 : false,
   });
+  // 죽은 런(백엔드 태스크 소실) - '작성 중' 스피너 배너를 중단 안내로 바꾼다.
+  const stalled = useConfirmedStalled(snapshotQuery.data);
   const qaPayload = useMemo(
     () =>
       snapshotQuery.data?.pending_gate?.gate === "qa_select"
@@ -186,6 +188,14 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
     <div className="flex flex-col gap-4">
       {qaPayload ? (
         <QaApproveBar projectId={projectId} payload={qaPayload} />
+      ) : stalled ? (
+        // 실행이 끊겼는데 '진행 중' 스피너를 계속 돌리면 사용자는 하염없이 기다린다
+        // (2026-08-12 실사용: 3시간 넘게 진행 중으로 보임). 재개 경로를 바로 안내한다.
+        <div className="flex items-center gap-2 rounded border border-fg-danger/30 bg-bg-danger px-3 py-2 text-xs text-fg">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-fg-danger" aria-hidden />
+          실행이 중단되었습니다 - 서버 재시작이나 오류로 실행이 끊겼습니다. 개요 화면의 '이어서
+          재개'를 누르면 멈춘 단계부터 다시 진행합니다.
+        </div>
       ) : isGenerating ? (
         <div className="flex items-center gap-2 rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
           <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
 import type { PhaseName } from "@/api/ws-messages";
@@ -31,6 +32,10 @@ export const ProjectProgressSchema = z.object({
   active_step: z.string().nullish(),
   active_seconds: z.number().nonnegative().nullish(),
   source_target: z.number().nullish(),
+  // 백엔드 프로세스에 살아 있는 러너 태스크가 있는지 - 구백엔드 호환 위해 default true
+  runner_alive: z.boolean().default(true),
+  // 마지막 진행 이벤트 시각(ISO) - 서버 재시작 후엔 null
+  last_event_at: z.string().nullish(),
 });
 export type ProjectProgress = z.infer<typeof ProjectProgressSchema>;
 
@@ -66,9 +71,17 @@ export interface ProgressSnapshot {
   last_activity_at: string | null;
   /** 실행 대기열 위치(1부터) - 동시 실행 상한 초과로 대기 중일 때만 값 존재 */
   queue_position: number | null;
+  /**
+   * 죽은 런 - 작업 단계인데 게이트 대기도 아니고 백엔드에 살아 있는 태스크도 없음.
+   * 서버 재시작·오류로 실행이 끊긴 상태라, 스피너 대신 재개 안내를 보여줘야 한다.
+   */
+  stalled: boolean;
 }
 
 const PHASE_ORDER: PhaseName[] = ["research", "indexing", "writing", "qa", "export"];
+
+/** 러너 태스크가 살아 있어야 정상인 작업 단계 - 게이트 대기는 pending_gate로 구분 */
+const ACTIVE_WORK_STATUSES = ["researching", "indexing", "writing", "reviewing"];
 
 const STATUS_TO_PHASE: Record<string, PhaseName> = {
   created: "research",
@@ -105,6 +118,7 @@ export function toProgressSnapshot(res: ProjectProgress): ProgressSnapshot {
     started_at: res.started_at ?? null,
     last_activity_at: res.last_activity_at ?? null,
     queue_position: res.queue_position ?? null,
+    stalled: ACTIVE_WORK_STATUSES.includes(res.status) && !res.pending_gate && !res.runner_alive,
   };
 }
 
@@ -135,4 +149,21 @@ export function useProgressSnapshot(
     // 개요 스테퍼 등 실행 중 화면이 폴링으로 단계 전이를 따라잡는 용도
     refetchInterval: opts?.refetchInterval ?? false,
   });
+}
+
+/**
+ * 죽은 런 확정 판정 - 연속 2회 폴링에서 stalled여야 true.
+ *
+ * 게이트 승인 직후 서버가 결정 반영과 태스크 기동 사이에 있으면 한 번 stalled로
+ * 보일 수 있다(찰나의 레이스). 한 번 더 확인해 배너가 깜빡이지 않게 한다.
+ */
+export function useConfirmedStalled(snapshot: ProgressSnapshot | undefined): boolean {
+  const countRef = useRef(0);
+  const [confirmed, setConfirmed] = useState(false);
+  useEffect(() => {
+    if (!snapshot) return;
+    countRef.current = snapshot.stalled ? countRef.current + 1 : 0;
+    setConfirmed(countRef.current >= 2);
+  }, [snapshot]);
+  return confirmed;
 }

@@ -1,4 +1,4 @@
-import { ArrowRight, Ban, Check, CircleDashed, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowRight, Ban, Check, CircleDashed, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -142,10 +142,12 @@ function ElapsedRow({ snapshot }: { snapshot: ProgressSnapshot }) {
 export interface PipelineStepperProps {
   projectId: string;
   snapshot: ProgressSnapshot | undefined;
+  /** 죽은 런 확정(연속 폴링 판정) - 스피너 대신 중단 표시를 그린다 */
+  stalled?: boolean;
 }
 
 /** 개요 우측의 파이프라인 스테퍼 - 어디까지 왔는지, 다음에 사람이 뭘 해야 하는지. */
-export function PipelineStepper({ projectId, snapshot }: PipelineStepperProps) {
+export function PipelineStepper({ projectId, snapshot, stalled = false }: PipelineStepperProps) {
   const navigate = useNavigate();
   const steps = deriveSteps(projectId, snapshot);
   const status = snapshot?.status ?? "created";
@@ -181,7 +183,12 @@ export function PipelineStepper({ projectId, snapshot }: PipelineStepperProps) {
                 {step.phase === "done" ? (
                   <Check className="h-4 w-4 shrink-0 text-fg-success" aria-hidden />
                 ) : step.phase === "active" ? (
-                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" aria-hidden />
+                  stalled ? (
+                    // 실행이 끊겼는데 스피너를 돌리면 '진행 중'이라는 거짓말이 된다
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-fg-danger" aria-hidden />
+                  ) : (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" aria-hidden />
+                  )
                 ) : step.phase === "action" ? (
                   <ArrowRight className="h-4 w-4 shrink-0 text-fg-warning" aria-hidden />
                 ) : (
@@ -222,6 +229,14 @@ export function PipelineStepper({ projectId, snapshot }: PipelineStepperProps) {
             </li>
           ))}
         </ol>
+
+        {stalled ? (
+          <p className="flex items-start gap-1.5 rounded border border-fg-danger/30 bg-bg-danger px-2.5 py-2 text-xs text-fg">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-fg-danger" aria-hidden />
+            실행이 중단되었습니다 - 서버 재시작이나 오류로 실행이 끊겼습니다. 상단의 '이어서 재개'를
+            누르면 멈춘 단계부터 다시 진행합니다.
+          </p>
+        ) : null}
 
         {snapshot?.queue_position ? (
           <p className="flex items-center gap-1.5 rounded border border-fg-info/30 bg-bg-info px-2.5 py-2 text-xs text-fg-secondary">

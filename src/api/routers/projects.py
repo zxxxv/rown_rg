@@ -85,7 +85,7 @@ from src.services.qa.alignment import align_section
 from src.services.qa.gate import uncited_units
 from src.services.sections.evidence import marker_chunk_ids
 from src.workflows import cancel
-from src.workflows.events import emit_error, last_step
+from src.workflows.events import emit_error, last_event_at, last_step
 from src.workflows.runner import get_pending_gate, is_running, queue_status, resume_run, start_run
 
 # 단계 기반 근사 진행률 — 섹션 단위 세밀화는 추후 진행 이벤트로
@@ -586,6 +586,8 @@ async def get_progress(
         active_step=_active_step_label(project.status, project.id),
         active_seconds=active_seconds,
         source_target=settings.research_min_sources,
+        runner_alive=is_running(project.id),
+        last_event_at=last_event_at(project.id),
     )
 
 

@@ -44,6 +44,14 @@ class ProgressResponse(BaseModel):
     # "현재 n건 / 목표 m건"을 보여줄 수 있게 게이트 전에도 내려준다(게이트 payload의
     # coverage.min_required와 같은 값).
     source_target: int = 0
+    # 이 프로세스에 살아 있는 러너 태스크가 있는지(단일 워커 전제). 작업 단계인데
+    # 게이트 대기도 아니고 이 값도 False면 죽은 런이다 — 프로세스 재시작·자원 고갈로
+    # 태스크가 사라져도 status는 그 단계에 남아, 이 신호 없인 스피너가 영원히 돈다
+    # (2026-08-12 실사용: 3시간 넘게 '진행 중'). /run으로 이어서 재개할 수 있다.
+    runner_alive: bool = True
+    # 마지막 진행 이벤트(emit_*) 시각 — 인메모리라 재시작 후 None. 살아 있는데 오래
+    # 조용한 런(외부 콜 대기 고착)을 화면이 알아볼 수 있게 내려준다.
+    last_event_at: datetime | None = None
 
 
 class DecideRequest(BaseModel):
