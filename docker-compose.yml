@@ -48,3 +48,9 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    volumes:
+      # 컨테이너를 재생성하면 /app/data는 통째로 사라진다 - 업로드 자료가 날아간다
+      # (2026-08-12 운영에서 실제로 PDF 6개 손실). prod와 같은 구성을 유지한다.
+      - ./data:/app/data
+      - ./exports:/app/exports
+      - ./cache:/app/cache
