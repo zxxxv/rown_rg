@@ -26,6 +26,11 @@ import {
   OutlineEditor,
   toPresetChapters,
 } from "./OutlineEditor";
+import {
+  clearPresetEditorDraft,
+  readPresetEditorDraft,
+  usePresetEditorDraftSave,
+} from "./usePresetEditorDraft";
 
 /** 내 목차 프리셋 만들기/편집 - 생성 폼과 완전히 같은 편집기(OutlineEditor)를 쓴다.
  * 미리 구성을 준비해 두고, 프로젝트 생성 화면의 보고서 유형에서 불러온다. */
@@ -40,10 +45,13 @@ export function PresetEditorDialog({
   const update = useUpdateUserPreset();
   // 편집이면 서버에서 골격을 받아 채운다 - 목록 응답에는 chapters가 없다.
   const detail = usePresetDetail(existing?.key ?? null);
-  const [name, setName] = useState(existing?.name ?? "");
-  const [description, setDescription] = useState("");
+  // 신규 작성만 초안을 복원한다(편집은 서버가 진실). 마운트 시 한 번만 읽는다.
+  const [draft] = useState(() => (existing ? null : readPresetEditorDraft()));
+  const [restoredDraft, setRestoredDraft] = useState(draft !== null);
+  const [name, setName] = useState(existing?.name ?? draft?.name ?? "");
+  const [description, setDescription] = useState(draft?.description ?? "");
   const [chapters, setChapters] = useState<DraftChapter[] | null>(
-    existing ? null : [emptyChapter()],
+    existing ? null : (draft?.chapters ?? [emptyChapter()]),
   );
   useEffect(() => {
     if (existing && detail.data && chapters === null) {
@@ -52,6 +60,19 @@ export function PresetEditorDialog({
       setDescription(detail.data.desc);
     }
   }, [existing, detail.data, chapters]);
+  // 쓰는 동안 자동 저장 - 다른 페이지에 다녀오거나 실수로 닫아도 이어서 쓴다.
+  usePresetEditorDraftSave(!existing, {
+    name,
+    description,
+    chapters: chapters ?? [],
+  });
+  const discardDraft = () => {
+    clearPresetEditorDraft();
+    setName("");
+    setDescription("");
+    setChapters([emptyChapter()]);
+    setRestoredDraft(false);
+  };
 
   const pending = create.isPending || update.isPending;
   const cleaned = chapters ? toPresetChapters(chapters) : [];
@@ -70,6 +91,7 @@ export function PresetEditorDialog({
         toast.success(`"${body.name}" 저장됨`);
       } else {
         await create.mutateAsync(body);
+        clearPresetEditorDraft(); // 저장됐으면 초안은 역할이 끝났다
         toast.success(`"${body.name}" 만들어짐`, {
           description: "프로젝트 생성 시 보고서 유형에서 선택할 수 있습니다.",
         });
@@ -92,6 +114,16 @@ export function PresetEditorDialog({
             불러옵니다.
           </DialogDescription>
         </DialogHeader>
+        {restoredDraft ? (
+          <div className="flex flex-wrap items-center gap-2 rounded border border-accent/40 bg-bg-info px-3 py-2">
+            <p className="text-xs text-fg-secondary">
+              작성하던 내용을 복원했습니다. 새로 시작하려면 초안을 비우세요.
+            </p>
+            <Button type="button" variant="ghost" size="sm" onClick={discardDraft}>
+              초안 비우기
+            </Button>
+          </div>
+        ) : null}
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
