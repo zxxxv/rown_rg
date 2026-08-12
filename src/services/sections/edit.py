@@ -52,7 +52,9 @@ async def regenerate_section(
 
     chunks = await retrieve(section)
     # 재료가 목표에 못 미치면 목표를 내린다 — 검색 뒤라야 실제 근거 수를 안다.
+    base_min_chars = ctx.min_chars
     ctx = scale_for_evidence(ctx, sum(1 for c in chunks if not c.is_summary))
+    volume_scaled = ctx.min_chars != base_min_chars
     write_model = model or app_settings.get_str("write_model")
 
     n_parts = plan_part_count(ctx.min_chars)
@@ -69,7 +71,7 @@ async def regenerate_section(
             project_id=project_id,
         )
         if split is not None:
-            return split
+            return split.model_copy(update={"volume_scaled": volume_scaled})
         # 분할이 무너져 단일 호출로 간다 - 절이 짧아지고 인용이 준다. 흔적을 남긴다.
         fell_back = True
     else:
@@ -85,7 +87,9 @@ async def regenerate_section(
         user_id=user_id,
         project_id=project_id,
     )
-    return drafts[0].model_copy(update={"split_fallback": fell_back})
+    return drafts[0].model_copy(
+        update={"split_fallback": fell_back, "volume_scaled": volume_scaled}
+    )
 
 
 _BLOCK_REWRITE_PROMPT = """다음은 보고서의 한 절 전체입니다. \

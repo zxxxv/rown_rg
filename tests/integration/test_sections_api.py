@@ -164,6 +164,10 @@ class TestSectionsApi:
         await test_session.commit()
         rows = await _seed_sections(test_session, project.id)
         sid = rows[2].id  # pending 섹션
+        # 자료 부족으로 썼던 절 - 재작성이 근거를 채우면 이 배지는 내려가야 한다
+        # (재업로드 워크플로우의 마감 신호, 2026-08-13).
+        rows[2].meta = {"volume_scaled": True}
+        await test_session.commit()
 
         cited = uuid4()
 
@@ -188,6 +192,8 @@ class TestSectionsApi:
         assert body["content"] == "AI 재작성 결과"
         assert body["source_ids"] == [str(cited)]
         assert body["qa_status"] == "passed"
+        # 이번 재작성은 분량을 안 줄였으므로(volume_scaled=False) 자료 부족 배지가 내려간다
+        assert body["evidence"]["scarce"] is False
 
     async def test_chart_block_is_not_rewritten_by_ai(
         self,

@@ -47,6 +47,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
 import { chartFallbackTable } from "@/features/preview/chartSpec";
+import { EvidenceBoost } from "@/features/preview/EvidenceBoost";
 import { BlockEvidence, partitionBlockEvidence } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { findTable, isTableCaption, type MarkdownTable } from "@/features/preview/tableToChart";
@@ -964,15 +965,15 @@ function SectionView({
 
       {data.evidence.scarce ? (
         // 근거가 모자란 절은 분량 목표를 내려서 쓴다 - 그 사실을 본문에 적으면 납품물이
-        // 더러워지므로(사용자 지적 2026-08-10) 본문 대신 여기서만 알린다.
-        <div className="flex items-center gap-1.5 border-b border-fg-warning/30 bg-bg-warning px-6 py-2.5">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-fg-warning" aria-hidden />
-          <p className="text-xs text-fg">
-            자료 부족 절 - 확보된 근거
-            {data.evidence.count !== null ? ` ${data.evidence.count}건` : ""}에 맞춰 분량을 줄여
-            작성했습니다. 자료를 추가하고 이 절만 재작성하면 채워집니다.
-          </p>
-        </div>
+        // 더러워지므로(사용자 지적 2026-08-10) 본문 대신 여기서만 알린다. 경고에서 바로
+        // 자료 추가→색인→이 절만 다시 쓰기가 이어진다(재업로드 워크플로우, 2026-08-13).
+        <EvidenceBoost
+          projectId={projectId}
+          count={data.evidence.count}
+          editable={editable}
+          onRewrite={() => void onRewriteSection()}
+          rewritePending={rewrite.isPending}
+        />
       ) : null}
 
       {qaWarnings.length > 0 ? (

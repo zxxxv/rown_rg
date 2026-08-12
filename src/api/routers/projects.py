@@ -1891,6 +1891,9 @@ async def rewrite_section(
     # (실린 근거 수를 모르고, 마커→청크 대응도 복원할 수 없다).
     meta = {**(row.meta or {}), "pool_chunk_ids": [str(c) for c in draft.pool_chunk_ids]}
     meta["plan_failed"] = draft.split_fallback
+    # 재작성이 새 근거로 목표를 채웠으면 '자료 부족' 배지를 내린다 — 안 갱신하면
+    # 자료를 추가해 다시 써도 배지가 남는다(재업로드 워크플로우의 마감 신호).
+    meta["volume_scaled"] = draft.volume_scaled
     if draft.pool_chunk_ids:
         meta["evidence_count"] = len(draft.pool_chunk_ids)
     try:
