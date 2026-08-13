@@ -490,7 +490,9 @@ export function MarkdownContent({ content, citations, evidence }: MarkdownConten
           ))}
         </div>
       ) : null}
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      {/* singleTilde 차단 - "1~4조, 2~5명"처럼 물결이 두 번 나오면 사이가 취소선으로 그어진다.
+          GFM 원 규격대로 ~~만 취소선으로 받는다(본문 수치 구간은 ~ 하나를 쓴다). */}
+      <ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }]]} components={components}>
         {prepared}
       </ReactMarkdown>
     </div>

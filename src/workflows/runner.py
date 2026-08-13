@@ -57,6 +57,10 @@ async def _notify_safe(
     프로젝트별 옵트인: config.notification_channels에 'naver_works'가 있을 때만 발송한다
     (전역 기본은 off — 사용자가 프로젝트에서 알림을 켜야 온다). result_type은 봇 템플릿
     키(success=완료, partial=검토 대기, failed=실패).
+
+    page는 버튼이 여는 화면 — 문구가 "검토하러 가기"인데 검토 화면이 아닌 곳에 떨어지면
+    안 되므로, 게이트 알림은 _GATE_PAGES로 결정 UI가 실제로 있는 화면을 넘긴다.
+    /export·/progress는 폐지된 경로다(개요로 리다이렉트만 남음) — 쓰지 말 것.
     """
     try:
         async with async_session_maker() as session:
@@ -75,6 +79,10 @@ async def _notify_safe(
         )
     except Exception:
         logger.warning("project.notify_failed", project_id=str(project_id), exc_info=True)
+
+
+# 게이트 → 결정 UI가 있는 화면. 자료 검토는 /sources, 본문 검토(QA)는 /preview에 통합됐다.
+_GATE_PAGES = {"source_pool": "sources", "qa_select": "preview"}
 
 
 def _parse_uuid_list(raw: Any) -> list[uuid.UUID]:
@@ -293,12 +301,18 @@ async def _execute(project_id: uuid.UUID) -> None:
                     str(outcome.review.id),
                     gate_level(outcome.review.gate.value),
                 )
-                # 검토 차례 알림 (partial=확인 필요 템플릿)
-                await _notify_safe(owner_id, project_id, "partial", page="progress")
+                # 검토 차례 알림 (partial=확인 필요 템플릿) — 버튼은 그 게이트의 결정 화면으로
+                await _notify_safe(
+                    owner_id,
+                    project_id,
+                    "partial",
+                    page=_GATE_PAGES.get(outcome.review.gate.value, "overview"),
+                )
             else:
                 await session.commit()
                 logger.info("project.completed", project_id=str(project_id))
-                await _notify_safe(owner_id, project_id, "success", page="export")
+                # 완료 알림 — 다운로드는 개요 헤더에 있다
+                await _notify_safe(owner_id, project_id, "success", page="overview")
     except cancel.RunCancelled:
         # 사용자 취소 — 실패가 아니라 깨끗한 중단으로 CANCELLED 확정(created 복귀 로직 회피).
         logger.info("project.cancelled", project_id=str(project_id))
@@ -354,7 +368,8 @@ async def _execute(project_id: uuid.UUID) -> None:
         else:
             emit_error(project_id, "run_failed", "실행 중 오류가 발생했습니다")
         if owner_id is not None:
-            await _notify_safe(owner_id, project_id, "failed", page="progress")
+            # 실패 알림 — 상태·재시작은 개요 화면에 있다(/progress는 폐지된 경로)
+            await _notify_safe(owner_id, project_id, "failed", page="overview")
 
 
 def _spawn(coro: Any) -> None:
@@ -592,7 +607,8 @@ async def _collect_more(project_id: uuid.UUID) -> None:
             await session.commit()
         emit_checkpoint(project_id, str(review.id), gate_level(review.gate.value))
         if owner_id is not None:
-            await _notify_safe(owner_id, project_id, "partial", page="progress")
+            # 추가 조사 후 재검토 — 항상 자료 검토 게이트라 결정 화면(/sources)으로
+            await _notify_safe(owner_id, project_id, "partial", page="sources")
     except Exception:
         logger.exception("source_pool.collect_more_failed", project_id=str(project_id))
         emit_error(project_id, "collect_more_failed", "추가 조사 중 오류가 발생했습니다")
