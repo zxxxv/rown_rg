@@ -43,6 +43,7 @@ import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
@@ -1240,8 +1241,11 @@ function SectionView({
           <Label htmlFor="rewrite-instruction" className="text-xs text-fg-secondary">
             {selectedBlocks.length > 0 ? `블록 ${selectedBlocks.length}개` : "절 전체"} 재작성 지시
           </Label>
-          <Textarea
+          {/* 한 줄 지시 입력 - textarea를 한 줄 높이로 누르면 Windows에서 세로 스크롤
+              화살표가 스피너처럼 보인다(2026-08-14 사용자 지적). 단일행 Input으로. */}
+          <Input
             id="rewrite-instruction"
+            type="text"
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
             placeholder={
@@ -1249,7 +1253,7 @@ function SectionView({
                 ? "예: 더 간결하게, 수치를 앞세워서"
                 : "예: 정책 시사점을 강조해서 다시 작성"
             }
-            className="h-9 min-h-0 flex-1 resize-none py-2 text-xs"
+            className="h-9 flex-1 text-xs"
             disabled={chartSelected}
           />
           <Button
