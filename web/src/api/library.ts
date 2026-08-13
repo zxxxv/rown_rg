@@ -6,6 +6,7 @@ import {
   type SourceContent,
   SourceContentSchema,
 } from "@/api/types";
+import { uploadWithProgress } from "@/api/upload";
 import { env } from "@/env";
 
 export const libraryKeys = {
@@ -58,8 +59,11 @@ interface UploadFileInput {
   file: File;
   /** 최상위 업로드 시 개인(내 자료)=true / 회사 공유=false. 상위 폴더가 있으면 무시(상속). */
   is_personal?: boolean;
+  /** 실제 전송 진행률(0~100). */
+  onProgress?: (percent: number) => void;
 }
 
+// XHR 업로드 - 진행률 + 넉넉한 타임아웃. ky 기본 30초는 수십 MB 파일이 잘렸다.
 export function useUploadFile() {
   const qc = useQueryClient();
   return useMutation({
@@ -69,7 +73,7 @@ export function useUploadFile() {
       fd.append("file", input.file);
       if (input.parent_id) fd.append("parent_id", input.parent_id);
       fd.append("is_personal", input.is_personal ? "true" : "false");
-      return apiClient.post<unknown>("library/files", { body: fd });
+      return uploadWithProgress<unknown>("library/files", fd, { onProgress: input.onProgress });
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: libraryKeys.all });

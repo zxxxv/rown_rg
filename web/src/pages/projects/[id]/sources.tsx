@@ -120,25 +120,30 @@ export default function SourcesPage() {
     return { included, excluded };
   }, [items]);
 
-  // 직접 업로드 → 저장 + 즉시 색인(백엔드). 진행 표시는 근사(전송·색인 단일 단계).
-  // PDF·HWPX만 색인되며, 그 외 형식은 백엔드가 명확한 오류로 알려준다.
+  // 직접 업로드 → 저장 + 즉시 색인(백엔드). 진행률은 XHR 전송 바이트 실측 -
+  // 전송이 끝나면 "저장 중…"으로 바뀌고, 색인은 목록 행의 상태가 이어받는다.
   const handleFiles = (files: File[]) => {
     for (const file of files) {
       const rowId = `${file.name}-${file.size}-${file.lastModified}`;
       setUploading((u) =>
-        u.some((f) => f.id === rowId) ? u : [...u, { id: rowId, name: file.name, progress: 50 }],
+        u.some((f) => f.id === rowId) ? u : [...u, { id: rowId, name: file.name, progress: 0 }],
       );
-      uploadSource.mutate(file, {
-        onSuccess: () => {
-          setUploading((u) => u.filter((f) => f.id !== rowId));
-          toast.success(`"${file.name}" 업로드·색인 완료`);
+      const onProgress = (percent: number) =>
+        setUploading((u) => u.map((f) => (f.id === rowId ? { ...f, progress: percent } : f)));
+      uploadSource.mutate(
+        { file, onProgress },
+        {
+          onSuccess: () => {
+            setUploading((u) => u.filter((f) => f.id !== rowId));
+            toast.success(`"${file.name}" 업로드·색인 완료`);
+          },
+          onError: (err: unknown) => {
+            setUploading((u) => u.filter((f) => f.id !== rowId));
+            const msg = err instanceof ApiError ? err.message : "업로드에 실패했습니다.";
+            toast.error("업로드 실패", { description: msg });
+          },
         },
-        onError: (err: unknown) => {
-          setUploading((u) => u.filter((f) => f.id !== rowId));
-          const msg = err instanceof ApiError ? err.message : "업로드에 실패했습니다.";
-          toast.error("업로드 실패", { description: msg });
-        },
-      });
+      );
     }
   };
 

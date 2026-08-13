@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
 import type { Source, SourceListResponse } from "@/api/types";
+import { uploadWithProgress } from "@/api/upload";
 
 // ─── 실계약: /projects/{id}/sources ──────────────────────────────────────
 // project_sources 행 + metadata 신호(웹 수집은 indexer가, 파일 소스는 업로드/불러오기가 영속화).
@@ -136,18 +137,22 @@ export function useDeleteSource(projectId: string) {
   });
 }
 
+export interface UploadSourceInput {
+  file: File;
+  /** 실제 전송 진행률(0~100) - 로딩바가 가짜 50%에 멈춰 보이던 것을 대체. */
+  onProgress?: (percent: number) => void;
+}
+
 // 직접 업로드 자료 - 파일 저장 + 즉시 색인(백엔드). 성공 시 자료 목록 갱신.
+// 색인은 뒤에서 도므로 이 요청은 파일 전송 + 자리 행 생성까지만 기다린다.
 export function useUploadProjectSource(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (file: File) => {
+    mutationFn: async ({ file, onProgress }: UploadSourceInput) => {
       const fd = new FormData();
       fd.append("file", file);
-      const data = await apiClient.post<unknown>(`projects/${projectId}/sources/upload`, {
-        body: fd,
-        // 업로드 자체(수십 MB)는 기본 30초로 부족할 수 있다. 색인은 뒤에서 도므로
-        // 이 요청은 파일 전송 + 자리 행 생성까지만 기다린다.
-        timeout: 120_000,
+      const data = await uploadWithProgress<unknown>(`projects/${projectId}/sources/upload`, fd, {
+        onProgress,
       });
       return toLegacySource(projectId, SourceItemSchema.parse(data));
     },

@@ -67,10 +67,15 @@ const baseClient = ky.create({
   },
 });
 
+/** API 절대 URL 조립 - fetch(ky)를 못 쓰는 호출(XHR 업로드)이 같은 base를 공유한다. */
+export function apiUrl(path: string): string {
+  return `${resolvePrefixUrl(env.VITE_API_BASE_URL).replace(/\/$/, "")}/${path}`;
+}
+
 // 401 시 한 번만 토큰 자동 갱신을 시도한다(동시다발 401은 single-flight로 공유).
 let refreshInFlight: Promise<boolean> | null = null;
 
-function refreshSession(): Promise<boolean> {
+export function refreshSession(): Promise<boolean> {
   if (!refreshInFlight) {
     refreshInFlight = baseClient
       .post("auth/refresh", { throwHttpErrors: false, retry: 0 })

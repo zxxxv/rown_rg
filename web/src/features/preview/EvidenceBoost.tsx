@@ -44,7 +44,7 @@ export function EvidenceBoost({
     if (!files?.length) return;
     for (const file of Array.from(files)) {
       try {
-        const row = await upload.mutateAsync(file);
+        const row = await upload.mutateAsync({ file });
         setTrackedIds((prev) => [...prev, row.id]);
       } catch (err) {
         const msg = err instanceof ApiError ? err.message : "업로드에 실패했습니다.";
