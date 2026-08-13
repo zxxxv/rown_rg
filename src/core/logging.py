@@ -1,5 +1,7 @@
 import logging
+import os
 import sys
+from logging.handlers import RotatingFileHandler
 
 import structlog
 
@@ -64,6 +66,25 @@ def configure_logging() -> None:
     root_logger.handlers.clear()
     root_logger.addHandler(handler)
     root_logger.setLevel(log_level)
+
+    # 프로덕션: stdout에 더해 파일로도 JSON 로그를 순환 기록한다. 컨테이너를 재생성해도
+    # (배포) 로그가 사라지지 않게 /app/logs(영속 볼륨)에 남긴다 — 2026-08-12 실측: 배포마다
+    # 로그가 소실돼 과거 이벤트(예: docling 파싱) 조회가 불가능했다. stdout 핸들러는 그대로
+    # 두어 `docker compose logs`도 계속 동작한다. 파일 로깅 실패는 비치명(경고만).
+    if settings.is_production:
+        log_dir = "/app/logs"
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                os.path.join(log_dir, "app.log"),
+                maxBytes=50 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
+        except OSError:
+            root_logger.warning("file_logging.setup_failed", exc_info=True)
 
     for noisy in ("uvicorn.access", "httpx", "sqlalchemy.engine"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
