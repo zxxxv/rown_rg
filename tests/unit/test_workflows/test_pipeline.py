@@ -15,6 +15,7 @@ import pytest
 from src.clients.llm.base import CompletionRequest, CompletionResponse
 from src.clients.llm.exceptions import LLMAPIError
 from src.core.config import settings
+from src.core.exceptions import IncompleteReportError
 from src.core.state import ProjectState
 from src.core.types import (
     ProjectStage,
@@ -413,10 +414,9 @@ class TestLegacyResumeThroughAssemble:
         assert done.state.current_stage is ProjectStage.COMPLETED
         assert len(done.state.selected_drafts()) == 2
 
-    async def test_missing_selection_still_completes_but_incomplete_structure(
-        self, fake_write: RetrievedChunk
-    ):
-        # 한 섹션만 선택 → assemble은 진행하되 selected_drafts는 1개 (structure 미완)
+    async def test_missing_selection_fails_completion_gate(self, fake_write: RetrievedChunk):
+        # 한 섹션만 선택 → 완성 게이트(2026-08-13)가 조립을 실패로 표면화한다 —
+        # 빈 절을 실은 채 completed로 마감되지 않는다(6.1 실사고 재발 방지).
         payload, state = self._paused_payload_and_state(fake_write)
         first = payload["sections"][0]
         selections = {first["section_id"]: first["candidates"][0]["candidate_id"]}
@@ -426,6 +426,6 @@ class TestLegacyResumeThroughAssemble:
         )
         fresh = rehydrate_from_payload(fresh, payload)
         fresh = apply_selection(fresh, selections)
-        done = await advance(fresh)
-        assert isinstance(done, Done)
-        assert len(done.state.selected_drafts()) == 1
+        with pytest.raises(IncompleteReportError) as excinfo:
+            await advance(fresh)
+        assert "미작성 절 1개" in str(excinfo.value)

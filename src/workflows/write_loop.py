@@ -13,10 +13,14 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 from uuid import UUID
 
+import structlog
+
 from src.clients.llm.base import LLMClient
+from src.clients.llm.exceptions import LLMClientError
 from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import (
+    CheckSeverity,
     GateResult,
     SectionCandidate,
     SectionCandidateSet,
@@ -41,6 +45,8 @@ from src.services.qa.gate import (
 from src.services.retrieval.section import SectionRetriever
 from src.workflows import cancel
 from src.workflows.events import emit_step
+
+logger = structlog.get_logger(__name__)
 
 # 재생성 시 온도 — 같은 온도로 다시 부르면 같은 실패를 반복할 확률이 높다.
 RETRY_TEMPERATURE = 1.0
@@ -160,13 +166,36 @@ async def run_write_loop(
             )
             if retry_set.survivors:
                 cset = retry_set
+        if not cset.survivors:
+            # 재시도까지 전멸 — 침묵하면 빈 절이 '완성' 뒤에 숨는다(2026-08-13 실사고:
+            # 6.1 빈 절·7.1 토막이 completed로 마감). 실패 사실·사유를 절 meta에 남겨
+            # 화면이 보여주게 하고, 완성 차단은 assemble의 structure 검사가 맡는다.
+            meta = section_meta[section.section_id]
+            meta["write_failed"] = True
+            detail = next(
+                (
+                    r.detail
+                    for cand in cset.candidates
+                    for r in cand.report.results
+                    if not r.passed and r.severity is CheckSeverity.HARD and r.detail
+                ),
+                None,
+            )
+            if detail:
+                meta["fail_detail"] = detail
+            logger.error(
+                "write_loop.section_failed",
+                project_id=str(pid),
+                section=f"{section.chapter_number}.{section.section_number}",
+                detail=detail,
+            )
         if draft_store is not None:
             # 절 완성 즉시 초안 영속화 — 편집기 미리보기가 진행 중에도 완성분을 보여준다
             survivor = cset.survivors[0].draft if cset.survivors else None
             # 지금까지 완료된 절들의 지표 스냅샷을 실어 넘긴다 — 작성 중 미리보기 배지용.
             # 스냅샷이어야 draft_store가 await하는 동안 다른 절의 mutation이 새지 않는다.
             await draft_store(state.with_section_meta(dict(section_meta)), section, survivor)
-        emit_step(pid, "writing", label, "completed")
+        emit_step(pid, "writing", label, "completed" if cset.survivors else "failed")
         return cset
 
     # 절끼리는 의존성이 없어(각자 검색→생성→게이트) 병렬이 안전하다. 상한은
@@ -175,7 +204,33 @@ async def run_write_loop(
 
     async def _bounded(section: SectionPlan) -> SectionCandidateSet:
         async with sem:
-            return await _process_section(section)
+            try:
+                return await _process_section(section)
+            except LLMClientError as exc:
+                # 절 하나의 LLM 실패(어댑터 백오프 재시도 소진)가 나머지 절의 작업을
+                # 통째로 버리게 하지 않는다 — 절만 실패로 기록하고 계속. 취소·DB 오류
+                # 등 비-LLM 예외는 기존대로 전파해 실행 전체를 세운다.
+                logger.error(
+                    "write_loop.section_llm_error",
+                    project_id=str(pid),
+                    section=f"{section.chapter_number}.{section.section_number}",
+                    error=str(exc),
+                )
+                meta = section_meta.setdefault(section.section_id, {})
+                meta["write_failed"] = True
+                meta["fail_detail"] = f"LLM 호출 실패: {exc}"
+                emit_step(
+                    pid,
+                    "writing",
+                    f"본문 작성 · {section.chapter_number}.{section.section_number}"
+                    f" {section.title}",
+                    "failed",
+                )
+                if draft_store is not None:
+                    # 실패 절도 행으로 남긴다(status=failed·빈 본문) — 미리보기가
+                    # '이 절은 비었음'을 정직하게 보여주고 재작성 진입점이 된다.
+                    await draft_store(state.with_section_meta(dict(section_meta)), section, None)
+                return SectionCandidateSet(section_id=section.section_id)
 
     tasks = [asyncio.ensure_future(_bounded(s)) for s in state.section_plan]
     try:
@@ -189,7 +244,8 @@ async def run_write_loop(
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
     # 완료 순서로 쌓인 meta를 절 순서로 재배열 — 직렬 버전과 동일한 산출을 보장한다.
-    ordered_meta = {s.section_id: section_meta[s.section_id] for s in state.section_plan}
+    # 실패 절은 meta가 부분적일 수 있어 .get으로 읽는다(격리 경로에서 채우지만 방어).
+    ordered_meta = {s.section_id: section_meta.get(s.section_id, {}) for s in state.section_plan}
     return state.with_section_candidates(candidate_sets).with_section_meta(ordered_meta)
 
 

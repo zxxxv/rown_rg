@@ -13,7 +13,7 @@ import asyncio
 from collections.abc import Sequence
 from uuid import UUID
 
-from src.clients.llm.base import CompletionRequest, LLMClient, Message
+from src.clients.llm.base import CompletionRequest, LLMClient, Message, incomplete_stop
 from src.clients.llm.factory import get_llm_client
 from src.clients.llm.token_tracker import token_context
 from src.core.citations import numbers_in_order
@@ -120,6 +120,9 @@ async def _one_candidate(
         cited_chunk_ids=_extract_cited_ids(response.content, chunks),
         # 인용 가능한 것만 — 요약 노드는 [n] 풀에서 빠지므로 여기서도 뺀다.
         pool_chunk_ids=[c.chunk_id for c in chunks if not c.is_summary],
+        # max_tokens 컷·refusal 등 미완결 종료를 초안에 새긴다 — 게이트가 HARD 제외해
+        # 문장 중간에 끊긴 토막이 '완성 절'로 채택되는 것을 막는다(2026-08-13 실사고).
+        incomplete_reason=incomplete_stop(response.stop_reason),
     )
 
 

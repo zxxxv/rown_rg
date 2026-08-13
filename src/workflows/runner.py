@@ -359,11 +359,19 @@ async def _execute(project_id: uuid.UUID) -> None:
                 logger.warning("project.status_rollback_failed", project_id=str(project_id))
         # 한도 초과는 원인이 명확한 실패 — 일반 오류로 뭉개지 말고 그대로 알린다
         # (진행 중 도달 케이스: 사전 검사는 통과했지만 실행 도중 한도에 닿음).
-        from src.core.exceptions import QuotaExceededError
+        from src.core.exceptions import IncompleteReportError, QuotaExceededError
 
         if isinstance(exc, QuotaExceededError):
             emit_error(
                 project_id, "quota_exceeded", f"{exc.message} - 한도 상향 후 다시 시작하세요"
+            )
+        elif isinstance(exc, IncompleteReportError):
+            # 완성 게이트(2026-08-13) — 어느 절이 비었는지까지 그대로 알린다.
+            # 완성분은 sections에 저장돼 있어 미리보기에서 열람·재작성 후 재시작하면 된다.
+            emit_error(
+                project_id,
+                "sections_incomplete",
+                f"{exc.message} - 미리보기에서 실패한 절을 채운 뒤 다시 시작하세요",
             )
         else:
             emit_error(project_id, "run_failed", "실행 중 오류가 발생했습니다")

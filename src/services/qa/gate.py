@@ -62,6 +62,22 @@ def check_citation_resolves(draft: SectionDraft, valid_chunk_ids: set[UUID]) -> 
     )
 
 
+def check_complete(draft: SectionDraft) -> GateResult:
+    """생성이 정상 종료로 완결됐는지 — max_tokens 컷·refusal 등은 HARD 제외.
+
+    길이 검사(bounds)는 SOFT라 문장 중간에 끊긴 토막도 통과한다 — 216자 토막이
+    '완성 절'로 조립된 실사고(2026-08-13, 7.1절)의 구멍. 미완결 초안은 후보에서
+    제외해 write 루프의 재생성을 태우고, 그래도 실패하면 절 누락으로 표면화된다.
+    """
+    passed = not draft.incomplete_reason
+    return GateResult(
+        check="complete",
+        severity=CheckSeverity.HARD,
+        passed=passed,
+        detail=None if passed else f"생성 미완결 (stop_reason={draft.incomplete_reason})",
+    )
+
+
 def check_renderable(draft: SectionDraft) -> GateResult:
     """본문이 렌더 가능한지 — 비어있지 않고 제어문자가 없어야.
 
@@ -333,6 +349,7 @@ def run_section_gate(
     cited_content = "\n".join(c.content for c in chunks if c.chunk_id in cited_ids)
     results = [
         check_citation_resolves(draft, valid_ids),
+        check_complete(draft),
         check_renderable(draft),
         check_citation_markers(draft),
         check_numeric_grounded(draft, cited_content),
@@ -377,12 +394,18 @@ def check_structure_complete(
     selected: Sequence[SectionDraft],
     plan: Sequence[SectionPlan],
 ) -> GateResult:
-    """조립 후 보고서 레벨 검사 — 선택된 초안이 계획된 전 섹션을 빠짐없이 덮는지."""
-    planned = {s.section_id for s in plan}
-    drafted = {d.section_id for d in selected}
-    missing = planned - drafted
+    """조립 후 보고서 레벨 검사 — 선택된 초안이 계획된 전 섹션을 빠짐없이 덮는지.
+
+    내용이 빈 초안은 '선택됐어도' 누락으로 센다 — 0자 절이 완성 보고서로 마감된
+    실사고(2026-08-13, 6.1절) 재발 방지. detail에 절 번호를 실어 사람이 어느 절을
+    고쳐야 하는지 바로 알게 한다.
+    """
+    drafted = {d.section_id for d in selected if d.content.strip()}
+    missing = [
+        f"{s.chapter_number}.{s.section_number}" for s in plan if s.section_id not in drafted
+    ]
     passed = not missing
-    detail = None if passed else f"누락 섹션 {len(missing)}개"
+    detail = None if passed else f"미작성 절 {len(missing)}개: {', '.join(missing)}"
     return GateResult(
         check="structure_complete",
         severity=CheckSeverity.HARD,

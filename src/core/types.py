@@ -162,6 +162,10 @@ class SectionDraft(BaseModel):
     # 재료 부족으로 분량 목표를 내려 썼는가 — 재작성 경로가 절 meta(volume_scaled)를
     # 이 값으로 갱신한다. 안 갱신하면 자료를 채워 다시 써도 '자료 부족' 배지가 남는다.
     volume_scaled: bool = False
+    # 생성이 완결되지 못한 이유(provider stop_reason). 빈 문자열이면 정상 완결.
+    # max_tokens 컷·refusal이 문장 중간에 멈춘 216자 토막을 '완성 절'로 통과시킨
+    # 실사고(2026-08-13, 7.1절) 재발 방지 — 게이트가 이 값으로 HARD 제외한다.
+    incomplete_reason: str = ""
 
 
 # QA 후보 검사 — AI는 후보만 생성, 합격/불합격은 정적 코드, 최종 선택은 사람.

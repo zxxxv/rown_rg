@@ -27,7 +27,7 @@ from uuid import UUID
 
 import structlog
 
-from src.clients.llm.base import CompletionRequest, LLMClient, Message
+from src.clients.llm.base import CompletionRequest, LLMClient, Message, incomplete_stop
 from src.clients.llm.token_tracker import token_context
 from src.core.citations import numbers_in_order
 from src.core.config import settings
@@ -390,6 +390,27 @@ async def generate_section_split(
                 cache_prefix_messages=1,  # 프리픽스 공유 — 파트 2+부터 캐시 읽기
             )
             response = await client.complete(request)
+            # 파트 미완결(max_tokens 컷·refusal 등)은 결합본 중간에 문장 토막을 심는다
+            # — 같은 호출 1회 재시도, 그래도 미완결이면 분할 포기(None) → 단일 호출
+            # 폴백. 폴백 초안의 미완결은 후보 게이트(check_complete)가 다시 본다.
+            reason = incomplete_stop(response.stop_reason)
+            if reason:
+                logger.warning(
+                    "split_writer.part_incomplete",
+                    section=f"{section.chapter_number}.{section.section_number}",
+                    part=i,
+                    stop_reason=reason,
+                )
+                response = await client.complete(request)
+                reason = incomplete_stop(response.stop_reason)
+                if reason:
+                    logger.warning(
+                        "split_writer.part_incomplete_giving_up",
+                        section=f"{section.chapter_number}.{section.section_number}",
+                        part=i,
+                        stop_reason=reason,
+                    )
+                    return None
             part = response.content.strip()
             parts.append(part)
             headers += _headers(part)

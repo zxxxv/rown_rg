@@ -58,6 +58,14 @@ def _rows(state: ProjectState) -> list[Section]:
     rows: list[Section] = []
     for plan in state.section_plan:
         draft = drafts.get(plan.section_id)
+        meta = dict(state.section_meta.get(plan.section_id) or {})
+        if draft is None:
+            # 작성 실패 절(meta.write_failed)은 failed로 보존한다 — 전량 교체가
+            # 증분 저장의 failed 행을 pending으로 되돌리면, 화면이 '아직 안 쓴 절'과
+            # '쓰다 실패한 절'을 구분하지 못한다(2026-08-13 완성 게이트와 한 세트).
+            status = "failed" if meta.get("write_failed") else "pending"
+        else:
+            status = "completed"
         rows.append(
             Section(
                 id=plan.section_id,
@@ -69,11 +77,11 @@ def _rows(state: ProjectState) -> list[Section]:
                 level=2,
                 content=draft.content if draft is not None else "",
                 source_ids=list(draft.cited_chunk_ids) if draft is not None else [],
-                meta=dict(state.section_meta.get(plan.section_id) or {}),
+                meta=meta,
                 qa_status=_qa_status(
                     plan.section_id, state.section_selections, state.section_candidates
                 ),
-                status="completed" if draft is not None else "pending",
+                status=status,
             )
         )
     return rows

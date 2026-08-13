@@ -25,6 +25,7 @@ from src.clients.llm.token_tracker import token_context
 from src.clients.parser.base import strip_replacement_chars
 from src.core import app_settings
 from src.core.config import settings
+from src.core.exceptions import IncompleteReportError
 from src.core.state import ProjectState
 from src.core.types import SectionPlan, SourceRef, SourceType
 from src.services.generation.planner import plan_from_outline, plan_sections
@@ -982,6 +983,13 @@ async def assemble(state: ProjectState) -> ProjectState:
     # 선택 확정 섹션을 정규 테이블에 저장 — 사후 조회·편집(/sections)의 원천.
     # 렌더 성공 여부와 무관하게 저장한다(부분 완성도 열람 가능해야 함).
     await _section_store(state)
+    if not result.passed or not drafts:
+        # 완성 게이트(2026-08-13) — 빈 절을 실은 채 completed로 마감된 실사고의 재발
+        # 방지. 완성분은 위에서 저장돼 미리보기로 열람·재작성할 수 있고, 실행 자체는
+        # 실패로 표면화한다(렌더·PM검증 생략 — 미완성 보고서에 비용을 쓰지 않는다).
+        detail = result.detail or "선택된 초안 없음"
+        emit_step(pid, "export", "통합·교정·HWPX 변환", "failed")
+        raise IncompleteReportError(f"보고서를 완성할 수 없습니다 — {detail}")
     if settings.pm_verify_enabled and drafts:
         emit_step(pid, "export", "PM 검증 리포트", "started")
         try:
@@ -996,39 +1004,33 @@ async def assemble(state: ProjectState) -> ProjectState:
                 "assemble.pm_verify_failed", project_id=str(state.project_id), exc_info=True
             )
             emit_step(pid, "export", "PM 검증 리포트", "failed")
-    if result.passed and drafts:
-        # 출처 최종장 — 재개 복원 state는 sources가 비어 있어 렌더 직전 DB에서 채운다.
-        try:
-            refs = await _adopted_source_refs(state.project_id)
-            if refs and not state.sources:
-                state = state.model_copy(update={"sources": refs})
-        except Exception:
-            logger.warning("assemble.sources_load_failed", project_id=str(pid), exc_info=True)
-        # 약어 사전 — 설명 열을 LLM 1콜(최저가)로 채우고 영속화(다운로드 재렌더용).
-        glossary: dict[str, dict[str, str]] | None = None
-        try:
-            from src.services.export.glossary import build_glossary, persist_glossary
+    # 여기 도달 = 완성 게이트 통과(전 절 작성됨) — 렌더는 무조건 수행한다.
+    # 출처 최종장 — 재개 복원 state는 sources가 비어 있어 렌더 직전 DB에서 채운다.
+    try:
+        refs = await _adopted_source_refs(state.project_id)
+        if refs and not state.sources:
+            state = state.model_copy(update={"sources": refs})
+    except Exception:
+        logger.warning("assemble.sources_load_failed", project_id=str(pid), exc_info=True)
+    # 약어 사전 — 설명 열을 LLM 1콜(최저가)로 채우고 영속화(다운로드 재렌더용).
+    glossary: dict[str, dict[str, str]] | None = None
+    try:
+        from src.services.export.glossary import build_glossary, persist_glossary
 
-            glossary = await build_glossary(state)
-            await persist_glossary(state.project_id, glossary)
+        glossary = await build_glossary(state)
+        await persist_glossary(state.project_id, glossary)
+    except Exception:
+        # 설명은 장식 — 실패해도 풀네임만으로 렌더를 계속한다.
+        logger.warning("assemble.glossary_failed", project_id=str(pid), exc_info=True)
+    # (요약문 생성·렌더는 r6에서 제거 — 최종 산출물에 싣지 않기로 함, 2026-08-13.)
+    # 표지 작성자 — 소유자 이름. 실패해도 작성자 줄만 빠진다(렌더는 계속).
+    if not state.author:
+        try:
+            state = state.model_copy(update={"author": await _owner_name(state.user_id)})
         except Exception:
-            # 설명은 장식 — 실패해도 풀네임만으로 렌더를 계속한다.
-            logger.warning("assemble.glossary_failed", project_id=str(pid), exc_info=True)
-        # (요약문 생성·렌더는 r6에서 제거 — 최종 산출물에 싣지 않기로 함, 2026-08-13.)
-        # 표지 작성자 — 소유자 이름. 실패해도 작성자 줄만 빠진다(렌더는 계속).
-        if not state.author:
-            try:
-                state = state.model_copy(update={"author": await _owner_name(state.user_id)})
-            except Exception:
-                logger.warning("assemble.author_load_failed", project_id=str(pid), exc_info=True)
-        path = _exporter(state, glossary)
-        logger.info("assemble.exported", project_id=str(state.project_id), path=str(path))
-    else:
-        logger.warning(
-            "assemble.export_skipped",
-            project_id=str(state.project_id),
-            detail=result.detail or "선택된 초안 없음",
-        )
+            logger.warning("assemble.author_load_failed", project_id=str(pid), exc_info=True)
+    path = _exporter(state, glossary)
+    logger.info("assemble.exported", project_id=str(state.project_id), path=str(path))
     emit_step(pid, "export", "통합·교정·HWPX 변환", "completed")
     # export/completed 가 프론트의 '완료' 신호(별도 done 프레임 없음).
     emit_phase(pid, "export", "completed")

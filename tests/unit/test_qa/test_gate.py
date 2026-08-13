@@ -16,6 +16,7 @@ from src.services.qa.gate import (
     check_bounds,
     check_citation_markers,
     check_citation_resolves,
+    check_complete,
     check_numeric_grounded,
     check_renderable,
     check_structure_complete,
@@ -98,6 +99,37 @@ class TestRenderable:
         # 탭·개행은 렌더 가능한 문자 — 실패하면 안 됨.
         result = check_renderable(_draft("첫 줄\n\t들여쓴 줄"))
         assert result.passed is True
+
+
+# ---------- complete (HARD) ----------
+
+
+class TestComplete:
+    """max_tokens 컷·refusal로 문장 중간에 끊긴 토막이 '완성 절'로 채택된 실사고
+    (2026-08-13, 7.1절 216자) 재발 방지 — 미완결 초안은 HARD 제외."""
+
+    def test_complete_draft_passes(self):
+        result = check_complete(_draft("정상 완결된 본문."))
+        assert result.passed is True
+        assert result.severity is CheckSeverity.HARD
+
+    def test_truncated_draft_fails_hard(self):
+        draft = _draft("문장 중간에 끊긴 (출처 ").model_copy(
+            update={"incomplete_reason": "max_tokens"}
+        )
+        result = check_complete(draft)
+        assert result.passed is False
+        assert result.severity is CheckSeverity.HARD
+        assert "max_tokens" in result.detail
+
+    def test_truncated_candidate_excluded_by_gate(self):
+        # run_section_gate 종합에서도 HARD로 후보가 제외돼야 재생성 경로가 돈다.
+        chunk = _chunk("근거")
+        draft = _draft("끊긴 본문 " * 30, cited=[chunk.chunk_id]).model_copy(
+            update={"incomplete_reason": "refusal"}
+        )
+        report = run_section_gate(draft, [chunk], min_chars=1, max_chars=10_000)
+        assert report.excluded is True
 
 
 # ---------- numeric_grounded (SOFT) ----------
@@ -221,7 +253,8 @@ class TestRunSectionGate:
             cited_chunk_ids=[chunk.chunk_id],
         )
         report = run_section_gate(draft, [chunk], min_chars=10)
-        assert len(report.results) == 6  # citation_markers(2026-08-05)·uncited_claims(2026-08-11)
+        # citation_markers(2026-08-05)·uncited_claims(2026-08-11)·complete(2026-08-13)
+        assert len(report.results) == 7
         assert report.excluded is False
 
     def test_hallucinated_citation_excludes(self):
@@ -298,7 +331,17 @@ class TestStructureComplete:
         selected = [_draft("a").model_copy(update={"section_id": s1.section_id})]
         result = check_structure_complete(selected, [s1, s2])
         assert result.passed is False
-        assert "누락 섹션 1개" in result.detail
+        assert "미작성 절 1개" in result.detail
+        assert "2.1" in result.detail  # 어느 절인지 사람이 바로 알 수 있어야 한다
+
+    def test_empty_draft_counts_as_missing(self):
+        # 0자 절이 '선택됨'만으로 완성 취급된 실사고(2026-08-13, 6.1절) 재발 방지 —
+        # 내용 없는 초안은 누락과 동일하게 실패해야 한다.
+        s1 = SectionPlan(chapter_number=6, section_number=1, title="사업화 가능성")
+        selected = [_draft("   \n").model_copy(update={"section_id": s1.section_id})]
+        result = check_structure_complete(selected, [s1])
+        assert result.passed is False
+        assert "6.1" in result.detail
 
 
 class TestCitationMarkers:

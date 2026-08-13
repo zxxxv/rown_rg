@@ -257,6 +257,73 @@ class TestRunWriteLoopParallel:
         assert aborted.is_set()
 
 
+# ---------- 절 단위 실패 비삼킴 (2026-08-13 실사고 재발 방지) ----------
+
+
+class TestSectionFailureSurfacing:
+    """빈 절·토막 절이 '완성' 뒤에 숨지 않는다 — 실패는 meta에 기록되고 절만 격리된다."""
+
+    async def test_llm_error_isolated_to_failed_section(self):
+        """한 절의 LLM 실패(백오프 소진)가 다른 절의 완성을 버리지 않는다."""
+        from src.clients.llm.exceptions import LLMAPIError
+
+        state, chunk = _mk_state(["정상절", "실패절"])
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            return [chunk]
+
+        class _FailOne(_StubClient):
+            async def complete(self, request: CompletionRequest) -> CompletionResponse:
+                if "실패절" in request.messages[0].content:
+                    raise LLMAPIError("overloaded (모의)")
+                return await super().complete(request)
+
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=_FailOne("본문입니다. [1] " * 30), n=1
+        )
+        ok_plan, bad_plan = state.section_plan
+        by_id = {cs.section_id: cs for cs in result.section_candidates}
+        assert by_id[ok_plan.section_id].survivors  # 정상 절은 산다
+        assert by_id[bad_plan.section_id].candidates == []  # 실패 절은 빈 묶음
+        meta = result.section_meta[bad_plan.section_id]
+        assert meta["write_failed"] is True
+        assert "LLM 호출 실패" in meta["fail_detail"]
+        # 조립 게이트가 이 상태를 실패로 본다 — completed로 못 넘어간다.
+        from src.workflows.write_loop import auto_select_survivors
+
+        _, gate = check_assembled(auto_select_survivors(result))
+        assert gate.passed is False
+
+    async def test_truncated_response_excluded_and_recorded(self):
+        """max_tokens 컷 토막은 후보에서 제외되고(재생성 1회 포함) 실패로 기록된다."""
+
+        class _Truncated(_StubClient):
+            async def complete(self, request: CompletionRequest) -> CompletionResponse:
+                self.calls.append(request)
+                return CompletionResponse(
+                    content="문장 중간에 끊긴 본문 (출처 ",
+                    input_tokens=1,
+                    output_tokens=1,
+                    model=request.model,
+                    stop_reason="max_tokens",
+                )
+
+        state, chunk = _mk_state(["절단절"])
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            return [chunk]
+
+        stub = _Truncated("")
+        result = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        plan = state.section_plan[0]
+        cset = result.section_candidates[0]
+        assert cset.survivors == []  # 토막이 '완성 절'로 채택되지 않는다
+        assert len(stub.calls) == 2  # 원호출 + 재생성 1회
+        meta = result.section_meta[plan.section_id]
+        assert meta["write_failed"] is True
+        assert "미완결" in meta["fail_detail"]
+
+
 # ---------- qa_select_payload (survivors 필터 + 경고 노출) ----------
 
 
@@ -351,7 +418,8 @@ class TestSelectionAndAssembly:
         drafts, result = check_assembled(state)
         assert len(drafts) == 1
         assert result.passed is False
-        assert "누락 섹션 1개" in result.detail
+        assert "미작성 절 1개" in result.detail
+        assert "2.1" in result.detail
 
 
 # ---------- overlay_working_copy (검토 중 편집 → 조립 반영) ----------

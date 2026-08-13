@@ -72,5 +72,20 @@ class CompletionResponse(BaseModel):
     web_sources: list[WebSource] = []
 
 
+# 정상 완결로 인정하는 stop_reason — provider별 표기를 한곳에 모은다.
+# Anthropic: end_turn·stop_sequence / OpenAI(Responses): completed / Gemini: STOP /
+# 테스트 fake: stop. 화이트리스트 방식이라 미지의 값(max_tokens·refusal·SAFETY·
+# max_output_tokens 등)은 전부 미완결로 분류된다 — 절단이 조용히 통과하는 것보다
+# 재시도가 낫다(2026-08-13 실사고: 문장 중간 216자 토막이 완성 절로 조립됨).
+COMPLETE_STOP_REASONS: frozenset[str] = frozenset(
+    {"end_turn", "stop_sequence", "stop", "completed", "STOP"}
+)
+
+
+def incomplete_stop(stop_reason: str) -> str:
+    """미완결이면 그 이유(stop_reason)를, 정상 완결이면 빈 문자열을 돌려준다."""
+    return "" if stop_reason in COMPLETE_STOP_REASONS else stop_reason
+
+
 class LLMClient(Protocol):
     async def complete(self, request: CompletionRequest) -> CompletionResponse: ...
