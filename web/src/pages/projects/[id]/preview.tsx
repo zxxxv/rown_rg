@@ -568,7 +568,9 @@ function ChapterView({
     <article className="flex flex-col">
       <header className="border-b border-border px-6 py-4">
         <p className="font-mono text-xs text-fg-tertiary">{chapterIndex + 1}장</p>
-        <h2 className="text-lg font-semibold text-fg">{chapter.title}</h2>
+        {/* 본문 마크다운 h1(text-2xl)보다 작으면 위계가 뒤집혀 보인다(2026-08-14 지적)
+            - 장 제목은 이 화면의 최상위라 한 단계 위(3xl)로 둔다. */}
+        <h2 className="text-3xl font-semibold text-fg">{chapter.title}</h2>
         <p className="mt-1 text-xs text-fg-secondary">
           완성된 절 {completed.length}/{chapter.children.length}개 - 이어서 표시(읽기 전용). 편집은
           각 절을 여세요.
