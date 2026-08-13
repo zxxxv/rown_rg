@@ -33,6 +33,7 @@ from src.core.citations import numbers_in_order
 from src.core.config import settings
 from src.core.types import RetrievedChunk, SectionDraft, SectionPlan
 from src.services.generation.candidates import _build_prompt, _extract_cited_ids
+from src.services.generation.effort import write_effort
 from src.services.generation.writer_context import WriterContext
 
 if TYPE_CHECKING:
@@ -388,6 +389,7 @@ async def generate_section_split(
                 temperature=base_temperature,
                 max_tokens=PART_MAX_TOKENS,
                 cache_prefix_messages=1,  # 프리픽스 공유 — 파트 2+부터 캐시 읽기
+                effort=write_effort(model),
             )
             response = await client.complete(request)
             # 파트 미완결(max_tokens 컷·refusal 등)은 결합본 중간에 문장 토막을 심는다

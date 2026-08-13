@@ -18,6 +18,7 @@ from src.clients.llm.factory import get_llm_client
 from src.clients.llm.token_tracker import token_context
 from src.core.citations import numbers_in_order
 from src.core.types import RetrievedChunk, SectionDraft, SectionPlan
+from src.services.generation.effort import write_effort
 from src.services.generation.writer_context import WriterContext, build_writer_context
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -112,6 +113,7 @@ async def _one_candidate(
         system=system,
         temperature=temperature,
         max_tokens=max_tokens,
+        effort=write_effort(model),
     )
     response = await client.complete(request)
     return SectionDraft(

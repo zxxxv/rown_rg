@@ -17,6 +17,7 @@ from src.clients.llm.token_tracker import token_context
 from src.core import app_settings
 from src.core.types import SectionDraft, SectionPlan
 from src.services.generation.candidates import generate_section_candidates
+from src.services.generation.effort import write_effort
 from src.services.generation.split_writer import generate_section_split, plan_part_count
 from src.services.generation.writer_context import build_writer_context, scale_for_evidence
 from src.services.retrieval.section import SectionRetriever
@@ -150,11 +151,13 @@ async def rewrite_block(
         block=block,
         instruction=instruction.strip() or "문장을 더 명확하고 자연스럽게 다듬는다.",
     )
+    rewrite_model = model or app_settings.get_str("write_model")
     request = CompletionRequest(
         messages=[Message(role="user", content=prompt)],
-        model=model or app_settings.get_str("write_model"),
+        model=rewrite_model,
         temperature=0.4,
         max_tokens=BLOCK_REWRITE_MAX_TOKENS,
+        effort=write_effort(rewrite_model),
     )
     with token_context(user_id=user_id, project_id=project_id, operation="section_block_rewrite"):
         response = await client.complete(request)

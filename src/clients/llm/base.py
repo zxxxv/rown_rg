@@ -47,6 +47,11 @@ class CompletionRequest(BaseModel):
     system: str | None = None
     # 설정 시 어댑터가 웹검색 도구를 켠다(provider-중립). 단발 호출엔 영향 없음.
     web_search: WebSearchConfig | None = None
+    # 추론(thinking) 깊이 힌트("low"|"medium"|"high"). thinking이 기본 켜지는 모델
+    # (Opus 5 등)에서 절 작성처럼 근거가 프롬프트에 다 있는 생성 작업의 추론 과금을
+    # 줄이는 레버다 — Anthropic 어댑터가 output_config.effort로 번역하고, 지원하지
+    # 않는 모델·provider는 조용히 무시한다. None이면 파라미터 자체를 보내지 않는다.
+    effort: str | None = None
     cache_key: str | None = Field(
         default=None,
         description="녹화·재생 시 캐셋 식별자. None이면 input_hash에서 자동 생성",

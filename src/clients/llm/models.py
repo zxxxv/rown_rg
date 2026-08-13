@@ -46,6 +46,11 @@ class ModelSpec:
     provider: Provider
     pricing: ModelPricing | None = None  # None이면 단가 미책정 (비용 0)
     default: bool = False  # provider 내 기본 모델 (미지정 시 선택)
+    # thinking(추론)이 요청에 아무 설정이 없어도 기본으로 켜지는 모델(Opus 5·Sonnet 5).
+    # 이런 모델은 추론 토큰이 출력으로 과금되므로, 근거가 프롬프트에 다 있는 생성
+    # 작업(절 작성)은 effort를 낮춰야 한다 — 소비처: services/generation/effort.py.
+    # (Sonnet 4.6·Haiku 4.5는 thinking 미지정 시 꺼진 채로 돈다 → False)
+    thinking_default_on: bool = False
 
 
 MODELS: tuple[ModelSpec, ...] = (
@@ -54,6 +59,7 @@ MODELS: tuple[ModelSpec, ...] = (
         "claude-opus-5",
         "anthropic",
         ModelPricing(Decimal("5"), Decimal("25"), Decimal("0.50")),
+        thinking_default_on=True,
     ),
     ModelSpec(
         "claude-opus-4-8",
@@ -71,6 +77,7 @@ MODELS: tuple[ModelSpec, ...] = (
         # 도입가($2/$10, 2026-08-31까지). 이후 정가는 4.6과 동일한 $3/$15로 환원되므로
         # 그때 이 행을 갱신해야 원장 비용이 진실을 유지한다.
         ModelPricing(Decimal("2"), Decimal("10"), Decimal("0.20")),
+        thinking_default_on=True,
     ),
     ModelSpec(
         "claude-sonnet-4-6",
@@ -222,3 +229,9 @@ def default_id(provider: Provider) -> str:
         if m.default:
             return m.id
     raise KeyError(f"기본 모델이 지정되지 않은 provider입니다: {provider}")
+
+
+def thinking_default_on(model_id: str) -> bool:
+    """thinking이 기본 켜지는 모델인가 — 미등록 모델은 False(보수적)."""
+    spec = BY_ID.get(model_id)
+    return spec is not None and spec.thinking_default_on

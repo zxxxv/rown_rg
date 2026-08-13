@@ -192,6 +192,83 @@ class TestCassetteHashStability:
         hinted = base.model_copy(update={"cache_prefix_messages": 1})
         assert compute_input_hash(base) == compute_input_hash(hinted)
 
+    def test_effort_none_stable_but_value_changes_hash(self) -> None:
+        """effort=None은 필드 도입 이전 카세트와 해시가 같아야 하고(무효화 방지),
+        값이 있으면 응답이 실제로 달라지므로 해시도 갈라져야 한다."""
+        import hashlib
+
+        from src.clients.llm.cassette import compute_input_hash
+
+        base = CompletionRequest(
+            messages=[Message(role="user", content="질문")], model="claude-opus-5"
+        )
+        # 필드 도입 이전과 동일한 직렬화(=effort 키 자체가 없던 시절)를 재현
+        legacy_payload = base.model_dump_json(
+            exclude={"cache_key", "web_search", "cache_prefix_messages", "effort"}
+        )
+        legacy_hash = hashlib.sha256(legacy_payload.encode("utf-8")).hexdigest()
+        assert compute_input_hash(base) == legacy_hash
+
+        lowered = base.model_copy(update={"effort": "low"})
+        assert compute_input_hash(lowered) != compute_input_hash(base)
+
+
+class TestEffort:
+    """추론 예산(output_config.effort) 배선 — Opus 비용 분해(2026-08-14)의 절감안 1."""
+
+    @staticmethod
+    def _result(model: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            content=[_text_block("답변")],
+            usage=_usage(),
+            model=model,
+            stop_reason="end_turn",
+        )
+
+    @pytest.mark.asyncio
+    async def test_effort_sent_for_supported_model(self, tmp_path: Path) -> None:
+        adapter = _make_adapter(tmp_path)
+        fake = _FakeClient([self._result("claude-opus-5")])
+        adapter._client = fake
+
+        await adapter._call_provider(
+            CompletionRequest(
+                messages=[Message(role="user", content="절 작성")],
+                model="claude-opus-5",
+                effort="low",
+            )
+        )
+        assert fake.messages.calls[0]["output_config"] == {"effort": "low"}
+
+    @pytest.mark.asyncio
+    async def test_effort_dropped_for_unsupported_model(self, tmp_path: Path) -> None:
+        """Haiku 4.5는 effort를 400으로 거부한다 — 보내지 말아야 한다."""
+        adapter = _make_adapter(tmp_path)
+        fake = _FakeClient([self._result("claude-haiku-4-5")])
+        adapter._client = fake
+
+        await adapter._call_provider(
+            CompletionRequest(
+                messages=[Message(role="user", content="질문")],
+                model="claude-haiku-4-5",
+                effort="low",
+            )
+        )
+        assert "output_config" not in fake.messages.calls[0]
+
+    @pytest.mark.asyncio
+    async def test_no_effort_no_output_config(self, tmp_path: Path) -> None:
+        adapter = _make_adapter(tmp_path)
+        fake = _FakeClient([self._result("claude-opus-5")])
+        adapter._client = fake
+
+        await adapter._call_provider(
+            CompletionRequest(
+                messages=[Message(role="user", content="질문")], model="claude-opus-5"
+            )
+        )
+        assert "output_config" not in fake.messages.calls[0]
+
 
 class TestWebSearchCaching:
     @pytest.mark.asyncio

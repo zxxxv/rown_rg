@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     # 미커버 절 수 — 게이트에서 실전 확인하고, 뚜렷이 나쁘면 sonnet으로 되돌린다.
     research_model: str = "claude-haiku-4-5"
     write_model: str = "claude-sonnet-4-6"
+    # 작성 콜 추론(thinking) 깊이 — thinking 기본-on 모델(Opus 5)에만 적용된다
+    # (services/generation/effort.py). 근거가 통째로 프롬프트에 들어가는 절 작성은
+    # 추론 집약형이 아닌데 기본 effort(high)로 돌면 출력 과금의 절반 이상이 추론
+    # 토큰이었다($33.84 런 분해, 2026-08-14). low로 낮추면 작성 -$8~10/런 추정.
+    # A/B: 서버에서 절 1~2개 재작성 후 육안 비교 — 품질이 떨어지면 medium으로 올린다.
+    write_effort: str = "low"
     # 웹 리서치 비용 노브 — 검색/회수 횟수와 응답 상한 (챕터당 1콜 분할 수집이라
     # 총 수집 폭 = 챕터 수 × max_uses)
     # 절당 후보 수. 1 = 기본(2026-08-07 확정). 후보 2개는 비용을 두 배로 쓰면서

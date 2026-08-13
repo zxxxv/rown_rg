@@ -61,6 +61,22 @@ def _accepts_temperature(model: str) -> bool:
     return not model.startswith(_NO_TEMPERATURE_PREFIXES)
 
 
+# output_config.effort를 받는 모델 접두사 — 그 외(Haiku 4.5 등)에 보내면 400.
+# effort는 추론(thinking) 깊이와 토큰 지출을 낮추는 GA 파라미터(베타 헤더 불요).
+_EFFORT_PREFIXES = (
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+)
+
+
+def _accepts_effort(model: str) -> bool:
+    return model.startswith(_EFFORT_PREFIXES)
+
+
 # pause_turn 재전송에서 대형 PDF를 걷어낼 때 자리에 남기는 안내문.
 PDF_RESEND_PLACEHOLDER = "[PDF 본문 생략 — 재전송 제한 회피. URL로만 참조하라]"
 
@@ -233,6 +249,11 @@ class AnthropicAdapter(BaseLLMAdapter):
         # 거부 모델에선 후보 다양성·재생성 온도 상향이 무의미해진다(기본 샘플링만).
         if _accepts_temperature(request.model):
             kwargs["temperature"] = request.temperature
+        # 추론 예산: thinking 기본-on 모델(Opus 5)의 작성 콜은 추론이 출력으로 과금돼
+        # 비용 지배 구간이었다($33.84 런 실측: 출력 661k 중 본문 ~260k). 호출자가
+        # effort를 낮춰 보내면 그대로 전달 — 미지원 모델이면 400 예방 차원에서 생략.
+        if request.effort and _accepts_effort(request.model):
+            kwargs["output_config"] = {"effort": request.effort}
         if request.system:
             kwargs["system"] = self._cacheable_system(request.system)
 
@@ -290,6 +311,8 @@ class AnthropicAdapter(BaseLLMAdapter):
                 "max_tokens": request.max_tokens,
                 "tools": tools,
             }
+            if request.effort and _accepts_effort(request.model):
+                kwargs["output_config"] = {"effort": request.effort}
             if request.system:
                 kwargs["system"] = self._cacheable_system(request.system)
             # 동적 필터링 웹도구(비-Haiku)는 서버가 code_execution 컨테이너 안에서
