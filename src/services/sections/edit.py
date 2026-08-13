@@ -45,12 +45,21 @@ async def regenerate_section(
     규칙은 WriterContext가 그대로 유지한다.
     """
     ctx = build_writer_context(section, analyst_catalog, rules)
+    search_plan = section
     if instruction.strip():
         extra = f"편집 지시(최우선 반영): {instruction.strip()}"
         guidance = f"{ctx.guidance}\n\n{extra}" if ctx.guidance else extra
         ctx = replace(ctx, guidance=guidance)
+        # 지시문을 검색에도 반영한다 - 작성 프롬프트에만 넣으면 "일본 사례를 보강해줘"
+        # 같은 절 계획 밖 지시에 맞는 청크가 근거 풀에 안 들어와, 모델이 지시를 못
+        # 따르거나 근거 없이 쓴다(2026-08-14 사용자 결정). 주입 지점은 재채점 앵커
+        # (direction → _rerank_query)뿐이다 - 1차 검색은 제목 키워드 AND 결합이라
+        # 문장을 붙이면 재현율이 무너진다(_section_query 주석). 생성 프롬프트는
+        # 원본 section을 그대로 쓴다(지시문은 guidance로 이미 들어감).
+        merged = " — ".join(p for p in (section.direction.strip(), instruction.strip()) if p)
+        search_plan = section.model_copy(update={"direction": merged})
 
-    chunks = await retrieve(section)
+    chunks = await retrieve(search_plan)
     # 재료가 목표에 못 미치면 목표를 내린다 — 검색 뒤라야 실제 근거 수를 안다.
     base_min_chars = ctx.min_chars
     ctx = scale_for_evidence(ctx, sum(1 for c in chunks if not c.is_summary))
