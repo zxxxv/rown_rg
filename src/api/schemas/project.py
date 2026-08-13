@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.core.types import ProjectStage
 
@@ -25,13 +25,19 @@ class ConfigUpdateRequest(BaseModel):
 
 
 class PresetRead(BaseModel):
-    """생성 화면 프리셋 선택용 카탈로그 항목. 생성 시 preset에 id 또는 name을 넣는다."""
+    """생성 화면 프리셋 선택용 카탈로그 항목. 생성 시 preset에 id 또는 name을 넣는다.
+
+    scope='personal'은 사용자가 저장한 목차 프리셋(id는 "u:<uuid>")이고, 시스템
+    프리셋과 같은 선택지로 노출된다 - 구성 재사용(2026-08-12 QA 2번의 확장).
+    """
 
     id: str
     name: str
     desc: str
     n_chapters: int
     n_sections: int
+    scope: Literal["system", "personal"] = "system"
+    updated_at: datetime | None = None
 
 
 class PresetSectionRead(BaseModel):
@@ -56,6 +62,46 @@ class PresetDetailRead(BaseModel):
     desc: str
     domain_context: str = ""
     chapters: list[PresetChapterRead]
+
+
+class UserPresetSectionIn(BaseModel):
+    """개인 프리셋의 절 1개 — 프리셋 상세(agents 표기)와 같은 와이어 모양으로 받는다."""
+
+    title: str = Field(..., min_length=1, max_length=255)
+    direction: str = Field("", max_length=1000)
+    key_points: list[str] = Field(default_factory=list, max_length=30)
+    agents: list[str] = Field(default_factory=list, max_length=5)
+
+
+class UserPresetChapterIn(BaseModel):
+    title: str = Field("", max_length=255)
+    sections: list[UserPresetSectionIn] = Field(default_factory=list, max_length=50)
+
+
+class UserPresetUpsert(BaseModel):
+    """개인 목차 프리셋 저장/수정 — 목차 편집기의 현재 구성을 이름 붙여 담는다."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=500)
+    chapters: list[UserPresetChapterIn] = Field(..., min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def _check_sections(self) -> UserPresetUpsert:
+        if not any(ch.sections for ch in self.chapters):
+            raise ValueError("절이 1개 이상 있어야 프리셋으로 저장할 수 있습니다")
+        return self
+
+
+class UserPresetRead(BaseModel):
+    """개인 프리셋 1건 — key는 생성 폼 preset 값으로 그대로 쓰는 "u:<uuid>"."""
+
+    id: UUID
+    key: str
+    name: str
+    description: str | None
+    n_chapters: int
+    n_sections: int
+    updated_at: datetime
 
 
 class AnalystRead(BaseModel):

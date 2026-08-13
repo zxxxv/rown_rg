@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { clearPromptDraft, readPromptDraft, usePromptDraftSave } from "./usePromptDraft";
 
 // ─── 프롬프트 편집 다이얼로그(공용) ───
 // 프롬프트 관리 화면과 목차 편집기가 같이 쓴다 - 목차를 짜다 관점이 없을 때
@@ -72,26 +73,62 @@ export function PromptDialog({
   const create = useCreatePersonalPrompt();
   const update = useUpdatePersonalPrompt(existing?.id ?? "");
   const system = useListSystemPrompts(kind);
-  const [name, setName] = useState(existing?.name ?? "");
-  const [content, setContent] = useState(existing?.content ?? "");
+  // 신규 작성만 초안을 복원한다(편집은 서버가 진실). 마운트 시 한 번만 읽는다.
+  const [draft] = useState(() => (existing ? null : readPromptDraft(kind)));
+  const [restoredDraft, setRestoredDraft] = useState(draft !== null);
+  const [name, setName] = useState(existing?.name ?? draft?.name ?? "");
+  const [content, setContent] = useState(existing?.content ?? draft?.content ?? "");
   // 에이전트는 칸으로 받아 서버가 한 장으로 조합한다. 21종이 모두 같은 골격
   // (임무·분석 방법론·핵심 산출물)이라 빈 화면에 통째로 쓰게 할 이유가 없다.
-  const [sections, setSections] = useState<Record<string, string>>(existing?.spec?.sections ?? {});
-  const [freeform, setFreeform] = useState(
-    kind === "rule" || Object.keys(existing?.spec?.sections ?? {}).length === 0,
+  const [sections, setSections] = useState<Record<string, string>>(
+    existing?.spec?.sections ?? draft?.sections ?? {},
   );
-  const [cat, setCat] = useState(existing?.cat ?? "");
-  const [description, setDescription] = useState(existing?.description ?? "");
+  const [freeform, setFreeform] = useState(() => {
+    if (kind === "rule") return true;
+    if (draft) return draft.freeform;
+    // 기존 항목은 칸 값이 있을 때만 칸 모드(자유 편집으로 만든 본문을 숨기면 안 된다).
+    if (existing) return Object.keys(existing.spec?.sections ?? {}).length === 0;
+    // 신규는 칸 모드로 시작 - 시스템 에이전트를 덮어쓸 때와 구조가 갈리면 혼란스럽고
+    // (2026-08-13 사용자 지적), 빈 화면에 페르소나를 통째로 쓰라는 건 무리다.
+    return false;
+  });
+  const [cat, setCat] = useState(existing?.cat ?? draft?.cat ?? "");
+  const [description, setDescription] = useState(existing?.description ?? draft?.description ?? "");
   // 빈 칸 = 지정 없음. 시스템 에이전트를 덮어쓸 때 분량까지 건드리면 원본 값
   // (특허분석 2만~6만자 등)이 조용히 깎이므로, 안 적으면 원본을 그대로 승계한다.
   const [minChars, setMinChars] = useState<string>(
-    existing?.spec?.min_chars ? String(existing.spec.min_chars) : "",
+    existing?.spec?.min_chars ? String(existing.spec.min_chars) : (draft?.minChars ?? ""),
   );
   const [maxChars, setMaxChars] = useState<string>(
-    existing?.spec?.max_chars ? String(existing.spec.max_chars) : "",
+    existing?.spec?.max_chars ? String(existing.spec.max_chars) : (draft?.maxChars ?? ""),
   );
   // 무엇을 덮어쓸지는 만들 때만 정한다(생성 시 확정, 이후 불변).
-  const [baseRef, setBaseRef] = useState<string>(existing?.base_ref ?? "");
+  const [baseRef, setBaseRef] = useState<string>(existing?.base_ref ?? draft?.baseRef ?? "");
+  // 쓰는 동안 자동 저장 - 실수로 닫거나 새로고침해도 다시 열면 이어서 쓴다.
+  usePromptDraftSave(kind, !existing, {
+    name,
+    content,
+    sections,
+    freeform,
+    cat,
+    description,
+    minChars,
+    maxChars,
+    baseRef,
+  });
+  const discardDraft = () => {
+    clearPromptDraft(kind);
+    setName("");
+    setContent("");
+    setSections({});
+    setFreeform(kind === "rule");
+    setCat("");
+    setDescription("");
+    setMinChars("");
+    setMaxChars("");
+    setBaseRef("");
+    setRestoredDraft(false);
+  };
   const pending = create.isPending || update.isPending;
   const hasSections = Object.values(sections).some((v) => v.trim());
   // 서버 규칙(1000~60000자, 최소<최대)과 같은 검증을 저장 전에 한다. 어긋난 채 보내면
@@ -139,21 +176,33 @@ export function PromptDialog({
     contentError === null &&
     sectionsError === null;
 
-  /** 시스템 원문을 폼에 채워 넣는다. 빈 칸에서 페르소나를 쓰라는 건 무리다. */
+  /** 선택한 시스템 항목을 템플릿으로 로드 - 모든 칸을 그 항목 기준으로 덮어쓴다.
+   * '빈 칸만 채우기'는 선택을 바꿀 때 이전 선택의 잔재가 섞였다(이름은 STEEP인데
+   * 임무는 산업연관분석 - 2026-08-13 확인). 칩은 템플릿 선택기여야 예측 가능하다. */
   const copyFrom = (ref: string) => {
     const found = system.data?.find((x) => x.ref === ref);
     if (!found) return;
+    const hasSecs = Object.keys(found.sections).length > 0;
     setContent(found.content);
-    if (Object.keys(found.sections).length > 0) {
-      setSections(found.sections);
-      setFreeform(false);
-    }
-    if (found.min_chars && found.max_chars) {
-      setMinChars(String(found.min_chars));
-      setMaxChars(String(found.max_chars));
-    }
-    if (!name.trim()) setName(kind === "agent" ? `${found.name} (내 버전)` : found.name);
-    if (kind === "agent" && !cat) setCat(found.cat ?? "");
+    setSections(hasSecs ? found.sections : {});
+    if (kind === "agent") setFreeform(!hasSecs);
+    setMinChars(found.min_chars ? String(found.min_chars) : "");
+    setMaxChars(found.max_chars ? String(found.max_chars) : "");
+    setName(kind === "agent" ? `${found.name} (내 버전)` : found.name);
+    if (kind === "agent") setCat(found.cat ?? "");
+    setDescription(found.description ?? "");
+  };
+
+  /** "새로 만들기" 선택 - 이전 선택의 내용이 남으면 새 것을 만드는지 알 수 없다. */
+  const startBlankForm = () => {
+    setName("");
+    setContent("");
+    setSections({});
+    setFreeform(kind === "rule");
+    setCat("");
+    setDescription("");
+    setMinChars("");
+    setMaxChars("");
   };
 
   const baseOptions =
@@ -193,6 +242,7 @@ export function PromptDialog({
           description: description.trim() || null,
           spec,
         });
+        clearPromptDraft(kind); // 저장됐으면 초안은 역할이 끝났다
         toast.success(`${name.trim()} 만들어짐`);
         onSaved?.(created);
       }
@@ -215,6 +265,16 @@ export function PromptDialog({
               : "작성 규칙은 프로젝트 생성 화면에서 선택해야 그 보고서에 적용됩니다."}
           </DialogDescription>
         </DialogHeader>
+        {restoredDraft ? (
+          <div className="flex flex-wrap items-center gap-2 rounded border border-accent/40 bg-bg-info px-3 py-2">
+            <p className="text-xs text-fg-secondary">
+              작성하던 내용을 복원했습니다. 새로 시작하려면 초안을 비우세요.
+            </p>
+            <Button type="button" variant="ghost" size="sm" onClick={discardDraft}>
+              초안 비우기
+            </Button>
+          </div>
+        ) : null}
         <div className="flex flex-col gap-3">
           {!existing ? (
             <div className="flex flex-col gap-1.5">
@@ -227,7 +287,10 @@ export function PromptDialog({
               <div className="flex flex-wrap gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setBaseRef("")}
+                  onClick={() => {
+                    setBaseRef("");
+                    startBlankForm();
+                  }}
                   className={cn(
                     "rounded-full border px-2.5 py-1 text-xs",
                     baseRef === ""

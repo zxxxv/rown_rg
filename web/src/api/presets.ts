@@ -1,15 +1,18 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
 
-// 실계약: GET /presets → [{id, name, desc, n_chapters, n_sections}]
+// 실계약: GET /presets → [{id, name, desc, n_chapters, n_sections, scope}]
 // 자유 주제(프리셋 없음)는 목록에 없으며 생성 시 preset=null 로 표현한다.
+// scope='personal'은 내가 저장한 목차 프리셋(id="u:<uuid>") - 시스템과 같은 경로로 로드된다.
 export const PresetReadSchema = z.object({
   id: z.string(),
   name: z.string(),
   desc: z.string(),
   n_chapters: z.number().int().nonnegative(),
   n_sections: z.number().int().nonnegative(),
+  scope: z.enum(["system", "personal"]).default("system"),
+  updated_at: z.string().nullish(),
 });
 export type PresetRead = z.infer<typeof PresetReadSchema>;
 
@@ -71,6 +74,60 @@ export function usePresetDetail(key: string | null) {
     queryKey: presetKeys.detail(key ?? "__none__"),
     queryFn: () => getPresetDetail(key as string),
     enabled: Boolean(key),
-    staleTime: Infinity,
+    // 내 프리셋("u:")은 편집으로 바뀔 수 있어 무한 캐시 금지 - 시스템은 파일이라 불변.
+    staleTime: key?.startsWith("u:") ? 0 : Infinity,
+  });
+}
+
+// ─── 내 목차 프리셋 (개인 저장) ──────────────────────────────────────────────
+// 목차 편집기 구성을 이름 붙여 저장하고 다음 프로젝트에서 재사용한다.
+
+export const UserPresetSchema = z.object({
+  id: z.string(),
+  /** 생성 폼 preset 값으로 그대로 쓰는 "u:<uuid>" */
+  key: z.string(),
+  name: z.string(),
+  description: z.string().nullish(),
+  n_chapters: z.number().int().nonnegative(),
+  n_sections: z.number().int().nonnegative(),
+  updated_at: z.string(),
+});
+export type UserPreset = z.infer<typeof UserPresetSchema>;
+
+export interface UserPresetBody {
+  name: string;
+  description?: string | null;
+  chapters: PresetChapterDetail[];
+}
+
+export function useCreateUserPreset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: UserPresetBody) => {
+      const data = await apiClient.post<unknown>("presets/personal", { json: body });
+      return UserPresetSchema.parse(data);
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: presetKeys.all }),
+  });
+}
+
+export function useUpdateUserPreset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...body }: UserPresetBody & { id: string }) => {
+      const data = await apiClient.put<unknown>(`presets/personal/${id}`, { json: body });
+      return UserPresetSchema.parse(data);
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: presetKeys.all }),
+  });
+}
+
+export function useDeleteUserPreset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await apiClient.delete<void>(`presets/personal/${id}`);
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: presetKeys.all }),
   });
 }
