@@ -7,6 +7,7 @@ import {
   ExternalLink,
   Eye,
   FileSearch,
+  FileUp,
   Loader2,
   Pencil,
   Save,
@@ -47,7 +48,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
 import { chartFallbackTable } from "@/features/preview/chartSpec";
-import { EvidenceBoost } from "@/features/preview/EvidenceBoost";
+import { EvidenceBoost, EvidenceBoostActions } from "@/features/preview/EvidenceBoost";
 import { BlockEvidence, partitionBlockEvidence } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { findTable, isTableCaption, type MarkdownTable } from "@/features/preview/tableToChart";
@@ -151,6 +152,12 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
       return next === undefined || !/[0-9]/.test(next); // '1.1'이 '1.12'에 오매칭되지 않게
     });
   }, [verifyQuery.data, selectedRef]);
+  // 목차 이행 경고(근거 자료에도 없음)가 있는 절 - 자료 추가→다시 쓰기 진입점을 연다.
+  // 경고가 "자료를 올려라"고 말하면서 올릴 곳이 없던 문제(백로그 1번 ②).
+  const coverageGap = useMemo(
+    () => sectionFindings.some((f) => f.category === "목차 지시 미반영"),
+    [sectionFindings],
+  );
 
   const navigateTo = (id: string) =>
     setParams(
@@ -292,6 +299,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
                 contentQuery={contentQuery}
                 qaWarnings={qaWarnings}
                 editable={!isGenerating}
+                coverageGap={coverageGap}
                 onEvidenceOpenChange={handleEvidenceOpenChange}
               />
             ) : (
@@ -686,6 +694,7 @@ function SectionView({
   contentQuery,
   qaWarnings,
   editable,
+  coverageGap = false,
   onEvidenceOpenChange,
 }: {
   projectId: string;
@@ -697,6 +706,8 @@ function SectionView({
   /** 생성이 끝나야 편집·재작성을 연다 - 작성 중 초안은 재생성으로 갈아치워질 수 있고,
    *  절 전체 재작성은 검색까지 다시 돌아 작성 루프와 자원을 다툰다(2026-08-09). */
   editable: boolean;
+  /** 이 절에 목차 이행 경고(근거 자료에도 없음)가 있는가 - 자료 추가 진입점을 연다 */
+  coverageGap?: boolean;
 }) {
   const data = contentQuery.data;
   const error = contentQuery.error;
@@ -720,6 +731,9 @@ function SectionView({
   const [instruction, setInstruction] = useState("");
   // 표→그래프 변환 중인 블록 위치 - 대화상자에서 유형·축을 고르고 저장한다.
   const [convertIdx, setConvertIdx] = useState<number | null>(null);
+  // 자료 보강 패널 - 경고 없는 절에서도 자료 추가→이 절만 다시 쓰기를 열어 준다
+  // (2026-08-14 사용자 결정: 완성 보고서의 일반 회복 경로, 전체 재생성의 대안).
+  const [boostOpen, setBoostOpen] = useState(false);
 
   const blocks = useMemo(() => (data ? splitBlocks(data.content) : []), [data]);
   // 문서 순서로 정렬 - 재작성은 위에서 아래로 처리해야 결과가 예측 가능하다.
@@ -938,11 +952,23 @@ function SectionView({
               </Button>
             </>
           ) : editable ? (
-            // 블록별 인라인 편집이 기본 경로라 전체 편집은 ghost로 낮춘다
-            // (긴 본문을 한 상자에 넣으면 쓰기 불편하다는 실사용 지적, 2026-08-09)
-            <Button variant="ghost" size="sm" onClick={startEdit} disabled={busy}>
-              <Pencil className="mr-1 h-4 w-4" />절 전체 편집
-            </Button>
+            <>
+              {/* 결과가 맘에 안 들 때 전체 재생성 대신 국소 회복 - 모든 완성 절에 상시 노출 */}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setBoostOpen((v) => !v)}
+                disabled={busy}
+              >
+                <FileUp className="mr-1 h-4 w-4" />
+                자료 보강
+              </Button>
+              {/* 블록별 인라인 편집이 기본 경로라 전체 편집은 ghost로 낮춘다
+                  (긴 본문을 한 상자에 넣으면 쓰기 불편하다는 실사용 지적, 2026-08-09) */}
+              <Button variant="ghost" size="sm" onClick={startEdit} disabled={busy}>
+                <Pencil className="mr-1 h-4 w-4" />절 전체 편집
+              </Button>
+            </>
           ) : (
             // 작성 중에는 편집 진입점을 두지 않는다 - 초안이 재생성으로 갈아치워질 수
             // 있고, 절 전체 재작성은 작성 루프와 검색 자원을 다툰다(사용자 결정).
@@ -963,17 +989,36 @@ function SectionView({
         </div>
       ) : null}
 
-      {data.evidence.scarce ? (
+      {data.evidence.scarce || coverageGap ? (
         // 근거가 모자란 절은 분량 목표를 내려서 쓴다 - 그 사실을 본문에 적으면 납품물이
         // 더러워지므로(사용자 지적 2026-08-10) 본문 대신 여기서만 알린다. 경고에서 바로
         // 자료 추가→색인→이 절만 다시 쓰기가 이어진다(재업로드 워크플로우, 2026-08-13).
+        // 목차 이행 경고(자료에도 없음)도 같은 회복 경로다 - 문구만 원인에 맞춘다.
         <EvidenceBoost
           projectId={projectId}
           count={data.evidence.count}
           editable={editable}
           onRewrite={() => void onRewriteSection()}
           rewritePending={rewrite.isPending}
+          message={
+            data.evidence.scarce
+              ? undefined
+              : "목차가 요구한 내용이 본문과 근거 자료에 없습니다 - 자료를 추가하고 이 절만 다시 쓰면 채워집니다."
+          }
         />
+      ) : boostOpen && editable ? (
+        // 경고 없는 절의 자료 보강 패널 - 헤더 버튼으로 여닫는다(경고 절은 위 배너가 대신한다).
+        <div className="flex flex-col gap-2 border-b border-border bg-bg-secondary px-6 py-2.5">
+          <p className="text-xs text-fg-secondary">
+            자료를 추가하고 이 절만 다시 쓰면, 새 자료가 검색에 반영돼 본문이 다시 작성됩니다.
+            지시가 필요하면 아래 편집 바의 지시문을 채운 뒤 다시 쓰기를 누르세요.
+          </p>
+          <EvidenceBoostActions
+            projectId={projectId}
+            onRewrite={() => void onRewriteSection()}
+            rewritePending={rewrite.isPending}
+          />
+        </div>
       ) : null}
 
       {qaWarnings.length > 0 ? (

@@ -461,7 +461,12 @@ function FinalizeBar({
           <ArrowLeft className="mr-1 h-4 w-4" />
           자료 추가 업로드
         </Button>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {/* '확정'의 심리적 무게를 낮춘다 - 이 시점 자료가 최종이 아니라는 안내
+              (완료 후에도 절 화면에서 자료 추가→그 절만 다시 쓰기가 열려 있다). */}
+          <p className="hidden text-xs text-fg-tertiary sm:block">
+            시작 후에도 자료를 추가하고 절 단위로 다시 쓸 수 있습니다
+          </p>
           <Button
             variant="outline"
             size="lg"
@@ -475,7 +480,7 @@ function FinalizeBar({
               <TooltipTrigger asChild>
                 <span>
                   <Button size="lg" disabled={!canFinalize} onClick={onFinalize}>
-                    {isPending ? "처리 중…" : `검토 완료 (${includedCount}개 채택)`}
+                    {isPending ? "처리 중…" : `이 자료로 시작 (${includedCount}개 채택)`}
                     <ArrowRight className="ml-1 h-4 w-4" />
                   </Button>
                 </span>
