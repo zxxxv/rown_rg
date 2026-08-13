@@ -51,6 +51,7 @@ from src.api.schemas.section import (
     SectionRewriteRequest,
     SectionTreeResponse,
 )
+from src.api.schemas.source_stats import SourceUsageResponse
 from src.api.uploads import read_validated_upload
 from src.core.charts import has_chart_fence
 from src.core.citations import numbers_in_order
@@ -87,6 +88,7 @@ from src.services.prompts import resolve_analysts
 from src.services.qa.alignment import align_section
 from src.services.qa.gate import uncited_units
 from src.services.sections.evidence import marker_chunk_ids
+from src.services.stats.source_usage import build_source_usage
 from src.services.user_presets import (
     create_user_preset,
     delete_user_preset,
@@ -1559,6 +1561,41 @@ async def get_sections(
     for n, node in zip(sorted(chapters), tree, strict=True):
         node.status = _reduce_chapter_status(chapter_statuses[n])
     return SectionTreeResponse(tree=tree)
+
+
+@router.get("/{project_id}/source-usage", response_model=SourceUsageResponse)
+async def get_source_usage(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SourceUsageResponse:
+    """완성 보고서의 자료 사용 통계(전체/장/절) — 읽기 전용이라 뷰어도 본다.
+
+    번호 해석이 조립 후 규약(전역 번호 = 채택 자료의 수집 순)이라, 조립 전에는
+    통계가 성립하지 않아 제공하지 않는다(프론트도 완성 상태에서만 노출).
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    if not _is_renumbered(project):
+        raise ValidationError(
+            message="자료 사용 통계는 보고서가 완성된 뒤에 제공됩니다",
+            code="REPORT_NOT_ASSEMBLED",
+        )
+    rows = await _load_sections(session, project.id)
+    sources_ordered = (
+        (
+            await session.execute(
+                select(ProjectSource)
+                .where(
+                    ProjectSource.project_id == project.id,
+                    ProjectSource.is_included.is_(True),
+                )
+                .order_by(ProjectSource.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return build_source_usage(rows, list(sources_ordered))
 
 
 async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID) -> Section:

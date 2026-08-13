@@ -55,6 +55,19 @@ def numbers_in_order(content: str) -> list[int]:
     return seen
 
 
+def count_numbers(content: str) -> dict[int, int]:
+    """번호별 마커 등장 횟수 — 출처형·인용형 합산(둘 다 '이 근거를 썼다'는 뜻).
+
+    numbers_in_order가 '무엇을 썼나'(중복 제거)라면 이건 '얼마나 기대나'다 —
+    자료 사용 통계(services/stats)가 자료별 참조 비중을 셀 때 쓴다.
+    """
+    counts: dict[int, int] = {}
+    for match in MARK_RE.finditer(content):
+        for n in _mark_numbers(match):
+            counts[n] = counts.get(n, 0) + 1
+    return counts
+
+
 def renumber(content: str, local_to_global: dict[int, int]) -> str:
     """마커의 번호를 매핑대로 갈아끼운다. 표기 형태(출처형/인용형)는 그대로 둔다.
 

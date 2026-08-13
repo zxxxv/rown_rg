@@ -1,5 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Download, FileSearch, PlayCircle, Settings2, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Download,
+  FileSearch,
+  PieChart,
+  PlayCircle,
+  Settings2,
+  Trash2,
+} from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -43,6 +51,7 @@ import { PipelineStepper } from "@/features/progress/PipelineStepper";
 import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
 import { presetLabel } from "@/features/project-config/presets";
 import type { ProjectFormValues } from "@/features/project-config/schema";
+import { SourceUsageCard } from "@/features/stats/SourceUsageCard";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import { ReportWorkspace } from "@/pages/projects/[id]/preview";
@@ -287,6 +296,24 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
                 />
               </AccordionContent>
             </AccordionItem>
+            {/* 자료 사용 통계 - 번호 해석이 조립 후 규약이라 완성 보고서에서만 연다.
+                근거 추적(블록 단위 미시)과 달리 보고서 전체의 자료 의존 구조를 조감한다. */}
+            {project.status === "completed" || project.status === "archived" ? (
+              <AccordionItem
+                value="source-usage"
+                className="mt-3 rounded-lg border border-border bg-bg"
+              >
+                <AccordionTrigger className="px-4 py-3 hover:no-underline">
+                  <span className="flex items-center gap-2 text-sm font-semibold text-fg">
+                    <PieChart className="h-4 w-4 text-fg-secondary" aria-hidden />
+                    자료 사용 통계
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4">
+                  <SourceUsageCard projectId={project.id} />
+                </AccordionContent>
+              </AccordionItem>
+            ) : null}
           </Accordion>
 
           {/* 보고서 본문 - 좌측 흐름 안에 두어야 진행 단계 카드 옆이 비지 않는다
