@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.cost_limit import enforce_cost_limit
 from src.api.dependencies.db import get_async_session
+from src.api.dependencies.permissions import require_writer
 from src.api.schemas.execution import DecideRequest, ProgressResponse, RunResponse
 from src.api.schemas.project import (
     AnalystRead,
@@ -404,7 +405,7 @@ async def _get_authorized_project(
 async def create_project(
     data: ProjectCreate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> Project:
     # preset은 파일 카탈로그(src.prompts)가 단일 진실 — 생성 시점에 키를 검증해 확정한다.
     # None이면 자유 주제(프리셋 없는 일반 목차 설계), "u:<uuid>"면 내가 저장한 프리셋.
@@ -603,7 +604,7 @@ _UNRUNNABLE_STATUSES = (
 async def cancel_project(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> dict[str, str]:
     """진행 중인 실행을 취소한다(협조적 — 단계·절 경계에서 멈춘다).
 
@@ -726,7 +727,7 @@ async def update_project_config(
     project_id: UUID,
     data: ConfigUpdateRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> Project:
     """진행 중 프로젝트의 옵션(config) 전체 교체.
 
@@ -749,7 +750,7 @@ async def update_project_config(
 async def delete_project(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> None:
     """프로젝트 영구 삭제 — 파이프라인이 실제 실행 중인 순간만 막는다.
 
@@ -870,7 +871,7 @@ async def update_project_source(
     source_id: UUID,
     data: SourceIncludeUpdate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> SourceItemRead:
     """자료 채택/제외 토글 — 제외분은 색인(index)·검색 근거에서 빠진다."""
     project = await _get_authorized_project(project_id, session, current_user)
@@ -896,7 +897,7 @@ async def delete_project_source(
     project_id: UUID,
     source_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> None:
     """업로드·라이브러리 자료 삭제 — 행과 색인 청크(FK CASCADE)를 함께 제거한다.
 
@@ -1111,7 +1112,7 @@ async def _index_file_source(
 async def upload_project_source(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
     file: Annotated[UploadFile, File()],
 ) -> SourceItemRead:
     """직접 업로드 자료 — 파일 저장 후 즉시 색인(청킹·임베딩).
@@ -1153,7 +1154,7 @@ async def attach_library_source(
     project_id: UUID,
     data: LibraryAttachRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> SourceItemRead:
     """라이브러리 파일을 프로젝트 자료로 불러오기 — 원본 파일을 색인해 근거로 편입.
 
@@ -1278,7 +1279,7 @@ async def _reverify_in_background(project_id: UUID) -> None:
 async def rerun_verify_report(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> dict[str, bool]:
     """PM 검증 다시 실행 - 편집으로 고친 뒤 남은 경고를 다시 보기 위한 경로.
 
@@ -1311,7 +1312,7 @@ async def resolve_verify_finding(
     finding_id: UUID,
     data: VerifyFindingResolve,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> VerifyFindingRead:
     """경고 하나를 '처리함'으로 표시(또는 해제).
 
@@ -1480,7 +1481,7 @@ async def decide_gate(
     project_id: UUID,
     data: DecideRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> RunResponse:
     project = await _get_authorized_project(project_id, session, current_user)
     if await get_pending_gate(session, project.id) is None:
@@ -1895,7 +1896,7 @@ async def update_section_content(
     section_id: UUID,
     data: SectionContentUpdate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> SectionContentResponse:
     """수동 편집 저장 — 본문 교체. 상태를 completed로 확정한다."""
     project = await _get_authorized_project(project_id, session, current_user)
@@ -1996,7 +1997,7 @@ async def rewrite_section(
     section_id: UUID,
     data: SectionRewriteRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> SectionContentResponse:
     """AI 재작성 — 프로젝트 인덱스에서 근거를 검색해 이 섹션만 다시 쓴다.
 
@@ -2075,7 +2076,7 @@ async def rewrite_section_block(
     section_id: UUID,
     data: SectionBlockRewriteRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> SectionContentResponse:
     """블록 재작성 — 본문에서 지정 블록 하나만 지시에 따라 고쳐 치환 저장한다.
 

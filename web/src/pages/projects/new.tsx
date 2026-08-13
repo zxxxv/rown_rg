@@ -1,8 +1,9 @@
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Lock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useCreateProject, useRunProject } from "@/api/projects";
+import { EmptyState } from "@/components/feedback/EmptyState";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
@@ -14,6 +15,24 @@ export default function NewProjectPage() {
   const { user, logout } = useAuth();
   const createProject = useCreateProject();
   const runProject = useRunProject();
+
+  // 뷰어는 열람 전용 - URL 직접 진입도 폼 대신 사유를 보여준다(백엔드도 403으로 막는다).
+  if (user?.role === "viewer") {
+    return (
+      <AppShell user={{ name: user.name, role: user.role }} onLogout={() => void logout()}>
+        <EmptyState
+          icon={Lock}
+          title="프로젝트 생성 권한이 필요합니다"
+          description="지금 계정은 열람 전용(viewer)입니다 - 관리자에게 권한 상향을 문의하세요."
+          action={
+            <Button variant="outline" onClick={() => navigate("/projects")}>
+              프로젝트 목록으로
+            </Button>
+          }
+        />
+      </AppShell>
+    );
+  }
 
   const handleSubmit = async (values: ProjectFormValues) => {
     try {

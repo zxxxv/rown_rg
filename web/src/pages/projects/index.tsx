@@ -62,6 +62,8 @@ export default function ProjectsPage() {
   const qRaw = params.get("q") ?? "";
   // 관리자만 전체 프로젝트 조회 가능(scope=all). 일반 사용자는 항상 자기 것.
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  // 뷰어는 열람 전용 - 생성 진입점을 숨기지 않고 막힌 이유를 보여준다(2026-08-14 결정).
+  const readOnly = user?.role === "viewer";
   const scope: "mine" | "all" = isAdmin && params.get("scope") === "all" ? "all" : "mine";
 
   const [searchInput, setSearchInput] = useState(qRaw);
@@ -153,9 +155,20 @@ export default function ProjectsPage() {
                 </TabsList>
               </Tabs>
             ) : null}
-            <Button onClick={() => navigate("/projects/new")}>
-              <FilePlus2 className="mr-1 h-4 w-4" />새 프로젝트
-            </Button>
+            {readOnly ? (
+              <div className="flex flex-col items-end gap-0.5">
+                <Button disabled>
+                  <FilePlus2 className="mr-1 h-4 w-4" />새 프로젝트
+                </Button>
+                <span className="text-xs text-fg-tertiary">
+                  열람 전용 권한 - 생성은 관리자에게 문의하세요
+                </span>
+              </div>
+            ) : (
+              <Button onClick={() => navigate("/projects/new")}>
+                <FilePlus2 className="mr-1 h-4 w-4" />새 프로젝트
+              </Button>
+            )}
           </div>
         </header>
 
@@ -271,9 +284,17 @@ export default function ProjectsPage() {
           ) : (
             <EmptyState
               icon={FilePlus2}
-              title="첫 보고서를 만들어보세요"
-              description="주제어만 입력하면 회사 양식의 보고서 초안이 자동으로 생성됩니다."
-              action={<Button onClick={() => navigate("/projects/new")}>새 프로젝트</Button>}
+              title={readOnly ? "아직 열람할 프로젝트가 없습니다" : "첫 보고서를 만들어보세요"}
+              description={
+                readOnly
+                  ? "지금 계정은 열람 전용입니다 - 프로젝트 생성 권한이 필요하면 관리자에게 문의하세요."
+                  : "주제어만 입력하면 회사 양식의 보고서 초안이 자동으로 생성됩니다."
+              }
+              action={
+                readOnly ? undefined : (
+                  <Button onClick={() => navigate("/projects/new")}>새 프로젝트</Button>
+                )
+              }
             />
           )
         ) : (

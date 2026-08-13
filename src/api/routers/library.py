@@ -28,7 +28,7 @@ from sqlalchemy.orm import selectinload
 
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
-from src.api.dependencies.permissions import ADMINS, require_role
+from src.api.dependencies.permissions import ADMINS, require_role, require_writer
 from src.api.schemas.library_node import (
     FolderCreateRequest,
     LibraryFileMeta,
@@ -54,7 +54,6 @@ from src.services.prompts import list_personal
 
 router = APIRouter(prefix="/library", tags=["library"])
 
-WRITERS: tuple[Role, ...] = (Role.SUPER_ADMIN, Role.ADMIN, Role.WORKER)
 ALL_ROLES: list[str] = [r.value for r in Role]
 VALID_SOURCE_KINDS = {"gov", "academic", "media", "library", "upload", "web_search"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -521,7 +520,7 @@ async def get_tree(
 async def create_folder(
     data: FolderCreateRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(require_role(*WRITERS))],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> LibraryTreeFolder:
     parent = await _get_parent_folder(session, data.parent_id)
     # 상위 폴더가 있으면 개인/공유 성격을 상속, 최상위면 요청값(개인 루트=True/회사=False).
@@ -554,7 +553,7 @@ async def create_folder(
 async def upload_file(
     file: UploadFile,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(require_role(*WRITERS))],
+    current_user: Annotated[User, Depends(require_writer)],
     parent_id: Annotated[UUID | None, Form()] = None,
     is_personal: Annotated[bool, Form()] = False,
 ) -> LibraryTreeFile:
@@ -652,7 +651,7 @@ async def get_source_content(
 async def delete_node(
     node_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(require_role(*WRITERS))],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> None:
     """노드 삭제(폴더는 하위 전체 포함 — DB FK CASCADE). 관리자 또는 생성자만."""
     node = await _get_node(session, node_id)

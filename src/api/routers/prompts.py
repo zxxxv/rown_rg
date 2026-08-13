@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
+from src.api.dependencies.permissions import require_writer
 from src.api.schemas.prompt import (
     PersonalPromptCreate,
     PersonalPromptRead,
@@ -77,7 +78,7 @@ async def list_my_prompts(
 async def create_my_prompt(
     data: PersonalPromptCreate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> PersonalPromptRead:
     _validate_base_ref(data.kind, data.base_ref)
     row = await create_personal(
@@ -109,7 +110,7 @@ async def update_my_prompt(
     prompt_id: UUID,
     data: PersonalPromptUpdate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> PersonalPromptRead:
     row = await update_personal(
         session,
@@ -128,7 +129,7 @@ async def update_my_prompt(
 async def delete_my_prompt(
     prompt_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> None:
     await delete_personal(session, current_user.id, prompt_id)
 
