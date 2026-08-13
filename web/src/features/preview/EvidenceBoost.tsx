@@ -19,6 +19,7 @@ export function EvidenceBoost({
   editable,
   onRewrite,
   rewritePending,
+  message,
 }: {
   projectId: string;
   count: number | null;
@@ -26,6 +27,8 @@ export function EvidenceBoost({
   editable: boolean;
   onRewrite: () => void;
   rewritePending: boolean;
+  /** 기본(자료 부족) 대신 쓸 경고 문구 - 목차 이행 경고 등 다른 원인에서 재사용 */
+  message?: string;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const upload = useUploadProjectSource(projectId);
@@ -58,8 +61,8 @@ export function EvidenceBoost({
     <div className="flex flex-col gap-2 border-b border-fg-warning/30 bg-bg-warning px-6 py-2.5">
       <p className="flex items-center gap-1.5 text-xs text-fg">
         <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-fg-warning" aria-hidden />
-        자료 부족 절 - 확보된 근거{count !== null ? ` ${count}건` : ""}에 맞춰 분량을 줄여
-        작성했습니다. 자료를 추가하고 이 절만 다시 쓰면 채워집니다.
+        {message ??
+          `자료 부족 절 - 확보된 근거${count !== null ? ` ${count}건` : ""}에 맞춰 분량을 줄여 작성했습니다. 자료를 추가하고 이 절만 다시 쓰면 채워집니다.`}
       </p>
       {editable ? (
         <div className="flex flex-wrap items-center gap-2 pl-5">

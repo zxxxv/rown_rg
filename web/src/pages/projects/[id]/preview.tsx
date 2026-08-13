@@ -151,6 +151,12 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
       return next === undefined || !/[0-9]/.test(next); // '1.1'이 '1.12'에 오매칭되지 않게
     });
   }, [verifyQuery.data, selectedRef]);
+  // 목차 이행 경고(근거 자료에도 없음)가 있는 절 - 자료 추가→다시 쓰기 진입점을 연다.
+  // 경고가 "자료를 올려라"고 말하면서 올릴 곳이 없던 문제(백로그 1번 ②).
+  const coverageGap = useMemo(
+    () => sectionFindings.some((f) => f.category === "목차 지시 미반영"),
+    [sectionFindings],
+  );
 
   const navigateTo = (id: string) =>
     setParams(
@@ -292,6 +298,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
                 contentQuery={contentQuery}
                 qaWarnings={qaWarnings}
                 editable={!isGenerating}
+                coverageGap={coverageGap}
                 onEvidenceOpenChange={handleEvidenceOpenChange}
               />
             ) : (
@@ -686,6 +693,7 @@ function SectionView({
   contentQuery,
   qaWarnings,
   editable,
+  coverageGap = false,
   onEvidenceOpenChange,
 }: {
   projectId: string;
@@ -697,6 +705,8 @@ function SectionView({
   /** 생성이 끝나야 편집·재작성을 연다 - 작성 중 초안은 재생성으로 갈아치워질 수 있고,
    *  절 전체 재작성은 검색까지 다시 돌아 작성 루프와 자원을 다툰다(2026-08-09). */
   editable: boolean;
+  /** 이 절에 목차 이행 경고(근거 자료에도 없음)가 있는가 - 자료 추가 진입점을 연다 */
+  coverageGap?: boolean;
 }) {
   const data = contentQuery.data;
   const error = contentQuery.error;
@@ -963,16 +973,22 @@ function SectionView({
         </div>
       ) : null}
 
-      {data.evidence.scarce ? (
+      {data.evidence.scarce || coverageGap ? (
         // 근거가 모자란 절은 분량 목표를 내려서 쓴다 - 그 사실을 본문에 적으면 납품물이
         // 더러워지므로(사용자 지적 2026-08-10) 본문 대신 여기서만 알린다. 경고에서 바로
         // 자료 추가→색인→이 절만 다시 쓰기가 이어진다(재업로드 워크플로우, 2026-08-13).
+        // 목차 이행 경고(자료에도 없음)도 같은 회복 경로다 - 문구만 원인에 맞춘다.
         <EvidenceBoost
           projectId={projectId}
           count={data.evidence.count}
           editable={editable}
           onRewrite={() => void onRewriteSection()}
           rewritePending={rewrite.isPending}
+          message={
+            data.evidence.scarce
+              ? undefined
+              : "목차가 요구한 내용이 본문과 근거 자료에 없습니다 - 자료를 추가하고 이 절만 다시 쓰면 채워집니다."
+          }
         />
       ) : null}
 
