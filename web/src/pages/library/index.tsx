@@ -1,12 +1,13 @@
 import { FolderPlus, Search, Upload, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useCreateFolder, useLibraryTree, useUploadFile } from "@/api/library";
-import type { LibraryNode } from "@/api/types";
+import type { LibraryNode, WritableTarget } from "@/api/types";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
+import { type UploadingFile, UploadProgressList } from "@/components/feedback/UploadProgressList";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import {
@@ -91,6 +92,43 @@ export default function LibraryPage() {
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
   const [folderName, setFolderName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // 진행 중 업로드 - XHR 전송 바이트 실측(0~100). 버튼·드롭 두 경로가 같은 목록을 쓴다.
+  const [uploads, setUploads] = useState<UploadingFile[]>([]);
+  // 본문(상세) 영역에 파일을 끌어 올린 상태 - 선택한 폴더로 떨어진다는 표시.
+  const [detailDragOver, setDetailDragOver] = useState(false);
+
+  /** 파일들을 대상 폴더로 업로드 - 트리 드롭·본문 드롭·버튼 선택의 공통 경로. */
+  const uploadTo = (target: WritableTarget, folderLabel: string, files: File[]) => {
+    for (const file of files) {
+      const rowId = `${folderLabel}:${file.name}-${file.size}-${file.lastModified}`;
+      setUploads((u) =>
+        u.some((f) => f.id === rowId) ? u : [...u, { id: rowId, name: file.name, progress: 0 }],
+      );
+      const onProgress = (percent: number) =>
+        setUploads((u) => u.map((f) => (f.id === rowId ? { ...f, progress: percent } : f)));
+      uploadFile.mutate(
+        {
+          file,
+          parent_id: target.parent_id ?? null,
+          is_personal: target.scope === "personal",
+          onProgress,
+        },
+        {
+          onSuccess: () => {
+            setUploads((u) => u.filter((f) => f.id !== rowId));
+            toast.success(`"${file.name}" 업로드 완료 (${folderLabel})`);
+          },
+          onError: (err: unknown) => {
+            setUploads((u) => u.filter((f) => f.id !== rowId));
+            const msg = err instanceof ApiError ? err.message : "업로드에 실패했습니다.";
+            toast.error(`"${file.name}" 업로드 실패`, { description: msg });
+          },
+        },
+      );
+    }
+  };
+
+  const draggingFiles = (e: DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
 
   const onCreateFolder = async () => {
     const name = folderName.trim();
@@ -110,22 +148,10 @@ export default function LibraryPage() {
     }
   };
 
-  const onPickFile = async (files: FileList | null) => {
-    const file = files?.[0];
-    if (!file || !writable) return;
-    try {
-      await uploadFile.mutateAsync({
-        file,
-        parent_id: targetParentId,
-        is_personal: targetIsPersonal,
-      });
-      toast.success(`"${file.name}" 업로드 완료 (${targetName})`);
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "업로드에 실패했습니다.";
-      toast.error("업로드 실패", { description: msg });
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
+  const onPickFile = (files: FileList | null) => {
+    if (!files?.length || !writable) return;
+    uploadTo(writable, targetName, Array.from(files));
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   return (
@@ -174,9 +200,10 @@ export default function LibraryPage() {
               <input
                 ref={fileInputRef}
                 type="file"
+                multiple
                 className="hidden"
                 aria-label="파일 선택"
-                onChange={(e) => void onPickFile(e.target.files)}
+                onChange={(e) => onPickFile(e.target.files)}
               />
             </div>
           </div>
@@ -220,17 +247,55 @@ export default function LibraryPage() {
             }
           />
         ) : (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
-            <ScrollArea className="h-[calc(100vh-260px)] rounded border border-border bg-bg">
-              <LibraryTree
-                tree={tree}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-                search={debouncedSearch}
-              />
-            </ScrollArea>
+          // biome-ignore lint/a11y/noStaticElementInteractions: 빗나간 드롭의 브라우저 기본 동작만 막는 껍데기 - 조작 대상이 아니다
+          <div
+            className="grid grid-cols-1 gap-4 lg:grid-cols-[300px_minmax(0,1fr)]"
+            // 드롭 대상을 빗나간 드롭이 브라우저 파일 열기로 새지 않게 페이지 수준에서 막는다.
+            onDragOver={(e) => {
+              if (draggingFiles(e)) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              if (draggingFiles(e)) e.preventDefault();
+            }}
+          >
+            <div className="flex flex-col gap-2">
+              <ScrollArea className="h-[calc(100vh-260px)] rounded border border-border bg-bg">
+                <LibraryTree
+                  tree={tree}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                  search={debouncedSearch}
+                  onDropFiles={(target, name, files) => uploadTo(target, name, files)}
+                />
+              </ScrollArea>
+              <UploadProgressList uploading={uploads} />
+            </div>
 
-            <main className="min-h-[400px] rounded border border-border bg-bg p-5">
+            <main
+              className={cn(
+                "min-h-[400px] rounded border border-border bg-bg p-5",
+                detailDragOver && canWrite && "border-accent ring-1 ring-inset ring-accent",
+              )}
+              // 본문 영역 드롭 = 지금 선택한 폴더로 업로드. 쓰기 불가 폴더면 반응하지 않는다.
+              onDragOver={(e) => {
+                if (!draggingFiles(e) || !canWrite) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+                setDetailDragOver(true);
+              }}
+              onDragLeave={(e) => {
+                if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                setDetailDragOver(false);
+              }}
+              onDrop={(e) => {
+                if (!draggingFiles(e)) return;
+                e.preventDefault();
+                setDetailDragOver(false);
+                if (!writable) return;
+                const files = Array.from(e.dataTransfer.files);
+                if (files.length > 0) uploadTo(writable, targetName, files);
+              }}
+            >
               <LibraryDetail
                 node={lookup.node}
                 path={lookup.path}

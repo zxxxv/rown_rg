@@ -7,9 +7,14 @@ import {
   Folder,
   FolderOpen,
 } from "lucide-react";
-import { useMemo, useState } from "react";
-import type { LibraryNode } from "@/api/types";
+import { type DragEvent, useMemo, useState } from "react";
+import type { LibraryNode, WritableTarget } from "@/api/types";
 import { cn } from "@/lib/utils";
+
+/** OS 파일을 끌고 있는 드래그인가 - 텍스트 선택·요소 드래그는 드롭 대상에서 제외. */
+function hasFiles(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer.types).includes("Files");
+}
 
 function fileIcon(name: string): typeof FileIcon {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -36,9 +41,11 @@ export interface LibraryTreeProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   search: string;
+  /** OS 파일을 폴더 행에 떨어뜨리면 그 폴더로 업로드 - 쓰기 가능한 폴더에만 열린다. */
+  onDropFiles?: (target: WritableTarget, folderName: string, files: File[]) => void;
 }
 
-export function LibraryTree({ tree, selectedId, onSelect, search }: LibraryTreeProps) {
+export function LibraryTree({ tree, selectedId, onSelect, search, onDropFiles }: LibraryTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(["me", "company", "me-projects"]),
   );
@@ -102,6 +109,7 @@ export function LibraryTree({ tree, selectedId, onSelect, search }: LibraryTreeP
           isExpanded={isExpanded}
           onToggle={toggle}
           q={q}
+          onDropFiles={onDropFiles}
         />
       ))}
       {filtered.length === 0 ? (
@@ -119,6 +127,7 @@ interface NodeViewProps {
   isExpanded: (id: string) => boolean;
   onToggle: (id: string) => void;
   q: string;
+  onDropFiles?: LibraryTreeProps["onDropFiles"];
 }
 
 function TreeNodeView({
@@ -129,9 +138,12 @@ function TreeNodeView({
   isExpanded,
   onToggle,
   q,
+  onDropFiles,
 }: NodeViewProps) {
   const selected = node.id === selectedId;
   const indent = { paddingLeft: `${8 + depth * 14}px` };
+  // 파일을 끌어 올려놓은 폴더 행 강조 - 어디에 떨어질지 눈으로 확인하고 놓게.
+  const [dragOver, setDragOver] = useState(false);
 
   if (node.type === "file") {
     const Icon = fileIcon(node.name);
@@ -158,8 +170,12 @@ function TreeNodeView({
   }
 
   const expanded = isExpanded(node.id);
+  // 쓰기 가능한 폴더만 드롭 대상 - 가상 컨테이너(프로젝트·프롬프트 등)는 반응하지 않는다.
+  const droppable = Boolean(onDropFiles && node.writable);
+  const writableTarget = node.writable ?? null;
   return (
     <li>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: 드롭은 포인터 전용 보강 - 같은 업로드가 '파일 업로드' 버튼(키보드 가능)으로 열려 있다 */}
       <div
         style={indent}
         className={cn(
@@ -167,8 +183,45 @@ function TreeNodeView({
           selected
             ? "border-l-2 border-accent bg-bg-info text-fg"
             : "border-l-2 border-transparent",
-          !selected && "hover:bg-bg-secondary/60",
+          !selected && !dragOver && "hover:bg-bg-secondary/60",
+          dragOver && "border-l-2 border-accent bg-bg-info ring-1 ring-inset ring-accent",
         )}
+        onDragOver={
+          droppable
+            ? (e) => {
+                if (!hasFiles(e)) return;
+                e.preventDefault(); // 기본 동작(브라우저가 파일을 여는 것)을 막아야 드롭이 성립한다
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = "copy";
+                setDragOver(true);
+              }
+            : undefined
+        }
+        onDragLeave={
+          droppable
+            ? (e) => {
+                // 행 안의 버튼으로 이동해도 leave가 오므로 실제로 행을 벗어날 때만 끈다.
+                if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                setDragOver(false);
+              }
+            : undefined
+        }
+        onDrop={
+          droppable
+            ? (e) => {
+                if (!hasFiles(e)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                setDragOver(false);
+                const files = Array.from(e.dataTransfer.files);
+                if (files.length > 0 && writableTarget && onDropFiles) {
+                  onDropFiles(writableTarget, node.name, files);
+                  // 접힌 폴더에 떨어뜨리면 결과가 안 보인다 - 펼쳐서 업로드된 파일을 보여준다.
+                  if (!isExpanded(node.id)) onToggle(node.id);
+                }
+              }
+            : undefined
+        }
       >
         <button
           type="button"
@@ -205,6 +258,7 @@ function TreeNodeView({
               isExpanded={isExpanded}
               onToggle={onToggle}
               q={q}
+              onDropFiles={onDropFiles}
             />
           ))}
         </ul>
