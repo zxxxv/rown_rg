@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, FilePlus2, Pencil, ScrollText, Trash2 } from
 import { useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
+import { type UserPreset, useDeleteUserPreset, usePresets } from "@/api/presets";
 import {
   type PersonalPrompt,
   type PromptKind,
@@ -23,6 +24,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { PresetEditorDialog } from "@/features/project-config/PresetEditorDialog";
 import { PromptDialog, SECTION_FIELDS } from "@/features/prompts/PromptDialog";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -64,8 +66,102 @@ export default function PromptsPage() {
 
         <KindSection kind="agent" />
         <KindSection kind="rule" />
+        <MyPresetsSection />
       </div>
     </AppShell>
+  );
+}
+
+/** 내 목차 프리셋 - 보고서 구성(장·절·에이전트 배정)을 미리 만들어 두고
+ * 프로젝트 생성 화면의 보고서 유형에서 불러온다(2026-08-12 QA 2번의 확장). */
+function MyPresetsSection() {
+  const presets = usePresets();
+  const del = useDeleteUserPreset();
+  const [editing, setEditing] = useState<UserPreset | null>(null);
+  const [creating, setCreating] = useState(false);
+  const mine = (presets.data ?? []).filter((p) => p.scope === "personal");
+
+  const onDelete = (id: string, name: string) => {
+    del.mutate(id, {
+      onSuccess: () => toast.success(`"${name}" 삭제됨`),
+      onError: (err) =>
+        toast.error("삭제 실패", { description: errMsg(err, "다시 시도해 주세요.") }),
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+        <div>
+          <CardTitle className="text-base">내 목차 프리셋</CardTitle>
+          <CardDescription>
+            보고서 구성(장·절·방향·에이전트 배정)을 저장해 두면 프로젝트 생성 화면의 보고서 유형에서
+            불러올 수 있습니다. 같은 구성으로 여러 정책을 분석할 때 씁니다.
+          </CardDescription>
+        </div>
+        <Button size="sm" onClick={() => setCreating(true)}>
+          <FilePlus2 className="mr-1 h-4 w-4" />
+          새로 만들기
+        </Button>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        {presets.isLoading ? (
+          <LoadingSkeleton variant="row" count={2} />
+        ) : mine.length > 0 ? (
+          mine.map((p) => (
+            <div
+              key={p.id}
+              className="flex items-center gap-2 rounded border border-border bg-bg px-3 py-2"
+            >
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="flex items-center gap-2">
+                  <span className="truncate text-sm font-medium text-fg">{p.name}</span>
+                  <Badge variant="outline" className="shrink-0 text-[10px]">
+                    {p.n_chapters}장 {p.n_sections}절
+                  </Badge>
+                </span>
+                <span className="truncate text-[11px] text-fg-tertiary">{p.desc}</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setEditing({
+                    id: p.id.replace(/^u:/, ""),
+                    key: p.id,
+                    name: p.name,
+                    description: p.desc,
+                    n_chapters: p.n_chapters,
+                    n_sections: p.n_sections,
+                    updated_at: p.updated_at ?? "",
+                  })
+                }
+              >
+                <Pencil className="mr-1 h-3.5 w-3.5" />
+                편집
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-fg-danger"
+                onClick={() => onDelete(p.id.replace(/^u:/, ""), p.name)}
+                disabled={del.isPending}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))
+        ) : (
+          <p className="rounded border border-dashed border-border bg-bg-secondary px-3 py-3 text-xs text-fg-tertiary">
+            아직 저장한 목차 프리셋이 없습니다. "새로 만들기"로 미리 구성하거나, 프로젝트 생성
+            화면의 목차 설계에서 "내 프리셋으로 저장"을 누르세요.
+          </p>
+        )}
+      </CardContent>
+
+      {creating ? <PresetEditorDialog onClose={() => setCreating(false)} /> : null}
+      {editing ? <PresetEditorDialog existing={editing} onClose={() => setEditing(null)} /> : null}
+    </Card>
   );
 }
 
