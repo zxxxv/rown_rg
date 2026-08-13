@@ -231,10 +231,16 @@ _ECONOMY_WRITE_MODEL = "gpt-5.4-mini-2026-03-17"
 # 1콜·600토큰이라 비용이 무시할 수준이라, 절약 모드에서도 상위 모델을 쓴다.
 # (Sonnet 5는 같은 역할에서 계획 실패 1/2회 관측 — 안정성 때문에 4.6 유지)
 _PLAN_MODEL = "claude-sonnet-4-6"
-# 고급 모드 — 수집은 Sonnet, 본문만 Opus. 수집은 도구를 여러 번 도는 루프라 상위
-# 모델을 써도 회수량이 크게 늘지 않는 반면, 본문은 모델 품질이 그대로 문장에 남는다
-# (사용자 요청 2026-08-11: "검색은 sonnet, 글 작성만 opus").
-_PREMIUM_RESEARCH_MODEL = "claude-sonnet-4-6"
+# 고급 모드 — 수집은 표준과 같은 Haiku로 환원(2026-08-14 결정, 절감 -$6.5/런).
+# 같은 주제 고급/표준 쌍 실측($33.84 분해)에서 Sonnet 수집의 품질 이득이 확인되지
+# 않았다: 두 런 모두 20절 완주·분량 동등, Sonnet이 회수 본문을 1.8배 긁었지만 인용
+# 기여는 업로드 자료가 지배(고급 런 인용의 77%)라 회수량이 본문 품질로 이어지지
+# 않았다. 부실 수집의 하방은 표준과 동일하게 작성 앞의 자료 검토 게이트가 막는다.
+# 본문은 모델 품질이 그대로 문장에 남는 구간이라 Opus 유지.
+_PREMIUM_RESEARCH_MODEL = "claude-haiku-4-5"
+# 목차 설계·pm_verify는 Sonnet 유지 — 런당 콜 수가 적어(설계 1콜·검증 챕터당 1콜)
+# 절감 실익이 없고, 구조·판정 품질은 지키는 쪽이 이득.
+_PREMIUM_SUPPORT_MODEL = "claude-sonnet-4-6"
 _PREMIUM_WRITE_MODEL = "claude-opus-5"
 # 고급 모드는 파트 계획도 Opus로 쓴다(사용자 결정 2026-08-11). 절당 1콜·수백 토큰이라
 # 비용 영향은 미미한데, 파트 소주제 구성이 문서 구조를 그대로 좌우한다.
@@ -244,19 +250,19 @@ _PREMIUM_PLAN_MODEL = "claude-opus-5"
 def _models_for(state: ProjectState) -> dict[str, str]:
     """프로젝트 품질 모드(config.model_mode) → 역할별 모델.
 
-    premium: 수집·검증은 Sonnet 4.6, 본문·파트 계획은 Opus 5(품질 우선).
-    economy: 수집·검증은 Haiku, 본문은 gpt-5.4-mini(비용 우선). standard: 전역 설정
-    (DB 오버라이드→env, 기본 Sonnet 4.6). 두 모드 모두 파트 계획만 _PLAN_MODEL.
-    RAPTOR(gemini)·임베딩은 모드와 무관.
+    premium: 수집은 Haiku(표준과 동일), 목차 설계·검증은 Sonnet 4.6, 본문·파트
+    계획은 Opus 5(품질 우선). economy: 수집·검증은 Haiku, 본문은 gpt-5.4-mini
+    (비용 우선). standard: 전역 설정(DB 오버라이드→env, 기본 Sonnet 4.6).
+    economy·standard는 파트 계획만 _PLAN_MODEL. RAPTOR(gemini)·임베딩은 모드와 무관.
     """
     mode = state.options.get("model_mode") if isinstance(state.options, dict) else None
     if mode == "premium":
         return {
-            "planner": _PREMIUM_RESEARCH_MODEL,
+            "planner": _PREMIUM_SUPPORT_MODEL,
             "research": _PREMIUM_RESEARCH_MODEL,
             "write": _PREMIUM_WRITE_MODEL,
             "write_plan": _PREMIUM_PLAN_MODEL,
-            "verify": _PREMIUM_RESEARCH_MODEL,
+            "verify": _PREMIUM_SUPPORT_MODEL,
         }
     if mode == "economy":
         return {

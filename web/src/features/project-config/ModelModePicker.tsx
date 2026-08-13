@@ -5,9 +5,9 @@ import type { ProjectFormValues } from "./schema";
 // 품질 모드 - 프로젝트 단위 모델 선택(백엔드 stages._models_for가 소비).
 // 역할별로 다른 모델을 쓴다(멀티 프로바이더):
 //   economy  = 수집·검증 Haiku 4.5 + 본문 GPT-5.4-mini
-//   standard = 수집·검증·본문 전역 설정 모델(기본 Sonnet 4.6)
-//   premium  = 수집·검증 Sonnet 4.6 + 본문·파트 계획 Opus 5(검색은 sonnet, 작성만 opus)
-//   파트 계획은 두 모드 모두 Sonnet 4.6(_PLAN_MODEL) - 절당 1콜이라 비용이 무시할 수준.
+//   standard = 수집 Haiku(기본) + 검증·본문 전역 설정 모델(기본 Sonnet 4.6)
+//   premium  = 수집 Haiku + 검증 Sonnet 4.6 + 본문·파트 계획 Opus 5
+//   (고급 수집도 Haiku - 2026-08-14 실측에서 Sonnet 수집의 품질 이득이 확인 안 됨)
 // 라벨을 'Haiku'로만 적어두면 사실과 다르다(2026-08-10 실측: 절약 런의 본문은 전부
 // gpt-5.4-mini였다).
 // 숫자를 적지 않는다 - 금액은 절 수·자료량·분량 목표에 따라 몇 배씩 갈리고, 배수도
@@ -33,7 +33,7 @@ const MODES: {
   {
     value: "premium",
     label: "고급",
-    model: "수집 Sonnet 4.6 + 본문 Opus 5",
+    model: "수집 Haiku 4.5 + 본문 Opus 5",
     cost: "비용 더 높음",
     hint: "검토 부담이 가장 적음 - 근거를 더 많이 끌어쓰고 단정이 덜 세다",
   },
