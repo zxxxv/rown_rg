@@ -183,8 +183,10 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   };
 
   const selectNode = (id: string, status: SectionStatus, isChapter: boolean) => {
-    // 장은 항상 이동(하위 절 통독 뷰가 완성분만 골라 보여줌). 절은 본문 있는 것만.
-    if (!isChapter && !VIEWABLE.includes(status)) {
+    // 장은 항상 이동(하위 절 통독 뷰가 완성분만 골라 보여줌). 절은 작성 중에는 본문
+    // 있는 것만 - 생성이 끝난 뒤에는 빈 절도 열린다. 막아 두면 작성 실패한 절의
+    // 재작성 진입점이 없다(2026-08-14 지적: 빈 절에 재작성 버튼이 없음).
+    if (!isChapter && !VIEWABLE.includes(status) && isGenerating) {
       toast("아직 작성되지 않은 절입니다", {
         description: "작성이 완료되는 대로 순서대로 표시됩니다.",
       });
@@ -291,6 +293,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
                 chapter={selectedChapter}
                 chapterIndex={tree.indexOf(selectedChapter)}
                 onOpenSection={navigateTo}
+                editable={!isGenerating}
               />
             ) : selectedId ? (
               <SectionView
@@ -557,13 +560,18 @@ function ChapterView({
   chapter,
   chapterIndex,
   onOpenSection,
+  editable,
 }: {
   projectId: string;
   chapter: ChapterNode;
   chapterIndex: number;
   onOpenSection: (sectionId: string) => void;
+  /** 생성이 끝났는가 - 끝났으면 미작성 절의 재작성 진입점(열기 버튼)을 노출한다 */
+  editable: boolean;
 }) {
   const completed = chapter.children.filter((s) => VIEWABLE.includes(s.status));
+  // 작성 실패·미작성 절 - 생성이 끝난 뒤에도 남아 있으면 복구 대상이다.
+  const unwritten = chapter.children.filter((s) => !VIEWABLE.includes(s.status));
   return (
     <article className="flex flex-col">
       <header className="border-b border-border px-6 py-4">
@@ -576,12 +584,44 @@ function ChapterView({
           각 절을 여세요.
         </p>
       </header>
+      {editable && unwritten.length > 0 ? (
+        // 빈 절을 "없음"으로만 표시하면 복구 경로가 없다(2026-08-14 지적) - 절을 열면
+        // 그 화면에서 AI 재작성으로 새로 쓸 수 있다.
+        <div className="flex flex-col gap-1.5 border-b border-fg-danger/30 bg-bg-danger px-6 py-3">
+          <p className="text-xs font-medium text-fg">작성되지 않은 절 {unwritten.length}개</p>
+          <ul className="flex flex-col gap-1">
+            {unwritten.map((section) => (
+              <li key={section.id} className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2 text-xs text-fg-secondary">
+                  <span className="font-mono text-fg-tertiary">
+                    {chapterIndex + 1}.{chapter.children.indexOf(section) + 1}
+                  </span>
+                  {section.title}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => onOpenSection(section.id)}
+                >
+                  <Sparkles className="mr-1 h-3 w-3" />
+                  열어서 다시 쓰기
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {completed.length === 0 ? (
         <div className="p-6">
           <EmptyState
             icon={Eye}
             title="아직 완성된 절이 없습니다"
-            description="이 장의 절이 작성 완료되면 여기 이어서 표시됩니다."
+            description={
+              editable && unwritten.length > 0
+                ? "위 목록에서 절을 열면 AI 재작성으로 새로 쓸 수 있습니다."
+                : "이 장의 절이 작성 완료되면 여기 이어서 표시됩니다."
+            }
           />
         </div>
       ) : (
@@ -1072,6 +1112,23 @@ function SectionView({
                 있습니다…
               </div>
             )}
+            {blocks.length === 0 && !rewrite.isPending ? (
+              // 작성 실패로 빈 절 - 본문이 없으니 블록 편집 대신 재작성 진입점을 바로 준다
+              // (2026-08-14 지적: 빈 절에서 재작성 버튼이 없어 복구 경로가 막혔다).
+              <EmptyState
+                icon={Sparkles}
+                title="이 절은 작성되지 않았습니다"
+                description="작성 단계에서 실패했거나 비어 있는 절입니다. 다시 쓰면 프로젝트 자료에서 근거를 검색해 처음부터 새로 작성합니다."
+                action={
+                  editable ? (
+                    <Button onClick={() => void onRewriteSection()} disabled={busy}>
+                      <Sparkles className="mr-1 h-4 w-4" />
+                      AI로 이 절 작성
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ) : null}
             <div className="flex flex-col gap-1">
               {blocks.map((block, idx) => (
                 // biome-ignore lint/a11y/useSemanticElements: 블록 안에 인용 링크(<a>)가 렌더돼 <button> 중첩은 invalid HTML - div+role/키핸들러로 대체

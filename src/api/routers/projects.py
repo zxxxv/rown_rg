@@ -2007,6 +2007,13 @@ async def rewrite_section(
     project = await _get_authorized_project(project_id, session, current_user)
     row = await _get_section(session, project.id, section_id)
     draft = await _section_rewriter(project, _plan_for_row(project, row), data.instruction)
+    if draft.incomplete_reason or not draft.content.strip():
+        # 작성 루프의 완결 게이트(check_complete)와 같은 기준 — max_tokens 컷·refusal
+        # 토막을 저장하면 기존 본문만 잃는다. 실패 절 복구 경로가 여기라 더 엄격해야 한다.
+        raise ValidationError(
+            message="재작성 결과가 완결되지 않았습니다 - 잠시 후 다시 시도하세요",
+            code="REWRITE_INCOMPLETE",
+        )
     content = draft.content
     # 근거 추적 기록 — 재작성은 작성 루프 밖 경로라 그냥 두면 이 절만 추적이 반쪽이 된다
     # (실린 근거 수를 모르고, 마커→청크 대응도 복원할 수 없다).

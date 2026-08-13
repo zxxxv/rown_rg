@@ -27,23 +27,18 @@ export const sectionsHandlers = [
         { status: 404 },
       );
     }
-    if (status !== "completed") {
-      return HttpResponse.json(
-        {
-          error: {
-            code: "section_not_ready",
-            message: "아직 작성되지 않은 섹션입니다.",
-          },
-        },
-        { status: 409 },
-      );
-    }
     const content = buildSectionContent(sectionId, title);
     if (!content) {
       return HttpResponse.json(
         { error: { code: "not_found", message: "섹션을 찾을 수 없습니다." } },
         { status: 404 },
       );
+    }
+    if (status === "pending" || status === "failed") {
+      // 실백엔드 미러 - 미작성·실패 절도 행을 돌려준다(빈 본문, qa 대기). 이 빈 절
+      // 화면이 AI 재작성 진입점이라 409로 막으면 복구 경로가 없다(2026-08-14).
+      content.content = "";
+      content.qa_status = "pending";
     }
     const override = CONTENT_OVERRIDES.get(sectionId);
     if (override !== undefined) content.content = override;
