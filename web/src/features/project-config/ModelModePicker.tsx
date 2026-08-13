@@ -24,7 +24,9 @@ const MODES: {
   {
     value: "standard",
     label: "표준",
-    model: "Sonnet 4.6",
+    // 수집 담당까지 밝힌다 - 'Sonnet 4.6'만 쓰면 수집도 Sonnet으로 오해한다
+    // (2026-08-14 실사용 오해 - 실제 수집 기본은 Haiku, 작성이 Sonnet).
+    model: "수집 Haiku 4.5 + 본문 Sonnet 4.6",
     cost: "기준",
     hint: "사람이 한 번 훑는 초안 - 수치와 표는 검토 화면에서 확인하세요",
   },
