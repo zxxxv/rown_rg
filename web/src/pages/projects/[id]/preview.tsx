@@ -54,6 +54,11 @@ import { findTable, isTableCaption, type MarkdownTable } from "@/features/previe
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
+// 블록 근거 UI(배지·드로어·본문 근거 매핑) - 실사용 검증 전이라 이번 배포에서는
+// 감춘다(2026-08-14 사용자 결정). 작성 시 근거 기록(백엔드)은 계속 쌓이므로 데이터
+// 손실은 없다. 내일 자료 보강 워크플로우와 함께 검증한 뒤 true로 되돌려 재배포.
+const EVIDENCE_UI_ENABLED = false;
+
 const STATUS_KIND: Record<SectionStatus, StatusKind> = {
   pending: "tertiary",
   writing: "info",
@@ -743,7 +748,7 @@ function SectionView({
   const error = contentQuery.error;
 
   // 본문 마커에 근거 원문을 붙이려면 절과 함께 받아야 한다(패널과 같은 캐시를 쓴다).
-  const evidenceQuery = useSectionEvidence(projectId, sectionId);
+  const evidenceQuery = useSectionEvidence(projectId, sectionId, EVIDENCE_UI_ENABLED);
   const save = useSaveSection(projectId, sectionId);
   const rewrite = useRewriteSection(projectId, sectionId);
   const rewriteBlock = useRewriteBlock(projectId, sectionId);
@@ -1123,7 +1128,7 @@ function SectionView({
                     <>
                       {/* 근거 있는 블록에만 표시를 달고, 눌렀을 때만 드로어를 연다 -
                           근거 0건 블록에서 빈 패널이 뜨는 불편을 없앤다(2026-08-12). */}
-                      {(evidenceCounts[idx] ?? 0) > 0 ? (
+                      {EVIDENCE_UI_ENABLED && (evidenceCounts[idx] ?? 0) > 0 ? (
                         <button
                           type="button"
                           title="이 블록이 인용한 근거 원문을 오른쪽 패널로 봅니다"
@@ -1210,7 +1215,7 @@ function SectionView({
           {/* 오른쪽 드로어: 근거 전용. 화면에 고정돼 본문 위로 뜨므로 본문 폭이 안 줄고,
               스크롤도 본문과 따로 논다 - 긴 근거를 읽는 동안 본문 위치를 잃지 않는다.
               블록 선택(재작성)과는 무관하게 '근거 N' 표시 클릭으로만 열고 닫는다. */}
-          {evidenceBlock !== null ? (
+          {EVIDENCE_UI_ENABLED && evidenceBlock !== null ? (
             <aside
               aria-label="선택한 블록의 근거"
               className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[92vw] flex-col border-l border-border bg-bg-secondary shadow-xl sm:w-[460px] 2xl:w-[560px]"
