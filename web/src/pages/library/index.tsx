@@ -82,7 +82,13 @@ export default function LibraryPage() {
   // (프로젝트·완성본 등)나 파일을 고르면 writable이 없어 업로드/폴더생성이 막힌다.
   const selectedFolder = lookup.node?.type === "folder" ? lookup.node : null;
   const writable = selectedFolder?.writable ?? null;
-  const canWrite = Boolean(writable);
+  // 뷰어는 열람 전용 - 쓰기 UI를 열어 두고 전송 끝에 403을 맞게 하지 않는다.
+  // 백엔드(require_writer)가 최종 차단하지만, 사유는 시도 전에 보여준다(2026-08-14).
+  const readOnly = user?.role === "viewer";
+  const canWrite = Boolean(writable) && !readOnly;
+  const writeBlockedReason = readOnly
+    ? "열람 전용 권한 - 업로드는 관리자에게 권한 상향을 문의하세요"
+    : "‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요";
   const targetName = selectedFolder?.name ?? "";
   const targetParentId = writable?.parent_id ?? null;
   const targetIsPersonal = writable?.scope === "personal";
@@ -99,6 +105,13 @@ export default function LibraryPage() {
 
   /** 파일들을 대상 폴더로 업로드 - 트리 드롭·본문 드롭·버튼 선택의 공통 경로. */
   const uploadTo = (target: WritableTarget, folderLabel: string, files: File[]) => {
+    if (readOnly) {
+      // 드롭 경로의 최종 안전망 - 버튼은 비활성이지만 드래그는 이벤트로 들어올 수 있다.
+      toast.error("열람 전용 권한입니다", {
+        description: "자료 업로드는 관리자에게 권한 상향을 문의하세요.",
+      });
+      return;
+    }
     for (const file of files) {
       const rowId = `${folderLabel}:${file.name}-${file.size}-${file.lastModified}`;
       setUploads((u) =>
@@ -172,7 +185,9 @@ export default function LibraryPage() {
                   </span>
                 ) : (
                   <span className="text-fg-tertiary">
-                    업로드하려면 ‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요.
+                    {readOnly
+                      ? "열람 전용 권한입니다 - 업로드·폴더 추가는 관리자에게 권한 상향을 문의하세요."
+                      : "업로드하려면 ‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요."}
                   </span>
                 )}
               </p>
@@ -183,7 +198,7 @@ export default function LibraryPage() {
                 size="sm"
                 onClick={() => setFolderDialogOpen(true)}
                 disabled={createFolder.isPending || !canWrite}
-                title={canWrite ? undefined : "‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요"}
+                title={canWrite ? undefined : writeBlockedReason}
               >
                 <FolderPlus className="mr-1 h-4 w-4" />
                 폴더 추가
@@ -192,7 +207,7 @@ export default function LibraryPage() {
                 size="sm"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploadFile.isPending || !canWrite}
-                title={canWrite ? undefined : "‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요"}
+                title={canWrite ? undefined : writeBlockedReason}
               >
                 <Upload className="mr-1 h-4 w-4" />
                 {uploadFile.isPending ? "업로드 중…" : "파일 업로드"}
@@ -265,7 +280,10 @@ export default function LibraryPage() {
                   selectedId={selectedId}
                   onSelect={setSelectedId}
                   search={debouncedSearch}
-                  onDropFiles={(target, name, files) => uploadTo(target, name, files)}
+                  onDropFiles={
+                    // 뷰어에겐 드롭 대상 강조 자체를 끈다 - 열리는 것처럼 보이면 안 된다.
+                    readOnly ? undefined : (target, name, files) => uploadTo(target, name, files)
+                  }
                 />
               </ScrollArea>
               <UploadProgressList uploading={uploads} />
