@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import hashlib
+import os
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -42,6 +43,11 @@ def _session_options(ort):
     """
     opts = ort.SessionOptions()
     opts.enable_cpu_mem_arena = False
+    # 코어 하나는 이벤트 루프 몫으로 남긴다. 기본값(전체 코어)이면 추론이 CPU를 다
+    # 잡아 색인 도는 내내 API·WS가 통째로 굳는다(2026-08-13 사용자 보고 - 임베딩
+    # 시작하면 웹 끊김. 운영 2vCPU에서 특히 치명). 추론은 그만큼 느려지지만 색인은
+    # 배경 작업이고, 화면이 죽는 것보다 낫다.
+    opts.intra_op_num_threads = max(1, (os.cpu_count() or 2) - 1)
     return opts
 
 

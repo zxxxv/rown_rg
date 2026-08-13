@@ -294,6 +294,8 @@ class ChunkingService:
                         )
 
         merged = self._merge_short(raw_chunks)
+        # 토큰 추정은 조립이 다 끝난 뒤 워커 스레드에서 일괄 — 이벤트 루프를 지킨다.
+        await asyncio.to_thread(self._fill_token_estimates, merged)
 
         for c in merged:
             if not (self.MIN_CHUNK_SIZE <= c.char_count <= self.MAX_CHUNK_SIZE):
@@ -403,11 +405,19 @@ class ChunkingService:
             sentence_count=len(all_combined),
         )
 
-    def _estimate_tokens(self, text: str) -> int:
-        # special_tokens 제외 — BGE-M3 [CLS][SEP] 두 개를 더 빼는 게 정확하지만 청킹용
-        # 추정치라 무시할 만함.
+    def _fill_token_estimates(self, chunks: list[Chunk]) -> None:
+        """토큰 추정치를 마지막에 한 번에 채운다 — 워커 스레드에서, 락은 한 번만.
+
+        전에는 청크마다 **이벤트 루프에서** 토크나이저를 불렀다. 임베딩 스레드가 같은
+        락("Already borrowed" 방지용)을 쥔 동안 루프가 lock.acquire에 서고, 토큰화
+        자체도 루프에서 돌아 색인 내내 API·WS가 굳었다(2026-08-13 사용자 보고 -
+        임베딩 시작하면 웹 끊김). special_tokens 제외는 종전과 동일(청킹용 추정치).
+        """
         with self._tokenizer_lock:
-            return len(self._tokenizer.encode(text, add_special_tokens=False))
+            for c in chunks:
+                c.metadata["token_count_estimate"] = len(
+                    self._tokenizer.encode(c.content, add_special_tokens=False)
+                )
 
     def _make_chunk(
         self,
@@ -426,7 +436,8 @@ class ChunkingService:
             metadata={
                 "header_path": list(header_path),
                 "chunk_type": chunk_type,
-                "token_count_estimate": self._estimate_tokens(content),
+                # token_count_estimate는 조립 끝에 _fill_token_estimates가 일괄로 채운다
+                # (여기서 채우면 이벤트 루프에서 토크나이저 락을 잡아 색인 중 API가 굳는다).
                 "has_numbers": _has_numbers(content),
                 "has_proper_nouns": _has_proper_nouns(content),
             },
@@ -456,7 +467,6 @@ class ChunkingService:
                     source_id=last.source_id,
                     metadata={
                         **last.metadata,
-                        "token_count_estimate": self._estimate_tokens(merged_text),
                         "has_numbers": last.metadata["has_numbers"] or _has_numbers(c.content),
                         "has_proper_nouns": (
                             last.metadata["has_proper_nouns"] or _has_proper_nouns(c.content)

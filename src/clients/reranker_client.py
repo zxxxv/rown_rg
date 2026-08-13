@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -32,6 +33,9 @@ def _session_options(ort):
     """
     opts = ort.SessionOptions()
     opts.enable_cpu_mem_arena = False
+    # 코어 하나는 이벤트 루프 몫으로 남긴다(임베딩 클라이언트와 동일한 이유 -
+    # 추론이 전 코어를 잡으면 색인·리랭킹 도는 내내 API·WS가 굳는다, 2026-08-13).
+    opts.intra_op_num_threads = max(1, (os.cpu_count() or 2) - 1)
     return opts
 
 
