@@ -51,27 +51,5 @@ class TestCitationsFromNumbers:
         assert _citations_from_numbers([], []) == []
 
 
-class TestPreAssembleNumbers:
-    """조립 전에는 [n]이 절-로컬(검색 청크 풀) 번호라 채택 자료 수를 넘는 게 정상이다.
-
-    그때 '출처 불명'으로 보여주면 사용자가 오류로 오해한다(2026-08-10 지적).
-    """
-
-    def test_pre_assemble_shows_pending_message(self):
-        rows = _citations_from_numbers([1, 32], [_src("자료A")], renumbered=False)
-        assert rows[0].title == "자료A"
-        assert rows[1].number == 32
-        assert rows[1].title == "(조립 후 번호가 확정됩니다)"
-        assert "불명" not in rows[1].title
-        assert rows[1].source_id is None
-
-    def test_after_assemble_keeps_unknown_message(self):
-        # 조립을 지난 뒤의 범위 밖 번호는 진짜 잔재라 기존 문구를 유지한다.
-        rows = _citations_from_numbers([99], [_src("자료A")], renumbered=True)
-        assert "불명" in rows[0].title
-
-    def test_in_range_unaffected_by_flag(self):
-        sources = [_src("자료A"), _src("자료B")]
-        for flag in (True, False):
-            rows = _citations_from_numbers([2], sources, renumbered=flag)
-            assert (rows[0].number, rows[0].title) == (2, "자료B")
+# (TestPreAssembleNumbers는 ea0982d에서 제거됨 - renumbered 플래그 직해석은 조립 전
+# 라벨을 엉뚱한 자료로 풀던 버그였다. feat/qa 병합이 옛 버전을 되살려 다시 지운다.)

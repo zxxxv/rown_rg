@@ -97,6 +97,14 @@ def test_청킹이_임베딩과_같은_락을_잡는다() -> None:
     assert service._tokenizer_lock is embedder.tokenizer_lock
 
 
+def _sample_chunk(service, text: str):
+    from uuid import uuid4
+
+    return service._make_chunk(
+        content=text, chunk_type="text", header_path=[], source_id=uuid4(), chunk_index=0
+    )
+
+
 def test_토큰_추정을_동시에_불러도_안_터진다() -> None:
     """락이 없거나 서로 다른 락이면 'Already borrowed'가 난다."""
     from src.services.indexing._chunking import ChunkingService
@@ -110,7 +118,9 @@ def test_토큰_추정을_동시에_불러도_안_터진다() -> None:
     def worker() -> None:
         try:
             for _ in range(20):
-                service._estimate_tokens("숏폼 콘텐츠 시장은 빠르게 성장하고 있다")
+                service._fill_token_estimates(
+                    [_sample_chunk(service, "숏폼 콘텐츠 시장은 빠르게 성장하고 있다")]
+                )
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
@@ -135,7 +145,9 @@ def test_임베딩과_청킹이_동시에_돌아도_안_터진다() -> None:
     def chunker() -> None:
         try:
             for _ in range(20):
-                service._estimate_tokens("본문 텍스트가 여기에 들어간다")
+                service._fill_token_estimates(
+                    [_sample_chunk(service, "본문 텍스트가 여기에 들어간다")]
+                )
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
