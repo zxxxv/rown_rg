@@ -26,6 +26,7 @@ from src.export.hwpx_writer import (
 )
 from src.services.export.report import (
     REFERENCES_HEADING,
+    _figure_placeholder,
     _figures_needed,
     export_filename,
     export_report,
@@ -35,7 +36,11 @@ from src.services.export.report import (
 
 
 class TestFiguresNeeded:
-    """분량이 요구하는 시각자료 수에서 표·차트가 채우고 남은 만큼이 그림 자리표시자가 된다."""
+    """분량이 요구하는 시각자료 수에서 표·차트가 채우고 남은 만큼이 그림 자리표시자가 된다.
+
+    자리표시자는 key_points 수로 캡한다(없으면 1) — 소재 없이 늘리면 같은 제목·같은
+    폴백 설명의 그림이 복제된다(2026-08-13 실사고: 한 절에 동일 그림 4개).
+    """
 
     def test_short_section_needs_one_visual(self):
         assert _figures_needed("짧은 절", visual_count=0) == 1
@@ -43,12 +48,47 @@ class TestFiguresNeeded:
 
     def test_two_pages_need_two_visuals(self):
         content = "가" * 3000  # 1,500자당 1개 → 2개 필요
-        assert _figures_needed(content, visual_count=0) == 2
-        assert _figures_needed(content, visual_count=1) == 1
-        assert _figures_needed(content, visual_count=2) == 0
+        kp = ["시장 규모", "경쟁 구도"]
+        assert _figures_needed(content, visual_count=0, key_points=kp) == 2
+        assert _figures_needed(content, visual_count=1, key_points=kp) == 1
+        assert _figures_needed(content, visual_count=2, key_points=kp) == 0
 
     def test_surplus_visuals_do_not_go_negative(self):
         assert _figures_needed("짧은 절", visual_count=5) == 0
+
+    def test_capped_by_key_points(self):
+        content = "가" * 6000  # 분량상 4개 필요
+        assert _figures_needed(content, visual_count=0, key_points=["a", "b"]) == 2
+
+    def test_no_key_points_caps_at_one(self):
+        # key_points 없는 절(폼에서 새로 추가한 절)은 폴백 설명이 하나뿐 — 1개만.
+        content = "가" * 6000
+        assert _figures_needed(content, visual_count=0) == 1
+        assert _figures_needed(content, visual_count=1) == 1  # 분량상 부족분이 남아도 캡 1
+        assert _figures_needed(content, visual_count=4) == 0  # 시각자료가 충분하면 0
+
+
+class TestFigurePlaceholder:
+    """한 절 그림 여러 개면 제목·설명이 key_point별로 달라야 한다(동일 복제 방지)."""
+
+    def test_captions_differ_per_key_point(self):
+        plan = SectionPlan(
+            chapter_number=3,
+            section_number=2,
+            title="국내 기술개발 동향",
+            key_points=["주요 기업 R&D", "특허 출원 추이"],
+        )
+        f0 = _figure_placeholder(plan, 0)
+        f1 = _figure_placeholder(plan, 1)
+        assert f0.caption == "주요 기업 R&D"
+        assert f1.caption == "특허 출원 추이"
+        assert f0.description != f1.description
+
+    def test_without_key_points_uses_section_title(self):
+        plan = SectionPlan(chapter_number=3, section_number=2, title="국내 기술개발 동향")
+        fig = _figure_placeholder(plan, 0)
+        assert fig.caption == "국내 기술개발 동향"
+        assert "국내 기술개발 동향" in fig.description
 
 
 class TestGroupStartSpacing:

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 import textwrap
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, timedelta, timezone
 from pathlib import Path
@@ -59,7 +60,7 @@ _KST = timezone(timedelta(hours=9))
 # 렌더 규칙을 바꿀 때마다 올린다. 다운로드는 "본문이 파일보다 새것인가"로만 재렌더를
 # 판단하는데, 코드를 고쳐도 본문 수정 시각은 그대로라 옛 파일이 그대로 내려갔다
 # (2026-08-11 지적). 버전을 파일명에 섞어 새 코드가 옛 산출물을 집지 않게 한다.
-EXPORT_RENDER_VERSION = 6
+EXPORT_RENDER_VERSION = 7  # r7: 그림 자리표시자 key_points 캡·캡션 구분(2026-08-13)
 
 
 def export_filename(project_id: UUID | str) -> str:
@@ -565,7 +566,7 @@ def _chapter_heading_text(chapter_number: int, ch_titles: dict[int, str]) -> str
 _CHARS_PER_VISUAL = 1500
 
 
-def _figures_needed(content: str, visual_count: int) -> int:
+def _figures_needed(content: str, visual_count: int, key_points: Sequence[str] = ()) -> int:
     """그 절에 더 넣을 그림 수 — 분량이 요구하는 시각자료 수에서 이미 있는 것을 뺀 만큼.
 
     visual_count는 표와 차트를 함께 센다 — 둘 다 시각자료라, 차트를 안 세면 이미 그림이
@@ -574,9 +575,14 @@ def _figures_needed(content: str, visual_count: int) -> int:
     한때는 "표가 하나도 없는 절"에만 그림을 넣었다. 그러다 보니 표를 많이 쓴 절일수록
     그림이 사라져, 표만 빽빽한 보고서가 됐다(2026-08-11 지적). 분량 기준으로 바꿔
     표가 있어도 긴 절에는 그림이 함께 들어가게 한다.
+
+    자리표시자 수는 key_points 수로 캡한다(없으면 1) — 설명을 하나씩 나눠 맡을 소재가
+    떨어지면 남는 그림이 같은 제목·같은 폴백 설명으로 복제된다(2026-08-13 실사고:
+    key_points 없는 절에 동일 그림 4개가 나란히 배치됨).
     """
     required = max(1, len(content) // _CHARS_PER_VISUAL)
-    return max(0, required - visual_count)
+    needed = max(0, required - visual_count)
+    return min(needed, max(1, len(key_points)))
 
 
 def _figure_placeholder(plan: SectionPlan, index: int = 0) -> Figure:
@@ -595,8 +601,11 @@ def _figure_placeholder(plan: SectionPlan, index: int = 0) -> Figure:
     else:
         focus = f"{plan.title}의 핵심 내용"
     description = f"{focus} 관련 핵심 수치·구조를 요약한 도표 또는 그래프"
-    # 번호 없는 제목만 담는다 — 표와 마찬가지로 조립 단계에서 장 단위 일련번호를 붙인다.
-    return Figure(caption=plan.title, description=description)
+    # 번호 없는 제목만 담는다 — 조립 단계에서 장 단위 일련번호를 붙인다. 제목은 담당
+    # key_point로 짓는다: 절 제목을 그대로 쓰면 한 절의 그림 여러 개가 전부 같은
+    # 이름이 된다(표 폴백 제목과 같은 문제, 2026-08-11 지적·2026-08-13 재발).
+    caption = plan.key_points[index] if index < len(plan.key_points) else plan.title
+    return Figure(caption=caption, description=description)
 
 
 _SOURCE_TYPE_LABEL: dict[SourceType, str] = {
@@ -719,7 +728,8 @@ def report_blocks(
         section_blocks = _strip_citation_blocks(section_blocks)
         visual_count = sum(1 for b in section_blocks if isinstance(b, Table | Chart))
         section_blocks += [
-            _figure_placeholder(plan, i) for i in range(_figures_needed(content, visual_count))
+            _figure_placeholder(plan, i)
+            for i in range(_figures_needed(content, visual_count, plan.key_points))
         ]
         chapter_table_no, chapter_figure_no = _number_visuals(
             section_blocks, plan.chapter_number, chapter_table_no, chapter_figure_no, plan.title
