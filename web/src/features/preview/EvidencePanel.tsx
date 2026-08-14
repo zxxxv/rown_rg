@@ -291,8 +291,11 @@ export function BlockEvidence({
           </Badge>
         ) : null}
       </div>
-      {flagged.length > 0 ? (
-        <ClaimTable claims={flagged} chunks={data.items} onLocate={onLocate} />
+      {/* 전체 목록을 넘긴다 - 걸러낸 목록을 넘기면 표 안의 '전체 문장 보기' 토글이
+          같은 목록을 두 번 보여주는 빈 스위치가 된다(2026-08-14 사용자 발견). 기본
+          표시는 표 안에서 '확인 필요'만 거른다. */}
+      {claims.length > 0 ? (
+        <ClaimTable claims={claims} chunks={data.items} onLocate={onLocate} />
       ) : null}
       {primary.length > 0 ? (
         <ul className="flex flex-col gap-2">

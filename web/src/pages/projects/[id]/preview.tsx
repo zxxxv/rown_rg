@@ -785,13 +785,35 @@ function SectionView({
   // 드로어 2면 중 원문 뷰어 - 근거 카드·수치에서 "원문에서 보기"를 눌렀을 때만.
   // 근거 목록으로 돌아가는 뒤로가기가 있으므로 블록이 바뀌면 반드시 비운다.
   const [sourceView, setSourceView] = useState<SourceLocation | null>(null);
-  // 블록별 '이 블록의 근거' 수 - 표시(배지) 유무의 원천. 드로어(BlockEvidence)와
-  // 같은 분류를 쓴다(문장 정렬로 좁힌 primary - 같은 번호에 딸려 온 다른 대목 제외).
+  // 블록별 '이 블록의 근거' 수 + 강한 경고 수 - 표시(배지)의 원천. 드로어와 같은 분류.
+  // 경고는 못 찾음·근거 없는 수치만 센다 - 추정·외국어·표기 없음까지 물들이면 문장의
+  // 70~90%가 비확정(검증런 실측)이라 모든 블록이 경고색이 되고 신호가 죽는다.
   const evidenceCounts = useMemo(() => {
     const data = evidenceQuery.data;
-    if (!data) return [] as number[];
-    return blocks.map((block) => partitionBlockEvidence([block], data).primary.length);
+    if (!data) return [] as { count: number; alert: number }[];
+    return blocks.map((block) => {
+      const { primary, claims } = partitionBlockEvidence([block], data);
+      const alert = claims.filter(
+        (c) => c.status === "unmatched" || c.ungrounded.length > 0,
+      ).length;
+      return { count: primary.length, alert };
+    });
   }, [blocks, evidenceQuery.data]);
+  // 절 단위 대조 요약 - 블록을 일일이 열지 않아도 어디를 볼지 가늠하게(2026-08-14 지적).
+  const claimStats = useMemo(() => {
+    const claims = evidenceQuery.data?.claims;
+    if (!claims || claims.length === 0) return null;
+    const by = (s: string) => claims.filter((c) => c.status === s).length;
+    return {
+      total: claims.length,
+      aligned: by("aligned"),
+      weak: by("weak"),
+      unmatched: by("unmatched"),
+      crosslingual: by("crosslingual"),
+      uncited: by("uncited"),
+      ungrounded: claims.filter((c) => c.ungrounded.length > 0).length,
+    };
+  }, [evidenceQuery.data]);
   // 드로어가 뜨는 조건과 정확히 같은 식을 부모에 알린다 - 부모는 이때 절 트리를 접어
   // 본문을 넓힌다. 절을 옮기거나 화면을 떠날 때도 반드시 닫힘으로 되돌린다.
   const drawerOpen = evidenceBlock !== null;
@@ -1076,6 +1098,26 @@ function SectionView({
                 }
               />
             ) : null}
+            {/* 절 단위 대조 요약 - 블록을 일일이 열지 않아도 이 절의 근거 상태를 한 줄로.
+                자세한 대조는 경고색 블록의 '근거 N' 표시를 눌러 드로어에서 한다. */}
+            {EVIDENCE_UI_ENABLED && claimStats ? (
+              <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-fg-tertiary">
+                <span className="font-medium text-fg-secondary">근거 대조</span>
+                <span>문장 {claimStats.total}</span>
+                <span className="text-fg-success">대목 특정 {claimStats.aligned}</span>
+                {claimStats.weak > 0 ? <span>추정 {claimStats.weak}</span> : null}
+                {claimStats.crosslingual > 0 ? (
+                  <span>외국어 근거 {claimStats.crosslingual}</span>
+                ) : null}
+                {claimStats.unmatched > 0 ? (
+                  <span className="text-fg-danger">못 찾음 {claimStats.unmatched}</span>
+                ) : null}
+                {claimStats.uncited > 0 ? <span>표기 없음 {claimStats.uncited}</span> : null}
+                {claimStats.ungrounded > 0 ? (
+                  <span className="text-fg-danger">근거 없는 수치 {claimStats.ungrounded}</span>
+                ) : null}
+              </div>
+            ) : null}
             <div className="flex flex-col gap-1">
               {blocks.map((block, idx) => (
                 // biome-ignore lint/a11y/useSemanticElements: 블록 안에 인용 링크(<a>)가 렌더돼 <button> 중첩은 invalid HTML - div+role/키핸들러로 대체
@@ -1129,8 +1171,10 @@ function SectionView({
                   ) : (
                     <>
                       {/* 근거 있는 블록에만 표시를 달고, 눌렀을 때만 드로어를 연다 -
-                          근거 0건 블록에서 빈 패널이 뜨는 불편을 없앤다(2026-08-12). */}
-                      {EVIDENCE_UI_ENABLED && (evidenceCounts[idx] ?? 0) > 0 ? (
+                          근거 0건 블록에서 빈 패널이 뜨는 불편을 없앤다(2026-08-12).
+                          강한 경고(못 찾음·근거 없는 수치)가 있는 블록은 배지를 경고색으로 -
+                          블록을 열지 않고도 어디를 볼지 훑을 수 있게(2026-08-14 지적). */}
+                      {EVIDENCE_UI_ENABLED && (evidenceCounts[idx]?.count ?? 0) > 0 ? (
                         <button
                           type="button"
                           title="이 블록이 인용한 근거 원문을 오른쪽 패널로 봅니다"
@@ -1144,11 +1188,16 @@ function SectionView({
                             "absolute -top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors",
                             evidenceIdx === idx
                               ? "border-accent bg-bg-info text-fg-info"
-                              : "border-border bg-bg text-fg-tertiary hover:border-border-strong hover:text-fg-secondary",
+                              : (evidenceCounts[idx]?.alert ?? 0) > 0
+                                ? "border-fg-warning/50 bg-bg-warning text-fg hover:border-fg-warning"
+                                : "border-border bg-bg text-fg-tertiary hover:border-border-strong hover:text-fg-secondary",
                           )}
                         >
                           <FileSearch className="h-3 w-3" aria-hidden />
-                          근거 {evidenceCounts[idx]}
+                          근거 {evidenceCounts[idx]?.count}
+                          {(evidenceCounts[idx]?.alert ?? 0) > 0
+                            ? ` · 확인 ${evidenceCounts[idx]?.alert}`
+                            : ""}
                         </button>
                       ) : null}
                       <MarkdownContent
@@ -1271,7 +1320,9 @@ function SectionView({
       {editable && !editing ? (
         // 선택 → 지시 → 실행이 가로 한 줄에 놓이도록 하단 띠로 뺐다. 평소에는 화면을
         // 차지하지 않고, 근거 패널이 세로 전체를 쓴다.
-        <div className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t border-border bg-bg px-6 py-3">
+        // z-20: 블록의 '근거 N' 배지(absolute z-10)가 스크롤 중 이 바를 뚫고 그려지는
+        // 것을 막는다(2026-08-14 사용자 발견). 드로어(z-40)보다는 아래.
+        <div className="sticky bottom-0 z-20 flex flex-wrap items-center gap-2 border-t border-border bg-bg px-6 py-3">
           <Label htmlFor="rewrite-instruction" className="text-xs text-fg-secondary">
             {selectedBlocks.length > 0 ? `블록 ${selectedBlocks.length}개` : "절 전체"} 재작성 지시
           </Label>
