@@ -131,7 +131,7 @@ function ClaimTable({
                             onClick={go}
                             className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-fg-info hover:underline"
                           >
-                            원문에서 위치 보기 <FileSearch className="h-3 w-3" />
+                            이 문장 위치 보기 <FileSearch className="h-3 w-3" />
                           </button>
                         ) : null;
                       })()}
@@ -182,6 +182,8 @@ function EvidenceCard({
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
           {item.source_title ?? "(제목 없음)"}
         </span>
+        {/* 외부 '원본' 링크는 뺐다(2026-08-14 사용자 지적: 문장 카드의 링크들과 중복으로
+            읽힘). 원문 뷰어 헤더에 '원본 열기'가 있어 경로 손실이 없다. */}
         {onLocate && item.source_id ? (
           <button
             type="button"
@@ -194,18 +196,8 @@ function EvidenceCard({
             title="이 대목이 원문 문서의 어디인지 앞뒤 문맥과 함께 봅니다"
             className="inline-flex shrink-0 items-center gap-1 text-[11px] text-fg-info hover:underline"
           >
-            원문에서 보기 <FileSearch className="h-3 w-3" />
+            문서 전체에서 보기 <FileSearch className="h-3 w-3" />
           </button>
-        ) : null}
-        {item.url ? (
-          <a
-            href={item.url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex shrink-0 items-center gap-1 text-[11px] text-fg-info hover:underline"
-          >
-            원본 <ExternalLink className="h-3 w-3" />
-          </a>
         ) : null}
       </div>
       {item.header_path.length > 0 ? (
