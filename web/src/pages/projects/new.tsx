@@ -51,14 +51,22 @@ export default function NewProjectPage() {
       navigate(`/projects/${project.id}/overview`, { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
-        // 에러코드는 개발자용 - 사용자에겐 백엔드가 준 사람이 읽을 이유(message)만 보여준다.
-        const title =
-          err.status === 422
-            ? "입력값을 다시 확인해 주세요."
-            : err.status === 429
-              ? "한도 초과 - 프로젝트를 만들 수 없습니다"
-              : "프로젝트 생성 실패";
-        toast.error(title, { description: err.message });
+        // 사유가 본문이다 - 설명줄에 넣으면 놓친다(2026-08-14 실사용 지적: UNKNOWN_ANALYST
+        // 사유가 안 보였음). 백엔드 메시지를 제목으로 올리고, 없을 때만 일반 문구를 쓴다.
+        const reason = err.message?.trim();
+        if (err.status === 422) {
+          toast.error(reason || "입력값을 다시 확인해 주세요.", {
+            description: reason ? "입력값을 고친 뒤 다시 시도해 주세요." : `code: ${err.code}`,
+            duration: 10_000,
+          });
+        } else if (err.status === 429) {
+          toast.error("한도 초과 - 프로젝트를 만들 수 없습니다", { description: reason });
+        } else {
+          toast.error("프로젝트 생성 실패", {
+            description: reason || `code: ${err.code}`,
+            duration: 10_000,
+          });
+        }
       } else {
         toast.error("프로젝트 생성 중 알 수 없는 오류가 발생했습니다.");
       }
