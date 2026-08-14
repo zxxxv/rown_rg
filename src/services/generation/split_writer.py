@@ -224,7 +224,7 @@ async def _plan_subtopics(
     previews = "\n".join(f"- {c.content[:80]}" for c in citable[:8])
     key_points = ", ".join(section.key_points) or "(없음)"
     prompt = (
-        f"절 제목: {section.chapter_number}.{section.section_number} {section.title}\n"
+        f"절 제목: {section.prompt_label()}\n"
         f"작성 방향: {section.direction or '(없음)'}\n"
         f"핵심 포인트: {key_points}\n\n근거 미리보기:\n{previews}"
     )

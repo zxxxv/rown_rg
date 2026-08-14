@@ -55,7 +55,7 @@ async def regenerate_section(
         # 같은 절 계획 밖 지시에 맞는 청크가 근거 풀에 안 들어와, 모델이 지시를 못
         # 따르거나 근거 없이 쓴다(2026-08-14 사용자 결정). 주입 지점은 재채점 앵커
         # (direction → _rerank_query)뿐이다 - 1차 검색은 제목 키워드 AND 결합이라
-        # 문장을 붙이면 재현율이 무너진다(_section_query 주석). 생성 프롬프트는
+        # 문장을 붙이면 재현율이 무너진다(section_search_query 주석). 생성 프롬프트는
         # 원본 section을 그대로 쓴다(지시문은 guidance로 이미 들어감).
         merged = " — ".join(p for p in (section.direction.strip(), instruction.strip()) if p)
         search_plan = section.model_copy(update={"direction": merged})

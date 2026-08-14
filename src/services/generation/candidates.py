@@ -43,10 +43,15 @@ def _build_prompt(
     """
     citable = [c for c in chunks if not c.is_summary]
     summaries = [c for c in chunks if c.is_summary]
-    lines = [
-        f"작성할 섹션: {section.chapter_number}.{section.section_number} {section.title}",
-        "",
-    ]
+    lines = [f"작성할 섹션: {section.prompt_label()}"]
+    if section.chapter_title and section.chapter_title.lower() not in section.title.lower():
+        # 같은 절 제목이 장마다 반복되는 비교형 목차에서 범위를 못 박는다 — 이 문장이
+        # 없어서 2·3·4장의 같은 번호 절이 서로 구별되지 않는 글로 나왔다(2026-08-14).
+        lines.append(
+            f"이 절은 '{section.chapter_title}' 장에 속한다 — 그 대상에 한정해 쓰고, "
+            "다른 장이 맡은 대상은 비교가 꼭 필요할 때만 한 줄로 언급하라."
+        )
+    lines.append("")
     if guidance:
         # 플래너 산출물(작성 방향·핵심 포인트) — 프리셋 경로에서만 채워진다.
         lines.extend([guidance, ""])

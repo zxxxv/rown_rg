@@ -81,22 +81,78 @@ async def _merged_with_translation(
     return merged[: max(width, len(hits))]
 
 
-def _section_query(section: SectionPlan) -> str:
-    """1차 검색 쿼리 — 절 제목만. pgroonga &@~가 공백 항을 AND로 묶으므로
-    여기에 주제 문장을 붙이면 키워드 재현율이 무너진다(짧게 유지)."""
-    return section.title
+# 재채점 앵커에 실을 주제문 상한(문자). topic은 사용자가 자유로 쓰는 지시문이라 길다 —
+# 탄소규제 런은 383자(189토큰)였는데, 리랭커는 query를 절대 자르지 않고 passage만
+# 자르므로(truncation="only_second", max_length=512) 근거 본문이 240~300토큰으로
+# 잘려 나갔다(청크 중앙값 518자 ≈ 340토큰). 게다가 절마다 똑같은 189토큰 접두사가
+# 붙어 절 간 변별력까지 지웠다. 표류 방지 역할은 이제 장 제목이 대신한다.
+_TOPIC_ANCHOR_CHARS = 80
+# 앵커 쿼리 전체 상한. 이 아래로 유지해야 cross-encoder 512 창에서 근거 본문 몫이 남는다.
+_RERANK_QUERY_CHARS = 240
+
+
+def _with_chapter(section: SectionPlan) -> str:
+    """'장 제목 절 제목' — 장 제목이 절 제목에 이미 들어 있으면 절 제목만."""
+    title = section.title.strip()
+    chapter = section.chapter_title.strip()
+    if chapter and chapter.lower() not in title.lower():
+        return f"{chapter} {title}"
+    return title
+
+
+def section_search_query(section: SectionPlan) -> str:
+    """1차 검색 쿼리 — '장 제목 + 절 제목'. 짧게 유지한다.
+
+    1차는 재현율 담당이고 같은 문자열이 dense 임베딩에도 들어가므로, 핵심 포인트까지
+    이어 붙이면 질의 벡터가 흐려진다. 변별에 필요한 최소한(장 맥락)만 더한다 —
+    풍부한 맥락은 길이 예산이 넉넉한 재채점 쪽(_rerank_query)이 맡는다.
+
+    절 제목만 쓰던 시절엔 비교형 목차(규제 4종을 같은 5절 틀로 보는 정석 설계)에서
+    네 장의 같은 절이 **글자까지 같은 질의**를 던져 같은 근거를 받았다. 2026-08-14
+    실측: 1.3과 2.3의 인용 자료 집합이 완전 일치했고, 2장이 EU CBAM 장인데 2.3~2.5가
+    CBAM 자료를 놔두고 RE100 자료를 인용했다. 반대로 제목이 고유한 절(2.2 'EU CBAM
+    상세 분석')은 자기 장 자료를 정확히 물어왔다 — 같은 런 안의 자연 실험이다.
+
+    pgroonga는 공백을 AND로 묶지만 _keyword.to_or_query가 토큰을 OR로 바꾸고 순위는
+    pgroonga_score에 맡긴다(2026-08-10) — 항이 늘어도 재현율은 안 떨어지고, 오히려
+    장 제목까지 걸린 청크가 위로 온다. 다만 문장을 통째로 넣지는 않는다(잡음 토큰).
+    """
+    return _with_chapter(section)
+
+
+def _topic_anchor(topic: str | None) -> str:
+    """주제문에서 앵커로 쓸 앞머리만. 줄바꿈은 공백으로 눕힌다."""
+    text = " ".join((topic or "").split())
+    if len(text) <= _TOPIC_ANCHOR_CHARS:
+        return text
+    return text[:_TOPIC_ANCHOR_CHARS].rstrip() + "…"
 
 
 def _rerank_query(section: SectionPlan, topic: str | None) -> str:
-    """재채점·요약 검색용 주제 앵커 쿼리 — '주제 — 절 제목 — 작성 방향'.
+    """재채점·요약 검색용 앵커 쿼리 — 변별력 큰 순으로 잇고 총량을 캡한다.
 
     절 제목만으로 재채점하면 '시장 규모' 같은 일반 제목이 주제와 무관한 청크를
     상위로 올린다(2026-08-03 주제 표류 실측: 원격근무 보고서에 공유오피스 시장
-    청크가 대량 유입). cross-encoder에 주제를 결합하면 이탈 청크가 채점 단계에서
-    밀려난다 — 1차 검색(재현율)은 건드리지 않는 최소 침습 지점.
+    청크가 대량 유입). 그때 주제문을 통째로 앞에 붙였는데, 그 처방이 길이 문제와
+    획일화 문제를 함께 만들었다(위 _TOPIC_ANCHOR_CHARS 주석).
+
+    순서가 곧 우선순위다 — 캡에 걸려 잘리는 쪽이 변별력 낮은 주제문이 되도록
+    장·절 제목을 앞에 둔다. 핵심 포인트는 1차 검색이 아니라 여기에만 싣는다
+    (cross-encoder는 질의를 안 자르고, dense 질의처럼 벡터가 흐려지지도 않는다).
     """
-    parts = [topic or "", section.title, section.direction or ""]
-    return " — ".join(p.strip() for p in parts if p and p.strip())
+    parts = [
+        _with_chapter(section),
+        section.direction,
+        " ".join(section.key_points[:2]),
+        _topic_anchor(topic),
+    ]
+    joined: list[str] = []
+    for part in parts:
+        text = " ".join((part or "").split())
+        # 이미 실린 말을 또 싣지 않는다(검색 질의가 절 제목과 겹치는 흔한 경우).
+        if text and all(text not in prev for prev in joined):
+            joined.append(text)
+    return " — ".join(joined)[:_RERANK_QUERY_CHARS]
 
 
 async def retrieve_for_section(
@@ -122,7 +178,7 @@ async def retrieve_for_section(
     리랭킹 대상이 아니며, 후보 생성에서 인용 불가 배경 맥락으로만 쓰인다.
     실패는 삼킨다(맥락 부재가 검색 실패가 되어선 안 된다).
     """
-    query = _section_query(section)
+    query = section_search_query(section)
     anchored = _rerank_query(section, topic)
     width = max(fetch_k, top_k) if reranker is not None else top_k
     hits = await client.search(query, project_id, track, width)

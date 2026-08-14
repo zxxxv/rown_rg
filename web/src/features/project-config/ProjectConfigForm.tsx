@@ -431,8 +431,9 @@ function BasicInfo({ readOnly }: { readOnly?: boolean }) {
         />
         {!readOnly ? (
           <p className="text-xs text-fg-tertiary">
-            AI가 자료를 검색하고 본문을 쓸 때 쓰는 실제 지시문입니다. 무엇을(대상), 어떤
-            관점으로(범위·목적), 필요하면 기간·지역까지 문장으로 적을수록 자료 조사가 정확해집니다.
+            AI가 자료를 검색할 때 쓰는 지시문입니다. 무엇을(대상), 어떤 관점으로(범위·목적) 적을수록
+            자료 조사가 정확해집니다. 본문 작성은 이 문장이 아니라 아래 목차의 절별 작성 방향을
+            따릅니다 - 절마다 쓸 내용은 목차에 적어 주세요.
           </p>
         ) : null}
         {errors.topic ? <p className="text-xs text-fg-danger">{errors.topic.message}</p> : null}

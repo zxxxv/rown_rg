@@ -119,6 +119,11 @@ def plan_from_outline(outline: dict[str, Any]) -> list[SectionPlan]:
     for ci, chapter in enumerate(chapters or [], start=1):
         if not isinstance(chapter, dict):
             continue
+        # 장 제목은 검색 질의·작성 프롬프트의 맥락이라 절마다 실어 보낸다 — 여태
+        # config.outline에만 있어서 위치로 되찾아야 했고(stages._chapter_groups),
+        # 정작 검색·작성에는 한 번도 안 닿았다.
+        ch_title = chapter.get("title")
+        ch_title = ch_title.strip() if isinstance(ch_title, str) else ""
         sections = chapter.get("sections")
         for si, sec in enumerate(sections if isinstance(sections, list) else [], start=1):
             if not isinstance(sec, dict):
@@ -134,6 +139,7 @@ def plan_from_outline(outline: dict[str, Any]) -> list[SectionPlan]:
                     chapter_number=ci,
                     section_number=si,
                     title=title.strip(),
+                    chapter_title=ch_title,
                     direction=direction.strip() if isinstance(direction, str) else "",
                     key_points=[k for k in key_points if isinstance(k, str)]
                     if isinstance(key_points, list)

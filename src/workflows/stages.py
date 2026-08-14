@@ -32,6 +32,7 @@ from src.services.generation.planner import plan_from_outline, plan_sections
 from src.services.indexing.raptor import RaptorBuilder, build_raptor_builder
 from src.services.indexing.web import WebSourceIndexer, build_web_source_indexer
 from src.services.research import ResearchResult, ResearchSpec, WebResearchService
+from src.services.research.web_research import collection_topic
 from src.services.retrieval.section import SectionRetriever
 from src.workflows.events import emit_phase, emit_step
 from src.workflows.write_loop import (
@@ -282,8 +283,15 @@ def _models_for(state: ProjectState) -> dict[str, str]:
 
 
 def _section_brief(sec: SectionPlan) -> str:
-    """검색 질의용 절 브리프 — 제목만으론 못 찾는 절(예산·경제성)에 방향·관점을 실어준다."""
-    parts = [f"{sec.chapter_number}.{sec.section_number} {sec.title}"]
+    """검색 질의용 절 브리프 — 제목만으론 못 찾는 절(예산·경제성)에 방향·관점을 실어준다.
+
+    장 제목을 함께 싣는다 — 비교형 목차에서는 '개요'·'시사점' 같은 절 제목이 장마다
+    반복되므로, 장을 모르면 수집기가 네 장에 같은 검색을 돈다(2026-08-14 실측).
+    """
+    head = f"{sec.chapter_number}.{sec.section_number} {sec.title}"
+    if sec.chapter_title and sec.chapter_title.lower() not in sec.title.lower():
+        head += f" ({sec.chapter_title})"
+    parts = [head]
     if sec.direction:
         parts.append(sec.direction)
     if sec.key_points:
@@ -298,6 +306,9 @@ def _chapter_groups(state: ProjectState) -> list[tuple[int, str, list[str]]]:
 
     챕터 제목은 SectionPlan에 없어 config.outline에서 위치로 가져오고, 없으면
     'N장' 폴백(질의 topic 결합용이라 근사면 충분).
+
+    plan에 chapter_title이 실려 오면 그쪽이 우선이다 — config.outline 폴백은 이 필드가
+    없던 시절 게이트 payload에서 복원된 옛 런을 위해 남겨 둔다.
     """
     titles: dict[int, str] = {}
     outline = state.options.get("outline") if isinstance(state.options, dict) else None
@@ -305,6 +316,9 @@ def _chapter_groups(state: ProjectState) -> list[tuple[int, str, list[str]]]:
         for i, ch in enumerate(outline.get("chapters") or [], start=1):
             if isinstance(ch, dict) and isinstance(ch.get("title"), str) and ch["title"].strip():
                 titles[i] = ch["title"].strip()
+    for s in state.section_plan:
+        if s.chapter_title:
+            titles[s.chapter_number] = s.chapter_title
     groups: dict[int, list[str]] = {}
     for s in state.section_plan:
         groups.setdefault(s.chapter_number, []).append(s.title)
@@ -432,11 +446,8 @@ async def _collect_sources(
                 break
             label = f"자료 수집 · {ch_num}장 {ch_title}" + (" (보충)" if pass_no > 1 else "")
             emit_step(pid, "research", label, "started")
-            topic = f"{state.topic} — {ch_title}"
-            if supplement:
-                topic += " (추가 심화 자료: 통계·사례·상반된 관점)"
             spec = ResearchSpec(
-                topic=topic,
+                topic=collection_topic(state.topic, ch_title, supplement=supplement),
                 report_type=state.preset or "blank",
                 scope=_search_scope(state),
                 outline=section_titles,

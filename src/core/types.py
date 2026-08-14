@@ -139,9 +139,26 @@ class SectionPlan(BaseModel):
     chapter_number: int
     section_number: int
     title: str
+    # 이 절이 속한 장의 제목. 검색·작성이 "2.3이 EU CBAM 장 소속"임을 알아야 한다 —
+    # 없던 시절엔 장 제목이 config.outline에만 있어 검색 질의와 작성 프롬프트 어디에도
+    # 안 실렸고, 4개 장에 같은 절 제목이 반복되면 네 절이 같은 자료를 인용했다
+    # (2026-08-14 탄소규제 런 실측: 1.3과 2.3의 인용 자료 집합이 완전 동일).
+    chapter_title: str = ""
     direction: str = ""
     key_points: list[str] = Field(default_factory=list)
     analysts: list[str] = Field(default_factory=list)
+
+    def prompt_label(self) -> str:
+        """프롬프트에 싣는 절 표기 — '2.3 국내 기업 대응수준 진단 (2장 EU CBAM)'.
+
+        장 맥락이 빠지면 비교형 목차에서 모델은 이 절이 어느 규제를 다루는지 알 방법이
+        없다. 2026-08-14 실측에서 2.3·3.3·4.3이 전부 '국내 기업 대응수준 진단 및
+        조사항목 도출'이라는 같은 제목만 받아 서로 구별되지 않는 글이 나왔다.
+        """
+        label = f"{self.chapter_number}.{self.section_number} {self.title}"
+        if self.chapter_title and self.chapter_title.lower() not in self.title.lower():
+            label += f" ({self.chapter_number}장 {self.chapter_title})"
+        return label
 
 
 class SectionDraft(BaseModel):

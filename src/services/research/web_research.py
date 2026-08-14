@@ -97,6 +97,26 @@ SEARCH_SCOPES["balanced"] = SEARCH_SCOPES["all"]
 DEFAULT_SEARCH_SCOPE = "all"
 
 
+# 보충 라운드(2차 패스·추가 조사)에서 질의를 심화 쪽으로 트는 꼬리표. 같은 검색 결과가
+# 반복 회수돼 전부 dedup으로 버려지는 낭비를 줄인다.
+SUPPLEMENT_HINT = " (추가 심화 자료: 통계·사례·상반된 관점)"
+
+
+def collection_topic(topic: str, chapter_title: str, *, supplement: bool = False) -> str:
+    """챕터 1콜의 수집 질의 주제 — '보고서 주제문 — 장 제목'.
+
+    수집은 장 단위로 한 번씩 돈다. **보고서 주제문(projects.topic)이 실제로 일하는 곳은
+    여기 하나뿐이다** — 절별 검색 질의는 장·절 제목으로 만들어지고 본문 작성 프롬프트는
+    주제문을 보지 않는다. 장 제목만으론 "무엇을 어떤 목적으로 모으는지"가 안 실린다
+    (예: 'EU CBAM'은 알아도 '국내 기업 대응 수준 진단'이라는 틀은 모른다).
+
+    설계 브리프 화면이 이 함수를 그대로 불러 사람에게 보여준다 — 화면과 실행이 갈라지면
+    "무엇이 검색될지 미리 본다"는 게이트의 약속이 깨진다.
+    """
+    text = f"{topic} — {chapter_title}"
+    return text + SUPPLEMENT_HINT if supplement else text
+
+
 class ResearchSpec(BaseModel):
     topic: str
     report_type: str

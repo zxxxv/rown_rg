@@ -20,19 +20,33 @@ logger = structlog.get_logger(__name__)
 
 
 def _chapter_titles(state: ProjectState) -> dict[int, str]:
-    """chapter_number → 챕터 제목. 프리셋이 있으면 위치로 매핑, 없으면 'N장' 폴백.
+    """chapter_number → 챕터 제목. plan이 실어 온 값이 진실이다.
 
-    planner._assign_analysts와 동일한 위치 대응 관례(챕터 순서=프리셋 순서)를 따른다.
+    전에는 프리셋 파일(load_preset)에서 위치로 가져왔는데, 그게 이미 데이터를 망가뜨리고
+    있었다(2026-08-14 운영 DB 실측):
+
+    - 프리셋 없는 프로젝트는 전부 'N장'으로 저장됐다. 탄소규제 런의 sections는
+      '1장~4장'인데 config.outline에는 '글로벌 RE100'·'EU CBAM'…이 그대로 있었다.
+    - 프리셋을 쓰되 장을 더한 프로젝트는 6장에 프리셋의 6번째 제목이 붙어 **틀린 제목**이
+      저장됐다. 폴백보다 나쁘다 — 그럴듯해서 아무도 못 알아챈다.
+    - 개인 프리셋(u:<uuid>)은 load_preset이 KeyError라 통째로 'N장'이었다.
+
+    사용자가 목차 화면에서 고친 장 제목이 저장에 반영되지 않던 것이라, 자료 사용 통계의
+    장 라벨도 같이 틀렸다(sections.chapter_title이 그 원천).
+
+    프리셋 폴백은 plan에 chapter_title이 없던 시절 시작된 런을 위해 남긴다.
     """
     titles: dict[int, str] = {}
+    for plan in state.section_plan:
+        if plan.chapter_title:
+            titles.setdefault(plan.chapter_number, plan.chapter_title)
     if state.preset:
         try:
             preset = load_preset(state.preset)
             for i, ch in enumerate(preset.chapters, start=1):
-                titles[i] = ch.title
+                titles.setdefault(i, ch.title)
         except KeyError:
             pass
-    # 프리셋 밖 챕터·자유 주제는 폴백
     for plan in state.section_plan:
         titles.setdefault(plan.chapter_number, f"{plan.chapter_number}장")
     return titles
