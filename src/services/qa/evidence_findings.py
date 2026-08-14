@@ -36,6 +36,7 @@ from src.services.qa.gate import (
     arithmetic_suspects,
     claim_coverage,
     leftover_artifacts,
+    misattributed_numbers,
     truncated_lines,
 )
 from src.services.sections.evidence import marker_chunk_ids
@@ -252,6 +253,44 @@ def content_findings(
     return out
 
 
+def _misattribution_findings(
+    row: Section, chunk_texts: dict[UUID, str], *, renumbered: bool
+) -> list[dict[str, Any]]:
+    """마커 오귀속 전수 검사 — 절 풀 스코프에서 '인용엔 없는데 딴 근거엔 있는' 수치.
+
+    n=2 트리아지(N2O·RGGI)에서 쓴 마커↔청크 결정적 대조의 전수 승격(2026-08-14).
+    '엉뚱한 곳' 탐색 범위는 이 절의 검색 풀 — 문장은 그 풀에서 작성됐으므로, 다른
+    절 근거까지 넓히면 오탐이 는다.
+    """
+    content = row.content or ""
+    mapping, _ = marker_chunk_ids(
+        content, list(row.source_ids or []), row.meta, renumbered=renumbered
+    )
+    if not mapping:
+        return []
+    scope: set[UUID] = {cid for ids in mapping.values() for cid in ids}
+    for raw in (row.meta or {}).get("pool_chunk_ids") or []:
+        try:
+            scope.add(UUID(str(raw)))
+        except (ValueError, TypeError):
+            continue
+    section_pool = {cid: t for cid, t in chunk_texts.items() if cid in scope}
+    found = misattributed_numbers(content, mapping, section_pool)
+    if not found:
+        return []
+    ref = f"{row.chapter_number}.{row.section_number}"
+    return [
+        _finding(
+            row.chapter_number,
+            ref,
+            "warning",
+            "마커 오귀속",
+            f"인용한 출처엔 없고 다른 근거에 있는 수치 {len(found)}건 (예: {found[0]})"
+            + (f" 외 {len(found) - 1}건" if len(found) > 1 else ""),
+        )
+    ]
+
+
 # 절 하나에서 이만큼 겹치면 사람이 봐야 한다. 개조식 보고서는 한두 문장이 비슷한 게
 # 자연스러워(같은 정책을 여러 각도로 다룬다) 건수로 가른다.
 _DUP_MIN = 3
@@ -413,6 +452,7 @@ async def evidence_findings(
             )
         )
         out.extend(content_findings(row, n_sources=n_sources, renumbered=renumbered))
+        out.extend(_misattribution_findings(row, chunk_texts, renumbered=renumbered))
         out.extend(
             await _coverage_findings(
                 row,

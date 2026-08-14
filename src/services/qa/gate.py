@@ -14,7 +14,7 @@ from uuid import UUID
 
 import structlog
 
-from src.core.citations import MARK_RE
+from src.core.citations import MARK_RE, numbers_in_order
 from src.core.types import (
     CheckSeverity,
     GateResult,
@@ -211,6 +211,52 @@ def ungrounded_numbers(content: str, cited_content: str) -> list[str]:
         seen.add(norm)
         if norm and norm not in haystack:
             out.append(token)
+    return out
+
+
+def misattributed_numbers(
+    content: str,
+    marker_chunks: dict[int, Sequence[UUID]],
+    chunk_texts: dict[UUID, str],
+) -> list[str]:
+    """마커가 가리킨 근거엔 없는 수치가 같은 풀의 다른 청크에 있는 경우 — 오귀속 신호.
+
+    유령 출처 검사(참고문헌 범위 밖 번호)는 '목록에 존재하는 번호로 잘못 가리키는'
+    마커를 통과시키고, claim_verify는 근거 집합을 마커와 무관하게 받아 도메인 밖이다
+    (2026-08-14 프로브 실증: 합성 오귀속 5건을 세 모델 전원이 supported로 통과, 0/5).
+    마커 dedup 147건·이중 색인 재번호·유령 출처 실측이 전부 번호가 어긋날 수 있다는
+    증거라 실제 위험이다. 문장 단위로 "인용 청크에 없는 수치가 풀의 다른 청크에는
+    있다"를 결정적으로 대조한다 — 어디에도 없으면 무근거(다른 검사 몫), 다른 데
+    있으면 마커가 엉뚱한 곳을 가리킨다는 뜻이다.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    pool = {cid: (t or "").replace(",", "") for cid, t in chunk_texts.items()}
+    for unit in claim_units(content):
+        marks = numbers_in_order(unit)
+        if not marks:
+            continue
+        cited_ids = {cid for n in marks for cid in marker_chunks.get(n, ())}
+        if not cited_ids:
+            continue
+        bare = MARK_RE.sub(" ", unit)
+        cited_text = "\n".join(pool.get(c, "") for c in cited_ids)
+        # 인용 근거가 외국어면 어휘로 '없다'를 선언할 수 없다(단위 환산 - 72억 vs
+        # $7.2B). 그 축의 원칙 그대로 오귀속 판정도 건너뛴다.
+        if cited_text.strip() and not _HANGUL_RE.search(cited_text):
+            continue
+        for tok in _significant_numbers(bare):
+            norm = _normalize_number(tok)
+            if not norm or norm in seen or norm in cited_text:
+                continue
+            elsewhere = next(
+                (cid for cid, text in pool.items() if cid not in cited_ids and norm in text),
+                None,
+            )
+            if elsewhere is not None:
+                seen.add(norm)
+                mark_s = ", ".join(str(n) for n in sorted(set(marks))[:3])
+                out.append(f"{tok} — 인용(출처 {mark_s})엔 없고 풀의 다른 근거에 있음")
     return out
 
 
@@ -545,6 +591,27 @@ def truncated_lines(content: str) -> list[str]:
     return out
 
 
+def check_citation_attribution(draft: SectionDraft, chunks: Sequence[RetrievedChunk]) -> GateResult:
+    """작성 시점 마커 오귀속 검사 — 로컬 번호↔cited_chunk_ids 순서 규약으로 대조.
+
+    본문에 등장한 서로 다른 번호의 첫 등장 순서 = cited_chunk_ids 저장 순서
+    (candidates._extract_cited_ids, renumber._local_to_global과 같은 규약).
+    """
+    mapping: dict[int, list[UUID]] = {}
+    for i, n in enumerate(numbers_in_order(draft.content)):
+        if i >= len(draft.cited_chunk_ids):
+            break
+        mapping.setdefault(n, []).append(draft.cited_chunk_ids[i])
+    found = misattributed_numbers(draft.content, mapping, {c.chunk_id: c.content for c in chunks})
+    passed = not found
+    return GateResult(
+        check="citation_attribution",
+        severity=CheckSeverity.SOFT,
+        passed=passed,
+        detail=None if passed else f"마커 오귀속 의심 {len(found)}건: {found[0]}",
+    )
+
+
 def check_leftovers(draft: SectionDraft) -> GateResult:
     """편집 잔재·절단 의심 줄 검사 — 본문은 유효할 수 있어 SOFT 경고."""
     problems = leftover_artifacts(draft.content)
@@ -607,6 +674,7 @@ def run_section_gate(
         check_complete(draft),
         check_renderable(draft),
         check_citation_markers(draft),
+        check_citation_attribution(draft, chunks),
         check_leftovers(draft),
         check_numeric_grounded(draft, cited_content),
         check_uncited_claims(draft),

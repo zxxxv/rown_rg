@@ -15,6 +15,7 @@ from src.core.types import (
 from src.services.qa.gate import (
     arithmetic_suspects,
     check_bounds,
+    check_citation_attribution,
     check_citation_markers,
     check_citation_resolves,
     check_complete,
@@ -27,6 +28,7 @@ from src.services.qa.gate import (
     claim_units,
     gate_candidates,
     leftover_artifacts,
+    misattributed_numbers,
     run_section_gate,
     truncated_lines,
     uncited_units,
@@ -260,8 +262,8 @@ class TestRunSectionGate:
         )
         report = run_section_gate(draft, [chunk], min_chars=10)
         # citation_markers(2026-08-05)·uncited_claims(2026-08-11)·complete(2026-08-13)
-        # ·leftovers(2026-08-14)
-        assert len(report.results) == 8
+        # ·leftovers·citation_attribution(2026-08-14)
+        assert len(report.results) == 9
         assert report.excluded is False
 
     def test_hallucinated_citation_excludes(self):
@@ -538,6 +540,58 @@ class TestClaimCoverage:
         # 라틴 접두가 아닌 진짜 수치는 그대로 잡는다("60TWh"는 숫자가 앞).
         body2 = "국내 기업이 공시한 연간 전력사용량 합계는 60TWh 규모로 집계됐음 (출처 3)"
         assert ungrounded_numbers(body2, "관련 없음") == ["60"]
+
+
+class TestMisattributedNumbers:
+    """마커 오귀속 - 프로브가 공짜로 실증한 구멍(합성 오귀속 5건을 판정 축 전원 통과,
+    0/5)의 결정적 마감. 유령 출처 검사는 '존재하는 번호로 잘못 가리키기'를 못 본다."""
+
+    def _pool(self):
+        a, b = uuid4(), uuid4()
+        return (
+            a,
+            b,
+            {
+                a: "국내 생산 능력은 42.7% 확대된 것으로 조사됐다.",
+                b: "정부는 관련 제도 정비를 추진하고 있다.",
+            },
+        )
+
+    def test_wrong_marker_flagged(self):
+        # 수치의 실제 출처는 A인데 마커는 B를 가리킨다 - 프로브 5건의 형태.
+        a, b, pool = self._pool()
+        content = "ㅇ 국내 생산 능력은 42.7% 확대된 것으로 나타났음 (출처 2)"
+        found = misattributed_numbers(content, {2: [b]}, pool)
+        assert len(found) == 1 and "42.7" in found[0]
+
+    def test_correct_marker_clean(self):
+        a, b, pool = self._pool()
+        content = "ㅇ 국내 생산 능력은 42.7% 확대된 것으로 나타났음 (출처 1)"
+        assert misattributed_numbers(content, {1: [a]}, pool) == []
+
+    def test_number_nowhere_is_not_misattribution(self):
+        # 풀 어디에도 없는 수치는 무근거(다른 검사 몫)지 오귀속이 아니다.
+        a, b, pool = self._pool()
+        content = "ㅇ 국내 생산 능력은 99.9% 확대된 것으로 나타났음 (출처 2)"
+        assert misattributed_numbers(content, {2: [b]}, pool) == []
+
+    def test_english_cited_chunk_skipped(self):
+        # 인용 근거가 외국어면 어휘로 '없다'를 선언할 수 없다(단위 환산) - 건너뛴다.
+        a = uuid4()
+        b = uuid4()
+        pool = {a: "연간 세수는 72억 달러 규모로 추산된다.", b: "Revenue reaches $7.2 billion."}
+        content = "ㅇ 연간 세수는 72억 달러 규모로 추산됨 (출처 2)"
+        assert misattributed_numbers(content, {2: [b]}, pool) == []
+
+    def test_gate_check_uses_cited_order_contract(self):
+        # 로컬 번호 첫 등장 순서 = cited_chunk_ids 순서 규약으로 매핑을 편다.
+        a, b, pool = self._pool()
+        chunks = [_chunk(pool[a], a), _chunk(pool[b], b)]
+        draft = _draft("ㅇ 생산 능력은 42.7% 확대된 것으로 나타났음 (출처 1)", cited=[b])
+        result = check_citation_attribution(draft, chunks)
+        assert result.passed is False and "42.7" in (result.detail or "")
+        draft_ok = _draft("ㅇ 생산 능력은 42.7% 확대된 것으로 나타났음 (출처 1)", cited=[a])
+        assert check_citation_attribution(draft_ok, chunks).passed is True
 
 
 class TestArithmeticSuspects:
