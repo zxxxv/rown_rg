@@ -13,16 +13,20 @@ from src.core.types import (
     StaticCheckReport,
 )
 from src.services.qa.gate import (
+    arithmetic_suspects,
     check_bounds,
     check_citation_markers,
     check_citation_resolves,
     check_complete,
+    check_leftovers,
     check_numeric_grounded,
     check_renderable,
     check_structure_complete,
     check_uncited_claims,
     gate_candidates,
+    leftover_artifacts,
     run_section_gate,
+    truncated_lines,
     uncited_units,
     ungrounded_numbers,
 )
@@ -254,7 +258,8 @@ class TestRunSectionGate:
         )
         report = run_section_gate(draft, [chunk], min_chars=10)
         # citation_markers(2026-08-05)·uncited_claims(2026-08-11)·complete(2026-08-13)
-        assert len(report.results) == 7
+        # ·leftovers(2026-08-14)
+        assert len(report.results) == 8
         assert report.excluded is False
 
     def test_hallucinated_citation_excludes(self):
@@ -425,3 +430,89 @@ def test_인용_마커의_출처_번호는_수치가_아니다() -> None:
 def test_대괄호_직접인용_마커도_걷어낸다() -> None:
     body = "글로벌 시장은 2026년까지 1,350억 달러로 성장할 전망임[12]"
     assert ungrounded_numbers(body, "1350억 달러 규모로 성장") == []
+
+
+def test_연월_표기는_수치가_아니다() -> None:
+    """실측 오탐(2026-08-14 탄소규제 런): critical 26건 중 표본 22건이 오탐, 다수가
+    "’25.10"(2025년 10월)·"2019.12"류 연월 표기였다. 날짜는 수치 주장이 아니다."""
+    body = "개정 규정은 2019.12 발표 후 ’25.10 개정을 거쳐 ’24년부터 단계 적용되고 있음 (출처 3)"
+    assert ungrounded_numbers(body, "관련 제도 연혁 서술") == []
+    # 아포스트로피 없는 진짜 소수·퍼센트는 그대로 잡는다.
+    body2 = "시장 점유율이 22.3%까지 상승한 것으로 조사됐음 (출처 3)"
+    assert ungrounded_numbers(body2, "관련 내용 없음") == ["22.3%"]
+
+
+class TestLeftoversAndTruncation:
+    def test_editing_memo_and_part_terms_flagged(self):
+        content = (
+            "ㅇ 관련 제도의 활용이 저조함(출처 15의 내용 대신 확인 가능한 범위로 한정 — 삭제)\n"
+            "본 파트에서는 국내 동향을 정리한다.\n# \n"
+        )
+        found = leftover_artifacts(content)
+        assert any("삭제" in f for f in found)
+        assert any("본 파트" in f for f in found)
+        assert any("헤딩" in f for f in found)
+        result = check_leftovers(_draft(content))
+        assert result.passed is False and result.severity is CheckSeverity.SOFT
+
+    def test_clean_content_passes(self):
+        content = "ㅇ 국내 기업의 대응 수준은 개선되는 흐름을 보이고 있음 (출처 3)"
+        assert leftover_artifacts(content) == []
+        assert truncated_lines(content) == []
+        assert check_leftovers(_draft(content)).passed is True
+
+    def test_mid_section_truncation_detected(self):
+        # 실측(2026-08-14 탄소규제 런 4.4): 파트 결합부에서 "…GDP가 약 2"로 끊긴 채
+        # 다음 항목으로 넘어갔다 - 절 끝 검사로는 안 잡히는 위치다.
+        content = (
+            "ㅇ 1.5℃ 시나리오 이행 시 탄소규제 미대응 기업의 ’50년까지 GDP가 약 2\n"
+            "ㅇ 다음 항목은 정상적으로 이어지는 서술임 (출처 5)"
+        )
+        cut = truncated_lines(content)
+        assert len(cut) == 1 and "약 2" in cut[0]
+
+    def test_latin_terms_ending_with_digits_not_flagged(self):
+        # RE100·CN 7204처럼 숫자로 끝나는 용어·코드는 절단이 아니다 - 정밀도 우선.
+        content = (
+            "ㅇ 국내 기업의 상당수가 이행 수단으로 검토하는 제도는 RE100\n"
+            "ㅇ 철강 판재류의 관세분류 체계상 핵심 품목 코드는 CN 7204\n"
+            "| 지표 | 값 3 |\n"
+        )
+        assert truncated_lines(content) == []
+
+
+class TestArithmeticSuspects:
+    def test_wrong_growth_rate_flagged(self):
+        # 실측 결함(2026-08-14 탄소규제 런 1.2): 240→289는 +20.4%인데 30%로 서술.
+        content = "ㅇ 참여기업의 재생에너지 사용량은 전년 240TWh에서 289TWh로 30% 증가함 (출처 28)"
+        found = arithmetic_suspects(content)
+        assert len(found) == 1 and "240" in found[0] and "30%" in found[0]
+
+    def test_correct_growth_rate_passes(self):
+        content = (
+            "ㅇ 참여기업의 재생에너지 사용량은 전년 240TWh에서 289TWh로 20.4% 증가함 (출처 28)"
+        )
+        assert arithmetic_suspects(content) == []
+
+    def test_percent_point_change_not_judged(self):
+        # %p는 상대 증가율 산식이 아니다 - 판정 대상에서 자동 제외돼야 한다.
+        content = "ㅇ 신재생에너지 공급 의무 비율이 9%에서 12.5%로 3.5%p 상향 조정됨 (출처 33)"
+        assert arithmetic_suspects(content) == []
+
+    def test_correct_sum_passes_wrong_sum_flagged(self):
+        ok = "ㅇ 정보 제공(30.6%)과 교육(18.1%)을 합한 48.7%가 정보·역량 지원 수요임 (출처 34)"
+        assert arithmetic_suspects(ok) == []
+        bad = "ㅇ 정보 제공(30.6%)과 교육(18.1%)을 합한 52.7%가 정보·역량 지원 수요임 (출처 34)"
+        found = arithmetic_suspects(bad)
+        assert len(found) == 1 and "합산 불일치" in found[0]
+
+    def test_three_operand_sum_passes(self):
+        content = (
+            "ㅇ 사업장 이전(7.5%)·거래처 물색(13.0%)·거래 중단(1.8%)을 합한 22.3%는 미대응군임"
+        )
+        assert arithmetic_suspects(content) == []
+
+    def test_sum_without_result_number_not_judged(self):
+        # 피연산자와 결과가 한 문장에 함께 없으면 판정하지 않는다(정밀도 우선).
+        content = "ㅇ 두 항목을 합한 비중이 절반에 가까운 것으로 조사됨 (출처 34)"
+        assert arithmetic_suspects(content) == []

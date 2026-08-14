@@ -44,6 +44,12 @@ class TestRenumber:
         # 앞 공백만 먹고 개행은 남겨야 개조식 항목이 한 줄로 합쳐지지 않는다.
         assert renumber("첫 항목임 (출처 9)\n둘째 항목임", {}) == "첫 항목임\n둘째 항목임"
 
+    def test_same_global_deduped_within_mark(self):
+        # 같은 자료의 다른 청크(로컬 1·4)가 한 전역 번호로 합쳐지면 "(출처 7, 7)"이
+        # 된다 - 실측 147마커(2026-08-14 탄소규제 런). 중복은 걷어낸다.
+        assert renumber("복합 근거임 (출처 1, 4)", {1: 7, 4: 7}) == "복합 근거임 (출처 7)"
+        assert renumber("셋 인용임 (출처 1, 4, 2)", {1: 7, 4: 7, 2: 9}) == "셋 인용임 (출처 7, 9)"
+
 
 class TestStripSourceMarks:
     def test_source_marks_removed_quotes_kept(self):

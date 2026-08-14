@@ -73,11 +73,17 @@ def renumber(content: str, local_to_global: dict[int, int]) -> str:
 
     매핑에 없는 번호는 지운다 — 로컬 번호를 그대로 남기면 참고문헌의 다른 자료를
     가리켜 오독을 부른다. 출처형에서 일부만 매핑되면 매핑된 것만 남기고, 하나도
-    없으면 마커째 앞 공백까지 지운다.
+    없으면 마커째 앞 공백까지 지운다. 서로 다른 로컬 번호(같은 자료의 다른 청크)가
+    같은 전역 번호로 합쳐지면 "(출처 34, 34)"가 되므로 중복은 걷어낸다
+    (2026-08-14 실측: 탄소규제 런에서 중복 마커 147건).
     """
 
     def _sub(match: re.Match[str]) -> str:
-        mapped = [local_to_global[n] for n in _mark_numbers(match) if n in local_to_global]
+        mapped: list[int] = []
+        for n in _mark_numbers(match):
+            g = local_to_global.get(n)
+            if g is not None and g not in mapped:
+                mapped.append(g)
         if not mapped:
             return ""
         space = match.group("space")

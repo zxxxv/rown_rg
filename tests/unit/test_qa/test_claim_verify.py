@@ -100,3 +100,34 @@ class TestFindingsWithVerdicts:
             r["category"] for r in findings_from_claims(self._row(), claims, comparable=True)
         ] == ["무근거 수치"]
         assert findings_from_claims(self._row(), claims, comparable=True, supported={0}) == []
+
+    def test_refuted_numbers_are_critical_lexical_only_warns(self):
+        # critical은 판정이 '근거 없음'으로 확인한 수치의 몫 - 어휘 대조만 실패한
+        # 수치는 warning까지(단위 환산·표기 차이 오탐, 2026-08-14 실측 26건 전수 오탐).
+        cid = uuid4()
+        claims = [_claim("수치 문장", cid, score=0.9, ungrounded=["42.7%"])]
+        lexical_only = findings_from_claims(self._row(), claims, comparable=True)
+        numeric = [r for r in lexical_only if r["category"] == "무근거 수치"]
+        assert [r["severity"] for r in numeric] == ["warning"]
+        with_verdict = findings_from_claims(self._row(), claims, comparable=True, refuted={0})
+        numeric = [r for r in with_verdict if r["category"] == "무근거 수치"]
+        assert [r["severity"] for r in numeric] == ["critical"]
+        assert "판정 확인" in numeric[0]["detail"]
+
+    def test_crosslingual_numbers_skipped_without_verdict(self):
+        # 교차언어 근거는 어휘로 잴 수 없다 - 판정 없이 세면 전부 오탐이 된다
+        # (실측: "72억 달러" vs "$7.2 billion"). 판정이 반박하면 정상적으로 잡힌다.
+        cid = uuid4()
+        span = EvidenceSpan(
+            chunk_id=cid, number=1, start=0, end=10, text="english", score=0.9, comparable=False
+        )
+        claims = [
+            ClaimAlignment(
+                claim="세수는 72억 달러 규모임", numbers=[1], span=span, ungrounded=["72"]
+            )
+        ]
+        rows = findings_from_claims(self._row(), claims, comparable=True)
+        assert all(r["category"] != "무근거 수치" for r in rows)
+        rows = findings_from_claims(self._row(), claims, comparable=True, refuted={0})
+        numeric = [r for r in rows if r["category"] == "무근거 수치"]
+        assert [r["severity"] for r in numeric] == ["critical"]

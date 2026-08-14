@@ -14,11 +14,13 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 
+from src.core.citations import numbers_in_order
 from src.core.config import settings
 from src.db.models.chunk import Chunk
 from src.db.models.project import Project
+from src.db.models.project_source import ProjectSource
 from src.db.models.section import Section
 from src.db.session import async_session_maker
 from src.services.qa.alignment import ClaimAlignment, align_section
@@ -30,6 +32,7 @@ from src.services.qa.cross_section import (
 )
 from src.services.qa.design_coverage import coverage_terms, judge_covered
 from src.services.qa.design_coverage import findings_for_section as coverage_findings
+from src.services.qa.gate import arithmetic_suspects, leftover_artifacts, truncated_lines
 from src.services.sections.evidence import marker_chunk_ids
 
 logger = structlog.get_logger(__name__)
@@ -149,24 +152,98 @@ def findings_from_claims(
             )
         )
 
-    numbers: list[str] = []
+    # critical은 판정(claim_verify)이 '근거 없음'으로 확인한 문장의 수치만. 어휘 대조만
+    # 실패한 수치는 warning이다 — 부분문자열 매칭은 단위 환산(72억 vs $7.2 billion)·표기
+    # 차이(1.8조 vs 1조 8,000억)를 원리적으로 못 재고, 교차언어 근거는 아예 잴 수 없다
+    # (2026-08-14 실측: 탄소규제 런 critical 26건 중 표본 22건 오탐 → 전량 강등 원인).
+    confirmed: list[str] = []
+    lexical: list[str] = []
     for i, claim in enumerate(claims) if comparable else []:
         if i in supported:
             continue  # 근거로 뒷받침된다고 판정된 문장의 수치는 창작이 아니다
+        if claim.status == "crosslingual" and i not in refuted:
+            continue  # 어휘로 잴 수 없는 축 — 판정 없이 세면 전부 오탐이 된다
+        bucket = confirmed if i in refuted else lexical
         for token in claim.ungrounded:
-            if token not in numbers:
-                numbers.append(token)
-    if numbers:
+            if token not in confirmed and token not in lexical:
+                bucket.append(token)
+    if confirmed:
         out.append(
             _finding(
                 row.chapter_number,
                 ref,
                 "critical",
                 "무근거 수치",
-                f"인용한 근거에 없는 수치 {len(numbers)}건: {', '.join(numbers[:5])}"
-                + (" …" if len(numbers) > 5 else ""),
+                f"인용한 근거에 없는 수치 {len(confirmed)}건(판정 확인): "
+                f"{', '.join(confirmed[:5])}" + (" …" if len(confirmed) > 5 else ""),
             )
         )
+    if lexical:
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "무근거 수치",
+                f"인용 근거에서 어휘로 확인되지 않는 수치 {len(lexical)}건"
+                f"(단위 환산·표기 차이 가능): {', '.join(lexical[:5])}"
+                + (" …" if len(lexical) > 5 else ""),
+            )
+        )
+    return out
+
+
+def content_findings(
+    row: Section, *, n_sources: int | None, renumbered: bool
+) -> list[dict[str, Any]]:
+    """저장된 절 본문만으로 뽑는 결정적 경고 — 편집 잔재·절단 의심·유령 출처 번호.
+
+    유령 출처(참고문헌 범위 밖 번호)는 전역 번호화 이후에만 판정할 수 있다
+    (로컬 번호는 절마다 1..k라 범위 밖이 정상). 2026-08-14 실측: 탄소규제 런에
+    존재하지 않는 출처 48을 가리키는 편집 메모 잔재가 본문에 남아 있었다.
+    """
+    ref = f"{row.chapter_number}.{row.section_number}"
+    content = row.content or ""
+    out: list[dict[str, Any]] = []
+    artifacts = leftover_artifacts(content)
+    if artifacts:
+        out.append(_finding(row.chapter_number, ref, "warning", "편집 잔재", "; ".join(artifacts)))
+    cut = truncated_lines(content)
+    if cut:
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "critical",
+                "문장 절단",
+                f'문장 중간에서 끊긴 줄 {len(cut)}건 (예: "{cut[0]}…")',
+            )
+        )
+    math_issues = arithmetic_suspects(content)
+    if math_issues:
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "산술 불일치",
+                f"본문 스스로의 계산과 안 맞는 서술 {len(math_issues)}건: {math_issues[0]}"
+                + (f" 외 {len(math_issues) - 1}건" if len(math_issues) > 1 else ""),
+            )
+        )
+    if renumbered and n_sources:
+        ghosts = sorted({n for n in numbers_in_order(content) if n > n_sources})
+        if ghosts:
+            out.append(
+                _finding(
+                    row.chapter_number,
+                    ref,
+                    "warning",
+                    "유령 출처",
+                    f"참고문헌({n_sources}개) 범위 밖 출처 번호 참조: "
+                    f"{', '.join(str(n) for n in ghosts[:5])}" + (" …" if len(ghosts) > 5 else ""),
+                )
+            )
     return out
 
 
@@ -273,6 +350,14 @@ async def evidence_findings(
                     continue
         project = await session.get(Project, project_id)
         chapters = ((project.config or {}).get("outline") or {}).get("chapters") or []
+        # 유령 출처 판정 기준 — 전역 번호는 채택 자료 순번(renumber._adopted_source_order)
+        n_sources = (
+            await session.execute(
+                select(func.count())
+                .select_from(ProjectSource)
+                .where(ProjectSource.project_id == project_id, ProjectSource.is_included.is_(True))
+            )
+        ).scalar_one()
         chunk_texts: dict[UUID, str] = {}
         if wanted:
             chunk_texts = {
@@ -314,6 +399,7 @@ async def evidence_findings(
                 row, claims, comparable=comparable, supported=supported, refuted=refuted
             )
         )
+        out.extend(content_findings(row, n_sources=n_sources, renumbered=renumbered))
         out.extend(
             await _coverage_findings(
                 row,

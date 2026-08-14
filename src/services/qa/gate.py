@@ -12,6 +12,8 @@ import re
 from collections.abc import Sequence
 from uuid import UUID
 
+import structlog
+
 from src.core.citations import MARK_RE
 from src.core.types import (
     CheckSeverity,
@@ -23,6 +25,8 @@ from src.core.types import (
     SectionPlan,
     StaticCheckReport,
 )
+
+logger = structlog.get_logger(__name__)
 
 # 기본 길이 경계 (문자 수) — 필요하면 호출 시 오버라이드.
 DEFAULT_MIN_CHARS = 200
@@ -115,6 +119,14 @@ def _is_year(token: str) -> bool:
     return len(digits) == 4 and digits.isdigit() and 1900 <= int(digits) <= 2099
 
 
+# 연.월 표기 — "2019.12"·"2021.6". 소수 꼴이라 연도 제외를 비켜가 '무근거 수치'
+# 오탐의 최다 원천이었다(2026-08-14 실측: 탄소규제 런 critical 26건 중 표본 22건이
+# 오탐, 다수가 연월·아포스트로피 축약 연도).
+_YEAR_MONTH_RE = re.compile(r"^(?:19|20)\d{2}\.(?:1[0-2]|0?[1-9])$")
+# 축약 연도 표기의 접두 문자 — "’25"·"’25.10"의 25는 수치가 아니라 2025년이다.
+_DATE_PREFIXES = "’'‘′`"
+
+
 def _significant_numbers(text: str) -> list[str]:
     """본문에서 '사실 주장'으로 볼 만한 숫자만 추출.
 
@@ -123,18 +135,35 @@ def _significant_numbers(text: str) -> list[str]:
 
     연도(2029)는 뺀다. 원문은 같은 해를 '29년·2029.·`24~`26처럼 다르게 적어 부분문자열
     매칭이 자주 빗나가는데, 화면에는 "근거에 없는 수치"로 뜬다(2026-08-11 실측: 경고
-    5건 중 3건이 연도). 연도 창작은 근거 동봉 판정이 문맥으로 본다 — 거기서 잡는 편이
-    정확하고, 여기서 잡으면 진짜 신호가 노이즈에 묻힌다. pm_verify가 중복 인용 검사에서
-    연도를 뺀 것과 같은 이유다.
+    5건 중 3건이 연도). 같은 이유로 연.월(2019.12)과 아포스트로피 축약(’25.10)도
+    뺀다 — 날짜는 수치 주장이 아니고, 날짜 창작은 근거 동봉 판정이 문맥으로 본다.
+    pm_verify가 중복 인용 검사에서 연도를 뺀 것과 같은 이유다.
     """
     out: list[str] = []
+    excluded: list[tuple[str, str]] = []
     for m in _NUMBER_RE.finditer(text):
         token = m.group()
         digits = _normalize_number(token).replace(".", "")
         if _is_year(token):
+            excluded.append((token, "year"))
+            continue
+        if _YEAR_MONTH_RE.match(token):
+            excluded.append((token, "year_month"))
+            continue
+        # ’25·’25.10 — 아포스트로피 바로 뒤 숫자는 축약 연도(연.월)다. %가 붙었으면 수치.
+        if m.start() > 0 and text[m.start() - 1] in _DATE_PREFIXES and not token.endswith("%"):
+            excluded.append((token, "apostrophe_date"))
             continue
         if "." in token or "%" in token or len(digits) >= 2:
             out.append(token)
+    if excluded:
+        # 제외는 조용히 버리지 않는다 — 사유별 집계를 남겨야 나중에 "제외 패턴이 진짜
+        # 수치를 먹었는가"(미탐율)를 셀 수 있다(2026-08-14 회귀셋 라벨링 방침).
+        logger.debug(
+            "significant_numbers.excluded",
+            n=len(excluded),
+            samples=[f"{t}({r})" for t, r in excluded[:8]],
+        )
     return out
 
 
@@ -161,6 +190,87 @@ def ungrounded_numbers(content: str, cited_content: str) -> list[str]:
         seen.add(norm)
         if norm and norm not in haystack:
             out.append(token)
+    return out
+
+
+# ── 산술 검증 — 파생 계산은 근거 검사에서 빼는 게 아니라 계산 자체를 검증한다 ──
+# (2026-08-14 방침: "30.6+18.1을 합한 48.7%"를 근거 검사에서 제외만 하면, 합을
+# 틀리거나 합치면 안 되는 값을 더한 경우가 조용히 통과한다. 정밀도 우선 — 피연산자와
+# 결과가 같은 주장 단위에 함께 있을 때만 판정한다.)
+
+# "A(단위)에서 B(단위)로 p% 증가/감소" — 실측 결함(2026-08-14 탄소규제 런 1.2):
+# "전년 240TWh에서 289TWh로 30% 증가"는 실제 +20.4%다. %p 표기는 뒤에 p가 붙어
+# dir 매칭이 깨지므로 자동으로 제외된다(퍼센트포인트는 이 산식이 아니다).
+_RATE_CLAIM_RE = re.compile(
+    r"(?P<a>\d[\d,]*(?:\.\d+)?)\s*(?P<unit>[%A-Za-z가-힣]{0,6})\s*에서\s*"
+    r"(?P<b>\d[\d,]*(?:\.\d+)?)\s*(?P=unit)?[^\d\n]{0,12}?(?:로|으로)\s*"
+    r"[^\d\n]{0,16}?(?P<p>\d[\d,]*(?:\.\d+)?)\s*%\s*(?:가까이\s*|이상\s*|넘게\s*)?"
+    r"(?P<dir>증가|성장|상승|확대|늘|감소|줄|하락|축소)"
+)
+_SUM_KEYWORD_RE = re.compile(r"합한|합치면|합하면|더한")
+_SUM_RESULT_WINDOW = 30  # 키워드 뒤 이 거리 안의 첫 숫자를 '합산 결과'로 본다
+
+
+def _to_float(token: str) -> float | None:
+    try:
+        return float(_normalize_number(token))
+    except ValueError:
+        return None
+
+
+def _sum_subset_matches(operands: list[float], target: float) -> bool:
+    """피연산자 2~3개의 합이 target과 맞는 조합이 있는가 (반올림 오차 허용)."""
+    tol = max(0.11, abs(target) * 0.005)
+    n = len(operands)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if abs(operands[i] + operands[j] - target) <= tol:
+                return True
+            for k in range(j + 1, n):
+                if abs(operands[i] + operands[j] + operands[k] - target) <= tol:
+                    return True
+    return False
+
+
+def arithmetic_suspects(content: str) -> list[str]:
+    """주장 단위 안의 파생 계산이 스스로와 맞는지 — 틀린 곳의 설명 목록 (순수 함수).
+
+    증가율: "A에서 B로 p% 증가"의 p를 (B-A)/A와 대조(허용 오차 max(2%p, p의 10%)).
+    합산: "…를 합한 C"의 C가 같은 문장 피연산자 2~3개 합과 맞는지. 결과·피연산자가
+    한 문장에 함께 없으면 판정하지 않는다(정밀도 우선).
+    """
+    out: list[str] = []
+    for unit in claim_units(content):
+        bare = MARK_RE.sub(" ", unit)
+        for m in _RATE_CLAIM_RE.finditer(bare):
+            a, b, p = _to_float(m.group("a")), _to_float(m.group("b")), _to_float(m.group("p"))
+            if a is None or b is None or p is None or a == 0:
+                continue
+            change = (b - a) / a * 100.0
+            if m.group("dir") in ("감소", "줄", "하락", "축소"):
+                change = -change
+            if change < 0 or abs(change - p) > max(2.0, 0.1 * p):
+                out.append(
+                    f"{m.group('a')}→{m.group('b')}는 {change:+.1f}%인데 "
+                    f"{m.group('p')}% {m.group('dir')}로 서술"
+                )
+        kw = _SUM_KEYWORD_RE.search(bare)
+        if kw is None:
+            continue
+        after = bare[kw.end() : kw.end() + _SUM_RESULT_WINDOW]
+        result_m = _NUMBER_RE.search(after)
+        if result_m is None:
+            continue
+        target = _to_float(result_m.group())
+        if target is None:
+            continue
+        operands = [
+            v
+            for t in _significant_numbers(bare[: kw.start()])
+            if (v := _to_float(t)) is not None and v != target
+        ]
+        if len(operands) >= 2 and not _sum_subset_matches(operands, target):
+            out.append(f'합산 불일치 의심: "{unit.strip()[:40]}…"')
     return out
 
 
@@ -203,6 +313,11 @@ _CLAIM_TAILS: tuple[str, ...] = (
     "됨",
     "짐",
     "옴",  # "…분석이 나옴" — 명사형 어미 -ㅁ은 앞 모음에 따라 음/옴으로 갈린다
+    # "…30% 증가하였으며 … 5% 늘어남" 꼴이 통째로 주장에서 빠져 산술·근거 검사가
+    # 못 보던 구멍(2026-08-14 실측: 탄소규제 런 1.2). '남'은 "베트남"류 지명 소제목
+    # 오탐 여지가 있으나 나타남·늘어남·드러남 빈도가 압도적이라 받는다.
+    "남",
+    "듦",  # "…줄어듦"
     "필요",
     "전망",
     "예상",
@@ -305,6 +420,64 @@ def check_citation_markers(draft: SectionDraft) -> GateResult:
     )
 
 
+# 편집 잔재 — 모델이 본문에 남긴 작성 과정의 흔적(2026-08-14 실측: 탄소규제 런에
+# "(… — 삭제)" 메모 2건·"본 파트에서는" 노출·고아 헤딩). 문장 자체는 유효할 수 있어
+# SOFT — 사람이 지우면 되는 부류지만, 납품물에 남으면 신뢰를 깎는다.
+_LEFTOVER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"[-—–]\s*삭제\s*\)"), "편집 메모 잔재(… — 삭제)"),
+    (re.compile(r"본 파트"), "내부 작성 단위 용어('본 파트')"),
+    (re.compile(r"^#+\s*$", re.M), "빈 헤딩(#만 있는 줄)"),
+)
+
+# 절단 의심 꼬리 — 수량 표현 뒤 단위 없이 끝나거나("GDP가 약 2"), 접속사로 끝나는 줄.
+# 정밀도 우선(_CLAIM_TAILS와 같은 원칙): 애매한 꼴(라틴 약어 RE100·코드 CN 7204)은
+# 세지 않는다. 절 끝이 아니라 파트 결합부 중간에 박힌 토막이 표적이다(2026-08-14
+# 실측: 탄소규제 런 4.4 "…GDP가 약 2"에서 끊긴 채 다음 항목으로 넘어감).
+_TRUNCATED_TAIL_RE = re.compile(
+    r"(?:(?:^|\s)(?:약|총|평균|최대|최소)\s*\d[\d,]*(?:\.\d+)?|\s(?:및|또는|그리고))$"
+)
+
+
+def leftover_artifacts(content: str) -> list[str]:
+    """본문에 남은 편집 잔재 설명 목록 (순수 함수 — 게이트·PM 경고 공용)."""
+    out: list[str] = []
+    for pattern, label in _LEFTOVER_PATTERNS:
+        if pattern.search(content) and label not in out:
+            out.append(label)
+    return out
+
+
+def truncated_lines(content: str) -> list[str]:
+    """문장 중간에서 끊긴 것으로 보이는 줄(원문 앞부분) 목록 (순수 함수).
+
+    표·제목·짧은 나열 항목은 제외하고, 주장으로 볼 만한 길이의 줄만 본다.
+    """
+    out: list[str] = []
+    for raw in content.split("\n"):
+        line = raw.rstrip()
+        if len(line.strip()) < _MIN_CLAIM_CHARS or _NON_CLAIM_LINE_RE.match(line):
+            continue
+        if _TRUNCATED_TAIL_RE.search(line):
+            # 절단 지점은 줄 끝이다 - 머리가 아니라 꼬리를 보여줘야 사람이 바로 찾는다.
+            out.append(line.strip()[-40:])
+    return out
+
+
+def check_leftovers(draft: SectionDraft) -> GateResult:
+    """편집 잔재·절단 의심 줄 검사 — 본문은 유효할 수 있어 SOFT 경고."""
+    problems = leftover_artifacts(draft.content)
+    cut = truncated_lines(draft.content)
+    if cut:
+        problems.append(f'절단 의심 줄 {len(cut)}건 (예: "{cut[0]}…")')
+    passed = not problems
+    return GateResult(
+        check="leftovers",
+        severity=CheckSeverity.SOFT,
+        passed=passed,
+        detail=None if passed else "; ".join(problems),
+    )
+
+
 def check_bounds(
     draft: SectionDraft,
     *,
@@ -352,6 +525,7 @@ def run_section_gate(
         check_complete(draft),
         check_renderable(draft),
         check_citation_markers(draft),
+        check_leftovers(draft),
         check_numeric_grounded(draft, cited_content),
         check_uncited_claims(draft),
         check_bounds(
