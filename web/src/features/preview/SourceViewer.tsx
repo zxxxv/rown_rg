@@ -1,5 +1,6 @@
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, FileText } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { apiUrl } from "@/api/client";
 import { useSourceDocument } from "@/api/sections";
 import { cn } from "@/lib/utils";
 
@@ -81,13 +82,33 @@ export function SourceViewer({
     );
   }
 
+  // 페이지 정보가 있으면 PDF 자료다(페이지는 PDF 파서만 만든다). 지목된 청크의
+  // 페이지로 브라우저 PDF 뷰어를 바로 연다 - 쿠키 인증이라 새 탭 링크로 충분하다.
+  const focusedPage = doc.chunks.find((c) => c.chunk_id === location.chunkId)?.page ?? null;
+  const hasPages = doc.chunks.some((c) => c.page !== null);
+  const fileUrl = apiUrl(`projects/${projectId}/sources/${location.sourceId}/file`);
+  const pdfHref = (page: number | null) => (page ? `${fileUrl}#page=${page}` : fileUrl);
+
   let prevHeader = "";
+  let prevPage: number | null = null;
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2 rounded border border-border bg-bg px-2.5 py-2">
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
           {doc.title ?? "(제목 없음)"}
         </span>
+        {hasPages ? (
+          <a
+            href={pdfHref(focusedPage)}
+            target="_blank"
+            rel="noreferrer"
+            title="브라우저 PDF 뷰어로 원본을 해당 페이지에서 엽니다"
+            className="inline-flex shrink-0 items-center gap-1 text-[11px] text-fg-info hover:underline"
+          >
+            PDF 원본{focusedPage ? ` p.${focusedPage}` : ""} 열기
+            <FileText className="h-3 w-3" />
+          </a>
+        ) : null}
         {doc.url ? (
           <a
             href={doc.url}
@@ -104,6 +125,9 @@ export function SourceViewer({
           const header = c.header_path.join(" > ");
           const showHeader = header !== "" && header !== prevHeader;
           if (header) prevHeader = header;
+          // 페이지가 바뀌는 지점에만 p.N을 찍는다 - 문서를 훑을 때의 이정표.
+          const showPage = c.page !== null && c.page !== prevPage;
+          if (c.page !== null) prevPage = c.page;
           const focused = c.chunk_id === location.chunkId;
           return (
             <div
@@ -111,6 +135,17 @@ export function SourceViewer({
               data-chunk={c.chunk_id}
               className={cn("rounded px-2 py-1", focused && "bg-bg-info ring-1 ring-accent/40")}
             >
+              {showPage ? (
+                <a
+                  href={pdfHref(c.page)}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="PDF 원본을 이 페이지에서 엽니다"
+                  className="mt-2 inline-block font-mono text-[10px] text-fg-tertiary hover:text-fg-info hover:underline"
+                >
+                  p.{c.page}
+                </a>
+              ) : null}
               {showHeader ? (
                 <p className="mb-0.5 mt-2 truncate text-[11px] font-medium text-fg-tertiary">
                   {header}

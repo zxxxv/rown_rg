@@ -139,3 +139,84 @@ class TestSourceDocumentApi:
             headers=_auth(super_admin_token),
         )
         assert resp.status_code == 404
+
+    async def test_page_metadata_passthrough(
+        self,
+        test_client: AsyncClient,
+        super_admin_user,
+        super_admin_token: str,
+        test_session: AsyncSession,
+    ) -> None:
+        # PDF 색인이 남긴 metadata.page가 문서 뷰로 그대로 내려와야 "p.N 열기"가 선다.
+        project = await _make_project(test_session, super_admin_user.id)
+        await test_session.commit()
+        src = ProjectSource(
+            project_id=project.id, source_type="upload", upload_path="/tmp/x.pdf", title="x.pdf"
+        )
+        test_session.add(src)
+        await test_session.flush()
+        test_session.add(
+            Chunk(
+                project_id=project.id,
+                source_id=src.id,
+                track="content",
+                content="3쪽에서 온 본문",
+                chunk_index=0,
+                metadata_={"page": 3},
+            )
+        )
+        await test_session.commit()
+
+        resp = await test_client.get(
+            f"/api/v1/projects/{project.id}/sources/{src.id}/document",
+            headers=_auth(super_admin_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["chunks"][0]["page"] == 3
+
+
+class TestSourceFileApi:
+    async def test_serves_upload_file_inline(
+        self,
+        test_client: AsyncClient,
+        super_admin_user,
+        super_admin_token: str,
+        test_session: AsyncSession,
+        tmp_path,
+    ) -> None:
+        project = await _make_project(test_session, super_admin_user.id)
+        await test_session.commit()
+        pdf = tmp_path / "doc.pdf"
+        pdf.write_bytes(b"%PDF-1.4 fake body")
+        src = ProjectSource(
+            project_id=project.id, source_type="upload", upload_path=str(pdf), title="doc.pdf"
+        )
+        test_session.add(src)
+        await test_session.commit()
+
+        resp = await test_client.get(
+            f"/api/v1/projects/{project.id}/sources/{src.id}/file",
+            headers=_auth(super_admin_token),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"] == "application/pdf"
+        # 브라우저 뷰어로 열려야 #page=N이 동작한다 - 강제 다운로드 헤더가 있으면 안 된다.
+        assert "attachment" not in resp.headers.get("content-disposition", "")
+        assert resp.content == b"%PDF-1.4 fake body"
+
+    async def test_web_source_has_no_file(
+        self,
+        test_client: AsyncClient,
+        super_admin_user,
+        super_admin_token: str,
+        test_session: AsyncSession,
+    ) -> None:
+        project = await _make_project(test_session, super_admin_user.id)
+        await test_session.commit()
+        src = await _seed_source(test_session, project.id)  # web_search - 파일 없음
+
+        resp = await test_client.get(
+            f"/api/v1/projects/{project.id}/sources/{src.id}/file",
+            headers=_auth(super_admin_token),
+        )
+        assert resp.status_code == 404

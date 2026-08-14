@@ -35,6 +35,7 @@ export type DepthMode = z.infer<typeof DepthModeSchema>;
 // 백엔드 ProjectStage(core/types.py)와 동일한 어휘 - failed 없음, 검토 대기는 reviewing.
 export const ProjectStatusSchema = z.enum([
   "created",
+  "planning",
   "researching",
   "indexing",
   "writing",
@@ -267,6 +268,8 @@ export const EvidenceChunkSchema = z.object({
   reliability: z.string().nullable().default(null),
   header_path: z.array(z.string()).default([]),
   chunk_index: z.number().int().nullable().default(null),
+  /** PDF 원본에서의 시작 페이지(1-기반) - PDF 외 자료는 null */
+  page: z.number().int().nullable().default(null),
 });
 export type EvidenceChunk = z.infer<typeof EvidenceChunkSchema>;
 
@@ -320,6 +323,8 @@ export const SourceChunkSchema = z.object({
   content: z.string(),
   chunk_index: z.number().int().nullable().default(null),
   header_path: z.array(z.string()).default([]),
+  /** PDF 원본에서의 시작 페이지(1-기반) - PDF 외 자료는 null */
+  page: z.number().int().nullable().default(null),
 });
 export type SourceChunk = z.infer<typeof SourceChunkSchema>;
 

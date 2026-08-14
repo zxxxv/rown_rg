@@ -61,9 +61,11 @@ from src.core.citations import numbers_in_order
 from src.core.clock import now as clock_now
 from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
+from src.core.section_plan import SECTION_PLAN_KEY, plan_from_config
 from src.core.state import ProjectState
 from src.core.types import (
     ProjectStage,
+    ReviewGate,
     SectionCandidate,
     SectionCandidateSet,
     SectionDraft,
@@ -108,6 +110,7 @@ from src.workflows.runner import get_pending_gate, is_running, queue_status, res
 # 단계 기반 근사 진행률 — 섹션 단위 세밀화는 추후 진행 이벤트로
 _STAGE_PERCENT: dict[str, int] = {
     ProjectStage.CREATED.value: 0,
+    ProjectStage.PLANNING.value: 5,
     ProjectStage.RESEARCHING.value: 20,
     ProjectStage.INDEXING.value: 40,
     ProjectStage.WRITING.value: 60,
@@ -122,6 +125,7 @@ _STAGE_PERCENT: dict[str, int] = {
 _IN_PROGRESS_FILTER = "in_progress"
 _IN_PROGRESS_STATUSES = (
     ProjectStage.CREATED.value,
+    ProjectStage.PLANNING.value,
     ProjectStage.RESEARCHING.value,
     ProjectStage.INDEXING.value,
     ProjectStage.WRITING.value,
@@ -1343,15 +1347,19 @@ def _state_for_export(project: Project, rows: list[Section], author: str = "") -
 
     후보/선택 구조를 절당 1후보로 재구성한다 — 편집된 최신 본문이 곧 선택본.
     """
+    # 절 계획의 부수 정보(장 제목·방향·에이전트)는 config 정본에서 가져온다 — 제목만
+    # 담아 만들면 렌더가 장 맥락을 잃는다. 정본이 없는 옛 프로젝트는 행 값으로 채운다.
+    canonical = {p.section_id: p for p in plan_from_config(project.config)}
     plans: list[SectionPlan] = []
     sets: list[SectionCandidateSet] = []
     selections: dict[UUID, UUID] = {}
     for row in rows:
-        plan = SectionPlan(
+        plan = canonical.get(row.id) or SectionPlan(
             section_id=row.id,
             chapter_number=row.chapter_number,
             section_number=row.section_number,
             title=row.title,
+            chapter_title=row.chapter_title or "",
         )
         draft = SectionDraft(section_id=row.id, content=row.content or "", cited_chunk_ids=[])
         candidate = SectionCandidate(draft=draft)
@@ -1488,8 +1496,16 @@ async def decide_gate(
     current_user: Annotated[User, Depends(require_writer)],
 ) -> RunResponse:
     project = await _get_authorized_project(project_id, session, current_user)
-    if await get_pending_gate(session, project.id) is None:
+    pending = await get_pending_gate(session, project.id)
+    if pending is None:
         raise ValidationError(message="대기 중인 검토 게이트가 없습니다", code="NO_PENDING_GATE")
+    # 브리프 게이트가 목차를 고쳐 보냈다면 생성 시점과 같은 잣대로 검증한다 — 여기서
+    # 막지 않으면 잘못된 목차가 config에 커밋되고 수집 도중에야 터진다.
+    if pending["gate"] == ReviewGate.DESIGN_BRIEF.value and "outline" in data.decision:
+        _validate_outline_config(
+            {"outline": data.decision["outline"]},
+            await _known_analyst_names(session, current_user.id),
+        )
     # 한도 사전 검사 — 재개 구간(색인·작성·추가 검색)도 LLM 비용이 크다.
     from src.clients.llm.quota_gate import check_user_quota
 
@@ -1613,13 +1629,20 @@ async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID
 
 # config 안에서 폼이 건드리지 않는 내부 키 - 옵션 전체 교체 때 살려 둔다.
 # models = 런 시작 시점 역할별 모델 스냅샷(러너 기록) - 표시 라벨의 진실.
-_INTERNAL_CONFIG_KEYS = ("cancelled_from", "verify_resolved", "models")
+_INTERNAL_CONFIG_KEYS = ("cancelled_from", "verify_resolved", "models", SECTION_PLAN_KEY)
 
 
 def merge_config_update(current: dict[str, Any] | None, incoming: dict[str, Any]) -> dict[str, Any]:
     """옵션 전체 교체 + 내부 키 보존. 내부 키는 서버가 진실이라 클라이언트가
-    같은 키를 되돌려 보내도(폼 round-trip) 서버 값이 이긴다."""
+    같은 키를 되돌려 보내도(폼 round-trip) 서버 값이 이긴다.
+
+    단 _section_plan은 목차에서 파생된 스냅샷이라, 목차가 바뀌면 함께 버린다 —
+    남겨 두면 collect가 '이미 plan이 있다'고 보고 옛 목차로 실행한다(사용자가 화면에서
+    고친 것과 다른 보고서가 나오는 조용한 어긋남).
+    """
     keep = {k: v for k, v in (current or {}).items() if k in _INTERNAL_CONFIG_KEYS}
+    if incoming.get("outline") != (current or {}).get("outline"):
+        keep.pop(SECTION_PLAN_KEY, None)
     return {**incoming, **keep}
 
 
@@ -1871,6 +1894,7 @@ async def get_section_evidence(
         src = sources.get(source_id) if source_id else None
         is_cited = cid in cited_set
         header = (meta or {}).get("header_path")
+        page = (meta or {}).get("page")
         items.append(
             EvidenceChunk(
                 number=number_of.get(cid),
@@ -1884,6 +1908,7 @@ async def get_section_evidence(
                 reliability=src.reliability if src else None,
                 header_path=[str(h) for h in header] if isinstance(header, list) else [],
                 chunk_index=chunk_index,
+                page=page if isinstance(page, int) else None,
             )
         )
 
@@ -1983,12 +2008,14 @@ async def get_source_document(
     chunks: list[SourceChunkRead] = []
     for cid, content, idx, meta in rows:
         header = (meta or {}).get("header_path")
+        page = (meta or {}).get("page")
         chunks.append(
             SourceChunkRead(
                 chunk_id=str(cid),
                 content=content,
                 chunk_index=idx,
                 header_path=[str(h) for h in header] if isinstance(header, list) else [],
+                page=page if isinstance(page, int) else None,
             )
         )
     return SourceDocumentResponse(
@@ -1998,6 +2025,45 @@ async def get_source_document(
         source_type=src.source_type,
         chunks=chunks,
     )
+
+
+@router.get("/{project_id}/sources/{source_id}/file")
+async def get_source_file(
+    project_id: UUID,
+    source_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> FileResponse:
+    """자료의 원본 파일을 브라우저에서 열게 서빙 - "PDF 원본 p.N 열기"의 대상.
+
+    쿠키 인증(access_token)이 있어 새 탭 <a href>로 바로 연다. filename을 주지
+    않아 Content-Disposition이 attachment가 되지 않게 한다(다운로드가 아니라
+    브라우저 PDF 뷰어로 열려야 #page=N 프래그먼트가 동작한다).
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    src = (
+        await session.execute(
+            select(ProjectSource).where(
+                ProjectSource.id == source_id, ProjectSource.project_id == project.id
+            )
+        )
+    ).scalar_one_or_none()
+    if src is None:
+        raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
+    path: Path | None = None
+    if src.upload_path:
+        path = Path(src.upload_path)
+    elif src.library_node_id is not None:
+        node = await session.get(LibraryNode, src.library_node_id)
+        if node is not None and node.file_path:
+            path = Path(node.file_path)
+    if path is None or not path.is_file():
+        raise NotFoundError(
+            message="원본 파일이 없습니다(웹 수집 자료이거나 파일이 정리됨)",
+            code="SOURCE_FILE_MISSING",
+        )
+    media_type = "application/pdf" if path.suffix.lower() == ".pdf" else None
+    return FileResponse(path, media_type=media_type or "application/octet-stream")
 
 
 @router.patch("/{project_id}/sections/{section_id}", response_model=SectionContentResponse)
@@ -2035,6 +2101,8 @@ def _plan_for_row(project: Project, row: Section) -> SectionPlan:
         chapter_number=row.chapter_number,
         section_number=row.section_number,
         title=row.title,
+        # 절 행에 이미 있는 값 — 목차를 못 찾아도 장 맥락은 살린다(검색 질의가 쓴다).
+        chapter_title=row.chapter_title or "",
     )
     outline = (project.config or {}).get("outline")
     if not isinstance(outline, dict):
@@ -2042,7 +2110,8 @@ def _plan_for_row(project: Project, row: Section) -> SectionPlan:
     chapters = outline.get("chapters")
     if not isinstance(chapters, list) or not 1 <= row.chapter_number <= len(chapters):
         return plan
-    sections = (chapters[row.chapter_number - 1] or {}).get("sections")
+    chapter = chapters[row.chapter_number - 1] or {}
+    sections = chapter.get("sections")
     if not isinstance(sections, list) or not 1 <= row.section_number <= len(sections):
         return plan
     spec = sections[row.section_number - 1]
@@ -2050,6 +2119,7 @@ def _plan_for_row(project: Project, row: Section) -> SectionPlan:
         return plan
     return plan.model_copy(
         update={
+            "chapter_title": str(chapter.get("title") or row.chapter_title or ""),
             "direction": str(spec.get("direction") or ""),
             "key_points": [str(p) for p in (spec.get("key_points") or []) if str(p).strip()],
             "analysts": [str(a) for a in (spec.get("analysts") or []) if str(a).strip()],

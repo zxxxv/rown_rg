@@ -16,6 +16,7 @@ from typing import ClassVar
 import structlog
 
 from src.clients.parser.base import (
+    PAGE_BREAK_MARKER,
     ParseCache,
     ParseMetadata,
     ParserClient,
@@ -121,11 +122,15 @@ def _get_docling_converter() -> object:
 
 
 def _docling_convert(file_path: Path) -> tuple[str, int | None, int]:
-    """Run docling and return (markdown, page_count, image_count)."""
+    """Run docling and return (markdown, page_count, image_count).
+
+    페이지 경계에 마커를 심는다 - 색인이 청크에 페이지 번호를 달아 "PDF 원본 p.N
+    열기" 점프의 재료가 된다. 마커는 색인 직전에 제거돼 청크·프롬프트에 안 남는다.
+    """
     converter = _get_docling_converter()
     result = converter.convert(file_path)  # type: ignore[attr-defined]
     doc = result.document
-    markdown = doc.export_to_markdown()
+    markdown = doc.export_to_markdown(page_break_placeholder=f"\n\n{PAGE_BREAK_MARKER}\n\n")
     page_count = len(doc.pages) if getattr(doc, "pages", None) is not None else None
     image_count = len(doc.pictures) if getattr(doc, "pictures", None) is not None else 0
     return markdown, page_count, image_count
@@ -136,7 +141,11 @@ def _pymupdf_convert(file_path: Path) -> tuple[str, int | None, int]:
     import pymupdf
     import pymupdf4llm
 
-    markdown = pymupdf4llm.to_markdown(str(file_path))
+    # page_chunks로 페이지별 텍스트를 받아 docling 경로와 같은 마커를 사이에 심는다.
+    pages = pymupdf4llm.to_markdown(str(file_path), page_chunks=True)
+    markdown = f"\n\n{PAGE_BREAK_MARKER}\n\n".join(
+        str(p.get("text") or "") for p in pages if isinstance(p, dict)
+    )
     src = pymupdf.open(str(file_path))
     try:
         page_count = src.page_count

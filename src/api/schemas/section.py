@@ -87,6 +87,7 @@ class EvidenceChunk(BaseModel):
     reliability: str | None = None
     header_path: list[str] = Field(default_factory=list, description="원본 문서 안의 소제목 경로")
     chunk_index: int | None = None  # 원본 문서 안에서의 순번
+    page: int | None = None  # PDF 원본에서의 시작 페이지(1-기반) - PDF 외 자료는 None
 
 
 class GroundedNumberRead(BaseModel):
@@ -150,6 +151,7 @@ class SourceChunkRead(BaseModel):
     content: str
     chunk_index: int | None = None
     header_path: list[str] = Field(default_factory=list)
+    page: int | None = None  # PDF 원본에서의 시작 페이지(1-기반) - PDF 외 자료는 None
 
 
 class SourceDocumentResponse(BaseModel):

@@ -31,6 +31,7 @@ from src.core.config import settings
 from src.db.models.chunk import Chunk as ChunkModel
 from src.db.models.project_source import ProjectSource
 from src.services.indexing._boilerplate import excluded_metadata
+from src.services.indexing._pages import assign_chunk_pages, strip_page_markers
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -157,7 +158,10 @@ class VectorIndexingService:
             deleted_chunks=deleted,
         )
 
-        chunks = await self._chunking_service.chunk_markdown(parse_result.markdown, source_id)
+        # PDF 파서가 심은 페이지 경계 마커를 걷어내고 청킹한다 - 마커가 청크·임베딩·
+        # 프롬프트에 새면 안 된다. 페이지 번호는 청크 metadata로만 남긴다.
+        clean_md, page_starts = strip_page_markers(parse_result.markdown)
+        chunks = await self._chunking_service.chunk_markdown(clean_md, source_id)
         if not chunks:
             elapsed = (time.perf_counter() - t0) * 1000
             logger.info(
@@ -173,6 +177,16 @@ class VectorIndexingService:
                 elapsed_ms=elapsed,
                 page_count=parse_result.metadata.page_count,
             )
+
+        # 청크별 시작 페이지 - "PDF 원본 p.N 열기" 점프의 재료. 페이지를 모르는
+        # 문서(웹·HWPX 등)는 아무것도 달지 않는다.
+        for chunk, page in zip(
+            chunks,
+            assign_chunk_pages([c.content for c in chunks], clean_md, page_starts),
+            strict=True,
+        ):
+            if page is not None:
+                chunk.metadata["page"] = page
 
         # 본문 임베딩은 외부 I/O — DB 세션 밖에서. BGE-M3 자체 캐시가 재실행 시 비용을 흡수.
         # 배치를 끊어 넣는다: 한 번에 넣으면 배치 안 최장 청크에 맞춰 전부 패딩돼

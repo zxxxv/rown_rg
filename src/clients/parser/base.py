@@ -18,6 +18,11 @@ from pydantic import BaseModel, Field
 
 logger = structlog.get_logger(__name__)
 
+# 페이지 경계 마커 - PDF 파서가 페이지 사이에 심고, 색인이 읽어 청크에 페이지 번호를
+# 단 뒤 제거한다(services/indexing/_pages.py). 청크·화면·프롬프트에는 절대 남지 않는다.
+# HTML 주석 꼴이라 _strip_page_numbers(숫자 단독 줄)·표 필터에 걸리지 않는다.
+PAGE_BREAK_MARKER = "<!-- rown:page-break -->"
+
 
 _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$", re.MULTILINE)
 _TABLE_LINE = re.compile(r"^\s*\|.*\|\s*$")
@@ -168,11 +173,16 @@ class ParseCache:
     def __init__(self, root: Path = Path("./cache/parsed")) -> None:
         self.root = root
 
+    # 파서 출력 규약이 바뀌면 올린다 - 키에 섞여 옛 캐시를 자연 무효화한다.
+    # v2: PDF 페이지 경계 마커 도입(2026-08-14). 마커 없는 캐시본이 재색인에 쓰이면
+    # 그 자료만 페이지 없이 색인돼 "왜 이 자료만 점프가 안 되나"가 된다.
+    _VERSION = "v2"
+
     @staticmethod
     def _key(file_path: Path) -> str:
         abs_path = str(file_path.resolve())
         mtime = file_path.stat().st_mtime_ns
-        raw = f"{abs_path}:{mtime}".encode()
+        raw = f"{abs_path}:{mtime}:{ParseCache._VERSION}".encode()
         return hashlib.sha256(raw).hexdigest()[:16]
 
     def _path_for(self, key: str) -> Path:
