@@ -167,9 +167,12 @@ function ClaimTable({
 function EvidenceCard({
   item,
   onLocate,
+  hasCellNumber = false,
 }: {
   item: EvidenceChunk;
   onLocate?: (loc: SourceLocation) => void;
+  /** 이 카드 원문에 선택한 표 블록의 셀 수치가 들어 있다 - 정렬 근거의 표시 */
+  hasCellNumber?: boolean;
 }) {
   return (
     <li className="rounded border border-border bg-bg px-3 py-2">
@@ -177,6 +180,14 @@ function EvidenceCard({
         {item.number !== null ? (
           <span className="rounded-sm bg-bg-info px-1.5 font-mono text-[11px] text-fg-info">
             [{item.number}]
+          </span>
+        ) : null}
+        {hasCellNumber ? (
+          <span
+            title="이 카드 원문에 표의 수치가 들어 있어 앞으로 정렬했습니다 - 뒷받침 판정은 아닙니다"
+            className="rounded-sm bg-bg-success px-1 text-[10px] text-fg-success"
+          >
+            표 수치 포함
           </span>
         ) : null}
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
@@ -218,6 +229,48 @@ function EvidenceCard({
 // 대조가 실제로 일어난다.
 
 const MARK_RE = /\[(\d+)\]|\(출처\s*([\d,\s]+)\)/g;
+
+// ─── 표 블록 카드 정렬 ───
+// 표 행은 '주장 단위'가 아니라 문장 정렬로 근거를 못 좁힌다 - 번호에 묶인 카드
+// 전부(같은 자료의 다른 대목 포함)가 대등하게 나열돼 검증이 훑기가 된다. 셀 수치가
+// 실제로 든 카드를 앞으로 올려 훑기를 줄인다. **판정이 아니라 순서다** - 수치만
+// 겹친 카드를 "근거"로 선언하면 40%가 거짓 안심이었다(2026-08-12 실측).
+
+const _NUMBER_RE = /\d[\d,]*(?:\.\d+)?%?/g;
+
+/** 표 행(| … |)에서 대조할 만한 수치를 뽑는다 - 백엔드 significant_numbers의 최소
+    거울(콤마·후행 % 정규화, 두 자리 이상 또는 소수·퍼센트, 연도 제외). */
+export function tableCellNumbers(blocks: string[]): string[] {
+  const out = new Set<string>();
+  for (const block of blocks) {
+    for (const line of block.split("\n")) {
+      if (!/^\s*\|/.test(line)) continue;
+      for (const m of line.matchAll(_NUMBER_RE)) {
+        const norm = m[0].replace(/,/g, "").replace(/%$/, "");
+        const digits = norm.replace(".", "");
+        if (digits.length < 2 && !norm.includes(".") && !m[0].endsWith("%")) continue;
+        if (/^\d{4}$/.test(norm) && Number(norm) >= 1900 && Number(norm) <= 2099) continue;
+        out.add(norm);
+      }
+    }
+  }
+  return [...out];
+}
+
+/** 셀 수치가 든 카드를 앞으로(안정 정렬 - 그 외 순서는 유지). 매칭 여부도 돌려줘
+    카드에 '표 수치 포함' 표시를 단다. */
+export function orderByCellNumbers(
+  items: EvidenceChunk[],
+  cellNumbers: string[],
+): { item: EvidenceChunk; hasCellNumber: boolean }[] {
+  const hit = (content: string) => {
+    const hay = content.replace(/,/g, "");
+    return cellNumbers.some((n) => hay.includes(n));
+  };
+  return items
+    .map((item) => ({ item, hasCellNumber: cellNumbers.length > 0 && hit(item.content) }))
+    .sort((a, b) => Number(b.hasCellNumber) - Number(a.hasCellNumber));
+}
 
 /** 본문 텍스트에 등장하는 인용 번호 집합 - 블록별 근거 유무 판정(표시·패널)의 공통 원천. */
 export function markerNumbers(text: string): Set<number> {
@@ -299,8 +352,13 @@ export function BlockEvidence({
       ) : null}
       {primary.length > 0 ? (
         <ul className="flex flex-col gap-2">
-          {primary.map((item) => (
-            <EvidenceCard key={item.chunk_id} item={item} onLocate={onLocate} />
+          {orderByCellNumbers(primary, tableCellNumbers(blocks)).map(({ item, hasCellNumber }) => (
+            <EvidenceCard
+              key={item.chunk_id}
+              item={item}
+              onLocate={onLocate}
+              hasCellNumber={hasCellNumber}
+            />
           ))}
         </ul>
       ) : null}
