@@ -688,14 +688,20 @@ function ChapterSectionBlock({
 /** 마크다운 본문 → 블록 목록. 빈 줄 경계로 나누되 각 블록은 원문의 정확한
  * 부분 문자열로 유지한다 - 블록 치환(직접 편집·AI 재작성)의 전제 조건.
  *
- * 두 가지를 붙여 둔다.
+ * 세 가지를 붙여 둔다.
  * - 코드펜스(```chart 등)는 빈 줄이 들어 있어도 통째로 한 블록이다. 반으로 잘린 펜스는
  *   그래프로 그려지지도, 표로 되돌려지지도 않는다.
  * - **표 제목 줄은 표와 한 블록이다.** 제목은 표 위 문단으로 따로 쓰이지만 표의 일부다.
  *   떼어 놓으면 제목만 고르면 그래프 변환이 안 열리고, 표만 바꾸면 그림 위에 "표:"가
  *   남으며, 렌더러는 제목 없는 표로 보고 머리행으로 제목을 하나 더 지어낸다(제목 2개).
+ * - **인용 마커만 있는 문단은 앞 블록에 붙인다.** 표 아래 "(출처 n)" 단독 줄이 별도
+ *   블록이 되면 근거 배지가 표가 아니라 그 꼬마 블록에 붙고(2026-08-14 사용자 발견),
+ *   혼자서는 편집·재작성할 것도 없다. 그래프 변환은 원래 블록의 마커를 따라가게
+ *   설계돼 있어(tableToChart.source) 붙여도 무손실이다.
  *
  * 블록은 줄 범위를 잘라 만든다 - 사이 빈 줄까지 그대로 품어야 원문 부분 문자열로 남는다. */
+const MARKER_ONLY_BLOCK_RE = /^(?:\s|\(출처\s*[\d,\s]+\)|\[\d+\])+$/;
+
 function splitBlocks(content: string): string[] {
   const lines = content.split("\n");
   const ranges: Array<[number, number]> = [];
@@ -718,6 +724,10 @@ function splitBlocks(content: string): string[] {
     const prev = merged[merged.length - 1];
     if (prev && isTableCaption(text(prev)) && /^\s*\|/.test(lines[range[0]])) {
       prev[1] = range[1]; // 제목 줄부터 표 끝까지 한 덩어리로
+      continue;
+    }
+    if (prev && MARKER_ONLY_BLOCK_RE.test(text(range))) {
+      prev[1] = range[1]; // 출처 표기 단독 문단은 그 표기가 가리키는 앞 블록의 일부다
       continue;
     }
     merged.push(range);
