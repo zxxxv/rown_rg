@@ -39,6 +39,7 @@ from src.services.qa.gate import (
     misattributed_numbers,
     truncated_lines,
 )
+from src.services.qa.table_check import table_prose_mismatches, table_ungrounded_numbers
 from src.services.sections.evidence import marker_chunk_ids
 
 logger = structlog.get_logger(__name__)
@@ -291,6 +292,55 @@ def _misattribution_findings(
     ]
 
 
+def _table_findings(
+    row: Section, chunk_texts: dict[UUID, str], *, renumbered: bool
+) -> list[dict[str, Any]]:
+    """표 셀 수치 검사 — 문장 검사망에서 빠져 있던 표를 결정적으로 대조한다.
+
+    B(표-본문 불일치)가 실제 사고 양식이다 — 분할 작성이 검색 풀을 파트별로 쪼개
+    같은 지표가 표와 본문에서 다른 값이 된다(탄소규제 런 실측, 백로그 3번의 1차 검출).
+    A(근거 대조)는 어휘 매칭이라 단위 환산을 못 재므로 문장 쪽과 같은 warning 눈금.
+    """
+    content = row.content or ""
+    ref = f"{row.chapter_number}.{row.section_number}"
+    out: list[dict[str, Any]] = []
+
+    mismatches = table_prose_mismatches(content)
+    if mismatches:
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "표-본문 수치 불일치",
+                f"같은 지표가 표와 본문에서 다른 값 {len(mismatches)}건: {mismatches[0]}"
+                + (f" 외 {len(mismatches) - 1}건" if len(mismatches) > 1 else ""),
+            )
+        )
+
+    mapping, _ = marker_chunk_ids(
+        content, list(row.source_ids or []), row.meta, renumbered=renumbered
+    )
+    if mapping:
+        cited = "\n".join(
+            chunk_texts[cid] for ids in mapping.values() for cid in ids if cid in chunk_texts
+        )
+        ungrounded = table_ungrounded_numbers(content, cited)
+        if ungrounded:
+            out.append(
+                _finding(
+                    row.chapter_number,
+                    ref,
+                    "warning",
+                    "표 무근거 수치",
+                    f"인용 근거에서 어휘로 확인되지 않는 표 수치 {len(ungrounded)}건"
+                    f"(단위 환산·표기 차이 가능): {', '.join(ungrounded[:5])}"
+                    + (" …" if len(ungrounded) > 5 else ""),
+                )
+            )
+    return out
+
+
 # 절 하나에서 이만큼 겹치면 사람이 봐야 한다. 개조식 보고서는 한두 문장이 비슷한 게
 # 자연스러워(같은 정책을 여러 각도로 다룬다) 건수로 가른다.
 _DUP_MIN = 3
@@ -453,6 +503,7 @@ async def evidence_findings(
         )
         out.extend(content_findings(row, n_sources=n_sources, renumbered=renumbered))
         out.extend(_misattribution_findings(row, chunk_texts, renumbered=renumbered))
+        out.extend(_table_findings(row, chunk_texts, renumbered=renumbered))
         out.extend(
             await _coverage_findings(
                 row,
