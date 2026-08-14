@@ -42,6 +42,8 @@ class User(Base):
     )
     totp_secret: Mapped[str | None] = mapped_column(String(32))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 인증 통과 하트비트(60초 스로틀) — '현재 접속중' 판정용, last_login_at과 별개
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failed_login_count: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_changed_at: Mapped[datetime | None] = mapped_column(

@@ -471,3 +471,55 @@ class TestUserUsageDetail:
             f"/api/v1/admin/users/{uuid4()}/usage", headers=_auth(admin_token)
         )
         assert response.status_code == 404
+
+
+class TestOnlineUsersKPI:
+    async def test_counts_recent_heartbeats_excluding_stale_and_inactive(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        admin_user: User,
+        admin_token: str,
+        worker_user: User,
+        viewer_user: User,
+        super_admin_user: User,
+    ) -> None:
+        # 접속중 = last_seen_at이 5분 이내 & is_active. 요청자(admin)는 이 요청의
+        # 하트비트로 접속중에 포함된다.
+        current = now()
+        worker_user.last_seen_at = current - timedelta(minutes=2)  # 포함
+        super_admin_user.last_seen_at = current - timedelta(minutes=30)  # 창 밖 → 제외
+        viewer_user.last_seen_at = current - timedelta(minutes=1)  # 최근이지만 비활성 → 제외
+        viewer_user.is_active = False
+        await test_session.commit()
+
+        response = await test_client.get("/api/v1/admin/dashboard", headers=_auth(admin_token))
+
+        assert response.status_code == 200
+        kpis = response.json()["kpis"]
+        assert kpis["online_users"] == 2  # admin(요청자) + worker
+        # 활성 사용자(기간 내 로그인)와는 별개 지표다 — 로그인한 사람은 admin뿐.
+        assert kpis["active_users"] == 1
+
+
+class TestLastSeenHeartbeat:
+    async def test_authenticated_request_stamps_and_throttles_last_seen(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        admin_user: User,
+        admin_token: str,
+    ) -> None:
+        assert admin_user.last_seen_at is None
+
+        first_resp = await test_client.get("/api/v1/admin/dashboard", headers=_auth(admin_token))
+        assert first_resp.status_code == 200
+        await test_session.refresh(admin_user)
+        first_seen = admin_user.last_seen_at
+        assert first_seen is not None
+
+        # 60초 스로틀 — 직후의 두 번째 요청은 last_seen_at을 갱신하지 않는다.
+        second_resp = await test_client.get("/api/v1/admin/dashboard", headers=_auth(admin_token))
+        assert second_resp.status_code == 200
+        await test_session.refresh(admin_user)
+        assert admin_user.last_seen_at == first_seen

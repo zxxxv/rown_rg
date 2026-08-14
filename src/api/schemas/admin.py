@@ -16,6 +16,9 @@ from src.api.schemas.user import UserRole
 class AdminKPI(BaseModel):
     total_cost_usd: float
     cost_limit_usd: float
+    # 현재 접속중 — last_seen_at이 최근 5분 이내인 사용자 수 (기간 무관)
+    online_users: int
+    # 기간 활성 — 조회 기간 내 1회 이상 로그인한 사용자 수
     active_users: int
     active_projects: int
     completed_reports: int

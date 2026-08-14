@@ -1,4 +1,4 @@
-import { Activity, DollarSign, FileCheck2, FolderKanban, Users } from "lucide-react";
+import { Activity, DollarSign, FileCheck2, FolderKanban, Users, Wifi } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   Area,
@@ -204,7 +204,7 @@ function DashboardBody({
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard
           label={`${periodLabel} 총 비용`}
           value={`$${data.kpis.total_cost_usd.toLocaleString()}`}
@@ -212,6 +212,13 @@ function DashboardBody({
           icon={DollarSign}
           tone={costTone}
           progress={{ current: data.kpis.total_cost_usd, max: data.kpis.cost_limit_usd }}
+        />
+        <StatCard
+          label="현재 접속중"
+          value={`${data.kpis.online_users}명`}
+          hint="최근 5분 내 활동"
+          icon={Wifi}
+          tone="success"
         />
         <StatCard
           label="활성 사용자"
@@ -234,52 +241,54 @@ function DashboardBody({
         />
       </div>
 
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
-          <div>
-            <CardTitle className="text-base">일별 비용 추세 ({periodLabel})</CardTitle>
-            <CardDescription>USD 기준, 일별 총 사용 비용</CardDescription>
-          </div>
-          <span className="font-mono text-xs text-fg-tertiary">
-            평균 ${Math.round(data.kpis.total_cost_usd / data.daily_costs.length)}/일
-          </span>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-2">
-          <div className="flex items-center gap-4 text-xs text-fg-tertiary">
-            <span className="flex items-center gap-1.5">
-              <span
-                aria-hidden
-                className="inline-block w-5 shrink-0 border-t-2 border-solid"
-                style={{ borderColor: "var(--color-accent)" }}
-              />
-              비용 (USD, 실선)
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
+            <div>
+              <CardTitle className="text-base">일별 비용 추세 ({periodLabel})</CardTitle>
+              <CardDescription>USD 기준, 일별 총 사용 비용</CardDescription>
+            </div>
+            <span className="font-mono text-xs text-fg-tertiary">
+              평균 ${Math.round(data.kpis.total_cost_usd / data.daily_costs.length)}/일
             </span>
-            <span className="flex items-center gap-1.5">
-              <span
-                aria-hidden
-                className="inline-block w-5 shrink-0 border-t-2 border-dashed"
-                style={{ borderColor: "var(--color-text-warning)" }}
-              />
-              활성 사용자 수 (점선)
-            </span>
-          </div>
-          <div className="h-80 w-full">
-            <DailyCostChart points={data.daily_costs} />
-          </div>
-        </CardContent>
-      </Card>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            <div className="flex items-center gap-4 text-xs text-fg-tertiary">
+              <span className="flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="inline-block w-5 shrink-0 border-t-2 border-solid"
+                  style={{ borderColor: "var(--color-accent)" }}
+                />
+                비용 (USD, 실선)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="inline-block w-5 shrink-0 border-t-2 border-dashed"
+                  style={{ borderColor: "var(--color-text-warning)" }}
+                />
+                활성 사용자 수 (점선)
+              </span>
+            </div>
+            <div className="h-80 w-full">
+              <DailyCostChart points={data.daily_costs} />
+            </div>
+          </CardContent>
+        </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">날짜별 사용자 기여 ({periodLabel})</CardTitle>
-          <CardDescription>상위 6명 + 기타를 쌓아 '누가 언제 얼마나' 썼는지 표시</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="h-80 w-full">
-            <UserDailyChart series={data.user_daily} onSelectUser={onSelectUser} />
-          </div>
-        </CardContent>
-      </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">날짜별 사용자 기여 ({periodLabel})</CardTitle>
+            <CardDescription>상위 6명 + 기타를 쌓아 '누가 언제 얼마나' 썼는지 표시</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="h-80 w-full">
+              <UserDailyChart series={data.user_daily} onSelectUser={onSelectUser} />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <UsageTable rows={data.user_usage} periodLabel={periodLabel} onSelectUser={onSelectUser} />

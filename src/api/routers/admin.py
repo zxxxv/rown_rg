@@ -65,6 +65,10 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 # DB의 ProjectStage 값 기준 '진행 중' 상태 (created/completed/archived 제외)
 _ACTIVE_PROJECT_STATUSES = ("researching", "indexing", "writing", "reviewing")
 
+# '현재 접속중' 판정 창 — 하트비트(last_seen_at)가 이 시간 내면 접속중으로 센다.
+# 하트비트 갱신이 60초 스로틀이므로 창은 그보다 넉넉해야 한다.
+_ONLINE_WINDOW = timedelta(minutes=5)
+
 
 def _resolve_period_range(
     period: DashboardPeriod,
@@ -126,6 +130,16 @@ async def get_admin_dashboard(
             )
         )
     ).scalar_one()
+    online_users = (
+        await session.execute(
+            select(func.count())
+            .select_from(User)
+            .where(
+                User.is_active.is_(True),
+                User.last_seen_at >= today - _ONLINE_WINDOW,
+            )
+        )
+    ).scalar_one()
     active_users = (
         await session.execute(
             select(func.count())
@@ -163,6 +177,7 @@ async def get_admin_dashboard(
     kpis = AdminKPI(
         total_cost_usd=float(total_cost),
         cost_limit_usd=float(org_cost_limit_usd),
+        online_users=online_users,
         active_users=active_users,
         active_projects=active_projects,
         completed_reports=completed_reports,

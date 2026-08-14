@@ -3,6 +3,9 @@ import type { UserRoleType } from "@/api/types";
 export interface AdminKPI {
   total_cost_usd: number;
   cost_limit_usd: number;
+  // 현재 접속중 - last_seen_at이 최근 5분 이내인 사용자 수 (기간 무관)
+  online_users: number;
+  // 기간 활성 - 조회 기간 내 1회 이상 로그인한 사용자 수
   active_users: number;
   active_projects: number;
   completed_reports: number;
@@ -304,6 +307,7 @@ export function buildAdminDashboardFixture(
     kpis: {
       total_cost_usd,
       cost_limit_usd: 3_000,
+      online_users: 4,
       active_users: 13,
       active_projects: 7,
       completed_reports: 4,
