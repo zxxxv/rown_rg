@@ -1123,6 +1123,13 @@ function SectionView({
                   <span className="text-fg-danger">못 찾음 {claimStats.unmatched}</span>
                 ) : null}
                 {claimStats.uncited > 0 ? <span>표기 없음 {claimStats.uncited}</span> : null}
+                {evidenceQuery.data?.traceable === false ? (
+                  // 근거 기록 도입(8/11) 전에 작성된 절 - 번호와 청크의 대응이 없어
+                  // 블록 배지·드로어를 못 연다. 그 사실을 알려야 "왜 배지가 없지"가 안 된다.
+                  <span>
+                    (근거 기록이 없는 옛 작성분 - 블록별 근거 보기는 새로 작성한 절부터 지원됩니다)
+                  </span>
+                ) : null}
                 {claimStats.ungrounded > 0 ? (
                   <span className="text-fg-danger">근거 없는 수치 {claimStats.ungrounded}</span>
                 ) : null}
