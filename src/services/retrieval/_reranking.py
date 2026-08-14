@@ -11,6 +11,7 @@ downstream consumers can still see what the fan-out backends produced.
 from __future__ import annotations
 
 import time
+from uuid import UUID
 
 import structlog
 
@@ -25,6 +26,42 @@ logger = structlog.get_logger(__name__)
 # 상위 1위 대비 이 비율 아래는 근거로 싣지 않는다. 절대값(0.05 등)은 질의마다 점수
 # 스케일이 흔들려 어떤 절은 다 통과하고 어떤 절은 다 잘린다.
 _MIN_KEEP = 3
+# 출처별 상한의 하한 — 비율이 아무리 낮아도 한 자료에서 이만큼은 연달아 쓸 수 있다.
+# 이게 없으면 캡이 작은 절(top_k가 작을 때)에서 한 자료당 1~2개로 쪼개져 맥락이 끊긴다.
+_MIN_PER_SOURCE = 3
+
+
+def _cap_per_source(ranked: list[SearchHit], cap: int) -> list[SearchHit]:
+    """한 출처가 절당 근거 슬롯을 독점하지 못하게 나눈다(순위 순서는 보존).
+
+    리랭커는 청크만 보고 자료를 모른다 - 청크가 많은 PDF 하나가 질의와 두루 비슷하면
+    상위를 통째로 차지한다. 탄소규제 런(2026-08-14) 실측: 자료 1건이 전체 인용의 28%,
+    상위 3건이 52%. 반대편에서 4청크짜리 핵심 자료(K-RE100 이행수단 6가지 조달방식)는
+    105~245청크 PDF들에 밀려 20개 절 어디에도 한 번 안 뽑혔다.
+
+    MMR(문장 중복)과는 다른 축이다 - 큰 자료의 청크들은 서로 다른 문단이라 중복
+    필터에 안 걸린다. 여기서 막아야 할 것은 '같은 말'이 아니라 '같은 출처'다.
+
+    상한에 걸려 밀린 청크는 버리지 않고 남는 슬롯에 순위대로 되채운다. 자료가 두세
+    건뿐인 프로젝트(업로드만 한 경우)에서 상한이 근거를 굶기면 그 절은 못 쓴다 -
+    다양성은 고를 게 있을 때만 사는 것이다.
+    """
+    per_source = max(_MIN_PER_SOURCE, int(cap * settings.retrieval_source_cap_ratio))
+    picked: list[int] = []
+    deferred: list[int] = []
+    used: dict[UUID, int] = {}
+    for i, hit in enumerate(ranked):
+        if len(picked) >= cap:
+            break
+        if used.get(hit.source_id, 0) >= per_source:
+            deferred.append(i)
+            continue
+        picked.append(i)
+        used[hit.source_id] = used.get(hit.source_id, 0) + 1
+    if len(picked) < cap and deferred:
+        picked.extend(deferred[: cap - len(picked)])
+    # 인덱스로 되돌려 원래 점수 순서를 유지한다(되채운 것이 뒤에 몰리지 않게).
+    return [ranked[i] for i in sorted(picked)]
 
 
 def select_relevant(ranked: list[SearchHit], cap: int) -> list[SearchHit]:
@@ -45,6 +82,9 @@ def select_relevant(ranked: list[SearchHit], cap: int) -> list[SearchHit]:
     최소 _MIN_KEEP개는 남긴다 - 1위 자체가 낮은 절(자료 수집이 비어 있는 절)에서
     근거가 0개가 되면 그 절은 아예 못 쓴다. 그건 검색이 아니라 수집 공백 문제이고,
     design_coverage가 '근거 자료에도 없음'으로 따로 알린다.
+
+    하한을 통과한 것들 중에서 캡을 채울 때는 출처별 상한(_cap_per_source)을 건다 -
+    '관련 있는 만큼만'과 '한 자료에 기대지 않기'는 다른 축이고 둘 다 필요하다.
     """
     if not ranked:
         return []
@@ -53,7 +93,7 @@ def select_relevant(ranked: list[SearchHit], cap: int) -> list[SearchHit]:
     if ranked[0].score <= 0:
         return ranked[: min(_MIN_KEEP, cap)]
     floor = ranked[0].score * settings.retrieval_score_ratio
-    kept = [h for h in ranked if h.score >= floor][:cap]
+    kept = _cap_per_source([h for h in ranked if h.score >= floor], cap)
     return kept or ranked[: min(_MIN_KEEP, cap)]
 
 
