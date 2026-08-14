@@ -227,36 +227,62 @@ async def run_write_loop(
     # 절끼리는 의존성이 없어(각자 검색→생성→게이트) 병렬이 안전하다. 상한은
     # LLM 레이트리밋 보호 — 어댑터의 429 백오프가 있지만 동시 폭주 자체를 줄인다.
     sem = asyncio.Semaphore(max(1, settings.write_section_concurrency))
+    # 시스템 장애 판별 — 성공이 하나도 없는 채 연속 실패가 이 수에 닿으면 전체를 세운다.
+    # (키·DB 전면 장애를 20절 내내 개별 실패로 갈아 넣지 않기 위한 하한)
+    consecutive_failures = 0
+
+    async def _fail_section(section: SectionPlan, exc: Exception, kind: str) -> SectionCandidateSet:
+        """절 하나를 실패로 기록하고 나머지는 계속 — 죽은 절도 행으로 남겨 화면이 안다."""
+        meta = section_meta.setdefault(section.section_id, {})
+        meta["write_failed"] = True
+        meta["fail_detail"] = f"{kind}: {exc}"
+        emit_step(
+            pid,
+            "writing",
+            f"본문 작성 · {section.chapter_number}.{section.section_number} {section.title}",
+            "failed",
+        )
+        if draft_store is not None:
+            # 실패 절도 행으로 남긴다(status=failed·빈 본문) — 미리보기가
+            # '이 절은 비었음'을 정직하게 보여주고 재작성 진입점이 된다.
+            await draft_store(state.with_section_meta(dict(section_meta)), section, None)
+        return SectionCandidateSet(section_id=section.section_id)
 
     async def _bounded(section: SectionPlan) -> SectionCandidateSet:
+        nonlocal consecutive_failures
         async with sem:
             try:
-                return await _process_section(section)
+                result = await _process_section(section)
+                consecutive_failures = 0
+                return result
             except LLMClientError as exc:
                 # 절 하나의 LLM 실패(어댑터 백오프 재시도 소진)가 나머지 절의 작업을
-                # 통째로 버리게 하지 않는다 — 절만 실패로 기록하고 계속. 취소·DB 오류
-                # 등 비-LLM 예외는 기존대로 전파해 실행 전체를 세운다.
+                # 통째로 버리게 하지 않는다 — 절만 실패로 기록하고 계속.
                 logger.error(
                     "write_loop.section_llm_error",
                     project_id=str(pid),
                     section=f"{section.chapter_number}.{section.section_number}",
                     error=str(exc),
                 )
-                meta = section_meta.setdefault(section.section_id, {})
-                meta["write_failed"] = True
-                meta["fail_detail"] = f"LLM 호출 실패: {exc}"
-                emit_step(
-                    pid,
-                    "writing",
-                    f"본문 작성 · {section.chapter_number}.{section.section_number}"
-                    f" {section.title}",
-                    "failed",
+                consecutive_failures += 1
+                return await _fail_section(section, exc, "LLM 호출 실패")
+            except cancel.RunCancelled:
+                raise
+            except Exception as exc:
+                # 비-LLM 예외(검색·리랭커·저장 등)도 절 단위로 격리한다 — 전에는 그대로
+                # 전파해 병렬 전체가 즉사했고, 트레이스백이 콘솔에만 남아 유실되면
+                # 사인 불명이 됐다(2026-08-15 실측: 2장 작성 중 전체 사망, 6절 초안 유실
+                # 위기). 단 연속 실패가 쌓이면 시스템 문제로 승격해 세운다.
+                logger.exception(
+                    "write_loop.section_error",
+                    project_id=str(pid),
+                    section=f"{section.chapter_number}.{section.section_number}",
                 )
-                if draft_store is not None:
-                    # 실패 절도 행으로 남긴다(status=failed·빈 본문) — 미리보기가
-                    # '이 절은 비었음'을 정직하게 보여주고 재작성 진입점이 된다.
-                    await draft_store(state.with_section_meta(dict(section_meta)), section, None)
-                return SectionCandidateSet(section_id=section.section_id)
+                consecutive_failures += 1
+                if consecutive_failures >= 4:
+                    # 성공 없이 4절 연속 실패 — 절 문제가 아니라 환경 문제다.
+                    raise
+                return await _fail_section(section, exc, "작성 중 오류")
 
     tasks = [asyncio.ensure_future(_bounded(s)) for s in state.section_plan]
     try:

@@ -208,6 +208,52 @@ async def _apply_source_pool_exclusions(
     return len(excluded)
 
 
+async def _normalize_resume_stage(
+    session: AsyncSession, project_id: uuid.UUID, state: ProjectState
+) -> ProjectState:
+    """죽은 런 재개 시 게이트를 건너뛰지 않게 단계를 되돌린다.
+
+    PLANNING·RESEARCHING은 '단계 실행 중'의 표시 상태이기도 하다 — plan_brief/collect
+    도중 프로세스가 죽으면(재배포·--reload·강제 종료) status가 그 값으로 남는데, 그대로
+    재개하면 advance가 "게이트 승인 완료"로 읽어 다음 단계로 건너뛴다. 실측(2026-08-15):
+    수집 도중 --reload 재시작 → 재개가 자료 검토 게이트 없이 색인→작성으로 직행, 부분
+    수집(13건)만으로 Opus 작성이 시작됐다.
+
+    판정은 결정적이다: 그 단계의 게이트가 **resolved로 존재**해야 통과한 것이다.
+    없으면 게이트를 만드는 단계로 되돌린다(이미 스테이징된 자료·plan 정본은 그대로라
+    되돌려도 수집은 제외분 빼고 부족분만 채운다).
+    """
+    checks = {
+        ProjectStage.PLANNING: (ReviewGate.DESIGN_BRIEF, ProjectStage.CREATED),
+        ProjectStage.RESEARCHING: (ReviewGate.SOURCE_POOL, ProjectStage.PLANNING),
+    }
+    gate_and_fallback = checks.get(state.current_stage)
+    if gate_and_fallback is None:
+        return state
+    gate, fallback = gate_and_fallback
+    resolved = (
+        await session.execute(
+            select(ReviewPoint.id)
+            .where(
+                ReviewPoint.project_id == project_id,
+                ReviewPoint.gate == gate.value,
+                ReviewPoint.status == "resolved",
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if resolved is not None:
+        return state
+    logger.warning(
+        "project.resume_stage_rollback",
+        project_id=str(project_id),
+        from_stage=state.current_stage.value,
+        to_stage=fallback.value,
+        missing_gate=gate.value,
+    )
+    return state.with_stage(fallback)
+
+
 def _state_from_project(project: Project) -> ProjectState:
     # projects.status는 '표시용 단계'도 담는다(Phase.running) — WRITING은 척추 단계가
     # 아니라 INDEXING 구간이 실행 중임을 뜻한다. 그대로 stage로 삼으면 매칭되는 Phase가
@@ -324,6 +370,8 @@ async def _execute(project_id: uuid.UUID) -> None:
             owner_id = project.owner_id
 
             state = _state_from_project(project)
+            # 죽은 런 재개 가드 — 게이트가 resolved로 없으면 그 단계를 다시 돈다.
+            state = await _normalize_resume_stage(session, project.id, state)
             if project.status == ProjectStage.CREATED.value:
                 # 표시용 선행 전이: 실행에 들어간 순간부터 UI가 '시작 전'으로
                 # 보이지 않게 researching으로 먼저 영속화한다. 척추 진행 판단은
@@ -359,9 +407,15 @@ async def _execute(project_id: uuid.UUID) -> None:
 
             state = await _rehydrate_section_plan(session, project.id, state)
             state = await _rehydrate_qa_selection(session, project.id, state)
-            if entered_from_created and not state.sources:
-                # 부분 실패 후 재시작: 이전 실행이 스테이징해 둔 출처를 상태로 복원 —
-                # collect가 기존 출처를 제외(중복 스테이징 방지)하고 모자란 만큼만 보충한다.
+            # 수집을 앞둔 재개(CREATED·PLANNING)면 스테이징돼 있던 출처를 상태로 복원 —
+            # collect가 기존 출처를 제외(중복 스테이징 방지)하고 모자란 만큼만 보충하며,
+            # 게이트 payload에도 업로드·기존 수집분이 함께 실린다. entered_from_created만
+            # 보던 시절엔 PLANNING 재개가 빈 상태로 수집을 돌아 목표 계산이 어긋나고
+            # 게이트가 이번 콜 수집분만 보여줬다(2026-08-15 실측: 37건 중 17건만 집계).
+            if (
+                state.current_stage in (ProjectStage.CREATED, ProjectStage.PLANNING)
+                and not state.sources
+            ):
                 rows = (
                     (
                         await session.execute(
@@ -628,10 +682,16 @@ def _source_ref_from_row(row: ProjectSource) -> SourceRef:
     meta = row.metadata_ or {}
     content_md = meta.get("content_md") or ""
     usable = has_usable_content(content_md)
+    source_type = SourceType(row.source_type)
+    # 업로드·라이브러리 자료는 본문 추출(파싱)이 색인 단계에서 일어난다 — 지금
+    # content_md가 비어도 파일이 있으므로 '쓸 수 있는 자료'다. 웹처럼 회수 실패로
+    # 치면 게이트가 "본문 있는 자료 부족"을 오경보한다(2026-08-15 실측: PDF 12건을
+    # 올렸는데 전부 본문 없음으로 집계돼 17/40 경고).
+    file_backed = source_type in (SourceType.UPLOAD, SourceType.LIBRARY)
     matched = list(meta.get("matched_sections") or [])
     return SourceRef(
         id=row.id,
-        source_type=SourceType(row.source_type),
+        source_type=source_type,
         title=row.title or row.url or "(제목 없음)",
         url=row.url,
         reliability=row.reliability,
@@ -640,7 +700,7 @@ def _source_ref_from_row(row: ProjectSource) -> SourceRef:
         preview=(relevance_excerpt(content_md, matched) or _source_preview(content_md))
         if usable
         else None,
-        has_content=usable,
+        has_content=usable or file_backed,
     )
 
 

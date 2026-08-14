@@ -414,7 +414,10 @@ async def _collect_sources(
     직접 원인이었다(2026-08-09). 겨냥할 절이 없으면 전 챕터로 되돌린다.
     """
     pid = state.project_id
-    indexer = _web_indexer_factory()
+    # 첫 호출은 BGE-M3 ONNX 로드(수 초, CPU)다 — 단일 워커 루프에서 그대로 돌리면
+    # 그동안 모든 HTTP 응답이 멈춘다(2026-08-15 실측: 승인 직후 화면이 몇 초 '버퍼링').
+    # 스레드로 내보내 로드 중에도 API가 살아 있게 한다(이후 호출은 싱글턴이라 즉시).
+    indexer = await asyncio.to_thread(_web_indexer_factory)
     refs: list[SourceRef] = []
     seen: set[str] = set(exclude_keys)
     chapters = _chapter_groups(state)
@@ -686,7 +689,8 @@ async def index(state: ProjectState) -> ProjectState:
     pid = state.project_id
     emit_phase(pid, "indexing", "started")
     emit_step(pid, "indexing", "청킹·임베딩·색인", "started")
-    indexer = _web_indexer_factory()
+    # 모델 첫 로드를 루프 밖으로 — _collect_sources와 같은 이유(단일 워커 API 생존).
+    indexer = await asyncio.to_thread(_web_indexer_factory)
     staged = await indexer.load_included(state.project_id)
     # 색인·RAPTOR는 수 분짜리 단계다 — 자료별/클러스터별 진행을 세부 단계로 발행해
     # 스테퍼가 "멈춘 것처럼" 보이지 않게 한다(2026-08-07 실사용 보고).
@@ -1007,12 +1011,44 @@ async def write(state: ProjectState) -> ProjectState:
     state = _ensure_section_plan(state)
     retrieve = _retriever_factory(state)
     emit_phase(state.project_id, "writing", "started")
-    await _sections_cleaner(state.project_id)  # 이전 런 잔재 제거(증분 초안과 혼재 방지)
+    # 증분 재개 — 이전 실행이 증분 저장해 둔 완성 절(본문 있는 행)은 건너뛴다.
+    # 죽은 런 재개가 완성 절까지 지우고 전부 다시 쓰면 그 비용이 그대로 재청구된다
+    # (2026-08-15 실측: 6절 $2어치를 지울 뻔). 건너뛴 절의 행은 assemble의
+    # overlay_working_copy가 합성 후보로 승격해 조립에 포함시킨다(기존 계약 재사용).
+    working = await _working_copy(state.project_id)
+    plan_ids = {s.section_id for s in state.section_plan}
+    done_ids = {sid for sid, row in working.items() if sid in plan_ids and row[0].strip()}
+    kept_meta: dict[UUID, dict] = {}
+    if done_ids:
+        logger.info(
+            "write.incremental_resume",
+            project_id=str(state.project_id),
+            skipped=len(done_ids),
+            total=len(state.section_plan),
+        )
+        # 보존 절의 지표(근거 추적·자료부족 배지)도 행에서 되살린다 — 안 하면 조립의
+        # 전량 교체가 그 절들의 meta를 빈 값으로 덮는다.
+        from sqlalchemy import select as _select
+
+        from src.db.models.section import Section as _Section
+        from src.db.session import async_session_maker as _asm
+
+        async with _asm() as _session:
+            rows = (
+                (await _session.execute(_select(_Section).where(_Section.id.in_(done_ids))))
+                .scalars()
+                .all()
+            )
+        kept_meta = {r.id: dict(r.meta or {}) for r in rows}
+    else:
+        await _sections_cleaner(state.project_id)  # 이전 런 잔재 제거(증분 초안과 혼재 방지)
     models = _models_for(state)
     catalog = await _analyst_catalog(state.user_id)
     rules = await _rule_texts(state.user_id, _selected_rule_ids(state))
+    remaining = [s for s in state.section_plan if s.section_id not in done_ids]
+    loop_state = state.model_copy(update={"section_plan": remaining}) if done_ids else state
     result = await run_write_loop(
-        state,
+        loop_state,
         retrieve=retrieve,
         client=_write_client,
         model=models["write"],
@@ -1021,6 +1057,14 @@ async def write(state: ProjectState) -> ProjectState:
         analyst_catalog=catalog,
         rules=rules,
     )
+    if done_ids:
+        # 전체 계획 복원 + 보존 절 meta 병합 — 이후 단계(조립·저장)는 전체 절 기준.
+        result = result.model_copy(
+            update={
+                "section_plan": state.section_plan,
+                "section_meta": {**kept_meta, **result.section_meta},
+            }
+        )
     emit_phase(state.project_id, "writing", "completed")
     return auto_select_survivors(result)
 
