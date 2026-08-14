@@ -167,6 +167,16 @@ def _significant_numbers(text: str) -> list[str]:
     return out
 
 
+def significant_numbers(text: str) -> list[str]:
+    """공개 진입점 - 근거 위치 표시(alignment)가 무근거 판정과 같은 추출을 쓰게 한다."""
+    return _significant_numbers(text)
+
+
+def normalize_number(token: str) -> str:
+    """공개 진입점 - significant_numbers와 짝. 매칭은 반드시 이 정규화를 거친다."""
+    return _normalize_number(token)
+
+
 def ungrounded_numbers(content: str, cited_content: str) -> list[str]:
     """본문에서 인용 근거에 없는 유의미한 숫자 토큰(등장 순서·중복 제거).
 
@@ -298,6 +308,9 @@ def check_numeric_grounded(draft: SectionDraft, cited_content: str) -> GateResul
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 # 본문이 아닌 줄: 제목·표·인용블록·구분선.
 _NON_CLAIM_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|\||>|[-*_]{3,}\s*$)")
+# 캡션·표 메타 줄 — "표: …"·"그림: …"·"(단위: %)"는 주장이 아니라 분모를 오염시킨다
+# (2026-08-14 실측: 미포착 수치 111건 중 34건이 캡션).
+_CAPTION_LINE_RE = re.compile(r"^\s*(?:(?:표|그림)\s*[::]|\(단위)")
 # 글머리 기호(개조식) — 판정에서 떼어내고 길이를 잰다. 'ㅇ'·'ㅁ'은 한글 자모 마커다.
 _BULLET_RE = re.compile(r"^\s*(?:[-*•‣◦○□▪ㅇㅁ]|\d+[.)]|[가-힣][.)])\s+")
 # 주장으로 볼 최소 길이 — 이보다 짧은 줄은 소제목·나열 항목이라 인용을 요구하지 않는다.
@@ -330,14 +343,13 @@ _CLAIM_TAILS: tuple[str, ...] = (
 _SENTENCE_END_RE = re.compile(r"[.!?]\s*$")
 
 
-def claim_units(content: str) -> list[str]:
-    """본문을 '주장 단위'(문장·개조식 항목)로 자른다 — 인용 여부와 무관하게 전부.
+def _candidate_units(content: str) -> list[tuple[str, str]]:
+    """주장 후보 (원문, 마커 뗀 문장) 목록 — 제목·표·펜스·짧은 나열만 거른 상태.
 
-    제목·표·구분선과 짧은 나열 항목, 명사로 끝나는 소제목은 주장이 아니라 제외한다.
-    근거 추적(services/qa/alignment)과 미인용 검사가 같은 단위를 봐야 화면의 숫자와
-    경고가 어긋나지 않는다 — 그래서 분해를 여기 하나로 둔다.
+    여기서 살아남은 뒤 종결형 검사에서 떨어지는 문장이 '검출 파이프라인에서 증발한
+    분모'다 — claim_units와 claim_coverage가 같은 후보를 봐야 커버리지가 성립한다.
     """
-    out: list[str] = []
+    out: list[tuple[str, str]] = []
     in_fence = False
     for raw_line in content.splitlines():
         line = raw_line.strip()
@@ -346,7 +358,7 @@ def claim_units(content: str) -> list[str]:
             # 주장으로 세면 근거 없는 주장 경고가 헛돈다.
             in_fence = not in_fence
             continue
-        if in_fence or not line or _NON_CLAIM_LINE_RE.match(line):
+        if in_fence or not line or _NON_CLAIM_LINE_RE.match(line) or _CAPTION_LINE_RE.match(line):
             continue
         body = _BULLET_RE.sub("", line)
         for unit in _SENTENCE_SPLIT_RE.split(body):
@@ -357,10 +369,57 @@ def claim_units(content: str) -> list[str]:
             bare = MARK_RE.sub("", unit).strip()
             if len(bare) < _MIN_CLAIM_CHARS:
                 continue
-            if not _SENTENCE_END_RE.search(bare) and not bare.endswith(_CLAIM_TAILS):
-                continue  # 명사로 끝나면 소제목 — 인용을 요구하지 않는다
-            out.append(unit)
+            out.append((unit, bare))
     return out
+
+
+# 문장 끝의 짧은 보조 괄호 — "…나타남(복수응답)"·"…됨(’23년 기준)"이 꼬리 검사를
+# 비켜가지 않게 벗기고 다시 본다.
+_TRAILING_PAREN_RE = re.compile(r"\([^()]{1,30}\)$")
+_HANGUL_RE = re.compile(r"[가-힣]")
+
+
+def _is_claim(bare: str) -> bool:
+    if _SENTENCE_END_RE.search(bare) or bare.endswith(_CLAIM_TAILS):
+        return True
+    stripped = _TRAILING_PAREN_RE.sub("", bare).rstrip()
+    if stripped != bare and (_SENTENCE_END_RE.search(stripped) or stripped.endswith(_CLAIM_TAILS)):
+        return True
+    # 유의미 수치를 실은 한글 문장은 꼬리와 무관하게 주장이다 — 개조식 명사 종결("…약
+    # 2.5배 수준"·"…로 측정"·"…에 그침")이 모든 검사에서 증발하던 77건(2026-08-14
+    # 실측)의 구조적 마감. 연도·연월은 유의미 수치에서 이미 빠져 있어 헤딩 오탐이 없고,
+    # 한글 조건은 '영문 줄은 주장이 아니다' 계약(test_alignment 교차언어 원칙)을 지킨다.
+    return bool(_HANGUL_RE.search(bare)) and bool(_significant_numbers(bare))
+
+
+def claim_units(content: str) -> list[str]:
+    """본문을 '주장 단위'(문장·개조식 항목)로 자른다 — 인용 여부와 무관하게 전부.
+
+    제목·표·구분선과 짧은 나열 항목, 명사로 끝나는 소제목은 주장이 아니라 제외한다.
+    근거 추적(services/qa/alignment)과 미인용 검사가 같은 단위를 봐야 화면의 숫자와
+    경고가 어긋나지 않는다 — 그래서 분해를 여기 하나로 둔다.
+    """
+    return [unit for unit, bare in _candidate_units(content) if _is_claim(bare)]
+
+
+def claim_coverage(content: str) -> tuple[int, int, list[str]]:
+    """(픽업 주장 수, 후보 문장 수, 미포착 중 수치 포함 문장) — 분모를 드러내는 지표.
+
+    claim_units가 못 집은 문장은 근거 대조·무근거·산술 검사 전부에서 증발하는데,
+    그 손실은 정밀도·재현율 어디에도 안 나타난다(지표는 들어온 문장에 대해서만
+    계산된다). '남' 꼬리 누락으로 산술 결함이 통째로 안 보이던 실사고(2026-08-14)의
+    재발 방지 — 미포착 수치 문장 목록이 곧 다음 보수 대상이다.
+    """
+    picked = 0
+    total = 0
+    missed_numeric: list[str] = []
+    for _unit, bare in _candidate_units(content):
+        total += 1
+        if _is_claim(bare):
+            picked += 1
+        elif _significant_numbers(bare):
+            missed_numeric.append(bare[:60])
+    return picked, total, missed_numeric
 
 
 def uncited_units(content: str) -> list[str]:

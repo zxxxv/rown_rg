@@ -23,6 +23,8 @@ from src.services.qa.gate import (
     check_renderable,
     check_structure_complete,
     check_uncited_claims,
+    claim_coverage,
+    claim_units,
     gate_candidates,
     leftover_artifacts,
     run_section_gate,
@@ -479,6 +481,46 @@ class TestLeftoversAndTruncation:
             "| 지표 | 값 3 |\n"
         )
         assert truncated_lines(content) == []
+
+
+class TestClaimCoverage:
+    """커버리지는 검출 지표의 분모다 - claim_units가 못 집은 문장은 모든 검사에서
+    증발하는데 그 손실은 정밀도·재현율 어디에도 안 나타난다('남' 실사고, 2026-08-14).
+    """
+
+    def test_josa_nominal_endings_picked(self):
+        # 코퍼스 실측 꼬리들 - 수치를 실은 개조식 명사 종결은 전부 주장으로 집혀야 한다.
+        endings = [
+            "ㅇ 국내 참여 기업의 복수 수단 병행 비율은 중견기업 1.1%에 그침",
+            "ㅇ 한국의 유효탄소가격은 29.9EUR/tCO2로 미국의 약 2.5배 수준",
+            "ㅇ 대응 수준은 자가진단 문항 12개로 구성된 자기평가 척도로 측정",
+            "ㅇ 수출 실적 100만 달러 이상 제조기업을 핵심 모집단으로 설정",
+            "ㅇ 재생에너지 조달 시장은 연 4,500억원 안팎의 규모를 형성",
+        ]
+        for line in endings:
+            assert claim_units(line) != [], line
+
+    def test_trailing_paren_stripped_before_tail_check(self):
+        line = "ㅇ 자가발전 선호가 규모와 무관하게 가장 높게 나타남(복수응답)"
+        assert claim_units(line) != []
+
+    def test_caption_and_unit_lines_not_candidates(self):
+        content = (
+            "표: 국내 제조 수출기업의 기업 규모별 RE100 이행수단 이용 현황\n"
+            "그림: 연도별 참여 기업 수 추이(2020~2023)\n"
+            "(단위: %, ’23년 기준 - 무응답 제외 표본 610개사)\n"
+        )
+        picked, total, missed = claim_coverage(content)
+        assert total == 0 and picked == 0 and missed == []
+
+    def test_coverage_counts_and_missed_numeric(self):
+        content = (
+            "ㅇ 참여 기업 수는 전년 대비 21개사 증가한 것으로 집계됐음\n"  # 픽업
+            "ㅇ 향후 정책 방향에 대한 종합적 검토와 제도 개선 논의\n"  # 명사 종결·무수치 - 미픽업
+        )
+        picked, total, missed = claim_coverage(content)
+        assert (picked, total) == (1, 2)
+        assert missed == []  # 수치=주장 규칙이 있는 한 미포착 수치는 구조적으로 0
 
 
 class TestArithmeticSuspects:

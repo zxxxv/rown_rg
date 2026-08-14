@@ -32,7 +32,12 @@ from src.services.qa.cross_section import (
 )
 from src.services.qa.design_coverage import coverage_terms, judge_covered
 from src.services.qa.design_coverage import findings_for_section as coverage_findings
-from src.services.qa.gate import arithmetic_suspects, leftover_artifacts, truncated_lines
+from src.services.qa.gate import (
+    arithmetic_suspects,
+    claim_coverage,
+    leftover_artifacts,
+    truncated_lines,
+)
 from src.services.sections.evidence import marker_chunk_ids
 
 logger = structlog.get_logger(__name__)
@@ -372,7 +377,15 @@ async def evidence_findings(
     use_llm = settings.claim_verify_enabled if verify is None else verify
     out: list[dict[str, Any]] = []
     n_verified = 0
+    # 문장 커버리지 — 검출 지표의 분모. claim_units가 못 집은 문장은 모든 검사에서
+    # 증발하고 그 손실은 어떤 지표에도 안 나타난다('남' 꼬리 실사고, 2026-08-14).
+    # 미포착 수치 문장은 구조 규칙상 0이어야 한다 — 0이 아니면 회귀다.
+    cov_picked, cov_total, cov_missed = 0, 0, []
     for row in rows:
+        p, t, missed = claim_coverage(row.content or "")
+        cov_picked += p
+        cov_total += t
+        cov_missed.extend(f"{row.chapter_number}.{row.section_number}: {m}" for m in missed)
         claims, comparable = claims_for_section(row, chunk_texts, renumbered=renumbered)
         supported: set[int] = set()
         refuted: set[int] = set()
@@ -418,7 +431,14 @@ async def evidence_findings(
         )
     )
     logger.info(
-        "evidence_findings.done", project_id=str(project_id), n=len(out), verified=n_verified
+        "evidence_findings.done",
+        project_id=str(project_id),
+        n=len(out),
+        verified=n_verified,
+        claim_coverage=round(cov_picked / cov_total, 3) if cov_total else None,
+        n_claim_candidates=cov_total,
+        missed_numeric=len(cov_missed),
+        missed_numeric_samples=cov_missed[:5],
     )
     return out
 
