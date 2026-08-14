@@ -168,9 +168,15 @@ class ProjectState(BaseModel):
         sources: list[SourceRef] | None = None,
         section_plan: list[SectionPlan] | None = None,
     ) -> Self:
+        """DB row에서 ProjectState 복원.
+
+        section_plan을 안 넘기면 config의 정본(``_section_plan``)에서 되살린다 —
+        plan 복원 경로가 여기 하나로 모이므로 호출부마다 게이트 payload를 뒤지거나
+        목차 위치 대응으로 재구성할 필요가 없다(core.section_plan 참조).
         """
-        DB row에서 ProjectState 복원
-        """
+        from src.core.section_plan import plan_from_config
+
+        config = project_row.get("config", {})
         return cls(
             project_id=project_row["id"],
             user_id=project_row["owner_id"],
@@ -180,22 +186,26 @@ class ProjectState(BaseModel):
             title=project_row.get("title") or "",
             preset=project_row["preset"],
             depth_mode=project_row.get("depth_mode") or "full_report",
-            options=project_row.get("config", {}),
+            options=config,
             current_stage=ProjectStage(project_row["status"]),
             sources=sources or [],
-            section_plan=section_plan or [],
+            section_plan=section_plan or plan_from_config(config),
         )
 
     def to_project_row(self) -> dict:
+        """projects 테이블 INSERT/UPDATE용 dict.
+
+        config에는 section_plan 정본을 함께 싣는다 — from_db가 거기서 되살리므로
+        둘이 어긋나면 복원이 조용히 옛 plan을 집는다.
         """
-        projects 테이블 INSERT/UPDATE용 dict
-        """
+        from src.core.section_plan import config_with_plan
+
         return {
             "id": self.project_id,
             "owner_id": self.user_id,
             "topic": self.topic,
             "preset": self.preset,
-            "config": self.options,
+            "config": config_with_plan(self.options, self.section_plan),
             "status": self.current_stage.value,
             "updated_at": self.updated_at,
         }

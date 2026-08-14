@@ -18,6 +18,7 @@ import structlog
 from src.clients.llm.base import LLMClient
 from src.clients.llm.exceptions import LLMClientError
 from src.core.config import settings
+from src.core.section_plan import dump_section_plan, load_section_plan
 from src.core.state import ProjectState
 from src.core.types import (
     CheckSeverity,
@@ -250,44 +251,18 @@ async def run_write_loop(
 
 
 def section_plan_payload(plan: Sequence[SectionPlan]) -> list[dict[str, object]]:
-    """게이트 payload용 section_plan 직렬화 — SOURCE_POOL·QA_SELECT 게이트가 공유.
+    """게이트 payload용 section_plan 직렬화 — 화면 표시용(SOURCE_POOL·QA_SELECT 공유).
 
-    plan은 projects 테이블에 없어 resume 시 게이트 payload가 유일한 복원원이다.
-    플래너 산출물(direction·key_points·analysts)도 함께 실어야 SOURCE_POOL 게이트
-    resume 후의 write 단계에서 WriterContext 주입이 살아남는다.
+    복원의 진실은 이제 projects.config["_section_plan"]이다(core.section_plan). 게이트
+    payload는 사람이 그 시점에 본 것을 남기는 감사 이력이자 구버전 복원 폴백이라
+    같은 모양을 유지한다.
     """
-    return [
-        {
-            "section_id": str(s.section_id),
-            "chapter_number": s.chapter_number,
-            "section_number": s.section_number,
-            "title": s.title,
-            "direction": s.direction,
-            "key_points": list(s.key_points),
-            "analysts": list(s.analysts),
-        }
-        for s in plan
-    ]
+    return list(dump_section_plan(plan))
 
 
 def plan_from_payload(payload: dict[str, Any]) -> list[SectionPlan]:
-    """게이트 payload에서 section_plan 복원 (section_plan_payload의 역변환).
-
-    direction 등 플래너 산출물 필드는 구버전 payload(필드 없음)와의 호환을 위해
-    .get 기본값으로 읽는다 — 없으면 자유 주제와 동일하게 동작한다.
-    """
-    return [
-        SectionPlan(
-            section_id=UUID(s["section_id"]),
-            chapter_number=s["chapter_number"],
-            section_number=s["section_number"],
-            title=s["title"],
-            direction=s.get("direction", ""),
-            key_points=list(s.get("key_points", [])),
-            analysts=list(s.get("analysts", [])),
-        )
-        for s in payload.get("section_plan", [])
-    ]
+    """게이트 payload에서 section_plan 복원 — config 정본이 없는 옛 런의 폴백."""
+    return load_section_plan(payload.get("section_plan", []))
 
 
 def qa_select_payload(state: ProjectState) -> dict[str, object]:

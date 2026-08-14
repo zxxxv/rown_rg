@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.clock import now as clock_now
 from src.core.config import settings
+from src.core.section_plan import config_with_plan
 from src.core.state import ProjectState
 from src.core.types import ProjectStage, ReviewGate, SourceRef, SourceType
 from src.db.models.project import Project
@@ -152,11 +153,11 @@ def _state_from_project(project: Project) -> ProjectState:
 async def _rehydrate_section_plan(
     session: AsyncSession, project_id: uuid.UUID, state: ProjectState
 ) -> ProjectState:
-    """resume 시 SOURCE_POOL review payload에서 section_plan을 되살린다.
+    """구버전 폴백 — SOURCE_POOL review payload에서 section_plan을 되살린다.
 
-    plan은 projects 테이블에 없어 게이트 payload가 유일한 복원원이다. 확정 게이트 이후
-    구간(RESEARCHING→index, INDEXING→write)에서 재개될 때 복원하며, 이미 plan이 있거나
-    해당 구간이 아니면 그대로 둔다(멱등).
+    정본은 projects.config["_section_plan"]이고 _state_from_project가 이미 읽는다.
+    이 경로는 그 필드가 생기기 전에 시작돼 지금 재개되는 런에만 걸린다 — state에 plan이
+    있으면(정본이 있었다는 뜻) 즉시 반환하므로 새 런에는 쿼리조차 안 나간다.
     """
     # REVIEWING 포함: QA 게이트 제거 후 조립 중 크래시 복구는 sections 행+plan으로
     # 재구성한다(_rehydrate_qa_selection의 overlay가 행을 후보로 승격).
@@ -285,6 +286,11 @@ async def _execute(project_id: uuid.UUID) -> None:
                     state = state.add_sources([_source_ref_from_row(r) for r in rows])
             outcome = await advance(state, on_stage=_persist_running_stage)
             project.status = outcome.state.current_stage.value
+            # section_plan 정본을 config에 남긴다 — 이걸로 다음 구간이 게이트 payload를
+            # 뒤지지 않고 그대로 이어받는다. **재할당이어야 한다**: JSONB를 in-place로
+            # 고치면 SQLAlchemy가 dirty로 안 잡아 커밋해도 안 써진다(config_with_plan이
+            # 항상 새 dict를 돌려주는 이유).
+            project.config = config_with_plan(project.config, outcome.state.section_plan)
 
             if isinstance(outcome, Paused):
                 # 게이트 대기 진입 — pending review_point 영속화(재시작 복구·감사 이력)
