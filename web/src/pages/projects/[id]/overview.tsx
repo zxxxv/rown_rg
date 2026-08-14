@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  ClipboardList,
   Download,
   FileSearch,
   PieChart,
@@ -58,6 +59,7 @@ import { ReportWorkspace } from "@/pages/projects/[id]/preview";
 
 const STATUS_LABEL: Record<ProjectStatus, string> = {
   created: "생성됨",
+  planning: "설계 검토",
   researching: "자료 수집",
   indexing: "인덱싱",
   writing: "작성 중",
@@ -67,8 +69,17 @@ const STATUS_LABEL: Record<ProjectStatus, string> = {
   cancelled: "취소됨",
 };
 
+// 게이트별 결정 화면과 CTA 문구. 백엔드 runner._GATE_PAGES와 같은 대응이다.
+// qa_select는 레거시 - 게이트 제거 전 백엔드로 작성돼 아직 pending인 프로젝트만 온다.
+const GATE_CTA: Record<string, { page: string; label: string }> = {
+  design_brief: { page: "brief", label: "설계 검토 완료하러 가기" },
+  source_pool: { page: "sources", label: "자료 검토 완료하러 가기" },
+  qa_select: { page: "preview", label: "본문 검토 완료하러 가기" },
+};
+
 const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
   created: "tertiary",
+  planning: "warning",
   researching: "info",
   indexing: "info",
   writing: "info",
@@ -305,7 +316,11 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
           {/* 완료 요약 카드는 제거 - 본문이 같은 화면에 인라인이라 '보고서 열기'
               타일이 자기 자신을 가리켰다(2026-08-09 사용자 지적). 숫자는 헤더 타일과
               PM 경고 배너가 이미 보여준다. */}
-          <QuickActions project={project} onNavigate={navigate} />
+          <QuickActions
+            project={project}
+            pendingGate={usageQuery.data?.pending_gate ?? null}
+            onNavigate={navigate}
+          />
 
           <Accordion type="single" collapsible>
             <AccordionItem value="config" className="rounded-lg border border-border bg-bg">
@@ -488,14 +503,11 @@ function PrimaryAction({
   // 누르면 게이트를 건너뛰고 미확정 자료로 본문이 작성되던 버그(2026-08-12)가 있어,
   // 백엔드도 GATE_PENDING(422)으로 막는다. 재개 버튼은 숨기고 검토 화면 CTA만 노출.
   if (pendingGate) {
-    const legacyQa = pendingGate.gate === "qa_select";
+    const { page, label } = GATE_CTA[pendingGate.gate] ?? GATE_CTA.source_pool;
     return (
-      <Button
-        size="lg"
-        onClick={() => navigate(`/projects/${project.id}/${legacyQa ? "preview" : "sources"}`)}
-      >
+      <Button size="lg" onClick={() => navigate(`/projects/${project.id}/${page}`)}>
         <FileSearch className="mr-1 h-4 w-4" />
-        {legacyQa ? "본문 검토 완료하러 가기" : "자료 검토 완료하러 가기"}
+        {label}
       </Button>
     );
   }
@@ -569,25 +581,67 @@ function QuickAction({
   );
 }
 
+// 단계 도달 판정용 순서 - 카드가 자기 단계 전에는 비활성(빈 화면으로 보내지 않기).
+// cancelled는 어디까지 갔는지 화면에서 모른다 - 갔던 데이터가 남아 있을 수 있어 열어 둔다.
+const STAGE_ORDER = [
+  "created",
+  "planning",
+  "researching",
+  "indexing",
+  "writing",
+  "reviewing",
+  "completed",
+  "archived",
+];
+
+function stageReached(status: string, stage: string): boolean {
+  if (status === "cancelled") return true;
+  return STAGE_ORDER.indexOf(status) >= STAGE_ORDER.indexOf(stage);
+}
+
 function QuickActions({
   project,
+  pendingGate,
   onNavigate,
 }: {
   project: Project;
+  pendingGate: { gate: string } | null;
   onNavigate: (to: string) => void;
 }) {
   {
     /* '모순 해결' 카드는 페이지(reconcile)와 함께 제거됨(2026-08-04) -
        문서 횡단 검증은 PM 검증(verify_findings)이 실물로 수행한다. */
   }
+  // 한번 연 단계는 계속 열려 있다(사후 열람) - 아직 안 간 단계만 잠근다.
+  const briefReached = stageReached(project.status, "planning");
+  const sourcesReached = stageReached(project.status, "researching");
   return (
     <section>
-      {/* 카드가 하나뿐이라 2열 그리드는 오른쪽 절반을 비운다 - 폭을 다 쓴다. */}
-      <div className="grid grid-cols-1 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <QuickAction
+          icon={ClipboardList}
+          title="설계 검토"
+          description={
+            briefReached ? "수집 전 절별 계획·검색 질의·예상 비용 확인" : "실행을 시작하면 열립니다"
+          }
+          disabled={!briefReached}
+          badge={
+            pendingGate?.gate === "design_brief"
+              ? { text: "결정 필요", tone: "warning" }
+              : undefined
+          }
+          onClick={() => onNavigate(`/projects/${project.id}/brief`)}
+        />
         <QuickAction
           icon={FileSearch}
           title="자료 검토"
-          description="채택할 자료를 선택하고 추가 업로드"
+          description={
+            sourcesReached ? "채택할 자료를 선택하고 추가 업로드" : "설계를 확정하면 열립니다"
+          }
+          disabled={!sourcesReached}
+          badge={
+            pendingGate?.gate === "source_pool" ? { text: "결정 필요", tone: "warning" } : undefined
+          }
           onClick={() => onNavigate(`/projects/${project.id}/sources`)}
         />
         {/* '보고서 미리보기·편집' 카드도 제거 - 본문이 이 페이지 아래에 인라인이라

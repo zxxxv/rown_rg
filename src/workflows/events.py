@@ -31,7 +31,10 @@ STEP_STATUSES = ("started", "completed", "failed")
 PHASE_STATUSES = ("started", "completed")
 
 # 백엔드 게이트(ReviewGate) → 프론트 checkpoint.level(1|2). 그 외는 2로.
-_GATE_LEVEL = {"source_pool": 1, "qa_select": 2}
+# level은 **순서가 아니라 거친 분류**다(프론트 zod가 1|2 리터럴 union이라 3은 파싱 실패).
+# 1 = 작성 전 준비 단계 결정(설계·자료), 2 = 본문이 생긴 뒤의 결정. 그래서 design_brief를
+# 앞에 넣어도 source_pool을 2로 밀 필요가 없다.
+_GATE_LEVEL = {"design_brief": 1, "source_pool": 1, "qa_select": 2}
 
 
 def gate_level(gate: str) -> int:

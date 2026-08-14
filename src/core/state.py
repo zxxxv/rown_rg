@@ -43,6 +43,11 @@ class ProjectState(BaseModel):
     section_plan: list[SectionPlan] = Field(default_factory=list)  # 섹션별 계획
     completed_section_ids: list[UUID] = Field(default_factory=list)  # 작성 완료 섹션 ID
 
+    # 설계 브리프(게이트 payload) — plan_brief 단계가 만든다. 게이트 함수는 순수라
+    # DB(개인 에이전트 카탈로그)를 못 보므로, async 단계가 여기 실어 나른다.
+    # 영속화 대상 아님(to_project_row에 없음) — 게이트 payload로 review_points에 남는다.
+    design_brief: dict | None = None
+
     # 절별 생성 지표 — section_id → {evidence_count, volume_scaled, ...}. sections.meta로
     # 영속화돼 화면이 '자료 부족' 배지를 띄운다(본문에 메타 서술을 넣지 않기 위한 통로).
     section_meta: dict[UUID, dict] = Field(default_factory=dict)

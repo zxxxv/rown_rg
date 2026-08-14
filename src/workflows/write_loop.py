@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
@@ -57,6 +58,25 @@ RETRY_TEMPERATURE = 1.0
 DraftStore = Callable[[ProjectState, SectionPlan, SectionDraft | None], Awaitable[None]]
 
 
+def design_plan_note(state: ProjectState, section: SectionPlan) -> str:
+    """이 절의 승인된 실행 계획 → 작성 guidance 블록. 없으면 빈 문자열.
+
+    출처는 config["_design_plan"](설계 브리프 게이트에서 사람이 보고 승인한 계획).
+    runner._commit_design_plan이 커밋하고, 목차가 바뀌면 함께 버려진다(어긋남 방지).
+    """
+    raw = state.options.get("_design_plan") if isinstance(state.options, dict) else None
+    if not isinstance(raw, dict):
+        return ""
+    note = raw.get(str(section.section_id))
+    if not isinstance(note, dict):
+        return ""
+    labels = (("goal", "목표"), ("source_strategy", "자료 활용"), ("writing_plan", "구성"))
+    lines = [f"- {label}: {note[key]}" for key, label in labels if str(note.get(key) or "").strip()]
+    if not lines:
+        return ""
+    return "설계 검토에서 승인된 이 절의 실행 계획:\n" + "\n".join(lines)
+
+
 async def run_write_loop(
     state: ProjectState,
     *,
@@ -91,6 +111,11 @@ async def run_write_loop(
         label = f"본문 작성 · {section.chapter_number}.{section.section_number} {section.title}"
         emit_step(pid, "writing", label, "started")
         ctx = build_writer_context(section, analyst_catalog, rules)
+        note = design_plan_note(state, section)
+        if note:
+            # 설계 검토에서 승인된 실행 계획 — 게이트가 보여준 계획대로 쓰게 하는 계약.
+            # 이 주입이 없으면 계획은 화면 장식이고 작성기는 계획을 본 적 없는 채로 쓴다.
+            ctx = replace(ctx, guidance="\n\n".join(x for x in (ctx.guidance, note) if x))
         chunks = await retrieve(section)
         # 재료가 목표에 못 미치면 목표를 내린다 — 검색 뒤라야 실제 근거 수를 안다.
         n_evidence = sum(1 for c in chunks if not c.is_summary)

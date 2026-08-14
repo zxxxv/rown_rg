@@ -81,10 +81,11 @@ export interface ProgressSnapshot {
 const PHASE_ORDER: PhaseName[] = ["research", "indexing", "writing", "qa", "export"];
 
 /** 러너 태스크가 살아 있어야 정상인 작업 단계 - 게이트 대기는 pending_gate로 구분 */
-const ACTIVE_WORK_STATUSES = ["researching", "indexing", "writing", "reviewing"];
+const ACTIVE_WORK_STATUSES = ["planning", "researching", "indexing", "writing", "reviewing"];
 
 const STATUS_TO_PHASE: Record<string, PhaseName> = {
   created: "research",
+  planning: "research",
   researching: "research",
   indexing: "indexing",
   writing: "writing",

@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 // 작업 화면으로 가는 버튼이 붙는다. 본문 검토(QA) 게이트는 제거됨(2026-08-07) -
 // 작성이 끝나면 곧장 조립·검증되고, 검토·편집은 보고서 화면에서 사후에 한다.
 const STEPS = [
+  { key: "brief", label: "설계 검토 · 확정" },
   { key: "collect", label: "자료 수집" },
   { key: "review", label: "자료 검토 · 확정" },
   { key: "index", label: "색인 (임베딩)" },
@@ -50,34 +51,42 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
   let actionLabel: string | undefined;
   let actionTo: string | undefined;
 
-  if (gate === "source_pool") {
-    current = 1;
+  if (gate === "design_brief") {
+    current = 0;
+    currentPhase = "action";
+    actionLabel = "설계 검토로 이동";
+    actionTo = `/projects/${projectId}/brief`;
+  } else if (gate === "source_pool") {
+    current = 2;
     currentPhase = "action";
     actionLabel = "자료 검토로 이동";
     actionTo = `/projects/${projectId}/sources`;
   } else if (gate === "qa_select") {
     // 레거시 - 게이트 제거 전 백엔드로 작성돼 아직 pending인 프로젝트만 도달한다.
-    current = 4;
+    current = 5;
     currentPhase = "action";
     actionLabel = "본문 검토로 이동";
     actionTo = `/projects/${projectId}/preview`;
   } else {
     switch (status) {
-      case "researching":
+      case "planning":
         current = 0;
         break;
-      case "indexing":
-        current = 2;
+      case "researching":
+        current = 1;
         break;
-      case "writing":
+      case "indexing":
         current = 3;
         break;
-      case "reviewing":
+      case "writing":
         current = 4;
+        break;
+      case "reviewing":
+        current = 5;
         break;
       case "completed":
       case "archived":
-        current = 6; // 전부 완료
+        current = 7; // 전부 완료
         break;
       default: // created·cancelled - 아직 진입 전(취소는 카드 하단에 별도 표기)
         current = -1;
@@ -151,7 +160,7 @@ export function PipelineStepper({ projectId, snapshot, stalled = false }: Pipeli
   const navigate = useNavigate();
   const steps = deriveSteps(projectId, snapshot);
   const status = snapshot?.status ?? "created";
-  const isActive = ["researching", "indexing", "writing", "reviewing"].includes(status);
+  const isActive = ["planning", "researching", "indexing", "writing", "reviewing"].includes(status);
   const cancelled = status === "cancelled";
 
   const cancel = useCancelProject();

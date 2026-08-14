@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.clock import now as clock_now
 from src.core.config import settings
-from src.core.section_plan import config_with_plan
+from src.core.section_plan import SECTION_PLAN_KEY, config_with_plan
 from src.core.state import ProjectState
 from src.core.types import ProjectStage, ReviewGate, SourceRef, SourceType
 from src.db.models.project import Project
@@ -83,7 +83,96 @@ async def _notify_safe(
 
 
 # 게이트 → 결정 UI가 있는 화면. 자료 검토는 /sources, 본문 검토(QA)는 /preview에 통합됐다.
-_GATE_PAGES = {"source_pool": "sources", "qa_select": "preview"}
+_GATE_PAGES = {"design_brief": "brief", "source_pool": "sources", "qa_select": "preview"}
+
+
+async def _apply_design_brief(
+    session: AsyncSession, project_id: uuid.UUID, decision: dict[str, Any]
+) -> bool:
+    """브리프 게이트 결정의 목차를 config.outline에 커밋. 바뀐 게 없으면 False.
+
+    ⚠️ JSONB를 in-place로 고치면 SQLAlchemy가 dirty로 표시하지 않아 커밋해도 안 써진다.
+    반드시 새 dict를 만들어 재할당한다(config_with_plan이 같은 이유로 새 dict를 준다).
+
+    plan 정본은 함께 버린다 — 목차가 바뀌었는데 남겨 두면 collect가 '이미 plan이 있다'고
+    보고 옛 목차로 실행한다(merge_config_update의 규칙과 같다).
+    """
+    outline = decision.get("outline")
+    if not isinstance(outline, dict) or not outline.get("chapters"):
+        return False
+    project = await session.get(Project, project_id)
+    if project is None:
+        return False
+    config = dict(project.config or {})
+    if config.get("outline") == outline:
+        return False
+    config["outline"] = outline
+    # 목차가 바뀌면 파생 스냅샷은 전부 버린다 — plan 정본도, 절별 실행 계획도
+    # 옛 목차 기준이라 남겨 두면 새 목차와 어긋난 채 실행된다.
+    config.pop(SECTION_PLAN_KEY, None)
+    config.pop("_design_plan", None)
+    project.config = config
+    logger.info("design_brief.outline_updated", project_id=str(project_id))
+    return True
+
+
+# 계획 필드 하나의 상한 — 사람 편집이 열려 있으므로 폭주 입력을 프롬프트에 싣지 않는다.
+_PLAN_FIELD_MAX_CHARS = 2000
+
+
+async def _commit_design_plan(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    payload: dict[str, Any] | None,
+    decision: dict[str, Any] | None = None,
+) -> None:
+    """승인된 AI 실행 계획을 config["_design_plan"]에 커밋 — 작성 프롬프트 주입용.
+
+    계획을 커밋하지 않으면 게이트가 보여준 계획은 안내문일 뿐이고 작성기는 그 계획을
+    본 적 없는 채로 쓴다 — '공개한 대로 쓴다'가 성립하려면 계획이 계약이 되어야 한다.
+    section_id 매핑은 config의 plan 정본(_section_plan)을 쓴다. 게이트에서 목차를
+    고친 경우엔 호출하지 않는다(계획이 옛 목차 기준이라 주입하면 어긋난다).
+
+    **사람이 게이트에서 고친 계획(decision["ai_plan"])이 AI 원안(payload)보다 우선한다**
+    — 계획은 제안이고 확정은 사람 몫이라는 게이트 원칙 그대로. 원안은 payload에,
+    수정본은 review.decision에 남아 무엇이 바뀌었는지 감사 이력도 유지된다.
+    """
+    from src.core.section_plan import plan_from_config
+
+    override = (decision or {}).get("ai_plan")
+    ai = (
+        override
+        if isinstance(override, dict) and isinstance(override.get("sections"), list)
+        else (payload or {}).get("ai_plan")
+    )
+    sections = ai.get("sections") if isinstance(ai, dict) else None
+    if not isinstance(sections, list) or not sections:
+        return
+    project = await session.get(Project, project_id)
+    if project is None:
+        return
+    by_num = {
+        (p.chapter_number, p.section_number): str(p.section_id)
+        for p in plan_from_config(project.config)
+    }
+    notes: dict[str, dict[str, str]] = {}
+    for s in sections:
+        if not isinstance(s, dict):
+            continue
+        sid = by_num.get((s.get("chapter"), s.get("section")))
+        if sid is None:
+            continue
+        note = {
+            key: str(s.get(key) or "").strip()[:_PLAN_FIELD_MAX_CHARS]
+            for key in ("goal", "source_strategy", "writing_plan")
+        }
+        if any(note.values()):
+            notes[sid] = note
+    if not notes:
+        return
+    # JSONB 재할당 필수 — in-place 수정은 SQLAlchemy가 dirty로 안 잡는다.
+    project.config = {**(project.config or {}), "_design_plan": notes}
+    logger.info("design_brief.plan_committed", project_id=str(project_id), n_sections=len(notes))
 
 
 def _parse_uuid_list(raw: Any) -> list[uuid.UUID]:
@@ -241,7 +330,7 @@ async def _execute(project_id: uuid.UUID) -> None:
                 # 위에서 이미 만든 in-memory state(CREATED) 기준이라 단계를
                 # 건너뛰지 않는다(엔드포인트 상태 선점 사고와 다른 지점).
                 entered_from_created = True
-                project.status = ProjectStage.RESEARCHING.value
+                project.status = ProjectStage.PLANNING.value
                 # 실행 시점 역할별 모델 스냅샷 — 모드→모델 매핑은 코드가 진실이라
                 # 배포로 바뀌면 과거 런의 표시가 함께 바뀐다(2026-08-14 고급 수집
                 # Haiku 환원 때 옛 Sonnet 수집 런이 'Haiku 수집'으로 둔갑).
@@ -505,12 +594,27 @@ async def resume_run(project_id: uuid.UUID, decision: dict[str, Any]) -> None:
         review.decision = decision
         review.resolved_at = clock_now()
         gate = review.gate
+        # 설계 브리프 확정: 사람이 고친 목차를 config.outline에 커밋한다. plan 정본은
+        # 함께 버려서 collect가 새 목차로 다시 뽑게 한다 — 결정을 payload 복원에 기대지
+        # 않으므로 재개 경로가 하나로 모인다.
+        if gate == ReviewGate.DESIGN_BRIEF.value:
+            outline_changed = await _apply_design_brief(session, project_id, decision)
+            if decision.get("action") != "replan" and not outline_changed:
+                # 그대로 승인 — 게이트가 보여준 AI 실행 계획(사람 수정본 우선)을 작성
+                # 계약으로 커밋. 목차를 고친 채 곧장 진행하면 계획이 옛 목차 기준이라
+                # 커밋하지 않는다(재계산 라운드를 돌면 새 계획이 커밋된다).
+                await _commit_design_plan(session, project_id, review.payload, decision)
         # 자료 풀 확정: 사람이 제외한 출처를 같은 커밋에서 is_included=false로 반영한다.
         if gate == ReviewGate.SOURCE_POOL.value:
             n_excluded = await _apply_source_pool_exclusions(session, project_id, decision)
             if n_excluded:
                 logger.info("source_pool.pruned", project_id=str(project_id), excluded=n_excluded)
         await session.commit()
+    if gate == ReviewGate.DESIGN_BRIEF.value and decision.get("action") == "replan":
+        # 고친 목차로 브리프를 다시 계산해 게이트를 다시 연다 — 수집으로 안 간다.
+        # '추가 조사'와 같은 라운드 패턴: 사람이 누를 때마다 1회(무한성 캡은 사람 손에).
+        _spawn_replan(project_id)
+        return
     if gate == ReviewGate.SOURCE_POOL.value and decision.get("action") == "collect_more":
         _spawn_collect_more(project_id)
         return
@@ -543,6 +647,58 @@ def _source_ref_from_row(row: ProjectSource) -> SourceRef:
 def _spawn_collect_more(project_id: uuid.UUID) -> bool:
     """보충 수집 라운드를 중복 가드 + 전역 슬롯 하에 spawn."""
     return _spawn_limited(project_id, lambda: _collect_more(project_id), clear_cancel_on_exit=False)
+
+
+def _spawn_replan(project_id: uuid.UUID) -> bool:
+    """설계 브리프 재계산 라운드를 중복 가드 + 전역 슬롯 하에 spawn."""
+    return _spawn_limited(project_id, lambda: _replan(project_id), clear_cancel_on_exit=False)
+
+
+async def _replan(project_id: uuid.UUID) -> None:
+    """DESIGN_BRIEF '재계산' — 고친 목차로 브리프·AI 계획을 다시 만들어 게이트 재개방.
+
+    척추를 전진시키지 않는다(수집 안 함). _apply_design_brief가 이미 config.outline을
+    갱신하고 plan 정본을 버렸으므로, plan_brief가 새 목차에서 plan과 브리프를 다시
+    만든다. 새 게이트가 열리면 사람이 다시 보고 확정한다.
+    """
+    from src.workflows.pipeline import _design_brief_gate
+    from src.workflows.stages import plan_brief
+
+    owner_id: uuid.UUID | None = None
+    try:
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                logger.warning("project.missing", project_id=str(project_id))
+                return
+            owner_id = project.owner_id
+            state = _state_from_project(project)
+        state = await plan_brief(state)
+        review = _design_brief_gate(state)
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                return
+            # 새 plan 정본 영속화 — 재할당 필수(JSONB in-place는 dirty로 안 잡힌다).
+            project.config = config_with_plan(project.config, state.section_plan)
+            session.add(
+                ReviewPoint(
+                    id=review.id,
+                    project_id=project_id,
+                    gate=review.gate.value,
+                    payload=review.payload,
+                    status="pending",
+                    created_at=review.created_at,
+                )
+            )
+            await session.commit()
+        emit_checkpoint(project_id, str(review.id), gate_level(review.gate.value))
+        if owner_id is not None:
+            await _notify_safe(owner_id, project_id, "partial", page="brief")
+    except Exception:
+        logger.exception("design_brief.replan_failed", project_id=str(project_id))
+        if owner_id is not None:
+            await _notify_safe(owner_id, project_id, "failed", page="brief")
 
 
 async def _collect_more(project_id: uuid.UUID) -> None:

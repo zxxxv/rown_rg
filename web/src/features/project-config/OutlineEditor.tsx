@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, ChevronUp, Copy, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useAnalysts } from "@/api/analysts";
 import type { PresetChapterDetail, PresetDetail } from "@/api/presets";
 import type { Outline } from "@/api/types";
@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { PromptDialog } from "@/features/prompts/PromptDialog";
 import { cn } from "@/lib/utils";
 import { PromptPreviewDialog } from "./PromptPreviewDialog";
+import { duplicatedSectionKeys, duplicateQueryGroups, effectiveSearchQuery } from "./searchPreview";
 
 // ─── 목차 편집기(순수) - 장·절·에이전트 배정을 value/onChange로 편집한다 ───
 // 프로젝트 생성 폼(OutlineDesigner)과 내 프리셋 관리가 같은 편집기를 쓴다.
@@ -135,8 +136,35 @@ export function OutlineEditor({
       return next;
     });
 
+  // 같은 질의를 쓰는 절 - 짜는 동안 바로 알려준다. 실행 후 브리프 게이트에서도 다시
+  // 확인하지만, 그때는 이미 만들고 난 뒤다.
+  const duplicates = useMemo(() => duplicateQueryGroups(chapters), [chapters]);
+  const duplicatedKeys = useMemo(() => duplicatedSectionKeys(duplicates), [duplicates]);
+
   return (
     <div className="flex flex-col gap-4">
+      {duplicates.length > 0 ? (
+        <div className="flex flex-col gap-2 rounded border border-border-danger bg-bg-danger-subtle p-3">
+          <p className="text-xs font-medium text-fg-danger">
+            검색 질의가 겹치는 절이 있습니다 - 이 절들은 같은 자료를 인용하게 됩니다
+          </p>
+          <p className="text-[11px] text-fg-secondary">
+            검색은 질의가 같으면 결과도 같습니다. 장 제목을 서로 다르게 적거나 절 제목에 대상을
+            넣으면 갈라집니다.
+          </p>
+          <ul className="flex flex-col gap-1">
+            {duplicates.map((group) => (
+              <li key={group.query} className="text-[11px]">
+                <code className="font-mono text-fg">{group.query}</code>
+                <span className="text-fg-secondary">
+                  {" "}
+                  - {group.sections.map((s) => s.label).join(" · ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-accent/40 bg-bg-info p-3">
         <p className="text-xs text-fg-secondary">{headerInfo}</p>
         <div className="flex gap-1.5">
@@ -171,6 +199,7 @@ export function OutlineEditor({
           count={chapters.length}
           expanded={expandedIds.has(chapter._id)}
           previewRules={previewRules}
+          duplicatedKeys={duplicatedKeys}
           onToggle={() => toggleChapter(chapter._id)}
           onChange={(next) => onChange(chapters.map((c, i) => (i === ci ? next : c)))}
           onMove={(delta) => onChange(move(chapters, ci, delta))}
@@ -212,6 +241,7 @@ function ChapterEditor({
   count,
   expanded,
   previewRules,
+  duplicatedKeys,
   onToggle,
   onChange,
   onMove,
@@ -223,6 +253,8 @@ function ChapterEditor({
   count: number;
   expanded: boolean;
   previewRules: string[];
+  /** 중복 질의에 걸린 절 좌표("ci:si") - 해당 절만 표시를 바꾼다 */
+  duplicatedKeys: Set<string>;
   onToggle: () => void;
   onChange: (next: DraftChapter) => void;
   onMove: (delta: -1 | 1) => void;
@@ -253,7 +285,7 @@ function ChapterEditor({
         </span>
         <Input
           value={chapter.title}
-          placeholder="장 제목 - 자료 수집은 장 단위로 한 번씩 돕니다 (예: 사업 개요)"
+          placeholder="장 제목 - 자료 수집 단위이자 아래 절들의 검색 질의에 함께 들어갑니다"
           onChange={(e) => onChange({ ...chapter, title: e.target.value })}
           className="h-8"
         />
@@ -290,6 +322,8 @@ function ChapterEditor({
               index={si}
               count={chapter.sections.length}
               previewRules={previewRules}
+              chapterTitle={chapter.title}
+              duplicated={duplicatedKeys.has(`${index}:${si}`)}
               onChange={(next) =>
                 onChange({
                   ...chapter,
@@ -327,6 +361,8 @@ function SectionEditor({
   index,
   count,
   previewRules,
+  chapterTitle,
+  duplicated,
   onChange,
   onMove,
   onRemove,
@@ -336,11 +372,16 @@ function SectionEditor({
   index: number;
   count: number;
   previewRules: string[];
+  /** 이 절이 속한 장 제목 - 검색 질의 미리보기에 결합된다 */
+  chapterTitle: string;
+  /** 다른 절과 질의가 겹치는가 - 겹치면 미리보기를 경고색으로 */
+  duplicated: boolean;
   onChange: (next: DraftSection) => void;
   onMove: (delta: -1 | 1) => void;
   onRemove: () => void;
 }) {
   const [previewing, setPreviewing] = useState(false);
+  const query = effectiveSearchQuery(chapterTitle, section.title);
   return (
     <div className="flex flex-col gap-2 rounded border border-border bg-bg-secondary p-3">
       <div className="flex items-center gap-2">
@@ -349,7 +390,7 @@ function SectionEditor({
         </span>
         <Input
           value={section.title}
-          placeholder="절 제목 - 목차·헤딩에 그대로 쓰이고 검색 질의가 됩니다"
+          placeholder="절 제목 - 목차·헤딩에 그대로 실립니다"
           onChange={(e) => onChange({ ...section, title: e.target.value })}
           className="h-8 bg-bg"
         />
@@ -361,10 +402,19 @@ function SectionEditor({
           label={`${chapterIndex + 1}.${index + 1}절`}
         />
       </div>
-      <p className="pl-8 text-[11px] text-fg-tertiary">
-        절 제목은 목차와 본문 헤딩에 그대로 쓰이고 자료 검색의 1차 질의가 됩니다.
-      </p>
-      <Field hint="작성 방향은 이 절이 무엇을 논증해야 하는지 한 줄로 적는 칸이고, 검색 질의와 작성 지시에 함께 실립니다.">
+      {/* 이 절이 실제로 무엇으로 검색되는지 - 장 제목이 함께 들어간다는 사실을
+          설명문으로 말하는 대신 결과를 보여준다. 확정 값은 실행 후 설계 검토 화면이
+          서버에서 계산해 다시 보여준다. */}
+      {query ? (
+        <p className="pl-8 text-[11px] text-fg-tertiary">
+          검색:{" "}
+          <code className={cn("font-mono", duplicated ? "text-fg-danger" : "text-fg-secondary")}>
+            {query}
+          </code>
+          {duplicated ? <span className="text-fg-danger"> - 다른 절과 겹칩니다</span> : null}
+        </p>
+      ) : null}
+      <Field hint="작성 방향 - 이 절이 무엇을 논증해야 하는지 한 줄로">
         <Input
           value={section.direction}
           placeholder="예: 관련 법령과 상위 계획에 비춘 국고 지원의 당위성 논증"
@@ -372,7 +422,7 @@ function SectionEditor({
           className="h-8 bg-bg text-sm"
         />
       </Field>
-      <Field hint="핵심 포인트는 반드시 다룰 항목을 줄마다 하나씩 적는 칸이고, 작성 체크리스트이자 검색 어휘로 쓰입니다.">
+      <Field hint="핵심 포인트 - 반드시 다룰 항목을 줄마다 하나씩(작성 체크리스트 겸 검색 어휘)">
         <Textarea
           value={section.key_points.join("\n")}
           placeholder={"예: 관련 법률\n상위 계획 연계\n국고 지원 필요성"}

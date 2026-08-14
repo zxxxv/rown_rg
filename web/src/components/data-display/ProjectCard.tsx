@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<ProjectStatus, string> = {
   created: "생성됨",
+  planning: "설계 검토",
   researching: "자료 수집",
   indexing: "인덱싱",
   writing: "작성 중",
@@ -18,6 +19,7 @@ const STATUS_LABEL: Record<ProjectStatus, string> = {
 
 const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
   created: "tertiary",
+  planning: "warning",
   researching: "info",
   indexing: "info",
   writing: "info",
@@ -31,6 +33,7 @@ const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
 // (실백엔드) 상태에서 유도한다. 완료·보관은 100%.
 const STATUS_PERCENT: Record<ProjectStatus, number> = {
   created: 0,
+  planning: 5,
   researching: 20,
   indexing: 40,
   writing: 60,

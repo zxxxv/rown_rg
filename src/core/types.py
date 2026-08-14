@@ -30,6 +30,7 @@ class ProjectStage(StrEnum):
     """
 
     CREATED = "created"  # 생성 직후, 작업 시작 전
+    PLANNING = "planning"  # 설계 브리프 작성·검토 (수집 전)
     RESEARCHING = "researching"  # 자료 검색·수집
     INDEXING = "indexing"  # 청킹·임베딩, 벡터 인덱스 구축
     WRITING = "writing"  # 섹션별 초안 작성
@@ -54,6 +55,7 @@ class ReviewGate(StrEnum):
     사용자 검토 게이트
     """
 
+    DESIGN_BRIEF = "design_brief"  # 설계 브리프 확정 (수집 전 — 검색 질의·중복 확인)
     SOURCE_POOL = "source_pool"  # 자료 풀 확정
     CONTRADICTION = "contradiction"  # 모순 해결
     LEVEL_1 = "level_1"  # 전체 요약

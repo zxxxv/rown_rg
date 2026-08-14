@@ -29,7 +29,7 @@ from src.core.types import (
 from src.services.indexing.vector import IndexingResult
 from src.services.indexing.web import StagedWebSource
 from src.services.research import CollectedSource, ResearchResult, ResearchSpec
-from src.workflows.pipeline import Done, Paused, advance
+from src.workflows.pipeline import Done, Outcome, Paused, advance
 from src.workflows.write_loop import apply_selection, qa_select_payload, rehydrate_from_payload
 
 
@@ -80,6 +80,17 @@ def fake_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
         # 인메모리 척추 검증 — DB 작업 사본 없음(편집 안 함과 동일).
         return {}
 
+    # AI 실행 계획도 실LLM 없이 — 항상 유효한 최소 JSON을 주는 스텁(빈 계획은
+    # _validate가 None으로 만들므로, 게이트 폴백까지 함께 검증하려면 별도 스텁 사용).
+    monkeypatch.setattr(
+        "src.workflows.stages._brief_client",
+        _StubClient(
+            '{"chapters":[{"chapter":1,"goal":"현황 정리"}],'
+            '"sections":[{"chapter":1,"section":1,"goal":"개요 제시",'
+            '"source_strategy":"정부 통계","writing_plan":"현황→시사점"}],'
+            '"flows":[],"orphans":[],"query_splits":[]}'
+        ),
+    )
     monkeypatch.setattr("src.workflows.stages._exporter", _export)
     monkeypatch.setattr("src.workflows.stages._section_store", _no_store)
     monkeypatch.setattr("src.workflows.stages._draft_store", _no_draft_store)
@@ -214,10 +225,120 @@ def _state_at_indexing() -> ProjectState:
     )
 
 
+# 장 제목이 있는 확정 목차 — 브리프 게이트 검증의 기본 입력(플래너 LLM 생략 경로).
+_OUTLINE_CFG = {
+    "outline": {
+        "chapters": [
+            {"title": "글로벌 RE100", "sections": [{"title": "개요"}]},
+            {"title": "EU CBAM", "sections": [{"title": "개요"}]},
+        ]
+    }
+}
+
+
+async def _past_brief(state: ProjectState) -> Outcome:
+    """설계 브리프 게이트를 통과시킨 뒤 다음 게이트까지 전진.
+
+    브리프는 수집 **전** 게이트라 CREATED에서 출발하면 반드시 한 번 멈춘다.
+    """
+    brief = await advance(state)
+    assert isinstance(brief, Paused)
+    assert brief.review.gate is ReviewGate.DESIGN_BRIEF
+    return await advance(brief.state.resolve_review(brief.review))
+
+
+class TestPausesAtDesignBrief:
+    """수집 전 설계 확인 — 무엇이 검색될지 사람이 먼저 본다(2026-08-14)."""
+
+    async def test_first_gate_is_design_brief(self):
+        outcome = await advance(ProjectState(user_id=uuid4(), topic="주제", options=_OUTLINE_CFG))
+        assert isinstance(outcome, Paused)
+        assert outcome.review.gate is ReviewGate.DESIGN_BRIEF
+        # 게이트보다 stage가 먼저 전이한다 — 재개 시 CREATED가 다시 매칭되면 무한 재개방.
+        assert outcome.state.current_stage is ProjectStage.PLANNING
+
+    async def test_brief_shows_the_query_that_will_run(self):
+        outcome = await advance(ProjectState(user_id=uuid4(), topic="주제", options=_OUTLINE_CFG))
+        assert isinstance(outcome, Paused)
+        sections = outcome.review.payload["sections"]
+        # 장 제목이 질의에 결합돼 장마다 다른 질의가 된다(탄소규제 런의 실패 지점).
+        assert sections[0]["search_query"] == "글로벌 RE100 개요"
+        assert sections[1]["search_query"] == "EU CBAM 개요"
+
+    async def test_duplicate_queries_are_flagged(self):
+        """장 제목이 없으면 같은 절 제목이 같은 질의가 된다 — 그 사실을 수집 전에 알린다."""
+        outcome = await advance(
+            ProjectState(
+                user_id=uuid4(),
+                topic="주제",
+                options={
+                    "outline": {
+                        "chapters": [
+                            {"title": "", "sections": [{"title": "개요"}]},
+                            {"title": "", "sections": [{"title": "개요"}]},
+                        ]
+                    }
+                },
+            )
+        )
+        assert isinstance(outcome, Paused)
+        assert outcome.review.payload["warnings"]["duplicate_query_sections"] == 2
+        groups = outcome.review.payload["duplicate_queries"]
+        assert [s["label"] for s in groups[0]["sections"]] == ["1.1 개요", "2.1 개요"]
+
+    async def test_brief_carries_ai_plan_and_estimate(self):
+        """AI 실행 계획(스텁)과 규모 추정이 게이트 payload에 실린다."""
+        outcome = await advance(ProjectState(user_id=uuid4(), topic="주제", options=_OUTLINE_CFG))
+        assert isinstance(outcome, Paused)
+        plan = outcome.review.payload["ai_plan"]
+        assert plan["sections"][0]["goal"] == "개요 제시"
+        est = outcome.review.payload["estimate"]
+        assert est["n_sections"] == 2
+        assert est["cost_usd_max"] > est["cost_usd_min"] > 0
+        # 분량 폴백(배정 없는 절 2개 × 게이트 기본 경계)
+        assert est["total_min_chars"] == 400
+        assert est["total_max_chars"] == 8000
+
+    async def test_ai_plan_failure_does_not_block_gate(self, monkeypatch: pytest.MonkeyPatch):
+        """LLM이 쓰레기를 돌려줘도 게이트는 결정적 브리프로 뜬다(ai_plan=None)."""
+        monkeypatch.setattr("src.workflows.stages._brief_client", _StubClient("JSON이 아닌 응답"))
+        outcome = await advance(ProjectState(user_id=uuid4(), topic="주제", options=_OUTLINE_CFG))
+        assert isinstance(outcome, Paused)
+        assert outcome.review.gate is ReviewGate.DESIGN_BRIEF
+        assert outcome.review.payload["ai_plan"] is None
+        assert outcome.review.payload["sections"]  # 결정적 내용은 그대로
+
+    async def test_brief_shows_the_collection_query(self):
+        """수집 질의도 실행과 같은 함수로 보여준다 — 주제문이 일하는 유일한 자리."""
+        outcome = await advance(
+            ProjectState(user_id=uuid4(), topic="글로벌 탄소규제 동향", options=_OUTLINE_CFG)
+        )
+        assert isinstance(outcome, Paused)
+        chapters = outcome.review.payload["chapters"]
+        assert [c["collection_query"] for c in chapters] == [
+            "글로벌 탄소규제 동향 — 글로벌 RE100",
+            "글로벌 탄소규제 동향 — EU CBAM",
+        ]
+        assert chapters[0]["section_titles"] == ["개요"]
+
+    async def test_no_duplicates_when_chapters_differ(self):
+        outcome = await advance(ProjectState(user_id=uuid4(), topic="주제", options=_OUTLINE_CFG))
+        assert isinstance(outcome, Paused)
+        assert outcome.review.payload["warnings"]["duplicate_query_sections"] == 0
+        assert outcome.review.payload["duplicate_queries"] == []
+
+    async def test_collection_has_not_started_yet(self, fake_research: _FakeResearchService):
+        """브리프는 수집 전이다 — 여기서 멈추면 검색 콜이 한 번도 안 나가야 한다."""
+        outcome = await advance(ProjectState(user_id=uuid4(), topic="주제", options=_OUTLINE_CFG))
+        assert isinstance(outcome, Paused)
+        assert fake_research.specs == []
+        assert outcome.state.sources == []
+
+
 class TestResearchPausesAtSourcePool:
     async def test_collect_plans_and_stages_before_gate(self, fake_research: _FakeResearchService):
         state = ProjectState(user_id=uuid4(), topic="인구 고령화 대응")  # CREATED
-        outcome = await advance(state)
+        outcome = await _past_brief(state)
 
         assert isinstance(outcome, Paused)
         assert outcome.review.gate is ReviewGate.SOURCE_POOL
@@ -257,7 +378,7 @@ class TestResearchPausesAtSourcePool:
         monkeypatch.setattr("src.workflows.stages._research_service_factory", lambda: service)
         monkeypatch.setattr("src.workflows.stages._web_indexer_factory", lambda: _FakeIndexer())
 
-        outcome = await advance(ProjectState(user_id=uuid4(), topic="인구 고령화 대응"))
+        outcome = await _past_brief(ProjectState(user_id=uuid4(), topic="인구 고령화 대응"))
         assert isinstance(outcome, Paused)
         assert outcome.review.gate is ReviewGate.SOURCE_POOL
         # 1장(첫 콜) 실패에도 2장 자료(본문 있는 1건)로 게이트가 열린다
@@ -275,11 +396,11 @@ class TestResearchPausesAtSourcePool:
         monkeypatch.setattr("src.workflows.stages._web_indexer_factory", lambda: _FakeIndexer())
 
         with pytest.raises(LLMAPIError):
-            await advance(ProjectState(user_id=uuid4(), topic="인구 고령화 대응"))
+            await _past_brief(ProjectState(user_id=uuid4(), topic="인구 고령화 대응"))
 
     async def test_gate_payload_carries_source_signals(self, fake_research: _FakeResearchService):
         """자료 확정 게이트 payload에 사람이 취사선택할 신호가 실려 나온다."""
-        outcome = await advance(ProjectState(user_id=uuid4(), topic="인구 고령화 대응"))
+        outcome = await _past_brief(ProjectState(user_id=uuid4(), topic="인구 고령화 대응"))
         assert isinstance(outcome, Paused)
         by_url = {s["url"]: s for s in outcome.review.payload["sources"]}
 
@@ -325,8 +446,8 @@ class TestFullPipelineChain:
         fake_write: RetrievedChunk,
         fake_export: list[Path],
     ):
-        # 1) research → SOURCE_POOL 정지
-        paused_sources = await advance(ProjectState(user_id=uuid4(), topic="주제"))
+        # 1) 설계 브리프 → research → SOURCE_POOL 정지
+        paused_sources = await _past_brief(ProjectState(user_id=uuid4(), topic="주제"))
         assert isinstance(paused_sources, Paused)
         assert paused_sources.review.gate is ReviewGate.SOURCE_POOL
 

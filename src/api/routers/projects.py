@@ -9,6 +9,7 @@ from zipfile import BadZipFile
 import structlog
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -680,6 +681,54 @@ async def _active_seconds(session: AsyncSession, project_id: UUID) -> int:
         if 0 <= gap <= _IDLE_GAP_SECONDS:
             total += gap
     return int(total)
+
+
+class DesignBriefRead(BaseModel):
+    """설계 브리프 기록 — 게이트가 닫힌 뒤에도 '무엇을 승인했는가'를 볼 수 있어야 한다.
+
+    payload=AI 원안(게이트가 보여준 것), decision=사람의 결정(수정본 포함). 커밋된
+    작성 계약은 decision의 ai_plan이 payload보다 우선한다(runner._commit_design_plan).
+    """
+
+    status: str  # pending | resolved
+    payload: dict[str, Any]
+    decision: dict[str, Any] | None
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+@router.get("/{project_id}/design-brief", response_model=DesignBriefRead)
+async def get_design_brief(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> DesignBriefRead:
+    """최신 설계 브리프(대기 중이든 확정이든) — 확정 후 사후 열람용.
+
+    승인하고 나면 게이트 payload는 progress에서 사라지는데, 브리프 화면이 그때
+    빈 화면이 되면 '내가 무엇을 승인했는지'를 다시 볼 길이 없다(2026-08-15 지적).
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = (
+        await session.execute(
+            select(ReviewPoint)
+            .where(
+                ReviewPoint.project_id == project.id,
+                ReviewPoint.gate == ReviewGate.DESIGN_BRIEF.value,
+            )
+            .order_by(ReviewPoint.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise NotFoundError(message="설계 브리프가 아직 없습니다", code="DESIGN_BRIEF_NOT_FOUND")
+    return DesignBriefRead(
+        status=row.status,
+        payload=row.payload or {},
+        decision=row.decision,
+        created_at=row.created_at,
+        resolved_at=row.resolved_at,
+    )
 
 
 @router.get("/{project_id}/progress", response_model=ProgressResponse)
@@ -1512,7 +1561,14 @@ async def decide_gate(
     await check_user_quota(project.owner_id)
     # 결정값으로 척추 재개 — 백그라운드. 게이트 다음 단계부터 이어서 진행된다.
     await resume_run(project.id, data.decision)
-    return RunResponse(project_id=str(project.id), status=ProjectStage.RESEARCHING)
+    # 재계산 라운드는 전진하지 않고 같은 게이트가 다시 열린다 — 응답 status도 그대로.
+    replanning = (
+        pending["gate"] == ReviewGate.DESIGN_BRIEF.value and data.decision.get("action") == "replan"
+    )
+    return RunResponse(
+        project_id=str(project.id),
+        status=ProjectStage.PLANNING if replanning else ProjectStage.RESEARCHING,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1629,7 +1685,13 @@ async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID
 
 # config 안에서 폼이 건드리지 않는 내부 키 - 옵션 전체 교체 때 살려 둔다.
 # models = 런 시작 시점 역할별 모델 스냅샷(러너 기록) - 표시 라벨의 진실.
-_INTERNAL_CONFIG_KEYS = ("cancelled_from", "verify_resolved", "models", SECTION_PLAN_KEY)
+_INTERNAL_CONFIG_KEYS = (
+    "cancelled_from",
+    "verify_resolved",
+    "models",
+    SECTION_PLAN_KEY,
+    "_design_plan",
+)
 
 
 def merge_config_update(current: dict[str, Any] | None, incoming: dict[str, Any]) -> dict[str, Any]:
@@ -1643,6 +1705,7 @@ def merge_config_update(current: dict[str, Any] | None, incoming: dict[str, Any]
     keep = {k: v for k, v in (current or {}).items() if k in _INTERNAL_CONFIG_KEYS}
     if incoming.get("outline") != (current or {}).get("outline"):
         keep.pop(SECTION_PLAN_KEY, None)
+        keep.pop("_design_plan", None)
     return {**incoming, **keep}
 
 

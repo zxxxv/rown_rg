@@ -564,6 +564,64 @@ def source_dedup_key(url: str | None, title: str | None) -> str:
     return (url or title or "").strip().lower()
 
 
+async def plan_brief(state: ProjectState) -> ProjectState:
+    """설계 브리프 단계 — 목차를 실행 계획(section_plan)으로 확정한다. **수집 전**.
+
+    LLM을 쓰지 않는다. 사용자가 확정한 목차를 그대로 옮기고, 브리프가 보여줄 검색
+    질의는 검색기와 같은 함수로 계산한다 — 이 게이트가 보여줄 것은 '우리가 실제로 할
+    일'이지 그것에 대한 LLM의 서술이 아니다. 화면과 실행이 갈라지면 게이트는 안심시키는
+    장식이 된다(services/generation/design_brief 참조).
+
+    진행 이벤트는 'research' 단계의 세부 스텝으로 낸다 — 프론트 phase는 고정 enum이라
+    새 이름을 넣으면 메시지 파싱이 깨진다(ws-messages.ts). 게이트 화면 분기는 phase가
+    아니라 pending_gate.gate 문자열이 한다.
+    """
+    pid = state.project_id
+    emit_phase(pid, "research", "started")
+    emit_step(pid, "research", "설계 브리프 작성", "started")
+    if not state.section_plan:
+        outline = state.options.get("outline") if isinstance(state.options, dict) else None
+        if outline:
+            # 사용자가 생성 화면에서 확정한 목차 — LLM 생략, 본 그대로 실행된다.
+            state = state.with_section_plan(plan_from_outline(outline))
+        else:
+            state = state.with_section_plan(
+                await plan_sections(
+                    state.topic,
+                    state.preset or "blank",
+                    model=_models_for(state)["planner"],
+                    client=_plan_client,
+                    user_id=state.user_id,
+                    project_id=state.project_id,
+                )
+            )
+    # 분량 목표는 개인 에이전트까지 해석해야 실제 작성과 같은 값이 나온다 — 카탈로그
+    # 없이 만들면 개인 에이전트 절이 전부 '목표 없음'으로 보이는 거짓 화면이 된다.
+    from src.services.generation.brief_ai import generate_ai_plan
+    from src.services.generation.design_brief import build_design_brief
+
+    catalog = await _analyst_catalog(state.user_id)
+    mode = state.options.get("model_mode") if isinstance(state.options, dict) else None
+    brief = build_design_brief(
+        state.section_plan, topic=state.topic, catalog=catalog, model_mode=mode
+    )
+    emit_step(pid, "research", "설계 브리프 작성", "completed")
+    # AI 실행 계획 — 절별 목표·자료 전략·작성 구성 + 절 간 흐름(LLM 1콜, 제안 전용).
+    # 실패해도 게이트는 결정적 브리프만으로 뜬다(계획이 게이트를 막으면 안 된다).
+    emit_step(pid, "research", "AI 실행 계획", "started")
+    ai_plan = await generate_ai_plan(
+        brief,
+        model=_models_for(state)["planner"],
+        user_id=state.user_id,
+        project_id=state.project_id,
+        client=_brief_client,
+    )
+    brief["ai_plan"] = ai_plan
+    emit_step(pid, "research", "AI 실행 계획", "completed" if ai_plan else "failed")
+    state = state.model_copy(update={"design_brief": brief})
+    return state
+
+
 async def collect(state: ProjectState) -> ProjectState:
     """목차 확인 → 챕터 단위 웹 수집 → 출처 스테이징(원문 저장). SOURCE_POOL 게이트 직전까지.
 
@@ -908,6 +966,8 @@ async def _default_pm_verifier(state: ProjectState) -> int:
 
 # 주입 지점 — 테스트는 이 전역들을 fake로 교체한다.
 _plan_client: LLMClient | None = None
+# AI 실행 계획(설계 브리프) 전용 주입 지점 — None이면 brief_ai가 기본 클라이언트 생성.
+_brief_client: LLMClient | None = None
 _research_service_factory: Callable[[], WebResearchService] = WebResearchService
 _web_indexer_factory: Callable[[], WebSourceIndexer] = build_web_source_indexer
 _raptor_builder_factory: Callable[[], RaptorBuilder] = build_raptor_builder

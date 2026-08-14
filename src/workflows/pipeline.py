@@ -20,8 +20,9 @@ from dataclasses import dataclass
 from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import ProjectStage, ReviewGate, UserReviewPoint
+from src.services.generation.design_brief import build_design_brief
 from src.workflows import cancel
-from src.workflows.stages import assemble, collect, index, write
+from src.workflows.stages import assemble, collect, index, plan_brief, write
 from src.workflows.write_loop import section_plan_payload
 
 
@@ -43,6 +44,22 @@ class Done:
 
 
 Outcome = Paused | Done
+
+
+def _design_brief_gate(state: ProjectState) -> UserReviewPoint:
+    """수집 전 설계 확인 게이트 — 절별 검색 질의·분량·배정을 사람이 보고 고친다.
+
+    payload에 plan을 실을 필요가 없다. 결정은 config.outline에 커밋되고 plan 정본은
+    config["_section_plan"]에 있어서, 재개는 그 둘만 보면 된다(core.section_plan).
+
+    브리프 본체는 plan_brief 단계가 만든다(개인 에이전트 카탈로그가 DB라 async 필요).
+    여기 폴백은 그 단계가 브리프를 못 실었을 때의 최소 보장 — 분량 목표만 파일
+    카탈로그 기준으로 좁아진다.
+    """
+    return UserReviewPoint(
+        gate=ReviewGate.DESIGN_BRIEF,
+        payload=state.design_brief or build_design_brief(state.section_plan, topic=state.topic),
+    )
 
 
 def _source_pool_gate(state: ProjectState) -> UserReviewPoint:
@@ -102,8 +119,19 @@ class Phase:
 # 검토 화면이 완성 후 편집·재작성을 다 하므로, 검토는 사후·게이트는 무의미했다.
 # write가 생존 후보를 자동 채택하고 곧장 조립한다(레거시 pending 게이트는 runner가 소화).
 PHASES: list[Phase] = [
+    # 설계 브리프는 '수집 전' 게이트지만 pre-gate가 아니다 — advance_to로 PLANNING에
+    # 먼저 전이한 뒤 멈춘다. 그래야 재개할 때 when==CREATED가 다시 매칭되지 않는다
+    # (stage 자체가 '이 게이트는 지났다'는 마커다). pre_gate로 만들면 그 마커가 없어
+    # 게이트가 무한 재개방되고, 막으려면 순수한 척추가 review_points를 조회해야 한다.
     Phase(
         ProjectStage.CREATED,
+        plan_brief,
+        ProjectStage.PLANNING,
+        running=ProjectStage.PLANNING,
+        gate=_design_brief_gate,
+    ),
+    Phase(
+        ProjectStage.PLANNING,
         collect,
         ProjectStage.RESEARCHING,
         running=ProjectStage.RESEARCHING,
