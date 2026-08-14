@@ -578,6 +578,30 @@ class TestReportBlocks:
         body_end = blocks.index(Heading(level=1, text=REFERENCES_HEADING))
         assert not any(isinstance(b, Paragraph) and "출처 1" in b.text for b in blocks[:body_end])
 
+    def test_table_source_label_variant_becomes_bibliography(self):
+        """작성기의 라벨 변형("* 출처: (출처 n, m)")도 실서지로 변환된다.
+
+        규약은 (출처 n) 단독 줄이지만 실제 출력엔 라벨·불릿이 붙었다(2026-08-15 실측).
+        안 받으면 변환이 통째로 빠지고 마커만 걷힌 빈 '출처:' 껍데기가 표 밑에 남는다.
+        """
+        sources = [
+            SourceRef(
+                id=uuid4(), source_type=SourceType.WEB_SEARCH, title="정부 통계", url="https://x"
+            ),
+            SourceRef(id=uuid4(), source_type=SourceType.UPLOAD, title="실태 조사", url=None),
+        ]
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="현황")]
+        body = "표: 국가별 현황\n| 국가 | 값 |\n|---|---|\n| 미국 | 1 |\n\n* 출처: (출처 1, 2)\n"
+        blocks = report_blocks(_state("표 출처 변형", plan, [body], sources))
+        table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] != "약어")
+        assert table.source == "출처: 정부 통계; 실태 조사"
+        # 라벨 껍데기("* 출처:")가 본문 문단으로 남지 않는다.
+        body_end = blocks.index(Heading(level=1, text=REFERENCES_HEADING))
+        assert not any(
+            isinstance(b, Paragraph) and b.text.strip().startswith(("출처", "* 출처"))
+            for b in blocks[:body_end]
+        )
+
     def test_year_quote_normalized(self):
         """연도 어깨점 혼용(‘24·`24)은 오른쪽 홑따옴표(’24)로 정규화된다."""
         plan = [SectionPlan(chapter_number=1, section_number=1, title="연혁")]
