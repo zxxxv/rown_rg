@@ -72,6 +72,22 @@ class TestSuspiciousIndices:
         ]
         assert suspicious_indices(claims) == [1, 3]
 
+    def test_numeric_drift_in_aligned_claim_enters_funnel(self):
+        # 퍼널 계약(2026-08-14): critical 채널 재현율 = 퍼널 x claim_verify인데,
+        # '맥락은 근거와 잘 맞고 수치 하나만 어긋난' 문장은 aligned로 분류되기 좋은
+        # 모양이라 or c.ungrounded 항이 없으면 판정기에 도달 자체를 못 한다.
+        # ClaimAlignment 합성이 아니라 content 수준으로 고정한다(상류 선별이 분모를
+        # 깎는 실패가 커버리지·claim_units에 이어 세 번째로 의심된 자리).
+        from src.services.qa.alignment import align_section
+
+        cid = uuid4()
+        chunk = "국내 생산 능력은 42.7% 확대된 것으로 조사됐고, 관련 설비 투자도 함께 늘었다.\n"
+        drifted = "국내 생산 능력은 61.9% 확대된 것으로 조사됐으며 관련 설비 투자도 함께 늘었음 [1]"
+        claims = align_section(drifted, {cid: chunk}, {1: [cid]})
+        assert claims[0].status == "aligned"  # 맥락 겹침은 높다 - 그래도
+        assert "61.9%" in claims[0].ungrounded
+        assert suspicious_indices(claims) == [0]  # 퍼널에 들어간다
+
 
 class TestFindingsWithVerdicts:
     def _row(self):
