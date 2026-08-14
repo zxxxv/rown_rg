@@ -105,7 +105,7 @@ from src.services.user_presets import (
     update_user_preset,
 )
 from src.workflows import cancel
-from src.workflows.events import emit_error, last_event_at, last_step
+from src.workflows.events import active_steps, emit_error, last_event_at, last_step
 from src.workflows.runner import get_pending_gate, is_running, queue_status, resume_run, start_run
 
 # 단계 기반 근사 진행률 — 섹션 단위 세밀화는 추후 진행 이벤트로
@@ -763,6 +763,7 @@ async def get_progress(
         last_activity_at=usage[3],
         queue_position=(queue_status(project.id) or {}).get("position"),
         active_step=_active_step_label(project.status, project.id),
+        active_steps=_active_step_labels(project.status, project.id),
         active_seconds=active_seconds,
         source_target=settings.research_min_sources,
         runner_alive=is_running(project.id),
@@ -778,6 +779,17 @@ def _active_step_label(status: str, project_id: UUID) -> str | None:
     if event is None or event.get("status") != "started":
         return None
     return str(event.get("step") or "") or None
+
+
+def _active_step_labels(status: str, project_id: UUID) -> list[str] | None:
+    """진행 중 세부 단계 전부 — 병렬 작성(세마포어 4)의 절 4개가 다 보이게.
+
+    마지막 하나만 보여주면 "2.5만 돌고 2.2~2.4는 멈췄나"로 읽힌다(2026-08-15 지적).
+    """
+    if status not in ("planning", "researching", "indexing", "writing", "reviewing"):
+        return None
+    labels = active_steps(project_id)
+    return labels or None
 
 
 @router.patch("/{project_id}/config", response_model=ProjectRead)

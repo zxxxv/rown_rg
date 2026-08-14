@@ -30,6 +30,7 @@ export const ProjectProgressSchema = z.object({
   // 실행 중 세부 단계 라벨(예: "청킹·임베딩 5/17", "배경 요약 1층 · 40/152") -
   // 색인·RAPTOR 같은 수 분짜리 단계의 내부 진행. 없으면 null.
   active_step: z.string().nullish(),
+  active_steps: z.array(z.string()).nullish(),
   active_seconds: z.number().nonnegative().nullish(),
   source_target: z.number().nullish(),
   // 백엔드 프로세스에 살아 있는 러너 태스크가 있는지 - 구백엔드 호환 위해 default true
@@ -48,6 +49,7 @@ export interface ProgressSnapshot {
   phase_status: "started" | "completed";
   completed_phases: PhaseName[];
   active_step?: string;
+  active_steps?: string[];
   /** 순수 생성 시간(초) - 검토 대기·중단을 뺀 실제 작업 시간 */
   active_seconds?: number;
   /** 자료 수집 목표 건수(권장 하한) - 수집 중 '현재 n/목표 m' 표시용 */
@@ -106,6 +108,7 @@ export function toProgressSnapshot(res: ProjectProgress): ProgressSnapshot {
     phase_status: finished ? "completed" : "started",
     completed_phases,
     active_step: res.active_step ?? undefined,
+    active_steps: res.active_steps ?? undefined,
     active_seconds: res.active_seconds ?? undefined,
     source_target: res.source_target ?? undefined,
     percent: res.percent,

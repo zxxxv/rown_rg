@@ -222,8 +222,18 @@ export function PipelineStepper({ projectId, snapshot, stalled = false }: Pipeli
               </div>
               {/* 실행 중 세부 단계 - 색인·RAPTOR처럼 수 분짜리 단계의 내부 진행
                   (예: "청킹·임베딩 5/17", "배경 요약 1층 · 40/152") */}
-              {step.phase === "active" && snapshot?.active_step ? (
-                <p className="ml-6 text-xs text-fg-tertiary">{snapshot.active_step}</p>
+              {step.phase === "active" &&
+              (snapshot?.active_steps?.length || snapshot?.active_step) ? (
+                <div className="ml-6 flex flex-col gap-0.5">
+                  {(snapshot.active_steps?.length
+                    ? snapshot.active_steps
+                    : [snapshot.active_step as string]
+                  ).map((label) => (
+                    <p key={label} className="text-xs text-fg-tertiary">
+                      {label}
+                    </p>
+                  ))}
+                </div>
               ) : null}
               {step.phase === "action" && step.actionTo ? (
                 <Button

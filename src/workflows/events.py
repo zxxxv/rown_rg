@@ -14,6 +14,7 @@ phase / step / stream / fake_stream / cost / checkpoint / error 7종. 'done'은 
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from datetime import datetime
 
@@ -86,10 +87,23 @@ progress_broker = ProgressBroker()
 # 색인·RAPTOR 같은 수 분짜리 단계의 내부 진행을 보게 하는 용도. 진행 API가 읽어 노출한다.
 _last_steps: dict[uuid.UUID, dict] = {}
 
+# 진행 중(started 후 completed/failed 안 된) 세부 단계 전부 — 병렬 작성은 절 4개가
+# 동시에 도는데 마지막 하나만 보이면 "멈춘 것 아니냐"로 읽힌다(2026-08-15 사용자 지적).
+# dict를 순서 보존 집합으로 쓴다(키=(phase, step)). 누수 방지 캡은 _ACTIVE_STEPS_CAP.
+_active_steps: dict[uuid.UUID, dict[tuple[str, str], None]] = {}
+_ACTIVE_STEPS_CAP = 12
+# 진행 카운터("3/25")와 그 뒤 꼬리 — 같은 계열 틱 판별용(교체 대상).
+_COUNTER_RE = re.compile(r"\d+/\d+.*$")
+
 
 def last_step(project_id: uuid.UUID) -> dict | None:
     """최근 emit_step 메시지({phase, step, status}) — 없으면 None."""
     return _last_steps.get(project_id)
+
+
+def active_steps(project_id: uuid.UUID) -> list[str]:
+    """진행 중 세부 단계 라벨 전부(시작 순서) — 병렬 작성의 절 4개가 다 보이게."""
+    return [step for (_phase, step) in _active_steps.get(project_id, {})]
 
 
 # 프로젝트별 마지막 이벤트 시각(단일 워커 전제) — 죽은/고착된 런 판정용. 진행 API가
@@ -116,6 +130,11 @@ def emit_phase(project_id: uuid.UUID | None, phase: str, status: str) -> None:
     if status == "completed":
         # 단계 종료 시 세부 단계 잔재 정리 — 다음 단계의 첫 emit_step이 다시 채운다.
         _last_steps.pop(project_id, None)
+        # 이 단계 소속 진행 중 표시도 정리(실패로 안 닫힌 잔재가 다음 단계에 남지 않게).
+        steps = _active_steps.get(project_id)
+        if steps:
+            for key in [k for k in steps if k[0] == phase]:
+                steps.pop(key, None)
     _publish(project_id, {"type": "phase", "phase": phase, "status": status})
 
 
@@ -133,6 +152,18 @@ def emit_step(
     if eta_seconds is not None:
         msg["eta_seconds"] = eta_seconds
     _last_steps[project_id] = msg
+    steps = _active_steps.setdefault(project_id, {})
+    if status == "started":
+        # 진행 카운터형 라벨("청킹·임베딩 3/25 · …")은 매 틱이 새 started고 닫히지
+        # 않는다 — 같은 계열의 이전 틱을 교체해 목록이 틱으로 차지 않게 한다.
+        family = _COUNTER_RE.sub("", step)
+        if family != step:
+            for key in [k for k in steps if k[0] == phase and _COUNTER_RE.sub("", k[1]) == family]:
+                steps.pop(key, None)
+        if len(steps) < _ACTIVE_STEPS_CAP:
+            steps[(phase, step)] = None
+    else:  # completed | failed
+        steps.pop((phase, step), None)
     _publish(project_id, msg)
 
 

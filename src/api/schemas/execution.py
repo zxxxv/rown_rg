@@ -37,6 +37,9 @@ class ProgressResponse(BaseModel):
     # 색인·RAPTOR처럼 수 분짜리 단계의 내부 진행을 스테퍼 서브라벨로 보여준다.
     # 실행 중이 아니거나 세부 단계가 없으면 None.
     active_step: str | None = None
+    # 진행 중 세부 단계 전부(시작 순) — 병렬 작성의 절 4개가 다 보이게. active_step은
+    # 마지막 하나만 담는 구계약이라 유지(프론트 구버전 호환).
+    active_steps: list[str] | None = None
     # 순수 생성 시간(초) — 사람 검토 대기·중단 구간을 뺀 실제 작업 시간.
     # 벽시계 경과(started_at~last_activity_at)와 달리 게이트에서 멈춘다.
     active_seconds: int = 0
