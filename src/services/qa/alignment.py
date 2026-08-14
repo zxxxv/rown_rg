@@ -23,7 +23,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from src.services.qa.gate import claim_units, ungrounded_numbers
+from src.services.qa.gate import (
+    claim_units,
+    normalize_number,
+    significant_numbers,
+    ungrounded_numbers,
+)
 
 # 토큰 가중치 — 숫자 > 라틴 약어 > 한글 2-gram.
 _W_NUMBER = 3.0
@@ -184,6 +189,41 @@ class EvidenceSpan:
     comparable: bool = True
 
 
+def _number_lines(chunk: str) -> list[tuple[int, int, str]]:
+    """수치 탐색용 줄 분해 - _spans와 달리 길이 제한이 없다.
+
+    수치의 단골 자리인 표 행은 220자를 훌쩍 넘겨 _spans가 후보에서 떨어뜨린다.
+    위치를 가리키는 게 목적이라 짧다고 버릴 이유도, 길다고 자를 이유도 없다.
+    """
+    out: list[tuple[int, int, str]] = []
+    pos = 0
+    for line in _LINE_SPLIT_RE.split(chunk):
+        start = chunk.find(line, pos)
+        if start < 0:
+            continue
+        pos = start + len(line)
+        if line.strip():
+            out.append((start, start + len(line), line))
+    return out
+
+
+@dataclass
+class NumberSpan:
+    """본문 수치 하나가 근거 원문에서 발견된 자리(청크 문자 오프셋).
+
+    ungrounded_numbers의 반대 방향이다 - "근거에 없다"만 알리지 않고, 있는 수치는
+    어느 줄에서 왔는지 가리켜 화면이 바로 점프하게 한다. 판정이 아니라 위치다:
+    같은 수치가 여러 줄에 있으면 주장과 어휘가 가장 겹치는 줄을 고를 뿐,
+    그 줄이 주장을 뒷받침한다고 선언하지 않는다(교차언어 40% 은폐 실측의 교훈).
+    """
+
+    token: str  # 본문 표기 그대로("1,234억"이면 콤마 포함)
+    chunk_id: UUID
+    start: int
+    end: int
+    text: str
+
+
 @dataclass
 class ClaimAlignment:
     """본문 문장 하나의 근거 대조 결과."""
@@ -192,6 +232,8 @@ class ClaimAlignment:
     numbers: list[int] = field(default_factory=list)
     span: EvidenceSpan | None = None
     ungrounded: list[str] = field(default_factory=list)
+    # 근거에서 발견된 수치의 위치. ungrounded와 합치면 이 문장의 수치 전수가 된다.
+    grounded: list[NumberSpan] = field(default_factory=list)
 
     @property
     def status(self) -> str:
@@ -226,11 +268,16 @@ def align_section(
         bare = _MARK_RE.sub(" ", claim).strip()
         best: EvidenceSpan | None = None
         cited_text: list[str] = []
+        cited_chunks: list[tuple[UUID, str]] = []  # 수치 위치 탐색용(중복 제거)
+        seen_cids: set[UUID] = set()
         for number in numbers:
             for cid in marker_chunks.get(number, ()):
                 chunk = chunk_texts.get(cid)
                 if not chunk:
                     continue
+                if cid not in seen_cids:
+                    seen_cids.add(cid)
+                    cited_chunks.append((cid, chunk))
                 cited_text.append(chunk)
                 # 한글 주장을 외국어 근거로 재는 경우 - 점수는 대목을 가리키는 데만 쓴다.
                 claim_has_hangul = bool(_HANGUL_RUN_RE.search(bare))
@@ -247,14 +294,71 @@ def align_section(
                             score=round(score, 3),
                             comparable=comparable,
                         )
+        # 수치는 대목이 아니라 인용 근거 전체를 상대로 본다(같은 자료의 다른
+        # 줄에 있을 수 있다) — 게이트와 같은 판정을 쓴다.
+        ungrounded = ungrounded_numbers(bare, "\n".join(cited_text)) if numbers else []
         out.append(
             ClaimAlignment(
                 claim=claim,
                 numbers=numbers,
                 span=best,
-                # 수치는 대목이 아니라 인용 근거 전체를 상대로 본다(같은 자료의 다른
-                # 줄에 있을 수 있다) — 게이트와 같은 판정을 쓴다.
-                ungrounded=ungrounded_numbers(bare, "\n".join(cited_text)) if numbers else [],
+                ungrounded=ungrounded,
+                grounded=_grounded_spans(bare, cited_chunks, ungrounded),
             )
         )
     return out
+
+
+def _grounded_spans(
+    bare_claim: str,
+    cited_chunks: list[tuple[UUID, str]],
+    ungrounded: list[str],
+) -> list[NumberSpan]:
+    """주장 속 수치가 근거의 어느 줄에서 왔는지 - 무근거 판정된 수치는 건너뛴다.
+
+    매칭은 ungrounded_numbers와 같은 자(콤마·후행 % 제거 후 부분문자열)로 반대
+    방향을 잰다 - 거기서 '있음'이면 여기서 반드시 자리가 나온다. 같은 수치가 여러
+    줄에 있으면 주장과 어휘가 가장 겹치는 줄을 고른다(동점이면 앞줄).
+    """
+    if not cited_chunks:
+        return []
+    skip = {normalize_number(t) for t in ungrounded}
+    out: list[NumberSpan] = []
+    seen: set[str] = set()
+    for token in significant_numbers(bare_claim):
+        norm = normalize_number(token)
+        if not norm or norm in seen or norm in skip:
+            continue
+        seen.add(norm)
+        best: NumberSpan | None = None
+        best_score = -1.0
+        for cid, chunk in cited_chunks:
+            for start, _end, line in _number_lines(chunk):
+                if norm not in line.replace(",", ""):
+                    continue
+                # 웹 원문은 문단이 한 줄이다 - 줄째로 강조하면 문단 전체가 칠해진다
+                # (2026-08-14 화면 검증). 수치가 든 문장까지 좁힌다.
+                s, e, seg = _narrow_to_sentence(line, start, norm)
+                score = overlap_score(bare_claim, seg)
+                if score > best_score:
+                    best_score = score
+                    best = NumberSpan(token=token, chunk_id=cid, start=s, end=e, text=seg.strip())
+        if best is not None:
+            out.append(best)
+    return out
+
+
+def _narrow_to_sentence(line: str, line_start: int, norm: str) -> tuple[int, int, str]:
+    """줄 안에서 정규화 수치를 품은 문장 하나로 좁힌다. 못 찾으면 줄 전체.
+
+    표 행처럼 문장 경계가 없는 줄은 그대로 남는다 - 좁히기는 보정이지 필터가 아니다.
+    """
+    inner = 0
+    for piece in _SPAN_SENTENCE_RE.split(line):
+        at = line.find(piece, inner)
+        if at < 0:
+            continue
+        inner = at + len(piece)
+        if norm in piece.replace(",", ""):
+            return line_start + at, line_start + at + len(piece), piece
+    return line_start, line_start + len(line), line

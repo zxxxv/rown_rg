@@ -8,6 +8,8 @@ import {
   type SectionTreeResponse,
   SectionTreeResponseSchema,
   type Source,
+  type SourceDocument,
+  SourceDocumentSchema,
   SourceSchema,
 } from "@/api/types";
 
@@ -160,6 +162,37 @@ export function useRewriteBlock(projectId: string, sectionId: string) {
     mutationFn: (input: { block: string; instruction: string }) =>
       rewriteSectionBlock(projectId, sectionId, input.block, input.instruction),
     onSuccess: () => invalidateSection(qc, projectId, sectionId),
+  });
+}
+
+// ─── 원문 뷰어 ──────────────────────────────────────────────────────────────
+// 자료의 색인 본문 전체를 청크 순서대로 받는다. 근거 카드의 "원문에서 보기"가
+// 청크 id·문자 오프셋으로 해당 대목까지 스크롤·강조하는 데 쓴다.
+
+export const sourceDocKeys = {
+  detail: (projectId: string, sourceId: string) =>
+    ["source-document", projectId, sourceId] as const,
+};
+
+export async function getSourceDocument(
+  projectId: string,
+  sourceId: string,
+): Promise<SourceDocument> {
+  const data = await apiClient.get<unknown>(`projects/${projectId}/sources/${sourceId}/document`);
+  return SourceDocumentSchema.parse(data);
+}
+
+export function useSourceDocument(projectId: string, sourceId: string | null) {
+  return useQuery({
+    queryKey: sourceDocKeys.detail(projectId, sourceId ?? ""),
+    queryFn: () => {
+      if (!sourceId) throw new Error("sourceId required");
+      return getSourceDocument(projectId, sourceId);
+    },
+    enabled: Boolean(projectId && sourceId),
+    // 색인이 다시 돌지 않는 한 문서는 안 변한다 - 패널을 여닫을 때마다 재요청하지 않는다
+    staleTime: 5 * 60 * 1000,
+    retry: false,
   });
 }
 

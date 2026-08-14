@@ -113,6 +113,76 @@ class TestAlignSection:
         assert claim.ungrounded == ["42.7%"]
 
 
+class TestGroundedNumbers:
+    """수치 → 근거 줄 위치. ungrounded_numbers의 반대 방향을 같은 자로 잰다 -
+    무근거가 아니면 반드시 자리가 나오고, 위치는 청크 원문 오프셋이어야 한다."""
+
+    def test_grounded_number_points_to_line(self):
+        cid = uuid4()
+        chunk = "시장 개요 설명이 먼저 온다.\n지난해 시장 규모는 42.7% 성장했다.\n다른 이야기.\n"
+        content = "시장 규모는 42.7% 성장한 것으로 나타났음 [1]"
+        [claim] = align_section(content, {cid: chunk}, {1: [cid]})
+        assert claim.ungrounded == []
+        [g] = claim.grounded
+        assert g.token == "42.7%"
+        assert g.chunk_id == cid
+        assert "42.7%" in chunk[g.start : g.end]
+
+    def test_comma_difference_matches_normalized(self):
+        # 본문 "3,200억" vs 근거 "3200억" - 무근거 판정과 같은 콤마 정규화로 잡아야 한다
+        cid = uuid4()
+        chunk = "반도체 장비 수출액은 3200억 원으로 집계됐다.\n"
+        content = "지난해 반도체 장비 수출액은 3,200억 원으로 집계된 것으로 나타났음 [1]"
+        [claim] = align_section(content, {cid: chunk}, {1: [cid]})
+        [g] = claim.grounded
+        assert g.token == "3,200"
+        assert chunk[g.start : g.end] == "반도체 장비 수출액은 3200억 원으로 집계됐다."
+
+    def test_long_table_row_is_still_findable(self):
+        # 수치의 단골 자리인 표 행은 220자를 넘겨 _spans 후보에서 떨어진다 -
+        # 위치 탐색은 길이 제한 없이 그 줄을 찾아야 한다.
+        cid = uuid4()
+        long_row = "| 구분 | " + " | ".join(f"세부 항목 {i}" for i in range(30)) + " | 57.3% |"
+        assert len(long_row) > 220
+        chunk = "표에 대한 설명이 먼저 온다.\n" + long_row + "\n"
+        content = "해당 부문의 국내 시장 점유율은 57.3%로 집계된 것으로 나타났음 [1]"
+        [claim] = align_section(content, {cid: chunk}, {1: [cid]})
+        [g] = claim.grounded
+        assert g.chunk_id == cid
+        assert "57.3" in chunk[g.start : g.end]
+
+    def test_ungrounded_number_is_not_located(self):
+        # 무근거로 판정된 수치에 위치를 지어내면 안 된다 - 두 목록은 서로소다.
+        cid = uuid4()
+        chunk = "국내 생산 능력은 꾸준히 확대되고 있다.\n"
+        content = "국내 생산 능력은 42.7% 확대된 것으로 나타났음 [1]"
+        [claim] = align_section(content, {cid: chunk}, {1: [cid]})
+        assert claim.ungrounded == ["42.7%"]
+        assert claim.grounded == []
+
+    def test_long_paragraph_narrows_to_sentence(self):
+        # 웹 원문은 문단이 한 줄이다 - 줄째로 강조하면 문단 전체가 칠해진다(2026-08-14
+        # 화면 검증). 수치가 든 문장까지 좁혀야 한다.
+        cid = uuid4()
+        chunk = (
+            "숏폼은 새로운 소비 행태로 자리 잡았다. 응답자의 86.3%가 시청 경험이 있다고 답했다. "
+            "플랫폼 간 경쟁도 치열해지고 있다.\n"
+        )
+        content = "설문 응답자의 86.3%가 숏폼 시청 경험이 있는 것으로 나타났음 [1]"
+        [claim] = align_section(content, {cid: chunk}, {1: [cid]})
+        [g] = claim.grounded
+        assert chunk[g.start : g.end].strip() == "응답자의 86.3%가 시청 경험이 있다고 답했다."
+
+    def test_picks_line_overlapping_claim_among_duplicates(self):
+        # 같은 수치가 여러 줄에 있으면 주장과 어휘가 가장 겹치는 줄을 고른다.
+        cid = uuid4()
+        chunk = "다른 지표도 42.7% 수준이다.\n수출 증가율은 42.7%로 집계됐다.\n"
+        content = "지난해 국내 수출 증가율은 42.7%로 집계된 것으로 나타났음 [1]"
+        [claim] = align_section(content, {cid: chunk}, {1: [cid]})
+        [g] = claim.grounded
+        assert "수출 증가율" in g.text
+
+
 class TestCrossLingual:
     """한글 주장 + 영문 근거는 어휘 겹침으로 판정할 수 없다.
 

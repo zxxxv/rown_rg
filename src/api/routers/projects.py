@@ -42,6 +42,7 @@ from src.api.schemas.section import (
     ClaimAlignmentRead,
     EvidenceChunk,
     EvidenceInfo,
+    GroundedNumberRead,
     SectionBlockRewriteRequest,
     SectionCitation,
     SectionContentResponse,
@@ -50,6 +51,8 @@ from src.api.schemas.section import (
     SectionNode,
     SectionRewriteRequest,
     SectionTreeResponse,
+    SourceChunkRead,
+    SourceDocumentResponse,
 )
 from src.api.schemas.source_stats import SourceUsageResponse
 from src.api.uploads import read_validated_upload
@@ -1930,9 +1933,71 @@ def _claim_rows(
                 span_text=span.text if span else None,
                 score=span.score if span else 0.0,
                 ungrounded=a.ungrounded,
+                grounded=[
+                    GroundedNumberRead(
+                        token=g.token,
+                        chunk_id=str(g.chunk_id),
+                        start=g.start,
+                        end=g.end,
+                        # 표 행이면 수백 자다 - 점프는 오프셋으로 하니 표시용만 남긴다
+                        text=g.text[:200],
+                    )
+                    for g in a.grounded
+                ],
             )
         )
     return out
+
+
+@router.get("/{project_id}/sources/{source_id}/document", response_model=SourceDocumentResponse)
+async def get_source_document(
+    project_id: UUID,
+    source_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SourceDocumentResponse:
+    """자료의 색인 본문을 원문 순서 청크로 반환 - 근거 패널의 원문 뷰어용.
+
+    파일 재파싱 없이(PDF는 수십 초) 색인 청크를 이어 붙인다. 근거 추적의 span
+    오프셋이 청크 기준이라 청크 경계를 살려 내려야 화면이 대목으로 점프한다.
+    라이브러리의 content_md 뷰어(owner 한정·웹 전용)와 달리 프로젝트 열람 권한
+    기준이고 업로드·라이브러리 자료도 다룬다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    src = (
+        await session.execute(
+            select(ProjectSource).where(
+                ProjectSource.id == source_id, ProjectSource.project_id == project.id
+            )
+        )
+    ).scalar_one_or_none()
+    if src is None:
+        raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
+    rows = (
+        await session.execute(
+            select(Chunk.id, Chunk.content, Chunk.chunk_index, Chunk.metadata_)
+            .where(Chunk.source_id == src.id, Chunk.track == "content")
+            .order_by(Chunk.chunk_index.asc().nulls_last())
+        )
+    ).all()
+    chunks: list[SourceChunkRead] = []
+    for cid, content, idx, meta in rows:
+        header = (meta or {}).get("header_path")
+        chunks.append(
+            SourceChunkRead(
+                chunk_id=str(cid),
+                content=content,
+                chunk_index=idx,
+                header_path=[str(h) for h in header] if isinstance(header, list) else [],
+            )
+        )
+    return SourceDocumentResponse(
+        source_id=str(src.id),
+        title=src.title,
+        url=src.url,
+        source_type=src.source_type,
+        chunks=chunks,
+    )
 
 
 @router.patch("/{project_id}/sections/{section_id}", response_model=SectionContentResponse)

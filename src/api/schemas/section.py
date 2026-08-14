@@ -89,6 +89,20 @@ class EvidenceChunk(BaseModel):
     chunk_index: int | None = None  # 원본 문서 안에서의 순번
 
 
+class GroundedNumberRead(BaseModel):
+    """본문 수치 하나 ↔ 근거 원문에서 발견된 자리(청크 문자 오프셋).
+
+    ungrounded의 반대 방향 - 위치를 가리킬 뿐 뒷받침 판정이 아니다. 화면은 이
+    오프셋으로 근거 카드·원문 뷰어의 해당 줄로 점프한다.
+    """
+
+    token: str
+    chunk_id: str
+    start: int
+    end: int
+    text: str = ""  # 발견된 줄(표 행이면 길다) - 점프의 본체는 오프셋이라 잘라 보낸다
+
+
 class ClaimAlignmentRead(BaseModel):
     """본문 문장 하나 ↔ 그 문장이 나온 근거 대목.
 
@@ -98,7 +112,8 @@ class ClaimAlignmentRead(BaseModel):
 
     claim: str
     numbers: list[int] = Field(default_factory=list)
-    # aligned(대목 특정) | weak(겹침 약함, 추정) | unmatched(근거에서 못 찾음) | uncited(표기 없음)
+    # aligned(대목 특정) | weak(겹침 약함, 추정) | unmatched(근거에서 못 찾음)
+    # | uncited(표기 없음) | crosslingual(근거가 외국어라 겹침 판정 불가)
     status: str
     chunk_id: str | None = None
     span_start: int | None = None  # 청크 본문 안에서의 문자 위치 - 화면이 그 대목만 강조한다
@@ -106,6 +121,7 @@ class ClaimAlignmentRead(BaseModel):
     span_text: str | None = None
     score: float = 0.0
     ungrounded: list[str] = Field(default_factory=list)  # 이 문장에서 근거에 없는 수치
+    grounded: list[GroundedNumberRead] = Field(default_factory=list)  # 근거에서 찾은 수치 위치
 
 
 class SectionEvidenceResponse(BaseModel):
@@ -125,6 +141,30 @@ class SectionEvidenceResponse(BaseModel):
     uncited_samples: list[str] = Field(default_factory=list)
     # 마커를 청크까지 되짚을 수 있는가. 옛 절(기록 없음)은 자료 단위까지만 가능하다.
     traceable: bool = True
+
+
+class SourceChunkRead(BaseModel):
+    """원문 뷰어의 문서 조각 - 색인 청크를 원문 순서 그대로 내려보낸다."""
+
+    chunk_id: str
+    content: str
+    chunk_index: int | None = None
+    header_path: list[str] = Field(default_factory=list)
+
+
+class SourceDocumentResponse(BaseModel):
+    """자료 하나의 색인 본문 전체 - 근거 패널의 '원문에서 위치 보기'용.
+
+    파일을 다시 파싱하지 않는다(PDF 재파싱은 수십 초). 색인 청크가 이미 파싱 원문의
+    순서 보존 조각이고, 근거 추적의 span 오프셋이 청크 기준이라 청크 경계를 살려
+    보내야 화면이 대목을 특정할 수 있다. 웹·업로드·라이브러리 자료 공통 경로.
+    """
+
+    source_id: str
+    title: str | None = None
+    url: str | None = None
+    source_type: str = ""  # library | upload | web_search
+    chunks: list[SourceChunkRead] = Field(default_factory=list)
 
 
 class SectionRewriteRequest(BaseModel):

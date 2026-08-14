@@ -1,8 +1,9 @@
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, FileSearch } from "lucide-react";
 import { useState } from "react";
 import { useSectionEvidence } from "@/api/sections";
 import type { ClaimAlignment, EvidenceChunk, SectionEvidence } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
+import type { SourceLocation } from "./SourceViewer";
 import { textFragmentUrl } from "./sourceLink";
 
 // ─── 근거 추적 ───
@@ -17,12 +18,30 @@ const CLAIM_STATUS: Record<string, { label: string; cls: string }> = {
   weak: { label: "추정", cls: "border-fg-warning/40 bg-bg-warning" },
   unmatched: { label: "못 찾음", cls: "border-fg-danger/40 bg-bg-danger" },
   uncited: { label: "근거 표기 없음", cls: "border-fg-tertiary/40" },
+  // 겹침으로는 판정 불가(한글 주장 + 외국어 근거) - 틀렸다는 뜻이 아니라 사람이 볼 자리
+  crosslingual: { label: "외국어 근거", cls: "border-fg-info/40 bg-bg-info" },
 };
 
 /** 문장별 대조표 - 기본은 확인이 필요한 문장만 보여준다(대목이 특정된 문장은 볼 이유가 적다). */
-function ClaimTable({ claims, chunks }: { claims: ClaimAlignment[]; chunks: EvidenceChunk[] }) {
+function ClaimTable({
+  claims,
+  chunks,
+  onLocate,
+}: {
+  claims: ClaimAlignment[];
+  chunks: EvidenceChunk[];
+  onLocate?: (loc: SourceLocation) => void;
+}) {
   const [showAll, setShowAll] = useState(false);
   const urlOf = new Map(chunks.map((c) => [c.chunk_id, c.url]));
+  const srcOf = new Map(chunks.map((c) => [c.chunk_id, c.source_id]));
+  // 수치·대목의 "원문에서 보기" - 청크가 속한 자료를 알아야 문서를 연다
+  const locate = (chunkId: string | null, start?: number | null, end?: number | null) => {
+    if (!onLocate || !chunkId) return undefined;
+    const sourceId = srcOf.get(chunkId);
+    if (!sourceId) return undefined;
+    return () => onLocate({ sourceId, chunkId, start, end });
+  };
   const needsCheck = claims.filter((c) => c.status !== "aligned");
   const shown = showAll ? claims : needsCheck;
 
@@ -72,26 +91,68 @@ function ClaimTable({ claims, chunks }: { claims: ClaimAlignment[]; chunks: Evid
                   ) : null}
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-fg">{c.claim}</p>
+                {c.grounded.length > 0 ? (
+                  // 근거에서 자리가 확인된 수치 - 누르면 원문 뷰어가 그 줄로 점프한다.
+                  // 위치를 가리킬 뿐, 문장 전체가 뒷받침된다는 뜻은 아니다.
+                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                    <span className="text-[10px] text-fg-tertiary">수치 위치</span>
+                    {c.grounded.map((g) => {
+                      const go = locate(g.chunk_id, g.start, g.end);
+                      return go ? (
+                        <button
+                          key={`${g.chunk_id}:${g.start}:${g.token}`}
+                          type="button"
+                          onClick={go}
+                          title="근거 원문에서 이 수치가 있는 줄을 봅니다"
+                          className="rounded-sm bg-bg-success px-1 font-mono text-[10px] text-fg-success hover:underline"
+                        >
+                          {g.token}
+                        </button>
+                      ) : (
+                        <span
+                          key={`${g.chunk_id}:${g.start}:${g.token}`}
+                          className="rounded-sm bg-bg-success px-1 font-mono text-[10px] text-fg-success"
+                        >
+                          {g.token}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : null}
                 {c.span_text ? (
                   <div className="mt-1 border-l-2 border-border-info pl-2">
                     <p className="text-xs leading-relaxed text-fg-secondary">{c.span_text}</p>
-                    {(() => {
-                      // 원문에서 이 대목으로 바로 뛰는 링크(브라우저 텍스트 프래그먼트).
-                      const jump = textFragmentUrl(
-                        c.chunk_id ? (urlOf.get(c.chunk_id) ?? null) : null,
-                        c.span_text,
-                      );
-                      return jump ? (
-                        <a
-                          href={jump}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-fg-info hover:underline"
-                        >
-                          원문에서 이 대목 보기 <ExternalLink className="h-3 w-3" />
-                        </a>
-                      ) : null;
-                    })()}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {(() => {
+                        const go = locate(c.chunk_id, c.span_start, c.span_end);
+                        return go ? (
+                          <button
+                            type="button"
+                            onClick={go}
+                            className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-fg-info hover:underline"
+                          >
+                            원문에서 위치 보기 <FileSearch className="h-3 w-3" />
+                          </button>
+                        ) : null;
+                      })()}
+                      {(() => {
+                        // 원문 웹페이지로 바로 뛰는 링크(브라우저 텍스트 프래그먼트).
+                        const jump = textFragmentUrl(
+                          c.chunk_id ? (urlOf.get(c.chunk_id) ?? null) : null,
+                          c.span_text,
+                        );
+                        return jump ? (
+                          <a
+                            href={jump}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-fg-info hover:underline"
+                          >
+                            웹 원본에서 보기 <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : null;
+                      })()}
+                    </div>
                   </div>
                 ) : null}
               </li>
@@ -103,7 +164,13 @@ function ClaimTable({ claims, chunks }: { claims: ClaimAlignment[]; chunks: Evid
   );
 }
 
-function EvidenceCard({ item }: { item: EvidenceChunk }) {
+function EvidenceCard({
+  item,
+  onLocate,
+}: {
+  item: EvidenceChunk;
+  onLocate?: (loc: SourceLocation) => void;
+}) {
   return (
     <li className="rounded border border-border bg-bg px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -115,6 +182,21 @@ function EvidenceCard({ item }: { item: EvidenceChunk }) {
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
           {item.source_title ?? "(제목 없음)"}
         </span>
+        {onLocate && item.source_id ? (
+          <button
+            type="button"
+            onClick={() =>
+              onLocate({
+                sourceId: item.source_id as string,
+                chunkId: item.chunk_id,
+              })
+            }
+            title="이 대목이 원문 문서의 어디인지 앞뒤 문맥과 함께 봅니다"
+            className="inline-flex shrink-0 items-center gap-1 text-[11px] text-fg-info hover:underline"
+          >
+            원문에서 보기 <FileSearch className="h-3 w-3" />
+          </button>
+        ) : null}
         {item.url ? (
           <a
             href={item.url}
@@ -182,11 +264,14 @@ export function BlockEvidence({
   projectId,
   sectionId,
   blocks,
+  onLocate,
 }: {
   projectId: string;
   sectionId: string;
   /** 선택된 블록 본문들 - 여기 등장하는 인용 번호만 추린다 */
   blocks: string[];
+  /** 근거 대목·수치를 원문 문서 안에서 보여달라는 요청 - 드로어가 원문 뷰어로 전환한다 */
+  onLocate?: (loc: SourceLocation) => void;
 }) {
   const query = useSectionEvidence(projectId, sectionId);
   const data = query.data;
@@ -214,11 +299,13 @@ export function BlockEvidence({
           </Badge>
         ) : null}
       </div>
-      {flagged.length > 0 ? <ClaimTable claims={flagged} chunks={data.items} /> : null}
+      {flagged.length > 0 ? (
+        <ClaimTable claims={flagged} chunks={data.items} onLocate={onLocate} />
+      ) : null}
       {primary.length > 0 ? (
         <ul className="flex flex-col gap-2">
           {primary.map((item) => (
-            <EvidenceCard key={item.chunk_id} item={item} />
+            <EvidenceCard key={item.chunk_id} item={item} onLocate={onLocate} />
           ))}
         </ul>
       ) : null}
@@ -234,7 +321,7 @@ export function BlockEvidence({
           </p>
           <ul className="mt-2 flex flex-col gap-2">
             {related.map((item) => (
-              <EvidenceCard key={item.chunk_id} item={item} />
+              <EvidenceCard key={item.chunk_id} item={item} onLocate={onLocate} />
             ))}
           </ul>
         </details>

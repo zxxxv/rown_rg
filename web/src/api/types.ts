@@ -270,18 +270,30 @@ export const EvidenceChunkSchema = z.object({
 });
 export type EvidenceChunk = z.infer<typeof EvidenceChunkSchema>;
 
+/** 본문 수치 하나가 근거 원문에서 발견된 자리 - 청크 문자 오프셋으로 점프한다 */
+export const GroundedNumberSchema = z.object({
+  token: z.string(),
+  chunk_id: z.string(),
+  start: z.number().int(),
+  end: z.number().int(),
+  text: z.string().default(""),
+});
+export type GroundedNumber = z.infer<typeof GroundedNumberSchema>;
+
 /** 본문 문장 하나 ↔ 그 문장이 나온 원문 대목(청크 안의 줄) */
 export const ClaimAlignmentSchema = z.object({
   claim: z.string(),
   numbers: z.array(z.number().int()).default([]),
-  /** aligned=대목 특정, weak=겹침 약함(추정), unmatched=근거에서 못 찾음, uncited=표기 없음 */
-  status: z.enum(["aligned", "weak", "unmatched", "uncited"]),
+  /** aligned=대목 특정, weak=겹침 약함(추정), unmatched=근거에서 못 찾음,
+      uncited=표기 없음, crosslingual=근거가 외국어라 겹침으로는 판정 불가 */
+  status: z.enum(["aligned", "weak", "unmatched", "uncited", "crosslingual"]),
   chunk_id: z.string().nullable().default(null),
   span_start: z.number().int().nullable().default(null),
   span_end: z.number().int().nullable().default(null),
   span_text: z.string().nullable().default(null),
   score: z.number().default(0),
   ungrounded: z.array(z.string()).default([]),
+  grounded: z.array(GroundedNumberSchema).default([]),
 });
 export type ClaimAlignment = z.infer<typeof ClaimAlignmentSchema>;
 
@@ -301,6 +313,25 @@ export const SectionEvidenceSchema = z.object({
   traceable: z.boolean().default(true),
 });
 export type SectionEvidence = z.infer<typeof SectionEvidenceSchema>;
+
+/** 원문 뷰어의 문서 조각 - 색인 청크를 원문 순서 그대로 */
+export const SourceChunkSchema = z.object({
+  chunk_id: z.string(),
+  content: z.string(),
+  chunk_index: z.number().int().nullable().default(null),
+  header_path: z.array(z.string()).default([]),
+});
+export type SourceChunk = z.infer<typeof SourceChunkSchema>;
+
+/** 자료 하나의 색인 본문 전체 - 근거 패널의 '원문에서 위치 보기'가 읽는다 */
+export const SourceDocumentSchema = z.object({
+  source_id: z.string(),
+  title: z.string().nullable().default(null),
+  url: z.string().nullable().default(null),
+  source_type: z.string().default(""),
+  chunks: z.array(SourceChunkSchema).default([]),
+});
+export type SourceDocument = z.infer<typeof SourceDocumentSchema>;
 
 export const LibraryFileMetaSchema = z.object({
   size_bytes: z.number().int().nonnegative(),

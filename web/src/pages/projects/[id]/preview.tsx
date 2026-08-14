@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   BarChart3,
   CheckCircle2,
+  ChevronLeft,
   ExternalLink,
   Eye,
   FileSearch,
@@ -50,14 +51,12 @@ import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
 import { chartFallbackTable } from "@/features/preview/chartSpec";
 import { BlockEvidence, partitionBlockEvidence } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
+import { type SourceLocation, SourceViewer } from "@/features/preview/SourceViewer";
 import { findTable, isTableCaption, type MarkdownTable } from "@/features/preview/tableToChart";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
-// 블록 근거 UI(배지·드로어·본문 근거 매핑) - 실사용 검증 전이라 이번 배포에서는
-// 감춘다(2026-08-14 사용자 결정). 작성 시 근거 기록(백엔드)은 계속 쌓이므로 데이터
-// 손실은 없다. 내일 자료 보강 워크플로우와 함께 검증한 뒤 true로 되돌려 재배포.
-const EVIDENCE_UI_ENABLED = false;
+const EVIDENCE_UI_ENABLED = true;
 
 const STATUS_KIND: Record<SectionStatus, StatusKind> = {
   pending: "tertiary",
@@ -783,6 +782,9 @@ function SectionView({
   // 블록의 '근거 N' 표시를 사용자가 클릭했을 때만 그 블록의 근거를 연다.
   const [evidenceIdx, setEvidenceIdx] = useState<number | null>(null);
   const evidenceBlock = evidenceIdx !== null ? (blocks[evidenceIdx] ?? null) : null;
+  // 드로어 2면 중 원문 뷰어 - 근거 카드·수치에서 "원문에서 보기"를 눌렀을 때만.
+  // 근거 목록으로 돌아가는 뒤로가기가 있으므로 블록이 바뀌면 반드시 비운다.
+  const [sourceView, setSourceView] = useState<SourceLocation | null>(null);
   // 블록별 '이 블록의 근거' 수 - 표시(배지) 유무의 원천. 드로어(BlockEvidence)와
   // 같은 분류를 쓴다(문장 정렬로 좁힌 primary - 같은 번호에 딸려 온 다른 대목 제외).
   const evidenceCounts = useMemo(() => {
@@ -1135,6 +1137,7 @@ function SectionView({
                           onClick={(e) => {
                             e.stopPropagation();
                             setEvidenceIdx((v) => (v === idx ? null : idx));
+                            setSourceView(null);
                           }}
                           onKeyDown={(e) => e.stopPropagation()}
                           className={cn(
@@ -1218,21 +1221,48 @@ function SectionView({
           {EVIDENCE_UI_ENABLED && evidenceBlock !== null ? (
             <aside
               aria-label="선택한 블록의 근거"
-              className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[92vw] flex-col border-l border-border bg-bg-secondary shadow-xl sm:w-[460px] 2xl:w-[560px]"
+              className={cn(
+                "fixed inset-y-0 right-0 z-40 flex w-full max-w-[92vw] flex-col border-l border-border bg-bg-secondary shadow-xl",
+                // 원문 뷰어는 문서를 통째로 보여주므로 근거 목록보다 폭을 더 준다
+                sourceView ? "sm:w-[560px] 2xl:w-[720px]" : "sm:w-[460px] 2xl:w-[560px]",
+              )}
             >
               <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-                <p className="text-xs font-medium text-fg">블록 근거</p>
-                <Button variant="ghost" size="sm" onClick={() => setEvidenceIdx(null)}>
+                {sourceView ? (
+                  <button
+                    type="button"
+                    onClick={() => setSourceView(null)}
+                    className="inline-flex items-center gap-1 text-xs font-medium text-fg-info hover:underline"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                    근거 목록
+                  </button>
+                ) : (
+                  <p className="text-xs font-medium text-fg">블록 근거</p>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setEvidenceIdx(null);
+                    setSourceView(null);
+                  }}
+                >
                   <X className="h-3.5 w-3.5" />
                   닫기
                 </Button>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-                <BlockEvidence
-                  projectId={projectId}
-                  sectionId={sectionId}
-                  blocks={[evidenceBlock]}
-                />
+                {sourceView ? (
+                  <SourceViewer projectId={projectId} location={sourceView} />
+                ) : (
+                  <BlockEvidence
+                    projectId={projectId}
+                    sectionId={sectionId}
+                    blocks={[evidenceBlock]}
+                    onLocate={setSourceView}
+                  />
+                )}
               </div>
             </aside>
           ) : null}
