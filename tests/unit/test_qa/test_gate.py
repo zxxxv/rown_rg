@@ -522,6 +522,23 @@ class TestClaimCoverage:
         assert (picked, total) == (1, 2)
         assert missed == []  # 수치=주장 규칙이 있는 한 미포착 수치는 구조적으로 0
 
+    def test_numeric_caption_is_reported_as_missed(self):
+        # 캡션 제외가 새 맹점이 되면 안 된다 - 수치 주장을 캡션 꼴로 쓴 줄은
+        # missed_numeric으로 발화한다(동어반복 지표 방지, 2026-08-14 지침).
+        _, _, missed = claim_coverage("표 3: 2030년 국가 감축목표 40% 달성 경로")
+        assert len(missed) == 1 and "40%" in missed[0]
+        # 용어 숫자(RE100)·연도만 담은 통상 캡션은 무해하다.
+        assert claim_coverage("표: 글로벌 RE100 가입·목표 설정·보고 기준(’23년)")[2] == []
+
+    def test_term_digits_and_year_suffix_not_significant(self):
+        # RE100·B2B의 숫자는 식별자 조각, 10년차·30년간은 기간 표기 - 수치 주장이 아니다
+        # (실측: 캡션 오탐 37건 중 36건이 RE100의 100).
+        body = "RE100 대응 기업은 지난 10년간 B2B 계약을 확대해 온 것으로 나타났음 (출처 3)"
+        assert ungrounded_numbers(body, "관련 서술") == []
+        # 라틴 접두가 아닌 진짜 수치는 그대로 잡는다("60TWh"는 숫자가 앞).
+        body2 = "국내 기업이 공시한 연간 전력사용량 합계는 60TWh 규모로 집계됐음 (출처 3)"
+        assert ungrounded_numbers(body2, "관련 없음") == ["60"]
+
 
 class TestArithmeticSuspects:
     def test_wrong_growth_rate_flagged(self):

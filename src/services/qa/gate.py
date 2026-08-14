@@ -154,6 +154,17 @@ def _significant_numbers(text: str) -> list[str]:
         if m.start() > 0 and text[m.start() - 1] in _DATE_PREFIXES and not token.endswith("%"):
             excluded.append((token, "apostrophe_date"))
             continue
+        # 라틴 문자에 붙은 숫자는 식별자 조각(RE100·B2B·S2)이지 수치 주장이 아니다
+        # (2026-08-14 실측: 캡션 미포착 37건 중 36건이 'RE100'의 100).
+        prev = text[m.start() - 1] if m.start() > 0 else ""
+        if prev.isascii() and prev.isalpha():
+            excluded.append((token, "term_digit"))
+            continue
+        # '년'이 바로 붙는 숫자는 기간·연차 표기(10년차·30년간) — 연도류와 같은 이유.
+        nxt = text[m.end()] if m.end() < len(text) else ""
+        if nxt == "년" and not token.endswith("%"):
+            excluded.append((token, "year_suffix"))
+            continue
         if "." in token or "%" in token or len(digits) >= 2:
             out.append(token)
     if excluded:
@@ -308,9 +319,11 @@ def check_numeric_grounded(draft: SectionDraft, cited_content: str) -> GateResul
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 # 본문이 아닌 줄: 제목·표·인용블록·구분선.
 _NON_CLAIM_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|\||>|[-*_]{3,}\s*$)")
-# 캡션·표 메타 줄 — "표: …"·"그림: …"·"(단위: %)"는 주장이 아니라 분모를 오염시킨다
-# (2026-08-14 실측: 미포착 수치 111건 중 34건이 캡션).
-_CAPTION_LINE_RE = re.compile(r"^\s*(?:(?:표|그림)\s*[::]|\(단위)")
+# 캡션·표 메타 줄 — "표: …"·"그림 3-1: …"·"(단위: %)"는 주장이 아니라 분모를 오염시킨다
+# (2026-08-14 실측: 미포착 수치 111건 중 34건이 캡션). 번호부("표 3:"·"표 3-1:") 허용.
+_CAPTION_LINE_RE = re.compile(r"^\s*(?:(?:표|그림)\s*[\d\-. ]*[::]|\(단위)")
+# 캡션 수치 검사용 — (단위…)는 정의상 단위 선언이라 표·그림 캡션만 본다.
+_TABLE_FIGURE_CAPTION_RE = re.compile(r"^(?:표|그림)\s*[\d\-. ]*[::]")
 # 글머리 기호(개조식) — 판정에서 떼어내고 길이를 잰다. 'ㅇ'·'ㅁ'은 한글 자모 마커다.
 _BULLET_RE = re.compile(r"^\s*(?:[-*•‣◦○□▪ㅇㅁ]|\d+[.)]|[가-힣][.)])\s+")
 # 주장으로 볼 최소 길이 — 이보다 짧은 줄은 소제목·나열 항목이라 인용을 요구하지 않는다.
@@ -419,6 +432,16 @@ def claim_coverage(content: str) -> tuple[int, int, list[str]]:
             picked += 1
         elif _significant_numbers(bare):
             missed_numeric.append(bare[:60])
+    # 캡션 제외는 그 자체가 새 맹점이다 — "표 3: 2030년 감축목표 40%"처럼 캡션 꼴로
+    # 수치 주장을 하는 줄은 후보에서 빠져 어떤 검사도 못 본다. 표·그림 캡션에 유의미
+    # 수치가 남아 있으면 미포착으로 센다("(단위: …)"는 정의상 단위 선언이라 제외,
+    # 연도·연차·용어 숫자는 유의미 수치가 아니라 "…현황(’23년)"·"RE100 비교"는 무해).
+    # 이로써 missed_numeric은 동어반복이 아니라 실제 발화 가능한 지표가 된다:
+    # 분할 실패·수치 정의 변경·캡션 과잉 제외 셋 다 여기서 드러난다(2026-08-14 지침).
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if _TABLE_FIGURE_CAPTION_RE.match(line) and _significant_numbers(line):
+            missed_numeric.append(f"캡션: {line[:60]}")
     return picked, total, missed_numeric
 
 
