@@ -8,11 +8,13 @@ from src.api.routers.projects import router as projects_router
 from src.api.routers.prompts import router as prompts_router
 from src.api.routers.settings import router as settings_router
 from src.api.routers.users import router as users_router
+from src.api.routers.verify_coverage import router as verify_coverage_router
 
 api_v1_router = APIRouter(prefix="/api/v1")
 api_v1_router.include_router(auth_router)
 api_v1_router.include_router(users_router)
 api_v1_router.include_router(projects_router)
+api_v1_router.include_router(verify_coverage_router)
 api_v1_router.include_router(presets_router)
 api_v1_router.include_router(analysts_router)
 api_v1_router.include_router(admin_router)

@@ -42,6 +42,35 @@ export function useVerifyReport(projectId: string, enabled = true) {
   });
 }
 
+// ─── 검사 커버리지 ───
+// 경고 0건이 '깨끗함'으로 읽히면 안 된다 - 무엇을 검사했고(분모) 무엇을 못 보는지
+// 함께 보여야 한다. 값은 서버가 조회 시 계산한다(본문을 고치면 따라온다).
+export const VerifyCoverageSchema = z.object({
+  n_sections: z.number().int(),
+  /** 주장 후보 문장 수(제목·표·캡션 제외) */
+  n_candidates: z.number().int(),
+  /** 검사망에 들어간 문장 수 */
+  n_claims: z.number().int(),
+  claim_coverage: z.number().nullable(),
+  /** 수치를 실었는데 검사망 밖인 문장 - 0이 아니면 분해 회귀 */
+  missed_numeric: z.number().int(),
+  llm_verify_enabled: z.boolean(),
+  pm_verify_enabled: z.boolean(),
+});
+export type VerifyCoverage = z.infer<typeof VerifyCoverageSchema>;
+
+export function useVerifyCoverage(projectId: string, enabled = true) {
+  return useQuery({
+    queryKey: [...verifyKeys.report(projectId), "coverage"],
+    queryFn: async () => {
+      const data = await apiClient.get<unknown>(`projects/${projectId}/verify-coverage`);
+      return VerifyCoverageSchema.parse(data);
+    },
+    enabled: Boolean(projectId) && enabled,
+    staleTime: 60_000,
+  });
+}
+
 // ─── 재검증 ───
 // 검증은 조립 때 한 번만 돌아서, 지적을 고쳐도 경고가 그대로 남아 있었다.
 // 챕터당 1콜이라 수십 초~수 분이 걸린다 - 요청 밖에서 돌리고 상태를 폴링한다.

@@ -12,6 +12,7 @@ import { useProject } from "@/api/projects";
 import {
   useRerunVerify,
   useResolveFinding,
+  useVerifyCoverage,
   useVerifyReport,
   useVerifyStatus,
   type VerifyFinding,
@@ -25,6 +26,38 @@ import { cn } from "@/lib/utils";
 // 차단이 아니라 참고용이며, 조회 실패(구백엔드 등) 시에는 조용히 숨긴다.
 // 전체 목록은 수정할 수 있는 곳(미리보기·편집)에 두고, 출력 페이지는 compact
 // 요약 배너만 쓴다(QA 산출물이 다운로드 화면을 지배하지 않게 - 2026-08-04).
+
+// 검사가 못 보는 축 - 경고 0건이 '깨끗함'으로 읽히지 않게 항상 함께 보인다.
+// (2026-08-14 실측: 진짜 결함 4건이 전부 이 축들에 있는데 critical 0이 떴다.)
+const UNCOVERED_AXES = "절 간 지표 값 대조(예정)·자료 시점·코퍼스 밖 사실 검증";
+
+// 활성 검사 축 요약 - 축별 상세는 경고 카테고리가 이미 말해준다.
+const ACTIVE_AXES = "근거 대조(수치)·산술·형식·잔재·마커 오귀속·절 간 중복";
+
+function CoverageLine({ projectId }: { projectId: string }) {
+  const query = useVerifyCoverage(projectId);
+  if (query.isLoading || query.isError || !query.data) return null;
+  const c = query.data;
+  const pct = c.claim_coverage === null ? null : Math.round(c.claim_coverage * 100);
+  return (
+    <div className="flex flex-col gap-0.5 text-xs text-fg-tertiary">
+      <p>
+        검사 범위 - 문장 {c.n_claims.toLocaleString()}/{c.n_candidates.toLocaleString()}
+        {pct === null ? "" : ` (${pct}%)`} · {ACTIVE_AXES}
+        {c.pm_verify_enabled ? " · 챕터 횡단(LLM)" : ""}
+      </p>
+      <p>못 보는 것 - {UNCOVERED_AXES}. 경고 없음이 무결을 뜻하지 않습니다</p>
+      {c.missed_numeric > 0 ? (
+        <p className="text-fg-danger">
+          검사망 밖 수치 문장 {c.missed_numeric}건 - 문장 분해 회귀 의심(관리자 확인 필요)
+        </p>
+      ) : null}
+      {!c.llm_verify_enabled ? (
+        <p className="text-fg-warning">근거 동봉 판정 꺼짐 - 무근거 수치는 warning까지만 뜹니다</p>
+      ) : null}
+    </div>
+  );
+}
 export function VerifyReportCard({
   projectId,
   compact = false,
@@ -84,10 +117,15 @@ export function VerifyReportCard({
       );
     }
     return (
-      <div className="flex flex-wrap items-center gap-2 rounded border border-border bg-bg p-3 text-sm text-fg-secondary">
-        <ShieldCheck className="h-4 w-4 shrink-0 text-fg-success" aria-hidden />
-        PM 검증 경고 없음 - 절 간 수치·용어·법령 시점 교차검사 통과
-        <span className="ml-auto">{rerunButton}</span>
+      // '통과'라고 쓰지 않는다 - 경고 0은 "검사한 축에서 못 찾음"이지 무결이 아니다.
+      // 검사 범위와 못 보는 축을 같이 보여야 거짓 안심을 안 준다(2026-08-14).
+      <div className="flex flex-col gap-1.5 rounded border border-border bg-bg p-3 text-sm text-fg-secondary">
+        <div className="flex flex-wrap items-center gap-2">
+          <ShieldCheck className="h-4 w-4 shrink-0 text-fg-success" aria-hidden />
+          PM 검증 경고 없음 - 아래 검사 범위에서 지적할 것을 찾지 못했습니다
+          <span className="ml-auto">{rerunButton}</span>
+        </div>
+        <CoverageLine projectId={projectId} />
       </div>
     );
   }
@@ -212,6 +250,8 @@ export function VerifyReportCard({
           </Button>
         ) : null}
       </header>
+
+      <CoverageLine projectId={projectId} />
 
       <div className="flex flex-col gap-3">
         {[...byChapter.entries()].map(([chapter, items]) => (
