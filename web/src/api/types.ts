@@ -93,6 +93,10 @@ export const ProjectConfigSchema = z.object({
   //   standard = 전역 설정 모델(기본 Sonnet 4.6)
   //   premium  = 수집·검증 Sonnet 4.6 + 본문·파트 계획 Opus 5(그 외 모드는 계획만 Sonnet 4.6).
   model_mode: z.enum(["economy", "standard", "premium"]),
+  // 실행 시점 역할별 모델 스냅샷(research/write 등) - 러너가 런 시작 때 기록.
+  // 모드 라벨은 코드 매핑이 바뀌면 과거 프로젝트 표시도 따라 바뀌므로, 이 값이
+  // 있으면 라벨을 여기서 만든다. optional: 스냅샷 도입 전 프로젝트 호환.
+  models: z.record(z.string(), z.string()).optional(),
   // 이 보고서에 적용할 개인 작성 규칙 id 목록(백엔드 stages._selected_rule_ids 소비).
   // optional: 이 필드 도입 전 config가 catch로 통째 초기화되지 않게 한다.
   rules: z.array(z.string()).optional(),

@@ -84,6 +84,34 @@ const MODEL_MODE_LABEL: Record<string, string> = {
   premium: "고급(Haiku 수집 + Opus 5 작성)",
 };
 
+const MODEL_MODE_NAME: Record<string, string> = {
+  economy: "절약",
+  standard: "표준",
+  premium: "고급",
+};
+
+// 모델 id -> 표시명. 카탈로그에 없는 id는 원문 그대로 보여준다(거짓 라벨보다 낫다).
+const MODEL_SHORT_NAME: Record<string, string> = {
+  "claude-haiku-4-5": "Haiku",
+  "claude-sonnet-4-6": "Sonnet",
+  "claude-sonnet-5": "Sonnet 5",
+  "claude-opus-5": "Opus 5",
+  "gpt-5.4-mini-2026-03-17": "GPT-mini",
+};
+
+// 라벨은 실행 시점 스냅샷(config.models) 우선 - 모드 매핑은 배포로 바뀔 수 있어
+// 정적 라벨만 쓰면 과거 런의 표시가 함께 바뀐다(예: 옛 고급 런은 Sonnet 수집이었다).
+function modelModeLabel(config: { model_mode: string; models?: Record<string, string> }): string {
+  const research = config.models?.research;
+  const write = config.models?.write;
+  if (research && write) {
+    const mode = MODEL_MODE_NAME[config.model_mode] ?? config.model_mode;
+    const short = (id: string) => MODEL_SHORT_NAME[id] ?? id;
+    return `${mode}(${short(research)} 수집 + ${short(write)} 작성)`;
+  }
+  return MODEL_MODE_LABEL[config.model_mode] ?? config.model_mode;
+}
+
 const DEPTH_LABEL: Record<string, string> = {
   outline_only: "개요만",
   standard: "표준",
@@ -241,7 +269,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               </Badge>
               <Badge variant="secondary">
                 {/* 역할별로 모델이 다르다 - 'Haiku'로만 적으면 사실과 다르다(본문은 GPT-5.4-mini) */}
-                모델 · {MODEL_MODE_LABEL[project.config.model_mode] ?? project.config.model_mode}
+                모델 · {modelModeLabel(project.config)}
               </Badge>
             </div>
           </div>

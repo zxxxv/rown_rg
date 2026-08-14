@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 from zipfile import BadZipFile
 
@@ -740,9 +740,8 @@ async def update_project_config(
     _validate_outline_config(data.config, await _known_analyst_names(session, current_user.id))
     await _validate_rules_config(session, current_user.id, data.config)
     # 옵션 교체가 파이프라인이 남긴 내부 키까지 지우면 안 된다 - 취소 복귀 지점과
-    # 검증 경고 완료 표시는 사용자가 폼에서 만지는 값이 아니다.
-    keep = {k: v for k, v in (project.config or {}).items() if k in _INTERNAL_CONFIG_KEYS}
-    project.config = {**keep, **data.config}
+    # 검증 경고 완료 표시·모델 스냅샷은 사용자가 폼에서 만지는 값이 아니다.
+    project.config = merge_config_update(project.config, data.config)
     await session.flush()
     await session.refresh(project)
     return project
@@ -1610,7 +1609,16 @@ async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID
 
 
 # config 안에서 폼이 건드리지 않는 내부 키 - 옵션 전체 교체 때 살려 둔다.
-_INTERNAL_CONFIG_KEYS = ("cancelled_from", "verify_resolved")
+# models = 런 시작 시점 역할별 모델 스냅샷(러너 기록) - 표시 라벨의 진실.
+_INTERNAL_CONFIG_KEYS = ("cancelled_from", "verify_resolved", "models")
+
+
+def merge_config_update(current: dict[str, Any] | None, incoming: dict[str, Any]) -> dict[str, Any]:
+    """옵션 전체 교체 + 내부 키 보존. 내부 키는 서버가 진실이라 클라이언트가
+    같은 키를 되돌려 보내도(폼 round-trip) 서버 값이 이긴다."""
+    keep = {k: v for k, v in (current or {}).items() if k in _INTERNAL_CONFIG_KEYS}
+    return {**incoming, **keep}
+
 
 # 근거 추적 응답 상한 — 안 쓰인 근거는 풀 전체(수십 개)라 목록·본문 길이를 자른다.
 _MAX_UNUSED_EVIDENCE = 40
