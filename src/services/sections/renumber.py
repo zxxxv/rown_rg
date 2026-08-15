@@ -23,6 +23,7 @@ import structlog
 from src.core.citations import numbers_in_order
 from src.core.citations import renumber as renumber_marks
 from src.core.state import ProjectState
+from src.services.sections.scrub import scrub_leftovers
 
 logger = structlog.get_logger(__name__)
 
@@ -153,9 +154,19 @@ async def renumber_state(state: ProjectState) -> ProjectState:
                     str(g): [str(c) for c in cids] for g, cids in sorted(mapping.items())
                 }
                 meta[cset.section_id] = prior
-                new_draft = cand.draft.model_copy(
-                    update={"content": renumber_content(cand.draft.content, cited, chunk_to_global)}
-                )
+                renumbered = renumber_content(cand.draft.content, cited, chunk_to_global)
+                # 조립은 본문이 최종 확정되는 단일 지점 — 여기서 작성 잔재를 결정적으로
+                # 세정한다(출처 배정 메모·오염 마커·기형 callout·'본 파트').
+                # 검출만 하면 사람이 지워야 한다(2026-08-15 검증런: 메모 13건+ 노출).
+                cleaned, scrub_notes = scrub_leftovers(renumbered)
+                if scrub_notes:
+                    logger.info(
+                        "assemble.scrubbed",
+                        project_id=str(state.project_id),
+                        section_id=str(cset.section_id),
+                        notes=scrub_notes,
+                    )
+                new_draft = cand.draft.model_copy(update={"content": cleaned})
                 cand = cand.model_copy(update={"draft": new_draft})
             new_cands.append(cand)
         new_sets.append(cset.model_copy(update={"candidates": new_cands}))

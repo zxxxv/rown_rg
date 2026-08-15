@@ -192,6 +192,15 @@ def build_writer_context(
     system = "\n\n".join(parts)
 
     guidance_lines: list[str] = []
+    # 개요 절 역할 규칙 — X.1 '개요'가 상세 절과 같은 통계를 반복해 '같은 절 2회전'이
+    # 되는 실측(2026-08-15 검증런: 1.1↔1.2 대량 중복, 4개 장 공통) 예방. 제목 기반
+    # 결정적 판정이라 프리셋·자유주제 모두에 걸린다.
+    if "개요" in section.title:
+        guidance_lines.append(
+            "이 절은 '개요'다 — 장 전체를 조감하고 뒤 절들이 무엇을 다루는지 안내하는 역할만 한다. "
+            "세부 통계의 나열, 상세 표, 개별 수치 분석은 뒤 절의 몫이므로 여기 쓰지 마라. "
+            "꼭 필요한 대표 수치는 3~4개 이내로 제한하고, 뒤 절에 실릴 표를 미리 만들지 마라."
+        )
     if section.direction:
         guidance_lines.append(f"작성 방향: {section.direction}")
     if section.key_points:

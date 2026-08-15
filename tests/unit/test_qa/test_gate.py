@@ -465,6 +465,26 @@ class TestLeftoversAndTruncation:
         assert truncated_lines(content) == []
         assert check_leftovers(_draft(content)).passed is True
 
+    def test_new_leftover_forms_flagged(self):
+        # 2026-08-15 검증런 신형: 배정 메모·오염 마커·기형 callout - 세정(scrub)과
+        # 같은 패턴 계열로 게이트도 가시화한다(세정 밖 경로 대비).
+        found = leftover_artifacts(
+            "ㅇ 추정치가 제시됨 (출처 17 제외)\n"
+            "ㅇ 평가가 이어짐 (출처 21은 사용 불가 — 해당 서술 생략)\n"
+            "ㅇ 부담이 확대됨 (출превод처 25)\n"
+            "<callout(warn)>\n고지\n</callout>"
+        )
+        joined = " ".join(found)
+        assert "배정 메모" in joined
+        assert "오염된 출처 마커" in joined
+        assert "callout" in joined
+
+    def test_legit_prose_not_flagged_as_memo(self):
+        content = (
+            "ㅇ 판재류는 대상에서 제외된 품목임 (출처 22). 상세는 (출처 12에서 제외된 품목) 참조"
+        )
+        assert leftover_artifacts(content) == []
+
     def test_mid_section_truncation_detected(self):
         # 실측(2026-08-14 탄소규제 런 4.4): 파트 결합부에서 "…GDP가 약 2"로 끊긴 채
         # 다음 항목으로 넘어갔다 - 절 끝 검사로는 안 잡히는 위치다.
