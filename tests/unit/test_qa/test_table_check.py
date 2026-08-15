@@ -127,3 +127,37 @@ class TestTableProseMismatch:
             "ㅇ 편의점 매장 수 통계는 협회가 집계해 발표한 것으로 나타났음 (출처 12)\n"
         )
         assert table_prose_mismatches(md) == []
+
+
+class TestV2FalsePositiveRegressions:
+    """2026-08-15 검증런 정밀도 검증: 표 검사 13건 전수 오탐 - 원인 3종의 회귀 고정."""
+
+    def test_marker_numbers_in_cells_not_extracted(self):
+        # 셀 안 "(출처 35, 13)"의 번호가 값으로 오인되던 4건(값 9개)의 형태.
+        md = "| 구분 | 내용 |\n|---|---|\n| 부과 기준 | 전환기 무료 신고 (출처 35, 13) |\n"
+        assert table_ungrounded_numbers(md, "한글 근거 본문") == []
+
+    def test_english_only_evidence_skipped(self):
+        # $370B vs 3,700억 달러 - 외국어 근거는 어휘로 '없다'를 선언할 수 없다(5건/값 20개).
+        md = "| 구분 | 수입 규모 |\n|---|---|\n| 미국 전체 | 3,700억 달러 |\n"
+        assert table_ungrounded_numbers(md, "Total imports were $370 billion in 2017.") == []
+        # 한글 근거면 정상 판정한다.
+        assert table_ungrounded_numbers(md, "수입 규모는 3,700억 달러였다") == []
+        assert table_ungrounded_numbers(md, "관련 없음") != []
+
+    def test_magnitude_band_blocks_different_indicators(self):
+        # 16TWh(영국 현재) vs 650TWh(2030 전망) 같은 지표 오짝(4건) - x10 밴드 밖은 비교 안 함.
+        md = (
+            "| 회원사 전력 수요 | 유럽 |\n|---|---|\n| 영국 | 16TWh |\n\n"
+            "ㅇ 2030년 유럽을 포함한 회원사 전력 수요는 650TWh에 이를 것으로 전망됨 [1]\n"
+        )
+        assert table_prose_mismatches(md) == []
+
+    def test_close_conflict_still_flagged(self):
+        # 진짜 결함(1.8조 vs 2.7조·74 vs 626류)은 밴드 안이라 계속 잡힌다.
+        md = (
+            "| 구분 | 총부담 |\n|---|---|\n| 한국 총부담 | 1.8조 |\n\n"
+            "ㅇ 한국 총부담은 10년 누적 2.7조 원으로 추정됨 [1]\n"
+        )
+        out = table_prose_mismatches(md)
+        assert len(out) == 1 and "1.8" in out[0] and "2.7" in out[0]

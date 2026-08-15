@@ -130,6 +130,20 @@ class TestFindingsWithVerdicts:
         assert [r["severity"] for r in numeric] == ["critical"]
         assert "판정 확인" in numeric[0]["detail"]
 
+    def test_english_only_evidence_without_span_is_crosslingual(self):
+        # 영문 근거 직역은 어휘 겹침이 0이라 대목(span)조차 못 잡는다 - unmatched로
+        # 새면 '근거 불일치'가 부푼다(2026-08-15 실측: 대표 예문 오탐 15건의 주범).
+        # crosslingual로 분류돼 경고에서 빠지고 판정 퍼널로는 들어가야 한다.
+        from src.services.qa.alignment import align_section
+
+        cid = uuid4()
+        chunk = "The CBAM cost equals embedded emissions times the EU ETS price."
+        claims = align_section(
+            "부담액은 내재배출량에 배출권 가격을 곱해 산정됨 [1]", {cid: chunk}, {1: [cid]}
+        )
+        assert claims[0].status == "crosslingual"
+        assert suspicious_indices(claims) == [0]
+
     def test_crosslingual_numbers_skipped_without_verdict(self):
         # 교차언어 근거는 어휘로 잴 수 없다 - 판정 없이 세면 전부 오탐이 된다
         # (실측: "72억 달러" vs "$7.2 billion"). 판정이 반박하면 정상적으로 잡힌다.

@@ -234,6 +234,11 @@ class ClaimAlignment:
     ungrounded: list[str] = field(default_factory=list)
     # 근거에서 발견된 수치의 위치. ungrounded와 합치면 이 문장의 수치 전수가 된다.
     grounded: list[NumberSpan] = field(default_factory=list)
+    # 인용 근거에 한글 대목이 하나라도 있는가. 전부 외국어면 겹침 0이어도 '불일치'가
+    # 아니라 '잴 수 없음'이다 - 영문 근거를 직역한 문장이 대목조차 못 잡아 unmatched로
+    # 새며 '근거 불일치' 경고가 부풀던 갭(2026-08-15 실측: 대표 예문 20건 정탐 0,
+    # 오탐 15건의 주범이 직역 케이스).
+    evidence_comparable: bool = True
 
     @property
     def status(self) -> str:
@@ -242,7 +247,7 @@ class ClaimAlignment:
         if not self.numbers:
             return "uncited"
         if self.span is None:
-            return "unmatched"
+            return "unmatched" if self.evidence_comparable else "crosslingual"
         if not self.span.comparable:
             return "crosslingual"
         if self.span.score >= ALIGNED_THRESHOLD:
@@ -297,6 +302,7 @@ def align_section(
         # 수치는 대목이 아니라 인용 근거 전체를 상대로 본다(같은 자료의 다른
         # 줄에 있을 수 있다) — 게이트와 같은 판정을 쓴다.
         ungrounded = ungrounded_numbers(bare, "\n".join(cited_text)) if numbers else []
+        joined_evidence = "\n".join(cited_text)
         out.append(
             ClaimAlignment(
                 claim=claim,
@@ -304,6 +310,9 @@ def align_section(
                 span=best,
                 ungrounded=ungrounded,
                 grounded=_grounded_spans(bare, cited_chunks, ungrounded),
+                evidence_comparable=(
+                    not joined_evidence.strip() or bool(_HANGUL_RUN_RE.search(joined_evidence))
+                ),
             )
         )
     return out

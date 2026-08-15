@@ -75,7 +75,9 @@ def table_numeric_cells(content: str) -> list[TableCell]:
             label = _clean_label(row[0]) if row else ""
             for col, cell in enumerate(row[1:], start=1):
                 header = _clean_label(headers[col]) if col < len(headers) else ""
-                for token in significant_numbers(cell):
+                # 셀 안 인용 마커 "(출처 35, 13)"의 번호는 수치가 아니다 - v2 검증런
+                # 실측에서 표 무근거 9건 중 4건(값 9개 전부)이 이 오인이었다(2026-08-15).
+                for token in significant_numbers(MARK_RE.sub(" ", cell)):
                     out.append(
                         TableCell(
                             row_label=label,
@@ -95,6 +97,11 @@ def table_ungrounded_numbers(content: str, cited_content: str) -> list[str]:
     반환은 "수치(행 라벨/열 머리)" 표기 - 어느 셀인지 사람이 바로 찾게.
     """
     if not cited_content.strip():
+        return []
+    # 인용 근거가 외국어뿐이면 어휘로 '없다'를 선언할 수 없다 - $370B vs 3,700억
+    # 달러 같은 단위 환산이 전부 오탐이 된다(2026-08-15 실측: 표 무근거 5건/값 20개
+    # 전부 이 유형). 문장 축의 crosslingual 원칙 그대로 판정을 포기한다.
+    if not re.search(r"[가-힣]", cited_content):
         return []
     haystack = cited_content.replace(",", "")
     out: list[str] = []
@@ -129,6 +136,23 @@ def _valid_key(text: str) -> bool:
     return len(text) >= 2 and bool(re.search(r"[가-힣A-Za-z]", text))
 
 
+def _same_band(a: str, b: str) -> bool:
+    """×10 배율 밴드 안에 있어야 같은 지표의 값 후보다.
+
+    라벨·열 머리가 겹쳐도 배율이 크게 다르면 다른 지표다(2026-08-15 실측: 표-본문
+    오짝 4건 전부 16vs650·8%vs200%·570vs37처럼 10배 이상). 실제 결함은 같은 지표의
+    근소한 충돌(1.8조vs2.7조, 74vs626개사)이라 밴드 안에 남는다.
+    """
+    try:
+        fa, fb = abs(float(a)), abs(float(b))
+    except ValueError:
+        return False
+    if fa == 0 or fb == 0:
+        return fa == fb
+    ratio = fa / fb if fa >= fb else fb / fa
+    return ratio < 10
+
+
 def table_prose_mismatches(content: str) -> list[str]:
     """검사 B: 같은 지표를 말하는 본문 문장과 표 셀의 수치가 다른 경우.
 
@@ -161,7 +185,7 @@ def table_prose_mismatches(content: str) -> list[str]:
             same_shape = [
                 (t, normalize_number(t))
                 for t in significant_numbers(bare)
-                if t.endswith("%") == cell.is_percent
+                if t.endswith("%") == cell.is_percent and _same_band(normalize_number(t), cell.norm)
             ]
             if not same_shape:
                 continue
