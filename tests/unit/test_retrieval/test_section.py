@@ -52,6 +52,14 @@ class TestHitToChunk:
         assert chunk.content == "본문"
         assert chunk.score == hit.score
 
+    def test_published_year_carried_from_metadata(self):
+        # 색인이 실은 발간연도(D1)가 검색을 거쳐 프롬프트 라벨(D2)까지 흘러야 한다.
+        hit = _hit("본문")
+        hit.metadata = {"published_year": 2022}
+        assert hit_to_chunk(hit).published_year == 2022
+        hit.metadata = {"published_year": "2022"}  # 형이 어긋나면 미상으로
+        assert hit_to_chunk(hit).published_year is None
+
 
 class TestRetrieveForSection:
     async def test_returns_retrieved_chunks(self):

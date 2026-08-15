@@ -115,6 +115,10 @@ class RetrievedChunk(BaseModel):
     # 여럿이 없는 날짜·기관을 붙인 귀속 오류였다).
     source_title: str = ""
     header_path: list[str] = Field(default_factory=list)
+    # 자료 발간연도(색인 시 추출, chunk.metadata.published_year) — 프롬프트 라벨에
+    # 실어 옛 자료('21~'22)의 통계가 무연도 현재형으로 서술되는 것을 막는 재료.
+    # 검증런 2회 연속의 주 감점 축이었다(2026-08-15). None=미상.
+    published_year: int | None = None
     # RAPTOR 요약 노드 여부 — True면 프롬프트에서 '배경 맥락'으로만 쓰이고
     # [번호] 인용 풀에서 제외된다(인용 무결성은 leaf 청크 계약 유지).
     is_summary: bool = False

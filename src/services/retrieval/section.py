@@ -32,13 +32,16 @@ DEFAULT_FETCH_K = 30
 
 def hit_to_chunk(hit: SearchHit) -> RetrievedChunk:
     """검색 백엔드 SearchHit을 생성·게이트가 쓰는 RetrievedChunk로 축약."""
-    header = hit.metadata.get("header_path") if isinstance(hit.metadata, dict) else None
+    meta = hit.metadata if isinstance(hit.metadata, dict) else {}
+    header = meta.get("header_path")
+    year = meta.get("published_year")
     return RetrievedChunk(
         chunk_id=hit.chunk_id,
         source_id=hit.source_id,
         content=hit.content,
         score=hit.score,
         header_path=[str(h) for h in header] if isinstance(header, list) else [],
+        published_year=year if isinstance(year, int) else None,
     )
 
 

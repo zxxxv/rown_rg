@@ -28,8 +28,14 @@ TEMPERATURE_CEILING = 1.0
 
 
 def _source_label(chunk: RetrievedChunk) -> str:
-    """근거 앞에 붙는 '무엇의 어디' 표기 - 없으면 빈 문자열(형식 불변)."""
-    parts = [p for p in [chunk.source_title, " > ".join(chunk.header_path)] if p]
+    """근거 앞에 붙는 '무엇의 어디' 표기 - 없으면 빈 문자열(형식 불변).
+
+    발간연도를 함께 실어 옛 자료의 통계가 무연도 현재형으로 서술되는 것을 막는다
+    (검증런 2회 연속의 주 감점 축, 2026-08-15). 미상이면 안 붙인다 - 전 청크에
+    '미상'을 달면 라벨이 소음이 된다.
+    """
+    year = f"{chunk.published_year}년 발간" if chunk.published_year else ""
+    parts = [p for p in [chunk.source_title, year, " > ".join(chunk.header_path)] if p]
     return f" ({' · '.join(parts)})" if parts else ""
 
 
@@ -76,6 +82,12 @@ def _build_prompt(
             " 표기하라. 근거를 여럿 썼으면 (출처 n, m)처럼 한 괄호에 모아라."
             " 원문 문장을 따옴표로 감싸 그대로 옮긴 경우에만 문장 끝에 [n]을 쓴다 —"
             " 참고해 다시 쓴 문장에는 절대 대괄호를 쓰지 마라.",
+            # 자료 시점 규칙(2026-08-15) — '21~'22 자료의 수치가 무연도 현재형으로
+            # 유통되던 결함('전기요금 40% 저렴' 등)의 예방. 라벨 연도가 재료다.
+            "근거 라벨의 '○○년 발간'을 보라: 발간이 오래된 자료(2년 이상 경과)의 실적·"
+            "통계·시장 여건을 쓸 때는 그 시점을 문장에 명기하고('○○년 기준', '○○년"
+            " 발간 자료 기준'), 현재형으로 단정하지 마라. 발간연도가 없는 근거의 통계도"
+            " 시점을 현재로 단정하지 마라. 제도 조문·정의처럼 시점과 무관한 서술은 예외다.",
         ]
     )
     return "\n".join(lines)
