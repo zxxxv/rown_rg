@@ -237,6 +237,10 @@ function resolveTableSources(md: string, citations: CitationMap): string {
         .split(",")
         .map((part) => Number(part.trim()))
         .map((n) => citations.get(n)?.title?.trim() || `자료 ${n}`);
+      // 표에 딱 붙은 줄이면 빈 줄을 끼워 표를 닫고 나서 쓴다 - 원문은 "* 출처: …"라 목록
+      // 시작으로 표가 끊겼지만, 실서지로 푼 결과는 평문이라 빈 줄이 없으면 GFM이 그 줄을
+      // 표의 다음 행으로 먹는다(출처가 빈 칸을 달고 표 안에 들어앉았다, 2026-08-15 실측).
+      if (out.length > 0 && out[out.length - 1].trim() !== "") out.push("");
       out.push(`출처: ${names.join("; ")}`);
       lastContent = out[out.length - 1];
       continue;

@@ -700,7 +700,12 @@ function ChapterSectionBlock({
  *   설계돼 있어(tableToChart.source) 붙여도 무손실이다.
  *
  * 블록은 줄 범위를 잘라 만든다 - 사이 빈 줄까지 그대로 품어야 원문 부분 문자열로 남는다. */
-const MARKER_ONLY_BLOCK_RE = /^(?:\s|\(출처\s*[\d,\s]+\)|\[\d+\])+$/;
+// 불릿·"출처:" 라벨이 앞에 붙은 변형도 받는다 - 작성기가 규약대로 단독 마커만 내지 않고
+// "* 출처: (출처 34, 21)"처럼 써 내는 게 실제 출력이라(백엔드 report.py와 같은 관용),
+// 안 받으면 표와 빈 줄 하나로 갈라진 출처 줄이 제 블록이 돼 실서지 변환이 통째로 빠지고
+// 표 밑이 비면서 인용·근거 배지만 한 벌 더 뜬다(2026-08-15 사용자 지적).
+const MARKER_ONLY_BLOCK_RE =
+  /^[※*\-–ㅇ○◦\s]*(?:(?:출처|자료|참고)\s*[:：])?(?:\s|\(출처\s*[\d,\s]+\)|\[\d+\])+$/;
 
 function splitBlocks(content: string): string[] {
   const lines = content.split("\n");
