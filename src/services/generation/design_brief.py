@@ -90,6 +90,17 @@ _COST_PER_SECTION_USD: dict[str, tuple[float, float]] = {
 }
 _DEFAULT_MODE = "standard"
 
+# 모드별 '런 1회 예상 비용' 고정값(USD) — 남은 한도 경고의 비교 기준(2026-08-15
+# 사용자 지정: 고급 $30 / 표준 $20 / 절약 $15). 위의 절수 비례 범위와 별개로,
+# 경고 문턱은 절 수에 흔들리지 않는 고정 기준을 쓴다 — "이 모드로 한 번 돌리면
+# 대략 이만큼"이라는 운영 감각의 값이라 목차가 작아도 문턱이 무너지지 않는다.
+# 부족해도 차단하지 않는다(경고만) — 강제는 quota_gate의 도달 시 차단 그대로.
+EXPECTED_RUN_COST_USD: dict[str, float] = {
+    "economy": 15.0,
+    "standard": 20.0,
+    "premium": 30.0,
+}
+
 
 def build_estimate(
     plan: list[SectionPlan],
@@ -118,6 +129,8 @@ def build_estimate(
         "pages_max": max(1, total_max // _CHARS_PER_PAGE) if n else 0,
         "cost_usd_min": round(n * low, 1),
         "cost_usd_max": round(n * high, 1),
+        # 남은 한도 경고의 비교 기준(고정값) — 프론트가 remaining_limit_usd와 비교한다.
+        "expected_run_cost_usd": EXPECTED_RUN_COST_USD[mode],
     }
 
 

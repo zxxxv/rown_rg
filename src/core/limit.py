@@ -12,7 +12,10 @@ DEFAULT_ROLE_LIMIT_USD: dict[str, Decimal] = {
     "super_admin": Decimal("500"),
     "admin": Decimal("300"),
     "worker": Decimal("200"),
-    "viewer": Decimal("50"),
+    # 뷰어는 읽기 전용(생성·실행 전부 require_writer 차단)이라 LLM 비용 경로가 없다 —
+    # 0은 "이 역할 이름으로 LLM 호출이 나가면 그 자체가 이상 신호"라는 선언이다
+    # (2026-08-15 사용자 결정, 50→0).
+    "viewer": Decimal("0"),
 }
 
 

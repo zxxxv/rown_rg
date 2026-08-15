@@ -42,13 +42,9 @@ export const QUOTA_META = [
     min: 1,
     max: 100_000,
   },
-  {
-    key: "DEFAULT_LIMIT_VIEWER_USD",
-    label: "viewer 기본 한도",
-    hint: "개인 지정이 없는 viewer에게 적용",
-    min: 1,
-    max: 100_000,
-  },
+  // viewer 한도 설정란은 없음 - 뷰어는 읽기 전용이라 기본 $0 고정(2026-08-15 결정).
+  // LLM 호출 경로 자체가 없어 조정할 이유가 없고, 조정이 필요해지면 그때 역할 설계부터
+  // 다시 본다(백엔드 core.limit DEFAULT_ROLE_LIMIT_USD.viewer = 0).
 ] as const;
 
 export const quotaSettingsKeys = {

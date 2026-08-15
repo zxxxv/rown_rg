@@ -15,7 +15,9 @@ class QuotaSettingKey(StrEnum):
     DEFAULT_LIMIT_SUPER_ADMIN_USD = "DEFAULT_LIMIT_SUPER_ADMIN_USD"
     DEFAULT_LIMIT_ADMIN_USD = "DEFAULT_LIMIT_ADMIN_USD"
     DEFAULT_LIMIT_WORKER_USD = "DEFAULT_LIMIT_WORKER_USD"
-    DEFAULT_LIMIT_VIEWER_USD = "DEFAULT_LIMIT_VIEWER_USD"
+    # viewer 한도는 설정 대상이 아니다 — 읽기 전용 역할이라 LLM 비용 경로가 없어
+    # $0 고정(core.limit). 여기서 빠졌으므로 조회 캐시·수정 모두 거부된다(0040에서
+    # 기존 시딩 행 삭제). 조정이 필요해지면 역할 설계부터 다시 본다(2026-08-15 결정).
 
 
 class QuotaSettingRule(NamedTuple):
@@ -38,9 +40,6 @@ QUOTA_SETTING_RULES: dict[QuotaSettingKey, QuotaSettingRule] = {
     QuotaSettingKey.DEFAULT_LIMIT_WORKER_USD: QuotaSettingRule(
         1, 100_000, "worker 역할 기본 월 한도(USD)"
     ),
-    QuotaSettingKey.DEFAULT_LIMIT_VIEWER_USD: QuotaSettingRule(
-        1, 100_000, "viewer 역할 기본 월 한도(USD)"
-    ),
 }
 
 # 마이그레이션 초기 시딩값 — 이관 전 config 상수의 실제 기본값을 그대로 옮긴다.
@@ -50,7 +49,6 @@ QUOTA_SETTING_SEED_VALUES: dict[str, str] = {
     QuotaSettingKey.DEFAULT_LIMIT_SUPER_ADMIN_USD.value: "500",
     QuotaSettingKey.DEFAULT_LIMIT_ADMIN_USD.value: "300",
     QuotaSettingKey.DEFAULT_LIMIT_WORKER_USD.value: "200",
-    QuotaSettingKey.DEFAULT_LIMIT_VIEWER_USD.value: "50",
 }
 
 
@@ -60,7 +58,7 @@ QUOTA_KEY_FOR_ROLE: dict[str, QuotaSettingKey] = {
     "super_admin": QuotaSettingKey.DEFAULT_LIMIT_SUPER_ADMIN_USD,
     "admin": QuotaSettingKey.DEFAULT_LIMIT_ADMIN_USD,
     "worker": QuotaSettingKey.DEFAULT_LIMIT_WORKER_USD,
-    "viewer": QuotaSettingKey.DEFAULT_LIMIT_VIEWER_USD,
+    # viewer는 매핑 없음 → quota_key_for_role이 None → core.limit 상수($0) 폴백.
 }
 
 

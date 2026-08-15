@@ -244,6 +244,8 @@ export const BriefEstimateSchema = z.object({
   // 이번 달 남은 한도(사용자·조직 중 빡빡한 쪽) - 부족해도 차단하지 않는다(경고만).
   // 조회 실패 시 서버가 필드를 생략한다 - 카드가 숫자 없이 뜬다.
   remaining_limit_usd: z.number().nullish(),
+  // 남은 한도 경고의 비교 기준 - 모드별 런 1회 고정 예상 비용(고급 $30/표준 $20/절약 $15).
+  expected_run_cost_usd: z.number().nullish(),
 });
 export type BriefEstimate = z.infer<typeof BriefEstimateSchema>;
 

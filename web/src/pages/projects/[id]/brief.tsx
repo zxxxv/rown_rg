@@ -72,9 +72,10 @@ function EstimateCard({ brief }: { brief: DesignBriefPayload }) {
   const est = brief.estimate;
   if (!est || est.n_sections === 0) return null;
   const remaining = est.remaining_limit_usd;
-  // 확실히 부족(최소 추정도 초과) vs 빠듯(최대 추정이 초과) - 문구를 구분한다.
-  const short = remaining != null && est.cost_usd_min > remaining;
-  const tight = remaining != null && !short && est.cost_usd_max > remaining;
+  // 경고 기준은 절수 비례 추정이 아니라 모드별 런 1회 고정 예상 비용(고급 $30/표준
+  // $20/절약 $15) - 남은 한도가 그보다 적으면 "이 모드로 한 번 돌릴 여유가 없다".
+  const expected = est.expected_run_cost_usd;
+  const short = remaining != null && expected != null && remaining < expected;
   return (
     <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-bg-secondary px-4 py-3">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
@@ -89,18 +90,18 @@ function EstimateCard({ brief }: { brief: DesignBriefPayload }) {
           {MODE_LABEL[est.model_mode] ?? est.model_mode} 모드)
         </span>
         {remaining != null ? (
-          <span className={cn("text-sm", short || tight ? "text-fg-warning" : "text-fg-secondary")}>
+          <span className={cn("text-sm", short ? "text-fg-warning" : "text-fg-secondary")}>
             이번 달 남은 한도 ${remaining}
           </span>
         ) : null}
         <span className="text-[11px] text-fg-tertiary">과거 실측 단가 기반 추정입니다</span>
       </div>
-      {short || tight ? (
+      {short ? (
         <p className="flex items-center gap-1.5 text-xs text-fg-warning">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          {short
-            ? "예상 비용이 남은 한도를 넘습니다 - 진행하면 도중에 한도에 걸려 멈출 수 있습니다. 절약 모드로 낮추거나 관리자에게 한도 조정을 요청하세요."
-            : "예상 비용 상단이 남은 한도에 빠듯합니다 - 도중에 한도에 걸릴 수 있습니다."}
+          남은 한도(${remaining})가 {MODE_LABEL[est.model_mode] ?? est.model_mode} 모드 1회 예상
+          비용(${expected})에 못 미칩니다 - 진행하면 도중에 한도에 걸려 멈출 수 있습니다. 절약
+          모드로 낮추거나 관리자에게 한도 조정을 요청하세요.
         </p>
       ) : null}
     </div>

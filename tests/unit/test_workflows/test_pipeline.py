@@ -316,6 +316,8 @@ class TestPausesAtDesignBrief:
         assert est["total_max_chars"] == 8000
         # 남은 한도가 예상 비용 옆에 실린다 - 부족해도 차단이 아니라 경고(사람 판단).
         assert est["remaining_limit_usd"] == 9_999.0
+        # 경고 비교 기준은 모드별 런 1회 고정값(표준 $20) - 절 수에 흔들리지 않는다.
+        assert est["expected_run_cost_usd"] == 20.0
 
     async def test_ai_plan_failure_does_not_block_gate(self, monkeypatch: pytest.MonkeyPatch):
         """LLM이 쓰레기를 돌려줘도 게이트는 결정적 브리프로 뜬다(ai_plan=None)."""
