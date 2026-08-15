@@ -32,6 +32,7 @@ from src.db.models.chunk import Chunk as ChunkModel
 from src.db.models.project_source import ProjectSource
 from src.services.indexing._boilerplate import excluded_metadata
 from src.services.indexing._pages import assign_chunk_pages, strip_page_markers
+from src.services.indexing.published_year import extract_published_year
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -187,6 +188,13 @@ class VectorIndexingService:
         ):
             if page is not None:
                 chunk.metadata["page"] = page
+
+        # 발간연도 — 자료 시점 축의 재료(2026-08-15). 청크에 실어 작성 주입·게이트
+        # 표시·통계가 전부 여기서 읽게 한다. 확신 없으면 안 단다(미상은 미상대로 처리).
+        year = extract_published_year(source.title or Path(source.file_path).name, clean_md[:4000])
+        if year is not None:
+            for chunk in chunks:
+                chunk.metadata["published_year"] = year
 
         # 본문 임베딩은 외부 I/O — DB 세션 밖에서. BGE-M3 자체 캐시가 재실행 시 비용을 흡수.
         # 배치를 끊어 넣는다: 한 번에 넣으면 배치 안 최장 청크에 맞춰 전부 패딩돼

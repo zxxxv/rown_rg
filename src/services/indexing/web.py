@@ -28,6 +28,7 @@ from src.db.models.chunk import Chunk as ChunkModel
 from src.db.models.project_source import ProjectSource
 from src.services.indexing._boilerplate import excluded_metadata
 from src.services.indexing.exclusion import AUTO_EXCLUDED_KEY
+from src.services.indexing.published_year import extract_published_year, year_from_page_age
 from src.services.indexing.vector import IndexingResult
 
 if TYPE_CHECKING:
@@ -198,6 +199,18 @@ class WebSourceIndexer:
 
         async with self._session_maker() as session:
             metas = await excluded_metadata(session, project_id, chunks)
+            # 발간연도 — 수집이 준 page_age가 1순위, 없으면 제목·본문 머리에서 추출
+            # (업로드 색인과 같은 축, 2026-08-15). 웹 자료의 시점 미상 현재형 서술을
+            # 작성 주입·게이트 표시가 걸러낼 재료다.
+            src_row = await session.get(ProjectSource, source_id)
+            year = (
+                year_from_page_age((src_row.metadata_ or {}).get("page_age")) if src_row else None
+            )
+            if year is None:
+                year = extract_published_year(src_row.title if src_row else None, content_md[:4000])
+            if year is not None:
+                for meta in metas:
+                    meta["published_year"] = year
             session.add_all(
                 [
                     ChunkModel(
