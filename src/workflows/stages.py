@@ -692,13 +692,26 @@ async def index(state: ProjectState) -> ProjectState:
     # 모델 첫 로드를 루프 밖으로 — _collect_sources와 같은 이유(단일 워커 API 생존).
     indexer = await asyncio.to_thread(_web_indexer_factory)
     staged = await indexer.load_included(state.project_id)
+    # 증분 색인 — 이미 청크가 있는 자료는 건너뛴다. index_existing은 무조건 INSERT라
+    # 재실행(크래시 재개·리허설 공백의 자료 게이트 재개방 후 재색인)이 같은 자료를
+    # 두 번 색인하면 청크가 중복돼 검색 결과까지 오염된다. 재수집으로 본문이 바뀐
+    # 자료는 잡지 못하는 한계가 있지만, 중복 오염보다 낫다(본문 교체는 드문 경로).
+    already = await _chunked_source_ids(state.project_id)
     # 색인·RAPTOR는 수 분짜리 단계다 — 자료별/클러스터별 진행을 세부 단계로 발행해
     # 스테퍼가 "멈춘 것처럼" 보이지 않게 한다(2026-08-07 실사용 보고).
     usable = [s for s in staged if has_usable_content(s.content_md)]
-    indexed: list[UUID] = []
-    for i, src in enumerate(usable, start=1):
+    todo = [s for s in usable if s.source_id not in already]
+    if len(todo) < len(usable):
+        logger.info(
+            "indexing.incremental_skip",
+            project_id=str(pid),
+            skipped=len(usable) - len(todo),
+            total=len(usable),
+        )
+    indexed: list[UUID] = [s.source_id for s in usable if s.source_id in already]
+    for i, src in enumerate(todo, start=1):
         title = f" · {src.title[:24]}" if src.title else ""
-        emit_step(pid, "indexing", f"청킹·임베딩 {i}/{len(usable)}{title}", "started")
+        emit_step(pid, "indexing", f"청킹·임베딩 {i}/{len(todo)}{title}", "started")
         result = await indexer.index_existing(
             project_id=state.project_id,
             source_id=src.source_id,
@@ -712,10 +725,15 @@ async def index(state: ProjectState) -> ProjectState:
     # 전역 인용 번호 자리를 차지해 출처장에 유령 항목이 실린다. 재수집이 본문을
     # 채우면 stage()가 자동 제외를 되돌린다.
     from src.services.indexing.exclusion import auto_exclude_chunkless
+    from src.services.retrieval.rehearsal import bump_index_version
 
-    await auto_exclude_chunkless(
+    n_excluded = await auto_exclude_chunkless(
         state.project_id, [s.source_id for s in staged if s.source_id not in set(indexed)]
     )
+    new_chunks = len(indexed) > len(already & {s.source_id for s in usable})
+    if new_chunks or n_excluded:
+        # 청크 구성이 변했다 — 리허설 캐시 전체 무효(신규 색인 시 프로젝트 전체 무효 규칙).
+        await bump_index_version(state.project_id)
     logger.info(
         "indexing.done",
         project_id=str(state.project_id),
@@ -723,7 +741,9 @@ async def index(state: ProjectState) -> ProjectState:
         n_indexed=len(indexed),
     )
     emit_step(pid, "indexing", "청킹·임베딩·색인", "completed")
-    if settings.raptor_enabled and indexed:
+    if settings.raptor_enabled and indexed and (new_chunks or not await _has_raptor_tree(pid)):
+        # 새 청크가 없고 트리도 이미 있으면 재구축하지 않는다 — 재개방 후 재색인이
+        # 자료 변화 없이 돌아왔을 때 수백 콜짜리 요약을 다시 사지 않기 위함.
         emit_step(pid, "indexing", "배경 요약 트리(RAPTOR)", "started")
         try:
             n_nodes = await _raptor_builder_factory().build(
@@ -738,8 +758,261 @@ async def index(state: ProjectState) -> ProjectState:
             # RAPTOR는 품질 부스터지 필수 경로가 아니다 — 실패해도 파이프라인은 계속 간다.
             logger.warning("raptor.build_failed", project_id=str(state.project_id), exc_info=True)
             emit_step(pid, "indexing", "배경 요약 트리(RAPTOR)", "failed")
+    state = await _rehearser(state)
     emit_phase(pid, "indexing", "completed")
     return state.mark_indexed(indexed)
+
+
+async def _chunked_source_ids(project_id: UUID) -> set[UUID]:
+    """이미 청크가 있는 자료 id — 증분 색인의 스킵 판정용."""
+    from sqlalchemy import select
+
+    from src.db.models.chunk import Chunk
+    from src.db.session import async_session_maker
+
+    async with async_session_maker() as session:
+        rows = (
+            await session.execute(
+                select(Chunk.source_id)
+                .where(Chunk.project_id == project_id, Chunk.track == "content")
+                .distinct()
+            )
+        ).all()
+    return {r[0] for r in rows if r[0] is not None}
+
+
+async def _has_raptor_tree(project_id: UUID) -> bool:
+    from sqlalchemy import select
+
+    from src.db.models.raptor_node import RaptorNode
+    from src.db.session import async_session_maker
+
+    async with async_session_maker() as session:
+        row = (
+            await session.execute(
+                select(RaptorNode.id).where(RaptorNode.project_id == project_id).limit(1)
+            )
+        ).scalar_one_or_none()
+    return row is not None
+
+
+async def _design_flows_inbound(project_id: UUID) -> dict[str, int]:
+    """AI 실행 계획 flows의 절별 수신 수 — '구성형 절'(앞 절 산출로 쓰는 절) 판정용.
+
+    수신이 많은 절은 검색으로 채우는 절이 아니라 앞 절 결과를 조립하는 절이다 —
+    리허설 공백을 자료 부족으로 오진하면 안 된다(builds_on 명시 계약 전까지의 근사).
+    flows는 게이트 payload의 AI 원안에서 읽는다(사람 수정본 decision.ai_plan에는
+    sections만 실린다).
+    """
+    from sqlalchemy import select
+
+    from src.db.models.review_point import ReviewPoint
+    from src.db.session import async_session_maker
+
+    try:
+        async with async_session_maker() as session:
+            row = (
+                await session.execute(
+                    select(ReviewPoint)
+                    .where(
+                        ReviewPoint.project_id == project_id,
+                        ReviewPoint.gate == "design_brief",
+                    )
+                    .order_by(ReviewPoint.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+    except Exception:
+        logger.warning("rehearsal.flows_load_failed", project_id=str(project_id))
+        return {}
+    ai = (row.payload or {}).get("ai_plan") if row is not None else None
+    flows = ai.get("flows") if isinstance(ai, dict) else None
+    inbound: dict[str, int] = {}
+    for f in flows if isinstance(flows, list) else []:
+        if isinstance(f, dict) and f.get("to"):
+            to = str(f["to"])
+            inbound[to] = inbound.get(to, 0) + 1
+    return inbound
+
+
+# 구성형 절 판정 하한 — flows 수신이 이 수 이상이면 '앞 절 산출로 쓰는 절'로 본다.
+_CONSTRUCTIVE_MIN_INFLOWS = 2
+# HyDE 남발 경고 비율 — 이 이상이면 부족이 아니라 질의 자체가 문제라는 신호(킬 기준).
+_HYDE_OVERUSE_RATIO = 0.75
+
+
+def _hyde_forced_retriever(state: ProjectState) -> SectionRetriever:
+    """HyDE를 강제로 켠 retriever — 리허설 부족 밴드의 재검색 1회용."""
+    opts = dict(state.options) if isinstance(state.options, dict) else {}
+    opts["hyde_enabled"] = True
+    return _retriever_factory(state.model_copy(update={"options": opts}))
+
+
+def _summary_probe(state: ProjectState):
+    """RAPTOR 클러스터 대조용 요약 검색기 — 트리가 꺼져 있으면 None.
+
+    임베딩 클라이언트는 첫 호출 시점에 만든다 — 공백 절이 없는 리허설이 모델 로드를
+    사지 않게(색인 경로에서 이미 로드돼 있으면 싱글턴이라 공짜다).
+    """
+    if not settings.raptor_enabled:
+        return None
+
+    async def probe(query: str):
+        from src.clients.embedding_factory import get_embedding_client
+        from src.db.session import async_session_maker
+        from src.services.retrieval._raptor import make_summary_fetcher
+
+        fetch = make_summary_fetcher(
+            async_session_maker,
+            get_embedding_client(),
+            state.project_id,
+            top_k=settings.raptor_top_k,
+            min_similarity=settings.raptor_min_similarity,
+        )
+        return await fetch(query)
+
+    return probe
+
+
+async def _rehearse(state: ProjectState) -> ProjectState:
+    """검색 리허설 + 계획 점검 — 색인 직후 자동 단계(게이트 아님).
+
+    절마다 **작성과 같은 검색**을 한 번 돌려 근거 충분성을 3밴드로 판정한다
+    (경계는 절 목표 분량에서 유도 — services/retrieval/rehearsal 참조):
+
+    - ok: 진행. hyde: HyDE 재검색 1회로 보강 시도(더 나은 쪽 채택, 그래도 부족하면
+      그대로 진행 — 작성이 scale_for_evidence로 분량을 깎는다).
+    - empty: 자료 게이트 재개방 사유. 단 구성형 절(AI 계획 flows 수신이 많은 절)은
+      검색으로 못 채우는 절이라 재개방 트리거에서 빼고 경고만 남긴다. RAPTOR
+      클러스터에도 유사 요약이 없으면 raptor_gap=True — '질의 문제'가 아니라
+      '자료 자체가 없음'이라는 뜻이라 보강 안내가 정확해진다.
+
+    결과 청크는 section_rehearsals에 영속된다 — 작성은 같은 index_version이면 이
+    목록을 재검색 없이 그대로 쓴다(리허설↔작성 동근거 계약, make_cached_retriever).
+
+    재개방은 프로젝트당 2회까지(config["_rehearsal_reopens"]) — 그 뒤에도 공백이면
+    경고를 남기고 진행한다(절 통합·삭제·성격 재지정은 사람이 취소 후 목차에서 한다).
+    """
+    from src.services.generation.writer_context import build_writer_context
+    from src.services.retrieval.rehearsal import (
+        BAND_EMPTY,
+        BAND_HYDE,
+        classify,
+        current_index_version,
+        empty_floor,
+        needed_evidence,
+        store_rehearsal,
+    )
+    from src.services.retrieval.section import _rerank_query
+
+    pid = state.project_id
+    if not state.section_plan:
+        return state
+    version = await current_index_version(pid)
+    catalog = await _analyst_catalog(state.user_id)
+    retrieve = _retriever_factory(state)
+    hyde_retrieve: SectionRetriever | None = None
+    flows_in = await _design_flows_inbound(pid)
+    probe = _summary_probe(state)
+    sections_report: list[dict] = []
+    n_total = len(state.section_plan)
+    n_hyde = 0
+    for i, section in enumerate(state.section_plan, start=1):
+        label = f"{section.chapter_number}.{section.section_number} {section.title}"
+        emit_step(pid, "indexing", f"검색 리허설 {i}/{n_total} · {label}", "started")
+        chunks = await retrieve(section)
+        citable = [c for c in chunks if not c.is_summary]
+        needed = needed_evidence(build_writer_context(section, catalog).min_chars)
+        band = classify(len(citable), needed)
+        hyde_used = False
+        if band == BAND_HYDE:
+            n_hyde += 1
+            if hyde_retrieve is None:
+                hyde_retrieve = _hyde_forced_retriever(state)
+            try:
+                second = [c for c in await hyde_retrieve(section) if not c.is_summary]
+            except Exception:
+                logger.warning("rehearsal.hyde_retry_failed", project_id=str(pid), section=label)
+                second = []
+            if len(second) > len(citable):
+                citable = second
+                hyde_used = True
+            band = classify(len(citable), needed)
+        constructive = (
+            flows_in.get(f"{section.chapter_number}.{section.section_number}", 0)
+            >= _CONSTRUCTIVE_MIN_INFLOWS
+        )
+        raptor_gap = False
+        if band == BAND_EMPTY and probe is not None:
+            try:
+                raptor_gap = not await probe(_rerank_query(section, state.topic))
+            except Exception:
+                logger.warning("rehearsal.raptor_probe_failed", project_id=str(pid))
+        try:
+            await store_rehearsal(
+                pid,
+                section.section_id,
+                index_version=version,
+                chunks=citable,
+                band=band,
+                floor_passed=len(citable),
+                needed=needed,
+                hyde_used=hyde_used,
+                warnings={"constructive": constructive, "raptor_gap": raptor_gap},
+            )
+        except Exception:
+            # 영속 실패 → 작성이 실검색 폴백을 쓴다. 리허설이 색인을 막으면 안 된다.
+            logger.warning("rehearsal.store_failed", project_id=str(pid), exc_info=True)
+        emit_step(pid, "indexing", f"검색 리허설 {i}/{n_total} · {label}", "completed")
+        sections_report.append(
+            {
+                "section_id": str(section.section_id),
+                "label": label,
+                "band": band,
+                "floor_passed": len(citable),
+                "needed": needed,
+                "floor": empty_floor(needed),
+                "hyde_used": hyde_used,
+                "constructive": constructive,
+                "raptor_gap": raptor_gap,
+            }
+        )
+    if n_hyde and n_hyde / n_total > _HYDE_OVERUSE_RATIO:
+        # 부족 절이 이만큼 많으면 개별 절 보강이 아니라 질의 설계 문제다 — HyDE 킬 기준
+        # 판단(20절 중 15절 발동)에 쓰는 신호라 경고로 남긴다.
+        logger.warning("rehearsal.hyde_overuse", project_id=str(pid), n_hyde=n_hyde, total=n_total)
+    gap_sections = [s for s in sections_report if s["band"] == BAND_EMPTY and not s["constructive"]]
+    opts = state.options if isinstance(state.options, dict) else {}
+    try:
+        reopens = int(opts.get("_rehearsal_reopens") or 0)
+    except (TypeError, ValueError):
+        reopens = 0
+    reopen = bool(gap_sections) and reopens < 2
+    report = {
+        "index_version": version,
+        "sections": sections_report,
+        "n_hyde": n_hyde,
+        "reopen": reopen,
+        "reopens_used": reopens,
+        # 재개방 예산 소진 후에도 공백 — 경고만 남기고 진행한다(분량은 작성이 깎는다).
+        "escalated": bool(gap_sections) and reopens >= 2,
+    }
+    logger.info(
+        "rehearsal.done",
+        project_id=str(pid),
+        bands={
+            b: sum(1 for s in sections_report if s["band"] == b) for b in ("ok", "hyde", "empty")
+        },
+        n_hyde_used=sum(1 for s in sections_report if s["hyde_used"]),
+        reopen=reopen,
+    )
+    update: dict = {"rehearsal": report}
+    if reopen:
+        update["options"] = {**opts, "_rehearsal_reopens": reopens + 1}
+        if not state.sources:
+            # 재개방 게이트 payload에 자료 풀이 실리도록 채택 자료를 상태로 복원.
+            update["sources"] = await _adopted_source_refs(pid)
+    return state.model_copy(update=update)
 
 
 def _ensure_section_plan(state: ProjectState) -> ProjectState:
@@ -815,11 +1088,17 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
         )
 
     summary_fetcher = None
-    if settings.raptor_enabled:
+    if settings.raptor_enabled and settings.raptor_write_inject:
+        # A/B의 A팔 — 기본 off. 트리 자체는 리허설의 클러스터 대조(_summary_probe)에
+        # 계속 쓰이므로 구축은 유지된다. 되돌리기는 raptor_write_inject 하나.
         from src.services.retrieval._raptor import make_summary_fetcher
 
         summary_fetcher = make_summary_fetcher(
-            async_session_maker, embedder, state.project_id, top_k=settings.raptor_top_k
+            async_session_maker,
+            embedder,
+            state.project_id,
+            top_k=settings.raptor_top_k,
+            min_similarity=settings.raptor_min_similarity,
         )
     return make_section_retriever(
         hybrid,
@@ -968,6 +1247,23 @@ async def _default_pm_verifier(state: ProjectState) -> int:
     return await run_pm_verify(state, model=_models_for(state)["verify"])
 
 
+async def _default_retrieval_cacher(
+    retrieve: SectionRetriever, state: ProjectState
+) -> SectionRetriever:
+    """작성 검색에 리허설 캐시를 씌운다 — 리허설↔작성 동근거 계약의 소비자 쪽.
+
+    RAPTOR 주입(A팔)일 때는 캐시를 건너뛴다 — 캐시엔 요약이 없어(인용 불가 배경은
+    저장 안 함) 주입 계약이 조용히 깨진다. A팔은 실검색이 곧 계약이다.
+    """
+    if settings.raptor_enabled and settings.raptor_write_inject:
+        return retrieve
+    from src.services.retrieval.rehearsal import current_index_version, make_cached_retriever
+
+    return make_cached_retriever(
+        retrieve, state.project_id, await current_index_version(state.project_id)
+    )
+
+
 # 주입 지점 — 테스트는 이 전역들을 fake로 교체한다.
 _plan_client: LLMClient | None = None
 # AI 실행 계획(설계 브리프) 전용 주입 지점 — None이면 brief_ai가 기본 클라이언트 생성.
@@ -976,6 +1272,12 @@ _research_service_factory: Callable[[], WebResearchService] = WebResearchService
 _web_indexer_factory: Callable[[], WebSourceIndexer] = build_web_source_indexer
 _raptor_builder_factory: Callable[[], RaptorBuilder] = build_raptor_builder
 _retriever_factory: Callable[[ProjectState], SectionRetriever] = _default_retriever_factory
+# 색인 끝 검색 리허설 — 인메모리 척추 테스트는 통과 함수로 교체한다(DB 필요).
+_rehearser: Callable[[ProjectState], Awaitable[ProjectState]] = _rehearse
+# 작성 검색의 리허설 캐시 래퍼 — 인메모리 테스트는 (r, s) → r 통과로 교체한다.
+_retrieval_cacher: Callable[[SectionRetriever, ProjectState], Awaitable[SectionRetriever]] = (
+    _default_retrieval_cacher
+)
 _write_client: LLMClient | None = None
 _exporter: Callable[[ProjectState, dict[str, dict[str, str]] | None], Path] = _default_exporter
 _section_store: Callable[[ProjectState], Awaitable[None]] = _default_section_store
@@ -1009,7 +1311,9 @@ async def write(state: ProjectState) -> ProjectState:
     작성 중에도 완성분부터 보여준다 — 확정본 전량 교체는 여전히 assemble 몫.
     """
     state = _ensure_section_plan(state)
-    retrieve = _retriever_factory(state)
+    # 리허설↔작성 동근거 계약 — 리허설이 영속해 둔 청크 목록을 같은 index_version이면
+    # 재검색 없이 그대로 쓴다. 캐시 미스(옛 런·버전 뒤바뀜)는 실검색 폴백.
+    retrieve = await _retrieval_cacher(_retriever_factory(state), state)
     emit_phase(state.project_id, "writing", "started")
     # 증분 재개 — 이전 실행이 증분 저장해 둔 완성 절(본문 있는 행)은 건너뛴다.
     # 죽은 런 재개가 완성 절까지 지우고 전부 다시 쓰면 그 비용이 그대로 재청구된다

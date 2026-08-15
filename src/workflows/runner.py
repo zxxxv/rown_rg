@@ -433,7 +433,17 @@ async def _execute(project_id: uuid.UUID) -> None:
             # 뒤지지 않고 그대로 이어받는다. **재할당이어야 한다**: JSONB를 in-place로
             # 고치면 SQLAlchemy가 dirty로 안 잡아 커밋해도 안 써진다(config_with_plan이
             # 항상 새 dict를 돌려주는 이유).
-            project.config = config_with_plan(project.config, outcome.state.section_plan)
+            updated_config = config_with_plan(project.config, outcome.state.section_plan)
+            # 리허설 재개방 카운터 — state.options는 영속 경로가 없어(config 재할당이
+            # DB의 config 기준) 단계가 올린 값을 여기서 실어 나른다. 2회 상한의 진실.
+            reopens = (
+                outcome.state.options.get("_rehearsal_reopens")
+                if isinstance(outcome.state.options, dict)
+                else None
+            )
+            if isinstance(reopens, int) and reopens > 0:
+                updated_config = {**updated_config, "_rehearsal_reopens": reopens}
+            project.config = updated_config
 
             if isinstance(outcome, Paused):
                 # 게이트 대기 진입 — pending review_point 영속화(재시작 복구·감사 이력)
@@ -659,11 +669,25 @@ async def resume_run(project_id: uuid.UUID, decision: dict[str, Any]) -> None:
                 # 커밋하지 않는다(재계산 라운드를 돌면 새 계획이 커밋된다).
                 await _commit_design_plan(session, project_id, review.payload, decision)
         # 자료 풀 확정: 사람이 제외한 출처를 같은 커밋에서 is_included=false로 반영한다.
+        n_excluded = 0
         if gate == ReviewGate.SOURCE_POOL.value:
             n_excluded = await _apply_source_pool_exclusions(session, project_id, decision)
             if n_excluded:
                 logger.info("source_pool.pruned", project_id=str(project_id), excluded=n_excluded)
+            project = await session.get(Project, project_id)
+            if project is not None and project.status == ProjectStage.INDEXING.value:
+                # 리허설이 다시 연 자료 게이트다(정상 SOURCE_POOL은 RESEARCHING에서 멈춘다).
+                # 색인 단계로 되돌려 보강분 색인→리허설 재판정을 다시 돈다 — 색인은
+                # 증분(이미 청크 있는 자료 스킵)이라 변화분만 비용이 든다.
+                project.status = ProjectStage.RESEARCHING.value
+                logger.info("rehearsal.reopen_resolved", project_id=str(project_id))
         await session.commit()
+    if n_excluded:
+        # 제외는 검색 결과를 바꾼다(검색 SQL이 is_included=false를 거른다) — 리허설
+        # 캐시를 무효화해 작성이 제외 전 근거를 그대로 쓰는 일이 없게 한다.
+        from src.services.retrieval.rehearsal import bump_index_version
+
+        await bump_index_version(project_id)
     if gate == ReviewGate.DESIGN_BRIEF.value and decision.get("action") == "replan":
         # 고친 목차로 브리프를 다시 계산해 게이트를 다시 연다 — 수집으로 안 간다.
         # '추가 조사'와 같은 라운드 패턴: 사람이 누를 때마다 1회(무한성 캡은 사람 손에).

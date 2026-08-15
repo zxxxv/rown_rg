@@ -141,11 +141,29 @@ export const SourcePoolCoverageSchema = z.object({
 });
 export type SourcePoolCoverage = z.infer<typeof SourcePoolCoverageSchema>;
 
+// 검색 리허설이 자료 게이트를 다시 연 경우의 근거 공백 신호 - 색인 후 절마다 작성과
+// 같은 검색을 미리 돌린 결과라, uncovered_sections(수집 매칭)보다 강한 실측 신호다.
+export const RehearsalGapSchema = z.object({
+  label: z.string().default(""),
+  floor_passed: z.number().int().default(0),
+  needed: z.number().int().default(0),
+  // 앞 절 산출로 쓰는 구성형 절 - 자료를 더 모아도 검색으로는 안 채워진다
+  constructive: z.boolean().default(false),
+  // 요약 트리(클러스터)에도 유사 자료 없음 - 질의 문제가 아니라 자료 자체가 없다는 뜻
+  raptor_gap: z.boolean().default(false),
+});
+export const SourcePoolRehearsalSchema = z.object({
+  reopens_used: z.number().int().default(0),
+  empty_sections: z.array(RehearsalGapSchema).default([]),
+});
+export type SourcePoolRehearsal = z.infer<typeof SourcePoolRehearsalSchema>;
+
 export const SourcePoolPayloadSchema = z.object({
   message: z.string().default(""),
   section_plan: z.array(QaSelectPlanEntrySchema).default([]),
   sources: z.array(SourcePoolSourceSchema).default([]),
   coverage: SourcePoolCoverageSchema.nullish(),
+  rehearsal: SourcePoolRehearsalSchema.nullish(),
 });
 export type SourcePoolPayload = z.infer<typeof SourcePoolPayloadSchema>;
 

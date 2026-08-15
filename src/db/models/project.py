@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     event,
@@ -54,6 +55,9 @@ class Project(Base):
     status: Mapped[str] = mapped_column(
         String(20), server_default="created", nullable=False, index=True
     )
+    # 검색 결과가 달라질 수 있는 청크 변화(색인·0청크 자동 제외·채택 토글)마다 +1.
+    # 리허설 캐시(section_rehearsals)의 무효화 키 — 값 자체에 의미는 없다.
+    index_version: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     depth_mode: Mapped[str] = mapped_column(
         String(20), server_default="full_report", nullable=False
     )

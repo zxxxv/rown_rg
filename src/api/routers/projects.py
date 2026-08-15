@@ -953,8 +953,15 @@ async def update_project_source(
     ).scalar_one_or_none()
     if row is None:
         raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
+    changed = row.is_included != data.is_included
     row.is_included = data.is_included
     await session.flush()
+    if changed:
+        # 채택 토글은 검색 결과를 바꾼다(검색 SQL이 제외분을 거른다) — 리허설 캐시
+        # 무효화. 색인 전 토글에는 캐시가 아직 없지만 +1은 무해하다(값 자체 무의미).
+        from src.services.retrieval.rehearsal import bump_index_version
+
+        await bump_index_version(project.id)
     return _to_source_item(row)
 
 
@@ -1003,6 +1010,11 @@ async def delete_project_source(
             logger.warning("source.upload_file_cleanup_failed", path=row.upload_path)
     await session.delete(row)
     await session.flush()
+    # 리허설 재개방으로 RESEARCHING에 돌아온 프로젝트는 이미 청크가 있다 — 삭제가
+    # CASCADE로 청크를 지우므로 리허설 캐시를 무효화한다(색인 전 삭제엔 무해한 +1).
+    from src.services.retrieval.rehearsal import bump_index_version
+
+    await bump_index_version(project.id)
 
 
 # 색인 백그라운드 태스크 참조 — GC로 사라지지 않게 붙잡아 둔다.
@@ -1703,6 +1715,7 @@ _INTERNAL_CONFIG_KEYS = (
     "models",
     SECTION_PLAN_KEY,
     "_design_plan",
+    "_rehearsal_reopens",
 )
 
 
@@ -1718,6 +1731,8 @@ def merge_config_update(current: dict[str, Any] | None, incoming: dict[str, Any]
     if incoming.get("outline") != (current or {}).get("outline"):
         keep.pop(SECTION_PLAN_KEY, None)
         keep.pop("_design_plan", None)
+        # 목차가 바뀌면 절 구성이 달라진다 — 리허설 재개방 예산도 새로 시작.
+        keep.pop("_rehearsal_reopens", None)
     return {**incoming, **keep}
 
 

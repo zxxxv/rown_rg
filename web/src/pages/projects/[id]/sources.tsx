@@ -61,6 +61,12 @@ export default function SourcesPage() {
     return parseSourcePoolPayload(snapshot.data?.pending_gate?.payload)?.coverage ?? null;
   }, [reviewOpen, snapshot.data]);
 
+  // 검색 리허설 재개방 신호 - 색인 후 절마다 실제 검색을 돌려 본 근거 공백(실측).
+  const rehearsal = useMemo(() => {
+    if (!reviewOpen) return null;
+    return parseSourcePoolPayload(snapshot.data?.pending_gate?.payload)?.rehearsal ?? null;
+  }, [reviewOpen, snapshot.data]);
+
   const handleCollectMore = () => {
     if (collectMore.isPending || collecting) return;
     const baseline = sourcesQuery.data?.items.length ?? 0;
@@ -290,6 +296,31 @@ export default function SourcesPage() {
                 <span className="ml-1 font-medium text-fg">+{newCount}건 수집됨</span>
               ) : null}
             </p>
+          </div>
+        ) : null}
+
+        {/* 검색 리허설 경고 - 색인 후 절별 실검색에서 근거 공백이 확인돼 게이트가
+            다시 열린 경우. 수집 매칭(coverage)보다 강한 실측 신호라 따로 보여준다. */}
+        {rehearsal && rehearsal.empty_sections.length > 0 ? (
+          <div className="flex flex-col gap-1.5 rounded-md border border-border-danger bg-bg-danger-subtle px-4 py-3 text-sm">
+            <p className="flex items-center gap-2 text-fg">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-fg-danger" aria-hidden />
+              검색 리허설에서 근거가 부족한 절이 확인됐습니다 - 자료를 보강하거나 그대로 진행하세요.
+              (재확인 {rehearsal.reopens_used + 1}/2회차)
+            </p>
+            <ul className="flex flex-col gap-0.5 text-xs text-fg-secondary">
+              {rehearsal.empty_sections.map((s) => (
+                <li key={s.label}>
+                  <span className="font-medium text-fg">{s.label}</span> - 근거 {s.floor_passed}/
+                  {s.needed}건
+                  {s.constructive
+                    ? " (구성형 절: 앞 절 산출로 쓰는 절이라 자료 보강으로는 안 채워집니다)"
+                    : s.raptor_gap
+                      ? " (수집 자료 전체에도 유사 내용 없음 - 해당 주제 자료 업로드 권장)"
+                      : " (자료는 있으나 검색에 안 걸림 - 절 제목·방향 표현을 바꾸면 나아질 수 있음)"}
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null}
 

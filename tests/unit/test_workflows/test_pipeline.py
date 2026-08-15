@@ -91,6 +91,17 @@ def fake_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
             '"flows":[],"orphans":[],"query_splits":[]}'
         ),
     )
+
+    async def _no_rehearse(state: ProjectState) -> ProjectState:
+        # 검색 리허설(DB: index_version·section_rehearsals) 없이 — 전용 테스트가 따로 검증.
+        return state
+
+    async def _no_cache(retrieve: object, _state: ProjectState) -> object:
+        # 리허설 캐시 래퍼(DB) 없이 — fake retriever를 그대로 쓴다.
+        return retrieve
+
+    monkeypatch.setattr("src.workflows.stages._rehearser", _no_rehearse)
+    monkeypatch.setattr("src.workflows.stages._retrieval_cacher", _no_cache)
     monkeypatch.setattr("src.workflows.stages._exporter", _export)
     monkeypatch.setattr("src.workflows.stages._section_store", _no_store)
     monkeypatch.setattr("src.workflows.stages._draft_store", _no_draft_store)

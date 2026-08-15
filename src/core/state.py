@@ -48,6 +48,11 @@ class ProjectState(BaseModel):
     # 영속화 대상 아님(to_project_row에 없음) — 게이트 payload로 review_points에 남는다.
     design_brief: dict | None = None
 
+    # 검색 리허설 리포트 — index 단계 끝의 _rehearse가 만든다. 게이트 함수(순수)가
+    # reopen 여부·공백 절 목록을 읽어 자료 게이트 재개방을 결정한다. 영속화 대상 아님
+    # — 절별 상세는 section_rehearsals 테이블이 진실이고 이건 이번 실행의 요약이다.
+    rehearsal: dict | None = None
+
     # 절별 생성 지표 — section_id → {evidence_count, volume_scaled, ...}. sections.meta로
     # 영속화돼 화면이 '자료 부족' 배지를 띄운다(본문에 메타 서술을 넣지 않기 위한 통로).
     section_meta: dict[UUID, dict] = Field(default_factory=dict)

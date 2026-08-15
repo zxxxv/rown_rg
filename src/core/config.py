@@ -243,7 +243,17 @@ class Settings(BaseSettings):
     # 세워 기다려 인덱싱에 10~15분이 쌓인다(2026-08-10 실측). DB 커넥션 풀(기본
     # 5+10)과 API 한도를 고려해 8.
     raptor_summary_concurrency: int = 8
-    raptor_top_k: int = 3  # 섹션 검색에 곁들일 배경 맥락 요약 수
+    raptor_top_k: int = 3  # 섹션 검색에 곁들일 배경 맥락 요약 수(상한 — 하한은 유사도)
+    # 작성 프롬프트에 RAPTOR 요약을 배경 맥락으로 실을지 — A/B의 A팔(주입)이다.
+    # 기본 off(B팔): +18~20% 인용 실측은 질의가 장끼리 같고 top_k=32이던 조건이라,
+    # leaf 대표성이 낮을 때 배경이 메운 효과일 가능성이 있다(2026-08-15 합의). 리허설
+    # 도입 후 A/B로 재판정한다 — 되돌리기는 이 플래그 하나다. 트리 구축과 리허설의
+    # 클러스터 대조는 이 플래그와 무관하게 유지된다.
+    raptor_write_inject: bool = False
+    # 요약 채택의 코사인 유사도 하한 — top_k 고정 3은 관련 없는 요약도 억지로 채웠다.
+    # 하한을 넘는 것만 0~top_k개 가변 채택(leaf의 상대 하한과 같은 철학, 절대값인
+    # 이유는 요약 검색이 단일 코사인 축이라 스케일이 안정적이기 때문).
+    raptor_min_similarity: float = 0.35
 
     # PM 검증 — assemble 직후 챕터당 1콜, 문서 횡단 일관성 경고 리포트(차단 아님).
     pm_verify_enabled: bool = True
