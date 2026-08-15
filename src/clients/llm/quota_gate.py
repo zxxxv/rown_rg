@@ -131,6 +131,26 @@ async def enforce() -> None:
     )
 
 
+async def remaining_budget(user_id: UUID) -> float | None:
+    """이번 달 남은 한도(USD) — 사용자·조직 중 더 빡빡한 쪽. 조회 실패면 None.
+
+    설계 브리프의 예상 비용 카드에 '남은 한도'를 함께 보여주기 위한 읽기 전용
+    조회다. **차단용이 아니다**(2026-08-15 사용자 결정: 경고만 표시) — 강제는
+    기존 enforce/check_user_quota(한도 도달 시)가 그대로 맡는다. 그래서
+    quota_enforcement_enabled와 무관하게 값을 돌려준다(표시는 정보다).
+    """
+    try:
+        org_cost, org_limit, user_cost, user_limit = await _fetch_usage(user_id)
+    except Exception:
+        # 표시용 조회가 브리프 생성을 막으면 안 된다 — 없으면 카드가 숫자를 생략한다.
+        logger.warning("quota.remaining_budget_failed", user_id=str(user_id), exc_info=True)
+        return None
+    candidates = [org_limit - org_cost]
+    if user_cost is not None and user_limit is not None:
+        candidates.append(user_limit - user_cost)
+    return float(max(Decimal("0"), min(candidates)))
+
+
 async def check_user_quota(user_id: UUID) -> None:
     """실행 시작 전 사전 검사 — 한도 도달이면 QuotaExceededError(→429).
 

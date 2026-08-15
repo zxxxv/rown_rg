@@ -608,6 +608,13 @@ async def plan_brief(state: ProjectState) -> ProjectState:
     brief = build_design_brief(
         state.section_plan, topic=state.topic, catalog=catalog, model_mode=mode
     )
+    # 예상 비용 옆에 '남은 한도'를 같이 보여준다 — 부족해도 **차단하지 않는다**
+    # (2026-08-15 사용자 결정: 경고만). 사람이 게이트에서 숫자 두 개를 보고 판단한다.
+    from src.clients.llm.quota_gate import remaining_budget
+
+    remaining = await remaining_budget(state.user_id)
+    if remaining is not None and isinstance(brief.get("estimate"), dict):
+        brief["estimate"]["remaining_limit_usd"] = round(remaining, 1)
     emit_step(pid, "research", "설계 브리프 작성", "completed")
     # AI 실행 계획 — 절별 목표·자료 전략·작성 구성 + 절 간 흐름(LLM 1콜, 제안 전용).
     # 실패해도 게이트는 결정적 브리프만으로 뜬다(계획이 게이트를 막으면 안 된다).

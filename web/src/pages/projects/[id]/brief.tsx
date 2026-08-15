@@ -37,6 +37,7 @@ import {
   toOutline,
 } from "@/features/project-config/OutlineEditor";
 import { useAuth } from "@/hooks/useAuth";
+import { cn } from "@/lib/utils";
 
 /** 브리프 절 목록 → 목차 편집기 초안. 편집은 생성 화면과 같은 편집기를 재사용한다. */
 function toDraftChapters(sections: BriefSection[]): DraftChapter[] {
@@ -64,23 +65,44 @@ const MODE_LABEL: Record<string, string> = {
   premium: "고급",
 };
 
-/** 시작 전 규모 - "비싼 런"이 얼마짜리인지 먼저 보여준다(실측 단가 기반 범위 추정). */
+/** 시작 전 규모 - "비싼 런"이 얼마짜리인지 먼저 보여준다(실측 단가 기반 범위 추정).
+    남은 한도가 예상 비용에 못 미쳐도 차단하지 않는다 - 숫자 두 개를 나란히 보여주고
+    판단은 사람이 한다(경고만, 2026-08-15 결정). */
 function EstimateCard({ brief }: { brief: DesignBriefPayload }) {
   const est = brief.estimate;
   if (!est || est.n_sections === 0) return null;
+  const remaining = est.remaining_limit_usd;
+  // 확실히 부족(최소 추정도 초과) vs 빠듯(최대 추정이 초과) - 문구를 구분한다.
+  const short = remaining != null && est.cost_usd_min > remaining;
+  const tight = remaining != null && !short && est.cost_usd_max > remaining;
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-lg border border-border bg-bg-secondary px-4 py-3">
-      <span className="text-sm font-medium text-fg">예상 규모</span>
-      <span className="text-sm text-fg-secondary">{est.n_sections}개 절</span>
-      <span className="text-sm text-fg-secondary">
-        {est.total_min_chars.toLocaleString()}~{est.total_max_chars.toLocaleString()}자 (A4{" "}
-        {est.pages_min}~{est.pages_max}쪽)
-      </span>
-      <span className="text-sm text-fg-secondary">
-        예상 비용 ${est.cost_usd_min}~${est.cost_usd_max} (
-        {MODE_LABEL[est.model_mode] ?? est.model_mode} 모드)
-      </span>
-      <span className="text-[11px] text-fg-tertiary">과거 실측 단가 기반 추정입니다</span>
+    <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-bg-secondary px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+        <span className="text-sm font-medium text-fg">예상 규모</span>
+        <span className="text-sm text-fg-secondary">{est.n_sections}개 절</span>
+        <span className="text-sm text-fg-secondary">
+          {est.total_min_chars.toLocaleString()}~{est.total_max_chars.toLocaleString()}자 (A4{" "}
+          {est.pages_min}~{est.pages_max}쪽)
+        </span>
+        <span className="text-sm text-fg-secondary">
+          예상 비용 ${est.cost_usd_min}~${est.cost_usd_max} (
+          {MODE_LABEL[est.model_mode] ?? est.model_mode} 모드)
+        </span>
+        {remaining != null ? (
+          <span className={cn("text-sm", short || tight ? "text-fg-warning" : "text-fg-secondary")}>
+            이번 달 남은 한도 ${remaining}
+          </span>
+        ) : null}
+        <span className="text-[11px] text-fg-tertiary">과거 실측 단가 기반 추정입니다</span>
+      </div>
+      {short || tight ? (
+        <p className="flex items-center gap-1.5 text-xs text-fg-warning">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          {short
+            ? "예상 비용이 남은 한도를 넘습니다 - 진행하면 도중에 한도에 걸려 멈출 수 있습니다. 절약 모드로 낮추거나 관리자에게 한도 조정을 요청하세요."
+            : "예상 비용 상단이 남은 한도에 빠듯합니다 - 도중에 한도에 걸릴 수 있습니다."}
+        </p>
+      ) : null}
     </div>
   );
 }

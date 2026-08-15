@@ -241,6 +241,9 @@ export const BriefEstimateSchema = z.object({
   pages_max: z.number().int().default(0),
   cost_usd_min: z.number().default(0),
   cost_usd_max: z.number().default(0),
+  // 이번 달 남은 한도(사용자·조직 중 빡빡한 쪽) - 부족해도 차단하지 않는다(경고만).
+  // 조회 실패 시 서버가 필드를 생략한다 - 카드가 숫자 없이 뜬다.
+  remaining_limit_usd: z.number().nullish(),
 });
 export type BriefEstimate = z.infer<typeof BriefEstimateSchema>;
 

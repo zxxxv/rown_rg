@@ -100,6 +100,11 @@ def fake_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
         # 리허설 캐시 래퍼(DB) 없이 — fake retriever를 그대로 쓴다.
         return retrieve
 
+    async def _fixed_budget(_user_id: object) -> float:
+        # 남은 한도 조회(DB) 없이 - 브리프 estimate의 remaining_limit_usd가 결정적이 된다.
+        return 9_999.0
+
+    monkeypatch.setattr("src.clients.llm.quota_gate.remaining_budget", _fixed_budget)
     monkeypatch.setattr("src.workflows.stages._rehearser", _no_rehearse)
     monkeypatch.setattr("src.workflows.stages._retrieval_cacher", _no_cache)
     monkeypatch.setattr("src.workflows.stages._exporter", _export)
@@ -309,6 +314,8 @@ class TestPausesAtDesignBrief:
         # 분량 폴백(배정 없는 절 2개 × 게이트 기본 경계)
         assert est["total_min_chars"] == 400
         assert est["total_max_chars"] == 8000
+        # 남은 한도가 예상 비용 옆에 실린다 - 부족해도 차단이 아니라 경고(사람 판단).
+        assert est["remaining_limit_usd"] == 9_999.0
 
     async def test_ai_plan_failure_does_not_block_gate(self, monkeypatch: pytest.MonkeyPatch):
         """LLM이 쓰레기를 돌려줘도 게이트는 결정적 브리프로 뜬다(ai_plan=None)."""
