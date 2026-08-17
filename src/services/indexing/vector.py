@@ -91,6 +91,9 @@ class IndexingResult(BaseModel):
     # 파서가 읽은 페이지 수(PDF 등). 라이브러리 목록의 '페이지' 열이 이 값을 쓴다 —
     # 색인 때 말고는 알 수 없어 여기서 실어 보낸다(2026-08-10: 계속 '-'로 비어 있었다).
     page_count: int | None = None
+    # 자료 발간연도(본문 머리·파일명 추출) — 자료 검토 게이트·통계의 연도 배지가
+    # 자료 단위 값을 원한다(청크 태깅만으론 목록 표시가 안 된다, 2026-08-17).
+    published_year: int | None = None
 
 
 class VectorIndexingService:
@@ -162,6 +165,9 @@ class VectorIndexingService:
         # PDF 파서가 심은 페이지 경계 마커를 걷어내고 청킹한다 - 마커가 청크·임베딩·
         # 프롬프트에 새면 안 된다. 페이지 번호는 청크 metadata로만 남긴다.
         clean_md, page_starts = strip_page_markers(parse_result.markdown)
+        # 발간연도 — 자료 시점 축의 재료(2026-08-15). 청킹 전에 뽑아 0청크 경로에도
+        # 결과로 싣는다(자료 검토 게이트가 자료 단위 값을 쓴다).
+        year = extract_published_year(source.title or Path(source.file_path).name, clean_md[:4000])
         chunks = await self._chunking_service.chunk_markdown(clean_md, source_id)
         if not chunks:
             elapsed = (time.perf_counter() - t0) * 1000
@@ -177,6 +183,7 @@ class VectorIndexingService:
                 parse_cached=parse_result.cached,
                 elapsed_ms=elapsed,
                 page_count=parse_result.metadata.page_count,
+                published_year=year,
             )
 
         # 청크별 시작 페이지 - "PDF 원본 p.N 열기" 점프의 재료. 페이지를 모르는
@@ -189,9 +196,7 @@ class VectorIndexingService:
             if page is not None:
                 chunk.metadata["page"] = page
 
-        # 발간연도 — 자료 시점 축의 재료(2026-08-15). 청크에 실어 작성 주입·게이트
-        # 표시·통계가 전부 여기서 읽게 한다. 확신 없으면 안 단다(미상은 미상대로 처리).
-        year = extract_published_year(source.title or Path(source.file_path).name, clean_md[:4000])
+        # 청크에도 연도를 실어 작성 주입(근거 라벨)이 읽게 한다. 확신 없으면 안 단다.
         if year is not None:
             for chunk in chunks:
                 chunk.metadata["published_year"] = year
@@ -241,6 +246,7 @@ class VectorIndexingService:
             chunks_created=len(chunks),
             parse_cached=parse_result.cached,
             elapsed_ms=elapsed,
+            published_year=year,
         )
 
     async def _upsert_source(self, session, source: SourceInput) -> UUID:

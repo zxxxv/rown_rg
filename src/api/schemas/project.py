@@ -166,6 +166,9 @@ class SourceItemRead(BaseModel):
     page_age: str | None = None
     preview: str | None = None
     has_content: bool = False
+    # 자료 발간연도(색인 추출 또는 page_age 파생) — '24년 이후' 같은 자료 기준을
+    # 사람이 게이트에서 판단할 수 있게 목록에 배지로 노출한다. None=미상.
+    published_year: int | None = None
     # 라이브러리에서 불러온 자료의 원본 노드 id — 트리에서 '이미 추가됨'을 표시하는 근거.
     library_node_id: UUID | None = None
     # 색인이 뒤에서 도는 중인지(업로드 직후). 화면은 '색인 중' 배지를 띄우고 새로고침한다.

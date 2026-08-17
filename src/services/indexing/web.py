@@ -240,6 +240,7 @@ class WebSourceIndexer:
             chunks_created=len(chunks),
             parse_cached=False,
             elapsed_ms=elapsed,
+            published_year=year,
         )
 
 

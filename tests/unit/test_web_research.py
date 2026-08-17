@@ -57,3 +57,23 @@ class TestMergeSourcesReliability:
         ws = WebSource(url="https://www.moel.go.kr/policy", title="정책", content_md="본문")
         merged = _merge_sources([ws], {"sources": []}, outline=[])
         assert merged[0].reliability == "high"
+
+
+class TestMergeSourcesPublished:
+    def test_manifest_published_fills_missing_page_age(self):
+        # 검색 API가 page_age를 못 주면 수집 LLM이 본문에서 확인한 published를 쓴다.
+        ws = WebSource(url="https://example.org/r", title="보고서", content_md="본문")
+        manifest = {"sources": [{"url": ws.url, "reliability": "medium", "published": "2024-03"}]}
+        [got] = _merge_sources([ws], manifest, [])
+        assert got.page_age == "2024-03"
+
+    def test_api_page_age_wins_and_garbage_published_ignored(self):
+        ws = WebSource(
+            url="https://example.org/r", title="보고서", content_md="본문", page_age="2025-01-02"
+        )
+        manifest = {"sources": [{"url": ws.url, "published": "최근"}]}
+        [got] = _merge_sources([ws], manifest, [])
+        assert got.page_age == "2025-01-02"
+        manifest2 = {"sources": [{"url": "https://example.org/x", "published": "최근"}]}
+        [got2] = _merge_sources([], manifest2, [])
+        assert got2.page_age is None

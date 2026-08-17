@@ -89,6 +89,7 @@ from src.prompts import list_presets, load_preset
 from src.services.export.report import export_file_pattern, export_filename
 from src.services.generation.planner import MAX_SECTIONS
 from src.services.indexing.exclusion import apply_index_outcome
+from src.services.indexing.published_year import year_from_page_age
 from src.services.indexing.vector import SourceInput
 from src.services.prompts import resolve_analysts
 from src.services.qa.alignment import align_section
@@ -886,6 +887,7 @@ def _to_source_item(row: ProjectSource) -> SourceItemRead:
             indexing=indexing,
             index_error=index_error,
             created_at=row.created_at,
+            published_year=meta.get("published_year"),
         )
     content_md = meta.get("content_md") or ""
     usable = has_usable_content(content_md)
@@ -905,6 +907,8 @@ def _to_source_item(row: ProjectSource) -> SourceItemRead:
         else None,
         has_content=usable,
         created_at=row.created_at,
+        # 웹은 색인 전에도 수집이 준 page_age에서 연도를 파생해 보여준다(2026-08-17)
+        published_year=meta.get("published_year") or year_from_page_age(meta.get("page_age")),
     )
 
 
@@ -1126,6 +1130,10 @@ def _index_meta(source: SourceInput, result: object) -> dict:
     pages = getattr(result, "page_count", None)
     if pages:
         meta["page_count"] = pages
+    # 발간연도 — 자료 검토 게이트·통계의 연도 배지가 자료 단위 값을 읽는다(2026-08-17).
+    year = getattr(result, "published_year", None)
+    if year:
+        meta["published_year"] = year
     try:
         meta["size_bytes"] = Path(source.file_path).stat().st_size
     except OSError:

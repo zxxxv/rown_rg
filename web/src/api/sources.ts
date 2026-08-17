@@ -26,6 +26,8 @@ export const SourceItemSchema = z.object({
   indexing: z.boolean().default(false),
   index_error: z.string().nullish(),
   created_at: z.string(),
+  /** 자료 발간연도(색인 추출 또는 page_age 파생) - '24년 이후' 기준 판단용, null=미상 */
+  published_year: z.number().int().nullish(),
 });
 export type SourceItem = z.infer<typeof SourceItemSchema>;
 
@@ -49,7 +51,8 @@ function toLegacySource(projectId: string, s: SourceItem): Source {
     source: host || (s.source_type === "web_search" ? "웹 검색" : s.source_type),
     source_kind: s.source_type,
     url: s.url ?? undefined,
-    published_at: s.page_age ?? undefined,
+    // 발간연도가 확정되면 그걸 보여준다 - page_age("3 days ago"류)보다 판단에 유용
+    published_at: s.published_year ? `${s.published_year}년 발간` : (s.page_age ?? undefined),
     reliability: s.reliability ? (RELIABILITY_NUM[s.reliability] ?? 0.5) : 0.5,
     summary: s.preview ?? (s.has_content ? "" : "본문 회수 실패 - 검색 근거로 쓰이지 않습니다."),
     is_included: s.is_included,

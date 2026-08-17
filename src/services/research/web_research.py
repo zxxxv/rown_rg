@@ -56,9 +56,12 @@ SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
 ```json
 {"sources": [
   {"url": "https://...", "title": "...", "reliability": "high|medium|low",
+   "published": "YYYY-MM",
    "sections": ["<입력 목차 항목과 정확히 같은 문자열>", "..."]}
 ]}
 ```
+- published는 그 페이지·문서의 **발간 시점**이다(본문·머리말에서 확인한 것만,
+  YYYY 또는 YYYY-MM). 확인 못 했으면 필드를 생략하라 — 추측 금지.
 - **매니페스트에는 web_fetch로 본문을 회수한 출처 + PDF URL만 싣는다** — 그 외에
   검색 결과로 보기만 한 URL은 넣지 마라(본문 없는 출처는 시스템이 사용하지 못한다).
   PDF는 회수하지 않아도 싣는다(시스템이 내려받는다). 최대 10개.
@@ -284,6 +287,12 @@ def _merge_sources(
         if not url:
             continue
         ws = by_url.get(url)
+        # 발간 시점: 검색 API가 준 page_age가 1순위, 없으면 수집 LLM이 본문에서 확인한
+        # published(YYYY[-MM], 추측 금지 지시) — 자료 시점 축의 재료(2026-08-17).
+        published = item.get("published")
+        page_age = (ws.page_age if ws else None) or (
+            published if isinstance(published, str) and published[:4].isdigit() else None
+        )
         out.append(
             CollectedSource(
                 url=url,
@@ -291,7 +300,7 @@ def _merge_sources(
                 content_md=ws.content_md if ws else None,
                 reliability=_domain_reliability(url) or item.get("reliability"),
                 matched_sections=[s for s in (item.get("sections") or []) if s in outline_set],
-                page_age=ws.page_age if ws else None,
+                page_age=page_age,
             )
         )
         seen.add(url)
