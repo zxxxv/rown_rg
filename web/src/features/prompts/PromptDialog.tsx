@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { clearPromptDraft, readPromptDraft, usePromptDraftSave } from "./usePromptDraft";
@@ -94,6 +95,9 @@ export function PromptDialog({
   });
   const [cat, setCat] = useState(existing?.cat ?? draft?.cat ?? "");
   const [description, setDescription] = useState(existing?.description ?? draft?.description ?? "");
+  // 공개하면 사내 전원의 에이전트 선택 목록에 뜬다(에이전트만). 초안에는 안 싣는다
+  // - 저장 안 한 초안이 되살아나며 공개까지 켜져 있으면 본인도 모르게 열린다.
+  const [isPublic, setIsPublic] = useState(existing?.is_public ?? false);
   // 빈 칸 = 지정 없음. 시스템 에이전트를 덮어쓸 때 분량까지 건드리면 원본 값
   // (특허분석 2만~6만자 등)이 조용히 깎이므로, 안 적으면 원본을 그대로 승계한다.
   const [minChars, setMinChars] = useState<string>(
@@ -229,6 +233,7 @@ export function PromptDialog({
           cat: cat.trim() || null,
           description: description.trim() || null,
           spec,
+          is_public: kind === "agent" ? isPublic : undefined,
         });
         toast.success(`${name.trim()} 저장됨`);
         onSaved?.(saved);
@@ -241,6 +246,7 @@ export function PromptDialog({
           cat: cat.trim() || null,
           description: description.trim() || null,
           spec,
+          is_public: kind === "agent" ? isPublic : undefined,
         });
         clearPromptDraft(kind); // 저장됐으면 초안은 역할이 끝났다
         toast.success(`${name.trim()} 만들어짐`);
@@ -406,6 +412,26 @@ export function PromptDialog({
             />
             {descriptionError ? <p className="text-xs text-fg-danger">{descriptionError}</p> : null}
           </div>
+          {kind === "agent" ? (
+            <div className="flex items-start gap-3 rounded border border-border bg-bg-secondary p-3">
+              <Switch
+                id="prompt-public"
+                checked={isPublic}
+                onCheckedChange={setIsPublic}
+                disabled={pending}
+              />
+              <div className="flex flex-col gap-0.5">
+                <Label htmlFor="prompt-public" className="cursor-pointer">
+                  사내에 공개
+                </Label>
+                <p className="text-xs text-fg-tertiary">
+                  {isPublic
+                    ? "사내 모든 사람의 담당 에이전트 목록에 뜹니다. 여기서 고친 내용은 다음 실행부터 반영되고, 이미 돌고 있는 보고서는 시작 시점 내용 그대로 씁니다."
+                    : "나만 씁니다. 켜면 사내 모든 사람이 목차의 담당 에이전트로 고를 수 있습니다."}
+                </p>
+              </div>
+            </div>
+          ) : null}
           {kind === "agent" && !freeform ? (
             <div className="flex flex-col gap-3">
               {SECTION_FIELDS.map(([key, label, hint]) => (

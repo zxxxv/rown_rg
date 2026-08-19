@@ -32,6 +32,8 @@ export const PersonalPromptSchema = z.object({
   cat: z.string().nullish(),
   description: z.string().nullish(),
   spec: PromptSpecSchema.default({ queries: [], sections: {} }),
+  /** 켜면 전 계정의 에이전트 선택 목록에 뜬다. 에이전트만 켤 수 있다 */
+  is_public: z.boolean().default(false),
   updated_at: z.string(),
 });
 export type PersonalPrompt = z.infer<typeof PersonalPromptSchema>;
@@ -120,6 +122,7 @@ export interface CreatePersonalPromptBody {
   cat?: string | null;
   description?: string | null;
   spec?: PromptSpecInput;
+  is_public?: boolean;
 }
 
 /** 저장 시 보내는 구조화 설정 - sections를 주면 서버가 본문을 조합한다 */
@@ -152,6 +155,7 @@ export function useUpdatePersonalPrompt(id: string) {
       cat?: string | null;
       description?: string | null;
       spec?: PromptSpecInput;
+      is_public?: boolean;
     }) => {
       const data = await apiClient.patch<unknown>(`prompts/personal/${id}`, { json: body });
       return PersonalPromptSchema.parse(data);

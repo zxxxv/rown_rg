@@ -72,7 +72,7 @@ def fake_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
         # 규칙은 파일 카탈로그 기본값 — 개인 규칙 조회(DB) 없이 돈다.
         return []
 
-    async def _no_catalog(_owner_id: object) -> dict:
+    async def _no_catalog(_owner_id: object, _options: object = None) -> dict:
         # 개인 에이전트 카탈로그(DB) 없이 — 파일 카탈로그만으로 컨텍스트가 만들어진다.
         return {}
 

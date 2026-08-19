@@ -11,6 +11,9 @@ export const AnalystSchema = z.object({
   desc: z.string(),
   // volume_target 분량 안내 (예: "10~15" 페이지). 없는 에이전트도 있다.
   pages: z.string().nullish(),
+  // 남이 만들어 공개한 에이전트인지 + 누구 것인지. 같은 이름이 둘일 때 가려 고르는 단서.
+  shared: z.boolean().default(false),
+  owner_name: z.string().nullish(),
 });
 export type Analyst = z.infer<typeof AnalystSchema>;
 

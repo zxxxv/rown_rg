@@ -207,6 +207,139 @@ class TestValidationErrorEnvelope:
         assert "Value error" not in msg
 
 
+class TestSharedAgents:
+    """공개 토글 — 잘 만든 개인 에이전트를 사내가 함께 쓴다(2026-08-19).
+
+    그전엔 owner_id 스코프라 같은 에이전트를 계정마다 손으로 심어야 했다.
+    """
+
+    async def _create_public(self, client: AsyncClient, token: str, name: str) -> str:
+        created = await client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(token),
+            json={
+                "kind": "agent",
+                "name": name,
+                "content": "너는 공개된 분석가다.",
+                "is_public": True,
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["is_public"] is True
+        return created.json()["id"]
+
+    async def test_public_agent_appears_for_other_user(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        await self._create_public(test_client, worker_token, "공개 탄소규제 분석가")
+        analysts = await test_client.get("/api/v1/analysts", headers=_auth(super_admin_token))
+        hit = next(a for a in analysts.json() if a["name"] == "공개 탄소규제 분석가")
+        assert hit["shared"] is True
+        assert hit["owner_name"]  # 누구 것인지 보여야 같은 이름 둘을 가릴 수 있다
+
+    async def test_private_agent_stays_invisible(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={"kind": "agent", "name": "비공개 분석가", "content": "..."},
+        )
+        analysts = await test_client.get("/api/v1/analysts", headers=_auth(super_admin_token))
+        assert "비공개 분석가" not in [a["name"] for a in analysts.json()]
+
+    async def test_owner_sees_own_agent_once_not_twice(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        """공개 층에서 자기 것을 또 넣으면 목록에 두 벌 뜬다 - 개인 층에서만 나와야 한다."""
+        await self._create_public(test_client, worker_token, "내가 공개한 분석가")
+        analysts = await test_client.get("/api/v1/analysts", headers=_auth(worker_token))
+        names = [a["name"] for a in analysts.json()]
+        assert names.count("내가 공개한 분석가") == 1
+        mine = next(a for a in analysts.json() if a["name"] == "내가 공개한 분석가")
+        assert mine["shared"] is False
+
+    async def test_toggle_off_removes_from_others(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        pid = await self._create_public(test_client, worker_token, "잠깐 공개한 분석가")
+        patched = await test_client.patch(
+            f"/api/v1/prompts/personal/{pid}",
+            headers=_auth(worker_token),
+            json={"is_public": False},
+        )
+        assert patched.status_code == 200
+        assert patched.json()["is_public"] is False
+        analysts = await test_client.get("/api/v1/analysts", headers=_auth(super_admin_token))
+        assert "잠깐 공개한 분석가" not in [a["name"] for a in analysts.json()]
+
+    async def test_others_cannot_toggle_my_agent(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        pid = await self._create_public(test_client, worker_token, "남이 못 건드릴 분석가")
+        resp = await test_client.patch(
+            f"/api/v1/prompts/personal/{pid}",
+            headers=_auth(super_admin_token),
+            json={"is_public": False},
+        )
+        assert resp.status_code == 404
+
+    async def test_rule_cannot_be_public(self, test_client: AsyncClient, worker_token: str) -> None:
+        resp = await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={"kind": "rule", "name": "공개 규칙", "content": "간결하게.", "is_public": True},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"]["code"] == "PROMPT_NOT_SHAREABLE"
+
+    async def test_name_collision_is_disambiguated_by_owner(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        """같은 이름이 둘이면 배정이 어느 쪽인지 갈린다 - 겹칠 때만 소유자를 덧붙인다."""
+        await self._create_public(test_client, worker_token, "겹치는 이름")
+        await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(super_admin_token),
+            json={"kind": "agent", "name": "겹치는 이름", "content": "내 것."},
+        )
+        analysts = await test_client.get("/api/v1/analysts", headers=_auth(super_admin_token))
+        names = [a["name"] for a in analysts.json()]
+        assert "겹치는 이름" in names  # 내 것이 원래 이름을 지킨다
+        assert any(n.startswith("겹치는 이름 (") for n in names)  # 공개분은 소유자로 갈린다
+        assert len(names) == len(set(names))
+
+    async def test_public_agent_is_assignable_in_outline(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        """UNKNOWN_ANALYST 422가 나던 자리 - 공개 에이전트는 남의 목차에서도 통과해야 한다."""
+        await self._create_public(test_client, worker_token, "목차에 배정할 공개 분석가")
+        resp = await test_client.post(
+            "/api/v1/projects",
+            headers=_auth(super_admin_token),
+            json={
+                "title": "공유 에이전트 배정",
+                "topic": "공개 에이전트를 남의 계정 목차에 배정한다",
+                "config": {
+                    "outline": {
+                        "chapters": [
+                            {
+                                "title": "1장",
+                                "sections": [
+                                    {
+                                        "title": "1.1",
+                                        "analysts": ["목차에 배정할 공개 분석가"],
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                },
+            },
+        )
+        assert resp.status_code == 201, resp.text
+
+
 class TestSystemCatalog:
     async def test_list_and_get(self, test_client: AsyncClient, worker_token: str) -> None:
         agents = await test_client.get(

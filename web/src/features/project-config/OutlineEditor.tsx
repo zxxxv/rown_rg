@@ -570,7 +570,13 @@ function AnalystPicker({
                 key={a.id}
                 type="button"
                 onClick={() => toggle(a.name)}
-                title={`${a.desc}${a.pages ? ` · ${a.pages}p` : ""}`}
+                title={[
+                  a.shared && a.owner_name ? `${a.owner_name} 공개` : "",
+                  a.desc,
+                  a.pages ? `${a.pages}p` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
                 aria-pressed={active}
                 className={cn(
                   "rounded-full border px-2.5 py-1 text-xs transition-colors",
@@ -582,6 +588,13 @@ function AnalystPicker({
                 {active ? `${order + 1}. ` : ""}
                 {a.name}
                 <span className="ml-1 text-[10px] text-fg-tertiary">{a.cat}</span>
+                {/* 남이 공개한 것임을 칩에서 바로 알린다 - 이름만 보면 내 것과
+                    구분이 안 되는데, 주인이 고치면 다음 실행부터 글이 달라진다. */}
+                {a.shared ? (
+                  <span className="ml-1 text-[10px] text-accent">
+                    공유{a.owner_name ? ` · ${a.owner_name}` : ""}
+                  </span>
+                ) : null}
               </button>
             );
           })

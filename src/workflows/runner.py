@@ -383,9 +383,17 @@ async def _execute(project_id: uuid.UUID) -> None:
                 # 배포로 바뀌면 과거 런의 표시가 함께 바뀐다(2026-08-14 고급 수집
                 # Haiku 환원 때 옛 Sonnet 수집 런이 'Haiku 수집'으로 둔갑).
                 # 이 런이 실제로 쓴 조합을 config에 남겨 표시·기록을 고정한다.
+                from src.services.prompts import snapshot_agents
                 from src.workflows.stages import _models_for
 
-                project.config = {**(project.config or {}), "models": _models_for(state)}
+                # 에이전트 스냅샷 — 남이 공개한 개인 에이전트는 라이브 참조라(주인이
+                # 언제든 고치고 내린다) 런 도중·재개 후에 페르소나가 갈릴 수 있다.
+                # 시작 순간의 프롬프트를 얼려 이 런 내내 같은 목소리로 쓰게 한다.
+                project.config = {
+                    **(project.config or {}),
+                    "models": _models_for(state),
+                    "analysts": await snapshot_agents(session, project.owner_id),
+                }
                 await session.commit()
 
             async def _persist_running_stage(stage: ProjectStage) -> None:

@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from pydantic import ValidationError as _SpecValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import NotFoundError, ValidationError
+from src.db.models.user import User
 from src.db.models.user_prompt import UserPrompt
 from src.prompts import AnalystSpec, VolumeTarget, list_analysts, load_component
 from src.services.prompts.composer import compose_agent_prompt
@@ -26,6 +28,17 @@ def _check_kind(kind: str) -> None:
         raise ValidationError(
             message=f"알 수 없는 프롬프트 종류: {kind} (가능: {', '.join(VALID_KINDS)})",
             code="INVALID_PROMPT_KIND",
+        )
+
+
+def _check_public(kind: str, is_public: bool) -> None:
+    """공개는 에이전트만. 작성 규칙은 프로젝트가 id로 골라 붙이는 소유자 스코프
+    계약이라(_validate_rules_config가 남의 id를 막는다) 공개해도 남이 쓸 길이 없다 —
+    켜지는 스위치인데 아무 일도 안 일어나면 그게 거짓 스위치다.
+    """
+    if is_public and kind != "agent":
+        raise ValidationError(
+            message="공개는 분석 에이전트만 가능합니다", code="PROMPT_NOT_SHAREABLE"
         )
 
 
@@ -111,8 +124,10 @@ async def create_personal(
     cat: str | None = None,
     description: str | None = None,
     spec: dict | None = None,
+    is_public: bool = False,
 ) -> UserPrompt:
     _check_kind(kind)
+    _check_public(kind, is_public)
     content = _content_from(kind, name, content, spec)
     row = UserPrompt(
         owner_id=owner_id,
@@ -123,6 +138,7 @@ async def create_personal(
         cat=cat,
         description=description,
         spec=spec or {},
+        is_public=is_public,
     )
     session.add(row)
     await session.flush()
@@ -140,9 +156,13 @@ async def update_personal(
     cat: str | None = None,
     description: str | None = None,
     spec: dict | None = None,
+    is_public: bool | None = None,
 ) -> UserPrompt:
     """개인 프롬프트 수정 — kind·base_ref는 불변(오버라이드 대상은 생성 시 확정)."""
     row = await get_personal(session, owner_id, prompt_id)
+    if is_public is not None:
+        _check_public(row.kind, is_public)
+        row.is_public = is_public
     if name is not None:
         row.name = name
     if content is not None:
@@ -166,11 +186,62 @@ async def delete_personal(session: AsyncSession, owner_id: UUID, prompt_id: UUID
     await session.delete(row)
 
 
+async def list_public_agents(
+    session: AsyncSession, viewer_id: UUID | None = None
+) -> list[tuple[UserPrompt, str]]:
+    """공개된 개인 에이전트 + 소유자 이름. viewer_id를 주면 그 사람 것은 뺀다.
+
+    자기 것은 개인 층에서 이미 나오므로 공개 층에서 또 넣으면 목록에 두 벌 뜬다.
+    """
+    stmt = (
+        select(UserPrompt, User.name)
+        .join(User, User.id == UserPrompt.owner_id)
+        .where(UserPrompt.kind == "agent", UserPrompt.is_public.is_(True))
+    )
+    if viewer_id is not None:
+        stmt = stmt.where(UserPrompt.owner_id != viewer_id)
+    stmt = stmt.order_by(UserPrompt.updated_at.desc())
+    return [(row[0], row[1]) for row in (await session.execute(stmt)).all()]
+
+
+def _unique_name(name: str, owner_name: str, prompt_id: UUID, taken: set[str]) -> str:
+    """목록 안에서 유일한 표시 이름. 목차·프리셋이 에이전트를 **이름**으로 참조하므로
+    (OutlineEditor의 칩이 a.name을 넣는다) 같은 이름이 둘이면 배정이 어느 쪽인지
+    갈리지 않는다 — 겹칠 때만 소유자를 덧붙여 가른다. 안 겹치면 원래 이름 그대로라
+    이미 저장된 목차의 참조가 깨지지 않는다.
+    """
+    if name not in taken:
+        return name
+    with_owner = f"{name} ({owner_name})"
+    if with_owner not in taken:
+        return with_owner
+    return f"{name} ({owner_name}·{str(prompt_id)[:4]})"
+
+
+def shared_spec(p: UserPrompt, owner_name: str, taken: set[str]) -> AnalystSpec:
+    """공개된 남의 에이전트 → 카탈로그 항목. 개인 에이전트와 같은 id 규약(u-<uuid>)."""
+    return AnalystSpec(
+        id=f"u-{p.id}",
+        name=_unique_name(p.name, owner_name, p.id, taken),
+        cat=p.cat or "공유",
+        desc=p.description or "",
+        queries=[q for q in (p.spec or {}).get("queries", []) if isinstance(q, str)],
+        prompt=p.content,
+        volume_target=volume_from_spec(p.spec) or VOLUME_PRESETS["normal"],
+        shared=True,
+        owner_name=owner_name,
+    )
+
+
 async def resolve_analysts(session: AsyncSession, owner_id: UUID) -> list[AnalystSpec]:
-    """개인 → 시스템 폴백으로 병합한 분석 에이전트 목록.
+    """시스템 → 내 개인 → 남의 공개 순으로 병합한 분석 에이전트 목록.
 
     base_ref가 시스템 에이전트(id/name)를 가리키는 개인 에이전트는 그 프롬프트를 덮어쓰고,
     base_ref 없는 개인 에이전트는 뒤에 새로 붙는다(id=`u-<uuid>`).
+
+    남이 공개한 에이전트(is_public)는 **덮어쓰지 않고 뒤에 붙기만 한다** — 남의 오버라이드가
+    내 시스템 에이전트를 조용히 바꾸면 같은 이름으로 다른 글이 나온다. base_ref가 달린
+    공개 에이전트도 그 변형본 자체로 한 항목이 된다.
     """
     system = list_analysts()
     personals = (
@@ -220,6 +291,50 @@ async def resolve_analysts(session: AsyncSession, owner_id: UUID) -> list[Analys
                     volume_target=volume_from_spec(p.spec) or VOLUME_PRESETS["normal"],
                 )
             )
+
+    # 공개 층 — 내 것/시스템 이름을 밀어내지 않도록 마지막에, 이름 충돌만 가려서 붙인다.
+    taken = {spec.name for spec in merged}
+    for p, owner_name in await list_public_agents(session, owner_id):
+        spec = shared_spec(p, owner_name, taken)
+        taken.add(spec.name)
+        merged.append(spec)
+    return merged
+
+
+async def snapshot_agents(session: AsyncSession, owner_id: UUID) -> list[dict]:
+    """런 시작 시점의 DB 출신 에이전트를 얼려 둘 형태로 돌려준다.
+
+    남의 공개 에이전트는 라이브 참조라(주인이 언제든 고치고 내린다) 런이 도는 도중
+    페르소나가 바뀌거나 사라질 수 있다 — 재개(resume)까지 생각하면 같은 보고서의 절마다
+    다른 프롬프트로 쓰이는 일이 생긴다. 시작 순간의 값을 config에 남겨 그 런 내내 같은
+    글을 쓰게 한다(2026-08-19 사용자 결정: 라이브 참조 + 런 시작 스냅샷).
+
+    파일 카탈로그와 프롬프트가 같은 항목은 담지 않는다 — 파일은 배포로만 바뀌고,
+    전부 담으면 config에 24종 프롬프트가 통째로 들어앉는다.
+    """
+    file_prompts = {a.id: a.prompt for a in list_analysts()}
+    return [
+        spec.model_dump(mode="json")
+        for spec in await resolve_analysts(session, owner_id)
+        if file_prompts.get(spec.id) != spec.prompt
+    ]
+
+
+def specs_from_snapshot(raw: list) -> list[AnalystSpec]:
+    """얼린 스냅샷 + 파일 카탈로그 → 그 런의 에이전트 목록.
+
+    같은 id는 스냅샷이 이긴다(개인 오버라이드가 시스템 항목을 대체한 상태 그대로).
+    형태가 깨진 항목은 조용히 버린다 — 옛 런의 config를 읽다 실행이 죽으면 안 된다.
+    """
+    frozen: dict[str, AnalystSpec] = {}
+    for item in raw:
+        try:
+            spec = AnalystSpec.model_validate(item)
+        except (_SpecValidationError, TypeError):
+            continue
+        frozen[spec.id] = spec
+    merged = [frozen.pop(a.id, a) for a in list_analysts()]
+    merged.extend(frozen.values())
     return merged
 
 

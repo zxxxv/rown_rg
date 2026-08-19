@@ -213,6 +213,9 @@ function KindSection({ kind }: { kind: PromptKind }) {
                       신규
                     </Badge>
                   )}
+                  {/* 공개 중인지는 목록에서 바로 보여야 한다 - 편집을 열어야만
+                      알 수 있으면 열어 둔 걸 잊는다. */}
+                  {p.is_public ? <Badge className="shrink-0 text-[10px]">사내 공개</Badge> : null}
                 </span>
                 <span className="truncate font-mono text-[11px] text-fg-tertiary">
                   변경 {p.updated_at.slice(0, 10)}

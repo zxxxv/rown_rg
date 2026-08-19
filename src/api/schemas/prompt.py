@@ -61,6 +61,8 @@ class PersonalPromptCreate(BaseModel):
     cat: str | None = Field(None, max_length=100)
     description: str | None = Field(None, max_length=500)
     spec: PromptSpec = Field(default_factory=PromptSpec)
+    # 켜면 전 계정의 에이전트 선택 목록에 뜬다(에이전트만).
+    is_public: bool = False
 
     @model_validator(mode="after")
     def _check_body(self) -> PersonalPromptCreate:
@@ -79,6 +81,8 @@ class PersonalPromptUpdate(BaseModel):
     cat: str | None = Field(None, max_length=100)
     description: str | None = Field(None, max_length=500)
     spec: PromptSpec | None = None
+    # None이면 공개 여부를 건드리지 않는다(부분 수정).
+    is_public: bool | None = None
 
 
 class PersonalPromptRead(BaseModel):
@@ -92,6 +96,7 @@ class PersonalPromptRead(BaseModel):
     cat: str | None
     description: str | None
     spec: dict = Field(default_factory=dict)
+    is_public: bool = False
     updated_at: datetime
 
 

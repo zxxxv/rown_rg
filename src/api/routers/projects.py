@@ -384,7 +384,7 @@ async def get_analysts(
 ) -> list[AnalystRead]:
     """분석 에이전트 카탈로그 — 섹션별 담당 배정 UI의 선택지.
 
-    개인→시스템 병합 목록(개인 에이전트가 있으면 함께/덮어써서 노출).
+    시스템 → 내 개인(덮어쓰기/추가) → 남이 공개한 에이전트(추가) 순 병합 목록.
     """
     return [
         AnalystRead(
@@ -393,6 +393,8 @@ async def get_analysts(
             cat=a.cat,
             desc=a.desc,
             pages=a.volume_target.pages if a.volume_target else None,
+            shared=a.shared,
+            owner_name=a.owner_name,
         )
         for a in await resolve_analysts(session, current_user.id)
     ]
@@ -1721,6 +1723,8 @@ _INTERNAL_CONFIG_KEYS = (
     "cancelled_from",
     "verify_resolved",
     "models",
+    # analysts = 런 시작 시점 DB 출신 에이전트 스냅샷(러너 기록) - 그 런이 실제로 쓴 페르소나.
+    "analysts",
     SECTION_PLAN_KEY,
     "_design_plan",
     "_rehearsal_reopens",
@@ -2258,7 +2262,9 @@ async def _default_section_rewriter(
         instruction=instruction,
         model=models["write"],
         plan_model=models["write_plan"],
-        analyst_catalog=await _analyst_catalog(project.owner_id),
+        # 절 재작성도 그 런의 얼린 페르소나로 쓴다 - 공개 에이전트 주인이 그새
+        # 고쳤다고 이미 쓴 절과 다른 목소리가 나오면 안 된다.
+        analyst_catalog=await _analyst_catalog(project.owner_id, state.options),
         rules=await _rule_texts(project.owner_id, _selected_rule_ids(state)),
         user_id=project.owner_id,
         project_id=project.id,

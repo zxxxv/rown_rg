@@ -603,7 +603,7 @@ async def plan_brief(state: ProjectState) -> ProjectState:
     from src.services.generation.brief_ai import generate_ai_plan
     from src.services.generation.design_brief import build_design_brief
 
-    catalog = await _analyst_catalog(state.user_id)
+    catalog = await _analyst_catalog(state.user_id, state.options)
     mode = state.options.get("model_mode") if isinstance(state.options, dict) else None
     brief = build_design_brief(
         state.section_plan, topic=state.topic, catalog=catalog, model_mode=mode
@@ -916,7 +916,7 @@ async def _rehearse(state: ProjectState) -> ProjectState:
     if not state.section_plan:
         return state
     version = await current_index_version(pid)
-    catalog = await _analyst_catalog(state.user_id)
+    catalog = await _analyst_catalog(state.user_id, state.options)
     retrieve = _retriever_factory(state)
     hyde_retrieve: SectionRetriever | None = None
     flows_in = await _design_flows_inbound(pid)
@@ -1204,17 +1204,25 @@ async def _default_rule_texts(owner_id, selected: list) -> list[str]:
         return await resolve_rules(session, owner_id, selected)
 
 
-async def _default_analyst_catalog(owner_id) -> dict:
-    """개인→시스템 병합 에이전트 카탈로그(id·name 양쪽 키) — 작성기 주입용.
+async def _default_analyst_catalog(owner_id, options: dict | None = None) -> dict:
+    """병합 에이전트 카탈로그(id·name 양쪽 키) — 작성기 주입용.
 
     작성기는 순수 모듈이라 DB를 못 읽는다. 실행 시작 시 한 번 만들어 넘겨야 사용자가
     만든 개인 에이전트가 실제 작성에 반영된다(그전엔 조용히 무시됐다).
+
+    options(=projects.config)에 런 시작 스냅샷이 있으면 그걸 쓴다 — 남이 공개한
+    에이전트는 라이브 참조라 런 도중 주인이 고치거나 내리면 절마다 다른 프롬프트로
+    쓰이게 된다(재개하면 더 벌어진다). 없으면(옛 런·미리보기) 지금 값을 읽는다.
     """
     from src.db.session import async_session_maker
-    from src.services.prompts import resolve_analysts
+    from src.services.prompts import resolve_analysts, specs_from_snapshot
 
-    async with async_session_maker() as session:
-        specs = await resolve_analysts(session, owner_id)
+    frozen = (options or {}).get("analysts") if isinstance(options, dict) else None
+    if isinstance(frozen, list) and frozen:
+        specs = specs_from_snapshot(frozen)
+    else:
+        async with async_session_maker() as session:
+            specs = await resolve_analysts(session, owner_id)
     catalog: dict = {}
     for spec in specs:
         catalog[spec.id] = spec
@@ -1354,7 +1362,7 @@ async def write(state: ProjectState) -> ProjectState:
     else:
         await _sections_cleaner(state.project_id)  # 이전 런 잔재 제거(증분 초안과 혼재 방지)
     models = _models_for(state)
-    catalog = await _analyst_catalog(state.user_id)
+    catalog = await _analyst_catalog(state.user_id, state.options)
     rules = await _rule_texts(state.user_id, _selected_rule_ids(state))
     remaining = [s for s in state.section_plan if s.section_id not in done_ids]
     loop_state = state.model_copy(update={"section_plan": remaining}) if done_ids else state

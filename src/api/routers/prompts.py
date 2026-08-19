@@ -91,6 +91,7 @@ async def create_my_prompt(
         cat=data.cat,
         description=data.description,
         spec=data.spec.model_dump(exclude_none=True),
+        is_public=data.is_public,
     )
     return PersonalPromptRead.model_validate(row)
 
@@ -121,6 +122,7 @@ async def update_my_prompt(
         cat=data.cat,
         description=data.description,
         spec=data.spec.model_dump(exclude_none=True) if data.spec is not None else None,
+        is_public=data.is_public,
     )
     return PersonalPromptRead.model_validate(row)
 

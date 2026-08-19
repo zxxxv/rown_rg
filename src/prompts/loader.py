@@ -43,6 +43,10 @@ class AnalystSpec(BaseModel):
     queries: list[str] = []
     prompt: str
     volume_target: VolumeTarget | None = None
+    # 남이 만들어 공개한 개인 에이전트인지 — 파일 카탈로그·내 개인 에이전트는 False.
+    # 선택 화면이 "누구 것인지"를 보여줘야 같은 이름 둘을 구분할 수 있다.
+    shared: bool = False
+    owner_name: str | None = None
 
 
 class PresetSection(BaseModel):

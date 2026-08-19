@@ -112,6 +112,10 @@ class AnalystRead(BaseModel):
     cat: str
     desc: str
     pages: str | None = None  # volume_target 분량 안내 (예: "10~15")
+    # 남이 만들어 공개한 에이전트인지 + 누구 것인지. 같은 이름이 둘일 때 사람이
+    # 가려 고를 수 있는 유일한 단서라, 목록에 반드시 함께 내려간다.
+    shared: bool = False
+    owner_name: str | None = None
 
 
 class OutlineSectionIn(BaseModel):

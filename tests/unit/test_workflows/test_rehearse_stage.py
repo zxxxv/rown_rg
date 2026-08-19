@@ -67,7 +67,7 @@ def rehearse_env(monkeypatch: pytest.MonkeyPatch):
     async def fake_flows(_pid) -> dict[str, int]:
         return env["flows"]
 
-    async def fake_catalog(_uid) -> dict:
+    async def fake_catalog(_uid, _options=None) -> dict:
         return {}
 
     async def fake_sources(_pid) -> list:

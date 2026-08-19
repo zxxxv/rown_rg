@@ -5,8 +5,11 @@ from src.services.prompts.personal import (
     delete_personal,
     get_personal,
     list_personal,
+    list_public_agents,
     resolve_analysts,
     resolve_rules,
+    snapshot_agents,
+    specs_from_snapshot,
     update_personal,
 )
 
@@ -15,7 +18,10 @@ __all__ = [
     "delete_personal",
     "get_personal",
     "list_personal",
+    "list_public_agents",
     "resolve_analysts",
     "resolve_rules",
+    "snapshot_agents",
+    "specs_from_snapshot",
     "update_personal",
 ]
