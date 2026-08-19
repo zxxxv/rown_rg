@@ -11,7 +11,10 @@ services:
     env_file:
       - .env
     environment:
-      GPU_MODEL_DIR: /models/bge-reranker-v2-m3-onnx
+      # fp16 채택(2026-08-20 실측): fp32 대비 2.09배 빠르고 VRAM 절반.
+      # 품질 확인 - Spearman 0.9996, 최대 절대오차 3.2e-5, top-24 차이는 동점급뿐.
+      # VRAM이 절반이라 임베딩 모델을 같은 카드에 올릴 여지가 생긴다.
+      GPU_MODEL_DIR: /models/bge-reranker-v2-m3-onnx-fp16
       GPU_DEVICE: cuda
     volumes:
       # 모델은 읽기 전용으로 넣는다 - 컨테이너가 가중치를 건드릴 이유가 없다.
