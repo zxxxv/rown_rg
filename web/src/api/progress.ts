@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
+
+import { type ProjectStatus, ProjectStatusSchema } from "@/api/types";
 import { apiClient } from "@/api/client";
 import type { PhaseName } from "@/api/ws-messages";
 
@@ -16,7 +18,10 @@ export type PendingGate = z.infer<typeof PendingGateSchema>;
 
 export const ProjectProgressSchema = z.object({
   project_id: z.string(),
-  status: z.string(), // created | researching | indexing | writing | reviewing | completed | archived
+  // 백엔드 ProjectStage. 프로젝트 목록·개요가 쓰는 ProjectStatus와 같은 값이라 같은
+  // enum으로 받는다 - string으로 두면 주 CTA·단계 카드가 이 값을 못 쓴다(타입 불일치).
+  // 모르는 값(백엔드가 먼저 배포된 경우)은 catch로 흘려 화면이 죽지 않게 한다.
+  status: ProjectStatusSchema.catch("created"),
   pending_gate: PendingGateSchema.nullable(),
   // 단계 기반 근사 진행률(0~100) + 프로젝트 누적 토큰·비용 (구백엔드 호환 위해 default)
   percent: z.number().min(0).max(100).default(0),
@@ -65,8 +70,9 @@ export interface ProgressSnapshot {
   not_started: boolean;
   /** status=cancelled - 사용자가 실행 도중 취소함 */
   cancelled: boolean;
-  /** 원본 status(취소 등 판정용) */
-  status: string;
+  /** 원본 status(취소 등 판정용). 개요의 주 CTA·단계 카드도 이 값을 쓴다 - 프로젝트
+   * 상세 스냅샷은 /run 뒤 한동안 낡아 있어서 서버가 진실인 이 값을 우선한다. */
+  status: ProjectStatus;
   /** 실행 시작 시각(ISO) - 페이지 재진입에도 경과 시간이 이어지도록 서버 값 사용 */
   started_at: string | null;
   /** 마지막 활동 시각(ISO) - 종료된 프로젝트의 경과 시간 고정용 */

@@ -58,6 +58,7 @@ export const PERSONAL_PROMPTS: PersonalPrompt[] = [
     cat: "커스텀",
     description: "사내 전용",
     spec: { volume: "normal", queries: [], sections: {} },
+    is_public: false,
     updated_at: new Date("2026-05-20T00:00:00Z").toISOString(),
   },
 ];

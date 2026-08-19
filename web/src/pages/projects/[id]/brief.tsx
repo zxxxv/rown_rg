@@ -384,6 +384,7 @@ function SectionRow({
   edited,
   onPlanChange,
   incoming,
+  planQueries,
 }: {
   section: BriefSection;
   duplicated: boolean;
