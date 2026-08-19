@@ -20,6 +20,7 @@ import {
   useProgressSnapshot,
 } from "@/api/progress";
 import {
+  projectKeys,
   useDeleteProject,
   useProject,
   useRunProject,
@@ -290,6 +291,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               project={project}
               pendingGate={usageQuery.data?.pending_gate ?? null}
               stalled={stalled}
+              liveStatus={usageQuery.data?.status}
             />
             {canDelete ? (
               <Button
@@ -320,6 +322,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
             project={project}
             pendingGate={usageQuery.data?.pending_gate ?? null}
             onNavigate={navigate}
+            liveStatus={usageQuery.data?.status}
           />
 
           <Accordion type="single" collapsible>
@@ -418,10 +421,16 @@ function PrimaryAction({
   project,
   pendingGate,
   stalled = false,
+  liveStatus,
 }: {
   project: Project;
   pendingGate: PendingGate | null;
   stalled?: boolean;
+  /** 진행 스냅샷의 상태(7초 폴링). 프로젝트 상세 스냅샷은 /run 뒤에도 한동안 낡아
+   * 있어서, 실행이 시작됐는데도 버튼이 '자료 조사 시작'으로 남았다 - 오른쪽 스테퍼는
+   * 이미 진행 중을 그리는데 버튼만 어긋나 보였다(2026-08-20 사용자 지적).
+   * 서버가 진실이므로 폴링 값이 있으면 그쪽을 따른다. */
+  liveStatus?: ProjectStatus;
 }) {
   // 진행 페이지 폐지 - 시작은 개요에서 바로 실행하고, 진행 관찰은 우측
   // 진행 단계 스테퍼가 담당한다(7초 폴링으로 researching 전이를 따라잡음).
@@ -431,11 +440,17 @@ function PrimaryAction({
   const { download, pending: downloading } = useDownload();
   // 같은 버튼이 '처음 시작'과 '멈춘 런 이어받기' 둘 다를 처리한다 - 안내 문구가
   // 실제 동작과 어긋나면 사용자가 수집이 다시 도는 줄 안다(2026-08-09 보고).
-  const isResume = project.status !== "created" && project.status !== "cancelled";
+  const status = liveStatus ?? project.status;
+  const isResume = status !== "created" && status !== "cancelled";
   const startRun = () => {
     run.mutate(project.id, {
-      onSuccess: () =>
-        toast.success(isResume ? "멈춘 지점부터 이어서 진행합니다." : "자료 조사를 시작했습니다."),
+      onSuccess: () => {
+        // 폴링(7초)을 기다리지 않고 둘 다 즉시 갱신 - 버튼과 스테퍼가 서로 다른
+        // 스냅샷을 보고 어긋나던 자리다.
+        void queryClient.invalidateQueries({ queryKey: projectKeys.detail(project.id) });
+        void queryClient.invalidateQueries({ queryKey: progressKeys.snapshot(project.id) });
+        toast.success(isResume ? "멈춘 지점부터 이어서 진행합니다." : "자료 조사를 시작했습니다.");
+      },
       onError: (err: unknown) => {
         const msg = err instanceof ApiError ? err.message : "시작에 실패했습니다.";
         // 문구가 아니라 코드로 판정한다 - 메시지 문장이 바뀌면 조용히 빗나간다.
@@ -461,19 +476,19 @@ function PrimaryAction({
     });
   };
 
-  if (project.status === "created" || project.status === "cancelled") {
+  if (status === "created" || status === "cancelled") {
     return (
       <Button size="lg" onClick={startRun} disabled={run.isPending}>
         <PlayCircle className="mr-1 h-4 w-4" />
         {run.isPending
           ? "시작 중…"
-          : project.status === "cancelled"
+          : status === "cancelled"
             ? "자료 조사 다시 시작"
             : "자료 조사 시작"}
       </Button>
     );
   }
-  if (project.status === "completed") {
+  if (status === "completed") {
     // '다운로드' 버튼은 즉시 다운로드해야 한다 - 페이지 이동이면 이름이 거짓말
     // (출력 상세·검증 배너는 요약 카드의 '완료일' 타일로 진입).
     return (
@@ -493,7 +508,7 @@ function PrimaryAction({
       </Button>
     );
   }
-  if (project.status === "archived") {
+  if (status === "archived") {
     return (
       <Button size="lg" variant="outline" disabled>
         보관된 프로젝트
@@ -604,18 +619,23 @@ function QuickActions({
   project,
   pendingGate,
   onNavigate,
+  liveStatus,
 }: {
   project: Project;
   pendingGate: { gate: string } | null;
   onNavigate: (to: string) => void;
+  /** 진행 스냅샷의 상태 - 상세 스냅샷은 /run 뒤 한동안 낡아 있어서 실행이
+   * 시작됐는데도 카드가 "실행을 시작하면 열립니다"로 남았다. */
+  liveStatus?: ProjectStatus;
 }) {
   {
     /* '모순 해결' 카드는 페이지(reconcile)와 함께 제거됨(2026-08-04) -
        문서 횡단 검증은 PM 검증(verify_findings)이 실물로 수행한다. */
   }
   // 한번 연 단계는 계속 열려 있다(사후 열람) - 아직 안 간 단계만 잠근다.
-  const briefReached = stageReached(project.status, "planning");
-  const sourcesReached = stageReached(project.status, "researching");
+  const status = liveStatus ?? project.status;
+  const briefReached = stageReached(status, "planning");
+  const sourcesReached = stageReached(status, "researching");
   return (
     <section>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
