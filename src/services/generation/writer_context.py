@@ -205,7 +205,17 @@ def build_writer_context(
         guidance_lines.append(f"작성 방향: {section.direction}")
     if section.key_points:
         points = "\n".join(f"- {k}" for k in section.key_points)
-        guidance_lines.append(f"반드시 다룰 핵심 포인트:\n{points}")
+        # "반드시 다룰"만으로는 항목이 조용히 빠졌다 — 3차 런 실측: 근거 자료가 있는데도
+        # 안 쓴 항목 7건(목차 지시 미반영 29건 중). 각 항목을 소제목·문단으로 대응시키고,
+        # 근거가 없어 못 쓰는 항목은 침묵 대신 한 줄로 밝히게 한다 — 빠뜨림과 자료
+        # 부재를 사람이 구분할 수 있어야 게이트에서 자료를 보강한다.
+        guidance_lines.append(
+            "반드시 다룰 핵심 포인트 — 항목마다 대응하는 소제목이나 문단이 있어야 한다:\n"
+            f"{points}\n"
+            "근거 자료에서 해당 내용을 찾을 수 없는 항목만 본문 말미에 "
+            '"(다음 항목은 확보된 자료에 관련 내용이 없어 다루지 못함: …)" 한 줄로 밝혀라. '
+            "관련 근거가 있는 항목을 빠뜨리는 것은 허용되지 않는다."
+        )
 
     max_tokens = DEFAULT_MAX_TOKENS
     min_chars: int | None = None
