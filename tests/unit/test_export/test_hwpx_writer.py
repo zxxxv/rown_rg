@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from src.export.hwpx_writer import BODY_SIZE_PT, _hanging_indent_mm
+from src.export.hwpx_writer import (
+    BODY_SIZE_PT,
+    CELL_MARGIN_SIDE_HWP,
+    CELL_MARGIN_VERT_HWP,
+    OUTLINE_INDENT_MM,
+    _hanging_indent_mm,
+)
 
 # 반각 한 칸의 폭(mm) — 본문 글자 크기의 절반. 기대값을 손으로 적지 않고 같은 근거로 세운다.
 _HALF = BODY_SIZE_PT * (25.4 / 72) / 2
@@ -34,3 +40,29 @@ class TestHangingIndent:
     def test_too_short_text_ignored(self):
         assert _hanging_indent_mm("ㅇ") == 0.0
         assert _hanging_indent_mm("") == 0.0
+
+
+class TestOutlineIndent:
+    """개조식 수준당 들여쓰기 — 전각 한 칸(본문 글자 한 글자 폭)."""
+
+    def test_one_full_width_character_per_level(self):
+        assert OUTLINE_INDENT_MM == 2 * _HALF
+
+    def test_narrower_than_the_marker_hanging_indent(self):
+        # 자식 마커가 부모 본문 글머리보다 살짝 왼쪽에 선다 — "한 칸"을 택한 결과다.
+        assert OUTLINE_INDENT_MM < _hanging_indent_mm("□ 대주제")
+
+
+class TestCellMargins:
+    """표 셀 안 여백 — 한컴이 표를 새로 넣을 때 쓰는 값과 같아야 한다(실납품 샘플 실측)."""
+
+    def test_side_margin_is_hancom_default(self):
+        assert CELL_MARGIN_SIDE_HWP == 510  # 1.8mm
+
+    def test_vertical_margin_is_hancom_default(self):
+        assert CELL_MARGIN_VERT_HWP == 141  # 0.5mm
+
+    def test_margins_are_not_zero(self):
+        # 0이면 글자가 괘선에 붙는다 — python-hwpx 기본값이 그래서 되돌려 준다.
+        assert CELL_MARGIN_SIDE_HWP > 0
+        assert CELL_MARGIN_VERT_HWP > 0

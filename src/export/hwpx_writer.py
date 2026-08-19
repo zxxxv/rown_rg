@@ -41,12 +41,14 @@ LINE_SPACING_PERCENT = 160
 MARGIN_MM: dict[str, float] = {"top": 20.0, "bottom": 20.0, "left": 30.0, "right": 20.0}
 HEADER_TEXT = "주식회사 로운인사이트"
 MAX_HEADING_LEVEL = 3
-# 개조식 한 수준당 왼쪽 들여쓰기(mm). Paragraph.indent 0=□, 1=ㅇ, 2=-, 3=* 순으로 누적된다.
-OUTLINE_INDENT_MM = 5.0
+_MM_PER_PT = 25.4 / 72
+# 개조식 한 수준당 왼쪽 들여쓰기 — 전각 한 칸(본문 글자 한 글자 폭). Paragraph.indent
+# 0=□, 1=ㅇ, 2=-, 3=* 순으로 누적된다. 고정 5mm였으나 수준이 깊어질수록 본문이 오른쪽으로
+# 밀려 보여 "한 칸"으로 좁혔다(2026-08-20 지적).
+OUTLINE_INDENT_MM = BODY_SIZE_PT * _MM_PER_PT
 # 개조식 글머리 문자 — 이 문자로 시작하는 문단은 마커 폭만큼 내어쓰기해 줄바꿈된 둘째
 # 줄이 본문 글머리에 정렬되게 한다(_hanging_indent_mm).
 OUTLINE_MARKERS: frozenset[str] = frozenset("□ㅇ○◦-*")
-_MM_PER_PT = 25.4 / 72
 # 개조식 문단 간격(pt) — 마커 항목이 붙어 보이지 않도록 문단마다 아래 여백을 준다.
 # 대주제(□, indent 0)는 앞에도 큰 여백을 줘 논리 묶음을 시각적으로 분리한다.
 BODY_SPACING_AFTER_PT = 3.0
@@ -205,10 +207,16 @@ Block = Cover | Heading | Paragraph | Table | Figure | Chart | PageBreak
 # 표 머리행 음영(옅은 회색) — 본문 행과 시각적으로 구분한다.
 TABLE_HEADER_SHADE = "#E6E6E6"
 
-# 왼쪽 정렬 문단 속성 id — 문서마다 한 번만 만들어 표 셀에 재사용한다.
+# 셀 안 여백(HWPUNIT) — 한컴이 표를 새로 넣을 때 쓰는 기본값 그대로다(실납품 샘플
+# 342개 셀에서 left/right=510, top/bottom=141로 실측). python-hwpx는 이 값을 0으로
+# 만들어 글자가 괘선에 붙는다(2026-08-20 지적) → 표를 만들 때마다 되돌려 준다.
+CELL_MARGIN_SIDE_HWP = 510  # 1.8mm
+CELL_MARGIN_VERT_HWP = 141  # 0.5mm
+
+# 표 셀 문단 속성 id — 문서마다 한 번만 만들어 재사용한다.
 # 문서별로 보관한다: 백엔드는 한 프로세스에서 여러 보고서를 렌더하는데, 전역으로 두면
 # 다른 문서에서 만든 id를 참조해 정렬이 엉뚱해진다.
-_LEFT_PARA_IDS: WeakKeyDictionary = WeakKeyDictionary()
+_CELL_PARA_IDS: WeakKeyDictionary = WeakKeyDictionary()
 
 
 def build_report(
@@ -501,30 +509,32 @@ def _fit_table_width(
         pass
 
 
-def _left_align_para_id(doc: HwpxDocument) -> str | None:
-    """왼쪽 정렬 문단 속성 id를 하나 만들어 재사용한다(표 셀에 붙일 용도).
+def _cell_para_id(doc: HwpxDocument) -> str | None:
+    """표 셀에 붙일 가운데 정렬 문단 속성 id를 하나 만들어 재사용한다.
 
     셀 문단은 기본 paraPr(양쪽 정렬)을 쓴다. 한글 표에서 양쪽 정렬은 짧은 셀의
-    글자 사이를 벌려 놓아 읽기 나쁘다(2026-08-10 지적) — 왼쪽 정렬로 고정한다.
+    글자 사이를 벌려 놓아 읽기 나쁘다(2026-08-10 지적). 왼쪽 정렬로 고정했다가
+    가운데 정렬로 바꿨다(2026-08-20 지정) — 셀 세로 정렬은 이미 CENTER라 가로도
+    가운데로 맞춰야 표 안 글자가 칸 한가운데에 놓인다.
     """
-    if doc in _LEFT_PARA_IDS:
-        return _LEFT_PARA_IDS[doc]
+    if doc in _CELL_PARA_IDS:
+        return _CELL_PARA_IDS[doc]
     para_id: str | None = None
     try:
         probe = doc.add_paragraph("")
         result = doc.set_paragraph_format(
-            paragraph_index=doc.paragraphs.index(probe), alignment="LEFT"
+            paragraph_index=doc.paragraphs.index(probe), alignment="CENTER"
         )
         para_id = str(result["paragraphs"][0]["paraPrIDRef"])
         doc.remove_paragraph(probe)
     except Exception:  # noqa: BLE001 — 정렬은 표시 품질, 실패해도 표는 유효
         para_id = None
-    _LEFT_PARA_IDS[doc] = para_id
+    _CELL_PARA_IDS[doc] = para_id
     return para_id
 
 
-def _align_cells_left(doc: HwpxDocument, tbl, n_rows: int, n_cols: int) -> None:
-    para_id = _left_align_para_id(doc)
+def _align_cells_center(doc: HwpxDocument, tbl, n_rows: int, n_cols: int) -> None:
+    para_id = _cell_para_id(doc)
     if para_id is None:
         return
     for r in range(n_rows):
@@ -534,6 +544,33 @@ def _align_cells_left(doc: HwpxDocument, tbl, n_rows: int, n_cols: int) -> None:
                     para.para_pr_id_ref = para_id
             except Exception:  # noqa: BLE001 — 병합 셀 등 접근 실패는 건너뛴다
                 continue
+
+
+def _apply_cell_margins(tbl) -> None:
+    """셀 안 여백을 한컴 기본값으로 되돌린다 — 글자가 괘선에 붙지 않게.
+
+    python-hwpx가 만든 표는 표의 `inMargin`(모든 셀의 기본 안 여백)과 셀마다의
+    `cellMargin`이 모두 0이다. 한컴이 실제로 쓰는 값은 좌우 510·상하 141 HWPUNIT이며,
+    `hasMargin`은 0(=기본값을 쓴다)인 채로 둔다 — 실납품 샘플과 같은 모양이다.
+    두 자리를 같은 값으로 채우므로 한컴이 어느 쪽을 읽든 결과가 같다.
+    """
+    element = getattr(tbl, "element", None)
+    if element is None:
+        return
+    attrs = {
+        "left": str(CELL_MARGIN_SIDE_HWP),
+        "right": str(CELL_MARGIN_SIDE_HWP),
+        "top": str(CELL_MARGIN_VERT_HWP),
+        "bottom": str(CELL_MARGIN_VERT_HWP),
+    }
+    for node in element.iter():
+        # outMargin(표 바깥 여백)은 건드리지 않는다 — 본문과의 간격이라 성격이 다르다.
+        if node.tag.rsplit("}", 1)[-1] in {"inMargin", "cellMargin"}:
+            node.attrib.update(attrs)
+    try:
+        tbl.mark_dirty()
+    except Exception:  # noqa: BLE001 — 여백은 표시 품질, 실패해도 표는 유효
+        pass
 
 
 def _add_table_caption(doc: HwpxDocument, caption: str, bookmark: str = "") -> None:
@@ -583,7 +620,8 @@ def _add_table(doc: HwpxDocument, table: Table) -> None:
         for col, value in enumerate(row):
             tbl.set_cell_text(row_idx, col, value)
     _fit_table_width(tbl, table.headers, table.rows, table.column_weights)
-    _align_cells_left(doc, tbl, n_rows, n_cols)
+    _align_cells_center(doc, tbl, n_rows, n_cols)
+    _apply_cell_margins(tbl)
     if table.source:
         # 출처는 표 바로 아래 좌측 정렬 — 캡션 위·출처 아래가 실측 관례다.
         _add_table_note(doc, table.source, align="LEFT", after_pt=BODY_SPACING_AFTER_PT)
@@ -634,3 +672,5 @@ def _add_figure(doc: HwpxDocument, figure: Figure) -> None:
         tbl.set_cell_shading(0, 0, FIGURE_CAPTION_SHADE)  # 캡션 행만 음영 — 데이터 표와 구분
     except Exception:  # noqa: BLE001 — 음영은 장식, 실패해도 박스는 유효
         pass
+    # 정렬은 손대지 않는다 — 설명 문장이 길어 가운데로 모으면 줄마다 들쭉날쭉해진다.
+    _apply_cell_margins(tbl)
