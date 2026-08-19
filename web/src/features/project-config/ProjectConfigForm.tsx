@@ -152,26 +152,12 @@ export function ProjectConfigForm({
             <SearchScopePicker />
           </Section>
 
-          {/* 필수 결정은 위 5개로 끝. 기능 토글 6종은 제거됨(2026-08-04) -
-              출처 태깅·약어집은 파이프라인 기본 동작. 남은 실스위치는 HyDE뿐. */}
-          <details className="group rounded border border-border bg-bg">
-            <summary className="flex cursor-pointer select-none items-center gap-2 p-4">
-              <span className="inline-flex h-6 w-6 items-center justify-center rounded-sm bg-bg-tertiary font-mono text-xs text-fg-secondary">
-                +
-              </span>
-              <span className="text-base font-semibold text-fg">고급 옵션</span>
-              <span className="text-xs text-fg-tertiary">
-                검색 확장(HyDE) - 기본값으로 충분합니다
-              </span>
-            </summary>
-            {/* 자료 출처 3종(자동 검색·라이브러리·업로드) 안내는 뺐다 - 라이브러리와
-                업로드가 '준비 중'으로 적혀 있었지만 실제로는 자료 검토 단계에서 되는
-                기능이다. 거짓 라벨을 지우고 실제 스위치인 HyDE만 남긴다(2026-08-10). */}
-            <div className="flex flex-col gap-3 border-t border-border p-4">
-              <h3 className="text-sm font-semibold text-fg">검색 품질</h3>
-              <HydeToggle />
-            </div>
-          </details>
+          {/* '고급 옵션'은 제거됨(2026-08-20). 남아 있던 유일한 스위치가 HyDE였는데,
+              리허설 단계가 근거 부족 절을 판정해 **그 절에만** HyDE를 자동으로 한 번
+              돌리게 되면서(3fbd817) 전역 토글이 할 일이 없어졌다. 오히려 해롭다 -
+              켜면 모든 절의 모든 질의에 HyDE가 붙는데, 질의 분화(fff9e98)로 절당 질의가
+              1개에서 5~6개가 됐으므로 콜이 절당 6배가 된다. 전역 기본 off는 그대로이고
+              실험용 오버라이드는 settings.hyde_enabled로 남는다. */}
         </div>
 
         {isEdit ? (
@@ -311,7 +297,6 @@ function NotificationChannels() {
   );
 }
 
-/** HyDE 검색 확장 토글 - 실스위치(백엔드 stages._hyde_enabled_for가 소비). */
 // 국내 제도·통계가 본질인 보고서와 해외 기술 동향이 본질인 보고서는 정답이 다르다 -
 // 한쪽으로 고정하지 않고 프로젝트마다 고르게 한다(2026-08-11).
 // 체크박스 다중 선택(2026-08-13 사용자 결정): 국내만/해외만/둘 다. '반반' 프리셋은
@@ -369,38 +354,6 @@ function SearchScopePicker() {
           </div>
         );
       }}
-    />
-  );
-}
-
-function HydeToggle() {
-  const { control } = useFormContext<ProjectFormValues>();
-  return (
-    <Controller
-      name="config.hyde_enabled"
-      control={control}
-      render={({ field }) => (
-        <label
-          htmlFor="hyde-toggle"
-          className="flex cursor-pointer items-start gap-3 rounded border border-border bg-bg p-3 transition-colors hover:bg-bg-secondary"
-        >
-          <Checkbox
-            id="hyde-toggle"
-            checked={field.value ?? false}
-            onCheckedChange={(checked) => field.onChange(checked === true)}
-            aria-describedby="hyde-toggle-desc"
-          />
-          <div className="flex flex-col gap-0.5">
-            <Label htmlFor="hyde-toggle" className="cursor-pointer text-sm font-medium text-fg">
-              HyDE 검색 확장 (실험적)
-            </Label>
-            <span id="hyde-toggle-desc" className="text-xs text-fg-tertiary">
-              작성 근거 검색 시 질문을 가상 답변 문서로 확장해 의미 검색 재현율을 높입니다. 절마다
-              소형 모델 호출이 추가됩니다(비용 소폭 증가).
-            </span>
-          </div>
-        </label>
-      )}
     />
   );
 }
