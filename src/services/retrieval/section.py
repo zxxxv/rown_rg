@@ -37,8 +37,6 @@ MAX_SECTION_QUERIES = 6
 MAX_KEYPOINT_QUERIES = 2
 # 에이전트 1종이 기여할 질의 수. 다관점 절에서 한 관점이 질의를 독식하지 않게 한다.
 MAX_QUERIES_PER_ANALYST = 2
-# RRF 상수 — 표준값 60. 순위 기반이라 백엔드마다 다른 점수 눈금을 섞어도 안전하다.
-_RRF_K = 60
 
 
 def hit_to_chunk(hit: SearchHit) -> RetrievedChunk:
@@ -213,28 +211,44 @@ def section_query_set(
     return unique[:MAX_SECTION_QUERIES]
 
 
-def fuse_by_rank(ranked_lists: list[list[SearchHit]], limit: int) -> list[SearchHit]:
-    """RRF(Reciprocal Rank Fusion) — 질의별 결과를 순위로 병합한다.
+def interleave_by_query(ranked_lists: list[list[SearchHit]], limit: int) -> list[SearchHit]:
+    """질의별 쿼터를 보장하는 라운드로빈 병합 — 각 관점이 제 몫을 갖는다.
 
-    점수로 더하지 않는 이유: 질의마다 점수 눈금이 다르고(dense·BM25 혼합 결과)
-    긴 질의일수록 절대 점수가 낮게 나오기도 해서, 그대로 더하면 특정 질의가 통째로
-    묻힌다. 순위 기반이면 '여러 질의가 공통으로 위에 올린 청크'가 자연히 위로 온다.
+    처음엔 RRF(Reciprocal Rank Fusion)를 썼는데 **반대로 작동했다**. RRF는 여러
+    리스트가 공통으로 위에 올린 항목을 끌어올리는 합의 융합이라(원 용도가 dense+BM25
+    융합이다), 질의를 늘리면 '모든 질의에 두루 걸리는 중심 청크'가 상위를 먹고 한
+    관점만 찾아온 청크는 나머지 질의에서 순위가 없어 밀린다. v2 탄소규제 색인 실측
+    (2026-08-19, 20절): 절쌍 평균 자카드 0.243 → 0.319(수렴), 영어 청크 비율
+    50.6% → 36.0%. 관점을 넓히려고 넣은 질의가 오히려 획일화를 만들었다.
+
+    라운드로빈은 순위 1위끼리, 2위끼리 차례로 걷어 간다 — 질의 하나가 혼자 찾아온
+    자료도 자기 차례에 반드시 들어온다. 앞쪽 질의(기본=재현율 담당)가 먼저 걷힌다.
 
     반환 hit의 score는 원 검색 점수 중 최댓값을 유지한다 — 뒤에 붙는 리랭커가 다시
     채점하므로 여기 점수는 폴백(리랭커 off)일 때만 순서에 쓰인다.
     """
-    fused: dict[UUID, tuple[float, SearchHit]] = {}
+    best: dict[UUID, SearchHit] = {}
     for hits in ranked_lists:
-        for rank, hit in enumerate(hits):
-            weight = 1.0 / (_RRF_K + rank + 1)
-            prev = fused.get(hit.chunk_id)
-            if prev is None:
-                fused[hit.chunk_id] = (weight, hit)
-            else:
-                best = prev[1] if prev[1].score >= hit.score else hit
-                fused[hit.chunk_id] = (prev[0] + weight, best)
-    order = sorted(fused.values(), key=lambda x: x[0], reverse=True)
-    return [hit for _, hit in order[:limit]]
+        for hit in hits:
+            prev = best.get(hit.chunk_id)
+            if prev is None or hit.score > prev.score:
+                best[hit.chunk_id] = hit
+
+    picked: list[SearchHit] = []
+    seen: set[UUID] = set()
+    depth = max((len(h) for h in ranked_lists), default=0)
+    for rank in range(depth):
+        for hits in ranked_lists:
+            if rank >= len(hits):
+                continue
+            cid = hits[rank].chunk_id
+            if cid in seen:
+                continue
+            seen.add(cid)
+            picked.append(best[cid])
+            if len(picked) >= limit:
+                return picked
+    return picked
 
 
 def _topic_anchor(topic: str | None) -> str:
@@ -307,8 +321,8 @@ async def retrieve_for_section(
     if len(queries) == 1:
         hits = await client.search(query, project_id, track, width)
     else:
-        # 질의별로 같은 폭을 받아 RRF로 병합한 뒤 다시 width로 캡한다 — 리랭커가 보는
-        # 후보 수는 그대로고(비용 불변), 그 안의 다양성만 올라간다.
+        # 질의별로 같은 폭을 받아 라운드로빈으로 걷어 width까지 채운다 — 리랭커가 보는
+        # 후보 수는 그대로고(비용 불변), 그 안의 관점 다양성만 올라간다.
         results = await asyncio.gather(
             *(client.search(q, project_id, track, width) for q in queries),
             return_exceptions=True,
@@ -318,7 +332,7 @@ async def retrieve_for_section(
         if failed:
             # 보조 질의 하나가 죽었다고 절 검색을 통째로 버리지 않는다.
             logger.warning("retrieval.multi_query_partial", failed=failed, total=len(queries))
-        hits = fuse_by_rank(ranked, width) if ranked else []
+        hits = interleave_by_query(ranked, width) if ranked else []
         logger.info(
             "retrieval.multi_query",
             n_queries=len(queries),

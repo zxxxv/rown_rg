@@ -16,7 +16,7 @@ from src.prompts import AnalystSpec
 from src.services.retrieval.base import SearchHit
 from src.services.retrieval.section import (
     MAX_SECTION_QUERIES,
-    fuse_by_rank,
+    interleave_by_query,
     section_query_set,
     section_search_query,
 )
@@ -134,31 +134,47 @@ class TestQuerySet:
         assert qs == [section_search_query(_section())]
 
 
-class TestFuseByRank:
-    def test_common_hits_rise(self):
-        """여러 질의가 공통으로 위에 올린 청크가 위로 온다 - RRF의 요점."""
-        shared = _hit(0.5)
-        a = [_hit(0.9), shared]
-        b = [_hit(0.9), shared]
-        fused = fuse_by_rank([a, b], limit=3)
-        assert fused[0].chunk_id == shared.chunk_id
+class TestInterleaveByQuery:
+    def test_every_query_gets_its_turn(self):
+        """한 질의만 찾아온 자료도 반드시 들어와야 한다 - RRF가 못 하던 일.
+
+        RRF는 공통으로 올라온 것을 끌어올려, 관점 하나가 혼자 찾은 청크를 밀어냈다
+        (2026-08-19 실측: 절쌍 자카드 0.243→0.319, 영어 비율 50.6%→36.0%).
+        """
+        a = [_hit(0.9), _hit(0.8), _hit(0.7)]
+        lone = _hit(0.4)  # b 질의만 찾아온 자료, 점수도 낮다
+        b = [lone]
+        merged = interleave_by_query([a, b], limit=3)
+        assert lone.chunk_id in {h.chunk_id for h in merged}
+
+    def test_first_query_leads(self):
+        """앞쪽 질의(기본=재현율 담당)가 먼저 걷힌다."""
+        a, b = [_hit(0.5)], [_hit(0.9)]
+        merged = interleave_by_query([a, b], limit=2)
+        assert merged[0].chunk_id == a[0].chunk_id
 
     def test_dedupes_by_chunk_id(self):
         shared = _hit(0.5)
-        fused = fuse_by_rank([[shared], [shared], [shared]], limit=10)
-        assert len(fused) == 1
+        merged = interleave_by_query([[shared], [shared], [shared]], limit=10)
+        assert len(merged) == 1
 
     def test_keeps_best_original_score(self):
         """리랭커 off일 때 순서에 쓰이는 폴백 점수는 최댓값을 유지한다."""
         cid = uuid.uuid4()
         low, high = _hit(0.2), _hit(0.8)
         low.chunk_id = high.chunk_id = cid
-        fused = fuse_by_rank([[low], [high]], limit=5)
-        assert fused[0].score == pytest.approx(0.8)
+        merged = interleave_by_query([[low], [high]], limit=5)
+        assert merged[0].score == pytest.approx(0.8)
 
     def test_respects_limit(self):
-        fused = fuse_by_rank([[_hit(0.9) for _ in range(10)]], limit=4)
-        assert len(fused) == 4
+        merged = interleave_by_query([[_hit(0.9) for _ in range(10)]], limit=4)
+        assert len(merged) == 4
+
+    def test_uneven_lists_do_not_lose_the_tail(self):
+        """짧은 리스트가 먼저 소진돼도 긴 리스트의 나머지가 계속 걷힌다."""
+        long_list = [_hit(0.9) for _ in range(5)]
+        merged = interleave_by_query([long_list, [_hit(0.5)]], limit=6)
+        assert len(merged) == 6
 
     def test_empty_input_is_empty(self):
-        assert fuse_by_rank([], limit=5) == []
+        assert interleave_by_query([], limit=5) == []
