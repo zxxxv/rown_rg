@@ -27,7 +27,9 @@ ENV PYTHONPATH=/app \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1
 
-RUN useradd --create-home --uid 1000 rown && chown -R rown /app
+# Ubuntu 24.04 베이스 이미지에는 uid 1000이 이미 있다(ubuntu 사용자). 그대로 useradd하면
+# exit 4(UID already in use)로 빌드가 죽는다 — 22.04에서는 없던 충돌이다. 먼저 걷어낸다.
+RUN userdel -r ubuntu 2>/dev/null || true; useradd --create-home --uid 1000 rown && chown -R rown /app
 USER rown
 
 EXPOSE 8009

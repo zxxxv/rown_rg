@@ -62,9 +62,27 @@ def to_fp16(src_dir: Path, out_dir: Path) -> None:
         from onnxconverter_common.float16 import convert_float_to_float16
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    model = onnx.load(str(src_dir / "model.onnx"))
+
+    # 2GB 넘는 모델은 여기서 걸린다. convert_float_to_float16이 내부에서
+    # onnx.shape_inference.infer_shapes(model)을 부르는데, 그게 model.SerializeToString()을
+    # 하고 protobuf는 메시지 하나가 2GB를 못 넘는다. bge-reranker fp32는 2.27GB라
+    # EncodeError로 죽는다(2026-08-20). 파일 기반 infer_shapes_path는 그 한계가 없으므로
+    # 먼저 돌려 두고, 변환기에는 다시 추론하지 말라고 알린다 - 추론을 생략하는 게 아니라
+    # 앞당기는 것이라 변환 품질은 그대로다.
+    inferred = src_dir / "_shape_inferred.tmp.onnx"
+    try:
+        # 출력을 src_dir에 두는 이유: 외부 데이터(model.onnx_data) 참조가 상대 경로라
+        # 다른 디렉터리에 쓰면 이어서 load할 때 가중치를 못 찾는다.
+        onnx.shape_inference.infer_shapes_path(
+            str(src_dir / "model.onnx"), str(inferred)
+        )
+        model = onnx.load(str(inferred))
+    finally:
+        inferred.unlink(missing_ok=True)
+
     # keep_io_types: 입출력은 fp32로 남긴다 - 호출부(int64 입력, float 출력)를 안 바꾸려고.
-    converted = convert_float_to_float16(model, keep_io_types=True)
+    converted = convert_float_to_float16(model, keep_io_types=True, disable_shape_infer=True)
+    # fp16은 절반이라 2GB 아래로 떨어져 단일 파일로 저장된다(외부 데이터 불필요).
     onnx.save(converted, str(out_dir / "model.onnx"))
     for name in (
         "tokenizer.json",
