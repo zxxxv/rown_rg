@@ -1,0 +1,11 @@
+# GPU 추론 서비스 전용 — 앱(pyproject.toml)과 별개다.
+# 여기에 DB·LLM SDK를 넣지 말 것. 이 컨테이너가 아는 것은 모델과 HTTP뿐이어야 한다.
+fastapi>=0.115
+uvicorn[standard]>=0.32
+# onnxruntime-gpu는 CPU용 onnxruntime과 같은 namespace를 점유한다 — 둘을 같이 깔면 안 된다.
+onnxruntime-gpu>=1.20
+transformers>=4.44
+# XLM-RoBERTa 토크나이저 폴백. 내보낸 폴더에 tokenizer.json이 있으면 안 쓰이지만,
+# 없을 때 조용히 실패하는 대신 느리게라도 뜨게 한다.
+sentencepiece>=0.2
+numpy>=1.26

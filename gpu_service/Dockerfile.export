@@ -1,0 +1,20 @@
+# 모델 내보내기 전용 일회성 이미지 — GPU 박스에 파이썬 환경을 안 만들어도 되게 한다.
+# 추론 이미지(Dockerfile)와 분리한 이유: optimum·torch는 내보내기에만 필요하고
+# 수 GB짜리다. 추론 컨테이너에 그걸 넣으면 매 배포마다 그 무게를 진다.
+FROM python:3.12-slim
+
+RUN pip install --no-cache-dir \
+        --extra-index-url https://download.pytorch.org/whl/cpu \
+        torch \
+        "optimum[exporters,onnxruntime]>=2.0" \
+        onnx \
+        "transformers>=4.44" \
+        sentencepiece
+
+WORKDIR /app
+COPY src/__init__.py src/__init__.py
+COPY src/clients/__init__.py src/clients/onnx_cross_encoder.py src/clients/
+COPY gpu_service gpu_service
+
+ENV PYTHONPATH=/app PYTHONUNBUFFERED=1
+ENTRYPOINT ["python", "gpu_service/scripts/export_reranker_onnx.py"]
