@@ -17,7 +17,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from src.clients.llm.base import CompletionRequest, LLMClient, Message
 from src.clients.llm.factory import get_llm_client
@@ -170,6 +170,50 @@ async def verify_report(
     return rows
 
 
+async def ledger_join_findings(project_id: UUID) -> list[dict[str, Any]]:
+    """절 meta의 사실 대장을 문서 단위로 취합해 절 간 지표 충돌을 조인으로 잡는다.
+
+    적립은 write 루프가 절 완료마다 했고(services/ledger.extract_entries), 여기는
+    읽기·조인만 한다 — 검출기·주입 이중 투자 금지(단일 원천). 엔트리의 chunk_ids는
+    verify_findings 스키마에 자리가 없어 행에는 안 싣는다(근거 연결 UI는 2차).
+    """
+    from src.db.models.section import Section
+    from src.db.session import async_session_maker
+    from src.services.ledger import join_conflicts
+
+    async with async_session_maker() as session:
+        metas = (
+            (
+                await session.execute(
+                    select(Section.meta).where(
+                        Section.project_id == project_id, Section.content != ""
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    entries = [e for meta in metas for e in (meta or {}).get("ledger_entries") or []]
+    out: list[dict[str, Any]] = []
+    for f in join_conflicts(entries):
+        try:
+            chapter = int(str(f["section_ref"]).split(".")[0])
+        except (ValueError, IndexError):
+            chapter = 0
+        out.append(
+            {
+                "chapter_number": chapter,
+                "severity": f["severity"],
+                "category": f["category"],
+                "section_ref": f["section_ref"],
+                "detail": f["detail"],
+            }
+        )
+    if out:
+        logger.info("pm_verify.ledger_conflicts", project_id=str(project_id), n=len(out))
+    return out
+
+
 async def persist_findings(project_id: UUID, rows: list[dict[str, Any]]) -> None:
     """프로젝트 단위 전량 교체 저장 — 재실행 시 stale 경고가 남지 않는다."""
     from src.db.models.verify_finding import VerifyFinding
@@ -197,6 +241,13 @@ async def run_pm_verify(state: ProjectState, *, model: str | None = None) -> int
         rows.extend(await evidence_findings(state.project_id, user_id=state.user_id))
     except Exception:
         logger.warning("pm_verify.evidence_failed", project_id=str(state.project_id), exc_info=True)
+    try:
+        # 사실 대장 조인 — "같은 지표 다른 값"은 절 내부 어떤 검사도 못 본다(3차 런
+        # 실측: CCA 탄소가격 60 vs 55, 각 절이 자기 출처에 충실). 결정적 대조라 LLM
+        # 비용 0이고, 실패해도 본체 경고는 남긴다.
+        rows.extend(await ledger_join_findings(state.project_id))
+    except Exception:
+        logger.warning("pm_verify.ledger_failed", project_id=str(state.project_id), exc_info=True)
     await persist_findings(state.project_id, rows)
     n_critical = sum(1 for r in rows if r["severity"] == "critical")
     logger.info(

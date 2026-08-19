@@ -1003,7 +1003,10 @@ async def _rehearse(state: ProjectState) -> ProjectState:
                 citable = second
                 hyde_used = True
             band = classify(len(citable), needed)
-        constructive = (
+        # 구성형 절 판정 — builds_on 명시 계약이 있으면 그게 정식이다(설계 확정:
+        # flows 수신 2+는 계약 전까지의 근사였다). 계약이 비어 있으면 근사 유지 —
+        # 자유주제·옛 프리셋은 builds_on이 없어 근사가 계속 일해야 한다.
+        constructive = bool(section.builds_on) or (
             flows_in.get(f"{section.chapter_number}.{section.section_number}", 0)
             >= _CONSTRUCTIVE_MIN_INFLOWS
         )
@@ -1307,6 +1310,32 @@ async def _default_analyst_catalog(owner_id, options: dict | None = None) -> dic
     return catalog
 
 
+async def _default_chunk_loader(chunk_ids: list) -> list:
+    """청크 id → RetrievedChunk. builds_on 주입이 앞 절 확정값의 원 청크를 의존 절
+    풀에 덧붙일 때 쓴다 — 인용 사슬이 원 근거로 해소되게(services/ledger 참조)."""
+    from sqlalchemy import select as _select
+
+    from src.core.types import RetrievedChunk
+    from src.db.models.chunk import Chunk
+    from src.db.session import async_session_maker
+
+    if not chunk_ids:
+        return []
+    async with async_session_maker() as session:
+        rows = (
+            (await session.execute(_select(Chunk).where(Chunk.id.in_(chunk_ids)))).scalars().all()
+        )
+    return [
+        RetrievedChunk(
+            chunk_id=r.id,
+            source_id=r.source_id,
+            content=r.content,
+            score=1.0,  # 주입 청크는 검색 점수가 없다 — 확정값의 근거라 항상 싣는다
+        )
+        for r in rows
+    ]
+
+
 async def _default_working_copy(project_id) -> dict:
     """sections 행(사람이 고친 작업 사본)을 절 id → (본문, 인용) 으로 읽어온다."""
     import uuid as _uuid
@@ -1377,6 +1406,8 @@ _draft_store = _default_draft_store
 _sections_cleaner = _default_sections_cleaner
 _working_copy = _default_working_copy
 _analyst_catalog = _default_analyst_catalog
+# builds_on 주입용 청크 로더 — 인메모리 척추 테스트는 빈 목록 반환으로 교체한다.
+_chunk_loader = _default_chunk_loader
 _rule_texts = _default_rule_texts
 _pm_verifier: Callable[[ProjectState], Awaitable[int]] = _default_pm_verifier
 
@@ -1442,7 +1473,13 @@ async def write(state: ProjectState) -> ProjectState:
     catalog = await _analyst_catalog(state.user_id, state.options)
     rules = await _rule_texts(state.user_id, _selected_rule_ids(state))
     remaining = [s for s in state.section_plan if s.section_id not in done_ids]
-    loop_state = state.model_copy(update={"section_plan": remaining}) if done_ids else state
+    # 증분 재개 시 보존 절의 사실 대장을 루프에 시드한다 — 남은 절에 builds_on이
+    # 걸려 있으면 건너뛴 완성 절의 확정값을 받아야 한다(행 meta에서 복원).
+    loop_updates: dict = {}
+    if done_ids:
+        loop_updates["section_plan"] = remaining
+        loop_updates["section_meta"] = kept_meta
+    loop_state = state.model_copy(update=loop_updates) if loop_updates else state
     result = await run_write_loop(
         loop_state,
         retrieve=retrieve,
@@ -1452,6 +1489,7 @@ async def write(state: ProjectState) -> ProjectState:
         draft_store=_draft_store,
         analyst_catalog=catalog,
         rules=rules,
+        chunk_loader=_chunk_loader,
     )
     if done_ids:
         # 전체 계획 복원 + 보존 절 meta 병합 — 이후 단계(조립·저장)는 전체 절 기준.

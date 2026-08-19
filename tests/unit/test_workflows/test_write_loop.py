@@ -65,6 +65,131 @@ def _candset(section_id, n: int = 2) -> SectionCandidateSet:
     return SectionCandidateSet(section_id=section_id, candidates=cands)
 
 
+# ---------- 사실 대장 + builds_on (적립·배치·주입) ----------
+
+
+class TestLedgerAndBuildsOn:
+    def _chunk(self) -> RetrievedChunk:
+        return RetrievedChunk(
+            chunk_id=uuid4(), source_id=uuid4(), content="근거 본문 " * 60, score=0.9
+        )
+
+    async def test_completed_section_accrues_ledger_entries(self):
+        """절 완료 직후 확정값이 meta.ledger_entries로 적립된다 - 마커는 로컬 번호."""
+        s1 = SectionPlan(chapter_number=4, section_number=1, title="예산")
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[s1])
+        chunk = self._chunk()
+
+        async def retrieve(section):
+            return [chunk]
+
+        body = (
+            "본문 서술이 길게 이어집니다. " * 20
+            + "\n| 구분 | 값 |\n|---|---|\n| 총사업비 | 1.2조 원 (출처 1) |\n"
+        )
+        result = await run_write_loop(state, retrieve=retrieve, client=_StubClient(body), n=1)
+        meta = result.section_meta[s1.section_id]
+        entries = meta.get("ledger_entries") or []
+        assert any(e["metric"] == "총사업비" and e["value"] == "1.2" for e in entries)
+        # 로컬 마커 1 -> 풀의 첫 청크 id로 해소
+        target = next(e for e in entries if e["metric"] == "총사업비")
+        assert str(chunk.chunk_id) in target["chunk_ids"]
+
+    async def test_dependent_section_receives_injection(self):
+        """builds_on 절은 앞 배치의 확정값을 guidance로 받고, 원 청크가 풀에 덧붙는다."""
+        s1 = SectionPlan(chapter_number=4, section_number=1, title="예산")
+        s5 = SectionPlan(chapter_number=4, section_number=5, title="시사점", builds_on=["4.1"])
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[s1, s5])
+        base = self._chunk()
+        loaded: list[list] = []
+
+        async def retrieve(section):
+            return [base] if section.section_number == 1 else [self._chunk()]
+
+        async def chunk_loader(ids):
+            loaded.append(list(ids))
+            return [
+                RetrievedChunk(chunk_id=i, source_id=uuid4(), content="원 근거", score=1.0)
+                for i in ids
+            ]
+
+        class _CapturingClient(_StubClient):
+            def __init__(self, text):
+                super().__init__(text)
+                self.systems: dict[str, str] = {}
+
+        body = (
+            "본문 서술이 길게 이어집니다. " * 20
+            + "\n| 구분 | 값 |\n|---|---|\n| 총사업비 | 1.2조 원 (출처 1) |\n"
+        )
+        stub = _CapturingClient(body)
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=stub, n=1, chunk_loader=chunk_loader
+        )
+        assert len(result.section_candidates) == 2
+        # 주입 블록이 프롬프트 어딘가에 실렸다 - 확정값 문구로 확인
+        joined = "\n".join(
+            (r.system or "") + "\n" + "\n".join(m.content for m in r.messages) for r in stub.calls
+        )
+        assert "앞 절에서 확정된 값" in joined
+        assert "총사업비: 1.2조원" in joined.replace("1.2조 원", "1.2조원") or "총사업비" in joined
+        # 원 청크 로드가 실제로 일어났다(같은 풀에 있으면 생략될 수 있어 base 기준)
+        assert loaded and str(base.chunk_id) in [str(x) for x in loaded[0]]
+
+    async def test_missing_dependency_warns_but_proceeds(self):
+        """대상 절이 확정값을 못 남겨도 의존 절은 막히지 않는다(절 격리 원칙)."""
+        s1 = SectionPlan(chapter_number=1, section_number=1, title="개요")
+        s2 = SectionPlan(chapter_number=1, section_number=2, title="종합", builds_on=["1.1"])
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[s1, s2])
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        # 표·명시 값이 없는 본문 -> 1.1의 대장이 빈다
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=_StubClient("서술만 있는 본문 [1] " * 30), n=1
+        )
+        assert len(result.section_candidates) == 2
+        meta = result.section_meta[s2.section_id]
+        assert meta.get("ledger_inject_warnings")
+
+    async def test_kept_meta_seeds_ledger_on_resume(self):
+        """증분 재개 - 건너뛴 완성 절의 대장이 state.section_meta로 들어와 주입된다."""
+        s5 = SectionPlan(chapter_number=4, section_number=5, title="시사점", builds_on=["4.1"])
+        kept_id = uuid4()
+        state = ProjectState(
+            user_id=uuid4(),
+            topic="주제",
+            section_plan=[s5],
+            section_meta={
+                kept_id: {
+                    "ledger_entries": [
+                        {
+                            "metric": "총사업비",
+                            "value": "1.2",
+                            "unit": "조원",
+                            "qualifiers": {},
+                            "section_ref": "4.1",
+                            "chunk_ids": [],
+                            "source_kind": "table",
+                        }
+                    ]
+                }
+            },
+        )
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        stub = _StubClient("본문 [1] " * 30)
+        result = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        assert len(result.section_candidates) == 1
+        joined = "\n".join(
+            (r.system or "") + "\n".join(m.content for m in r.messages) for r in stub.calls
+        )
+        assert "앞 절에서 확정된 값" in joined
+
+
 # ---------- run_write_loop (검색→생성→게이트 통합) ----------
 
 

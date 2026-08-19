@@ -18,12 +18,14 @@ import structlog
 
 from src.clients.llm.base import LLMClient
 from src.clients.llm.exceptions import LLMClientError
+from src.core.builds_on import batches as builds_on_batches
 from src.core.config import settings
 from src.core.section_plan import dump_section_plan, load_section_plan
 from src.core.state import ProjectState
 from src.core.types import (
     CheckSeverity,
     GateResult,
+    RetrievedChunk,
     SectionCandidate,
     SectionCandidateSet,
     SectionDraft,
@@ -38,6 +40,7 @@ from src.services.generation.split_writer import (
     plan_part_count,
 )
 from src.services.generation.writer_context import build_writer_context, scale_for_evidence
+from src.services.ledger import extract_entries, format_injection, select_for_refs
 from src.services.qa.gate import (
     DEFAULT_MAX_CHARS,
     DEFAULT_MIN_CHARS,
@@ -56,6 +59,12 @@ RETRY_TEMPERATURE = 1.0
 # 절 완성 즉시 초안을 영속화하는 훅(미리보기 증분 표시) — None이면 생략.
 # (state, plan, 생존 draft|None)을 받는다. 주입식이라 단위 테스트는 DB 없이 돈다.
 DraftStore = Callable[[ProjectState, SectionPlan, SectionDraft | None], Awaitable[None]]
+
+# 청크 id 목록 → RetrievedChunk. builds_on 주입이 앞 절 확정값의 원 청크를 의존 절
+# 근거 풀에 덧붙일 때 쓴다 — 풀에 있어야 작성기가 (출처 n)으로 인용하고 그 마커가
+# renumber를 거쳐 원 근거로 해소된다(인용 사슬 무결). None이면 주입은 값만 싣고
+# 인용 번호 없이 나간다(테스트·미리보기 경로).
+ChunkLoader = Callable[[list[UUID]], Awaitable[list[RetrievedChunk]]]
 
 
 def design_plan_note(state: ProjectState, section: SectionPlan) -> str:
@@ -88,6 +97,7 @@ async def run_write_loop(
     draft_store: DraftStore | None = None,
     analyst_catalog: dict[str, Any] | None = None,
     rules: list[str] | None = None,
+    chunk_loader: ChunkLoader | None = None,
 ) -> ProjectState:
     """section_plan의 각 섹션을 검색→후보 생성→정적 게이트로 처리해 state에 적재.
 
@@ -105,6 +115,62 @@ async def run_write_loop(
     # 완료 순서대로 채워지는 공유 dict — 단일 이벤트 루프라 태스크 간 mutation이 안전하다.
     section_meta: dict[UUID, dict] = {}
 
+    # 사실 대장 — 절 라벨("4.1") → 이번 실행에서 적립된 엔트리. 증분 재개로 건너뛴
+    # 완성 절의 몫은 행 meta에서 복원돼 state.section_meta로 들어온다(엔트리가
+    # section_ref를 품고 있어 라벨 매핑이 자급된다).
+    ledger_by_label: dict[str, list[dict]] = {}
+    for kept in (state.section_meta or {}).values():
+        for e in kept.get("ledger_entries") or []:
+            ref = e.get("section_ref")
+            if ref:
+                ledger_by_label.setdefault(str(ref), []).append(e)
+
+    async def _ledger_injection(
+        section: SectionPlan, chunks: list[RetrievedChunk]
+    ) -> tuple[list[RetrievedChunk], str]:
+        """builds_on 절의 근거 풀 확장 + 주입 블록 생성.
+
+        확정값의 원 청크를 풀에 덧붙여야 작성기가 (출처 n)으로 인용하고 그 마커가
+        renumber를 거쳐 원 근거로 해소된다(인용 사슬 무결 — 판정축 ③). 대상이 비어
+        있어도 막지 않는다 — 빈 주입 + meta 경고로 진행(절 격리 원칙).
+        """
+        entries, warns = select_for_refs(list(section.builds_on), ledger_by_label)
+        label = f"{section.chapter_number}.{section.section_number}"
+        if warns:
+            ledger_warns[section.section_id] = warns
+            logger.warning(
+                "write_loop.ledger_injection", project_id=str(pid), section=label, warnings=warns
+            )
+        if not entries:
+            return chunks, ""
+        have = {str(c.chunk_id) for c in chunks}
+        need = [UUID(cid) for e in entries for cid in e.get("chunk_ids", []) if cid not in have]
+        if need and chunk_loader is not None:
+            try:
+                extra = await chunk_loader(list(dict.fromkeys(need)))
+            except Exception:
+                # 청크 로드 실패가 절 작성을 막으면 안 된다 — 값은 그대로 싣되 인용
+                # 번호 없이 나간다(작성기는 값을 쓰고 출처 표기는 생략하게 된다).
+                logger.warning(
+                    "write_loop.ledger_chunks_failed", project_id=str(pid), section=label
+                )
+                extra = []
+            chunks = [*chunks, *extra]
+        citable = [c for c in chunks if not c.is_summary]
+        local_no = {str(c.chunk_id): i + 1 for i, c in enumerate(citable)}
+        note = format_injection(entries, local_no)
+        logger.info(
+            "write_loop.ledger_injected",
+            project_id=str(pid),
+            section=label,
+            n_entries=len(entries),
+            n_extra_chunks=len(need),
+        )
+        return chunks, note
+
+    # 주입 경고 임시 보관 — section_meta가 검색 뒤에야 만들어져 직접 못 적는다.
+    ledger_warns: dict[UUID, list[str]] = {}
+
     async def _process_section(section: SectionPlan) -> SectionCandidateSet:
         # 절 단위 취소 지점 — 세마포어 대기 중이던 절도 시작 전에 여기서 멈춘다.
         cancel.raise_if_cancelled(pid)
@@ -117,6 +183,15 @@ async def run_write_loop(
             # 이 주입이 없으면 계획은 화면 장식이고 작성기는 계획을 본 적 없는 채로 쓴다.
             ctx = replace(ctx, guidance="\n\n".join(x for x in (ctx.guidance, note) if x))
         chunks = await retrieve(section)
+        if section.builds_on:
+            # 사실 대장 주입 — 앞 배치가 적립한 확정값을 구조화된 형태로 싣는다.
+            # 서술 요약으로 잇는 실험은 무근거 +39% 순손해였다(services/ledger 참조).
+            chunks, ledger_note = await _ledger_injection(section, chunks)
+            if ledger_note:
+                ctx = replace(
+                    ctx,
+                    guidance="\n\n".join(x for x in (ctx.guidance, ledger_note) if x),
+                )
         # 재료가 목표에 못 미치면 목표를 내린다 — 검색 뒤라야 실제 근거 수를 안다.
         n_evidence = sum(1 for c in chunks if not c.is_summary)
         scaled = scale_for_evidence(ctx, n_evidence)
@@ -125,6 +200,12 @@ async def run_write_loop(
             "evidence_count": n_evidence,
             "volume_scaled": scaled.min_chars != ctx.min_chars,
             "min_chars": scaled.min_chars,
+            # builds_on 주입 흔적 — 화면·채점이 "이 절이 무엇을 받았나"를 본다.
+            **(
+                {"ledger_inject_warnings": ledger_warns[section.section_id]}
+                if section.section_id in ledger_warns
+                else {}
+            ),
             # 프롬프트에 실린 인용 가능 청크를 그 순서 그대로 남긴다(작성기의 [n] 번호 = 여기 i+1).
             # 인용된 것만 남기면 "봤는데 안 쓴 근거"와 "안 보고 쓴 주장"을 구분할 수 없다.
             "pool_chunk_ids": [str(c.chunk_id) for c in chunks if not c.is_summary],
@@ -215,6 +296,18 @@ async def run_write_loop(
                 section=f"{section.chapter_number}.{section.section_number}",
                 detail=detail,
             )
+        if cset.survivors:
+            # 사실 대장 적립 — 절이 확정한 값을 결정적으로 뽑아 meta에 남긴다.
+            # 마커가 아직 로컬 번호인 이 시점이어야 chunk_id로 풀 수 있다(renumber 전).
+            label_ref = f"{section.chapter_number}.{section.section_number}"
+            entries = extract_entries(
+                cset.survivors[0].draft.content,
+                label_ref,
+                section_meta[section.section_id].get("pool_chunk_ids", []),
+            )
+            section_meta[section.section_id]["ledger_entries"] = entries
+            if entries:
+                ledger_by_label[label_ref] = entries
         if draft_store is not None:
             # 절 완성 즉시 초안 영속화 — 편집기 미리보기가 진행 중에도 완성분을 보여준다
             survivor = cset.survivors[0].draft if cset.survivors else None
@@ -284,17 +377,28 @@ async def run_write_loop(
                     raise
                 return await _fail_section(section, exc, "작성 중 오류")
 
-    tasks = [asyncio.ensure_future(_bounded(s)) for s in state.section_plan]
-    try:
-        # gather는 입력 순서대로 돌려준다 — candidate_sets 순서 = section_plan 순서.
-        candidate_sets = list(await asyncio.gather(*tasks))
-    except BaseException:
-        # 취소(RunCancelled·CancelledError)든 한 절의 실제 예외든, 진행 중인 나머지
-        # 절을 정리하고 전파한다 — 고아 태스크가 취소 후에도 LLM을 계속 부르지 않게.
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
+    # builds_on 위상 정렬 — 레벨 0 배치가 전부 끝나야 레벨 1이 시작한다(의존 절이
+    # 앞 절의 사실 대장을 받으려면 그 절이 완료·적립돼 있어야 한다). 의존이 하나도
+    # 없으면 배치 1개 = 종전 평면 병렬 그대로다(코드 분기 없음, 조사분석 실측 0/0/0).
+    exec_batches, order_warnings = builds_on_batches(state.section_plan)
+    for w in order_warnings:
+        logger.warning("write_loop.builds_on_order", project_id=str(pid), detail=w)
+    results_by_id: dict[UUID, SectionCandidateSet] = {}
+    for batch in exec_batches:
+        tasks = [asyncio.ensure_future(_bounded(s)) for s in batch]
+        try:
+            batch_results = list(await asyncio.gather(*tasks))
+        except BaseException:
+            # 취소(RunCancelled·CancelledError)든 한 절의 실제 예외든, 진행 중인 나머지
+            # 절을 정리하고 전파한다 — 고아 태스크가 취소 후에도 LLM을 계속 부르지 않게.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        for sec, res in zip(batch, batch_results, strict=True):
+            results_by_id[sec.section_id] = res
+    # candidate_sets 순서 = section_plan 순서(배치가 섞어도 산출 순서는 직렬과 동일).
+    candidate_sets = [results_by_id[s.section_id] for s in state.section_plan]
     # 완료 순서로 쌓인 meta를 절 순서로 재배열 — 직렬 버전과 동일한 산출을 보장한다.
     # 실패 절은 meta가 부분적일 수 있어 .get으로 읽는다(격리 경로에서 채우지만 방어).
     ordered_meta = {s.section_id: section_meta.get(s.section_id, {}) for s in state.section_plan}
