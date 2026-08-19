@@ -6,6 +6,7 @@ write 루프는 SectionPlan 하나를 받아 근거 청크를 돌려주는 Secti
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -28,6 +29,16 @@ SectionRetriever = Callable[[SectionPlan], Awaitable[list[RetrievedChunk]]]
 DEFAULT_TOP_K = 10
 # 리랭커 사용 시 1차 검색 폭 — 넓게 가져와 cross-encoder가 top_k로 추리게 한다.
 DEFAULT_FETCH_K = 30
+
+# 절 하나가 던지는 1차 검색 질의 수 상한. 질의 하나당 검색 왕복이 하나 늘고, 병합 뒤
+# 리랭커 입력은 width로 다시 캡되므로(=리랭킹 비용 불변) 늘어나는 건 검색 호출뿐이다.
+MAX_SECTION_QUERIES = 6
+# 절 하나에서 질의로 승격할 핵심 포인트 수. 앞쪽이 사용자가 중요하게 적은 순서다.
+MAX_KEYPOINT_QUERIES = 2
+# 에이전트 1종이 기여할 질의 수. 다관점 절에서 한 관점이 질의를 독식하지 않게 한다.
+MAX_QUERIES_PER_ANALYST = 2
+# RRF 상수 — 표준값 60. 순위 기반이라 백엔드마다 다른 점수 눈금을 섞어도 안전하다.
+_RRF_K = 60
 
 
 def hit_to_chunk(hit: SearchHit) -> RetrievedChunk:
@@ -123,6 +134,109 @@ def section_search_query(section: SectionPlan) -> str:
     return _with_chapter(section)
 
 
+def _analyst_queries(section: SectionPlan, topic: str | None, catalog: dict | None) -> list[str]:
+    """이 절에 배정된 에이전트가 제공하는 검색 질의 — `{topic}` 치환.
+
+    카탈로그의 AnalystSpec.queries는 계약이 적혀 있는데(loader.AnalystSpec 독스트링)
+    소비하는 곳이 없어 값을 넣어도 아무 일이 없었다(2026-08-19 발견). 관점이 다르면
+    찾아야 할 자료도 다르다는 게 에이전트 배정의 전제인데, 배정이 작성 프롬프트에만
+    닿고 검색에는 안 닿고 있었다.
+
+    시스템 카탈로그 질의에는 영어 표현이 섞여 있다(예: "{topic} STEEP analysis").
+    한글 질의로는 영어 청크가 안 잡히던 BGE-M3 언어 편향에도 같이 듣는다.
+
+    `{topic}` 자리에는 **보고서 주제가 아니라 장·절 제목**을 넣는다. 주제를 넣으면
+    같은 에이전트를 배정받은 절들이 글자까지 같은 질의를 던져(예: 다섯 절이 모두
+    "글로벌 탄소규제 동향 SWOT") 8/14에 고친 중복 질의 문제가 그대로 재발한다 —
+    검색을 분화하려고 넣은 질의가 오히려 획일화를 만든다. 주제 앵커는 재채점
+    질의(_rerank_query)가 이미 들고 있어 주제 표류는 그쪽에서 걸린다. 절 제목이
+    비어 있을 때만 주제로 폴백한다.
+    """
+    if not catalog or not section.analysts:
+        return []
+    anchor = " ".join(_with_chapter(section).split()) or " ".join((topic or "").split())
+    anchor = anchor[:_TOPIC_ANCHOR_CHARS]
+    out: list[str] = []
+    for name in section.analysts:
+        spec = catalog.get(name)
+        if spec is None:
+            continue
+        for template in list(getattr(spec, "queries", []) or [])[:MAX_QUERIES_PER_ANALYST]:
+            if not isinstance(template, str) or not template.strip():
+                continue
+            # 주제가 없으면 자리표시자를 지운다 — "{topic} SWOT"이 그대로 나가면
+            # 중괄호가 키워드 토큰이 되어 잡음만 는다.
+            text = (
+                template.replace("{topic}", anchor) if anchor else template.replace("{topic}", "")
+            )
+            text = " ".join(text.split())
+            if text:
+                out.append(text)
+    return out
+
+
+def section_query_set(
+    section: SectionPlan, topic: str | None = None, catalog: dict | None = None
+) -> list[str]:
+    """1차 검색 질의 집합 — 재현율은 한 각도가 아니라 여러 각도에서 나온다.
+
+    질의 하나(장+절 제목)만 던지던 구조에서는 절이 무엇을 다루든 같은 자료가 왔다.
+    핵심 포인트와 담당 에이전트 관점을 **각각 독립 질의로** 올린다 — 한 질의에 모두
+    이어 붙이면 dense 질의 벡터가 흐려진다(그래서 기본 질의는 여전히 짧게 둔다).
+
+    순서가 우선순위다: 기본(재현율 담당) → 핵심 포인트 → 에이전트 관점. 상한에
+    걸려 잘리는 쪽이 뒤가 되도록 둔다. 중복은 제거한다.
+    """
+    from src.core.config import settings
+
+    base = section_search_query(section)
+    if not settings.retrieval_multi_query_enabled:
+        return [base]
+    queries = [base]
+    title = _with_chapter(section)
+    for point in section.key_points[:MAX_KEYPOINT_QUERIES]:
+        text = " ".join((point or "").split())
+        if not text:
+            continue
+        # 핵심 포인트만 단독으로 던지면 '관련 법률' 같은 일반어가 주제를 벗어난다 —
+        # 절 맥락을 앞에 붙여 묶되 짧게 유지한다.
+        queries.append(f"{title} {text}" if text not in title else title)
+    queries.extend(_analyst_queries(section, topic, catalog))
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for q in queries:
+        key = q.strip()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(key)
+    return unique[:MAX_SECTION_QUERIES]
+
+
+def fuse_by_rank(ranked_lists: list[list[SearchHit]], limit: int) -> list[SearchHit]:
+    """RRF(Reciprocal Rank Fusion) — 질의별 결과를 순위로 병합한다.
+
+    점수로 더하지 않는 이유: 질의마다 점수 눈금이 다르고(dense·BM25 혼합 결과)
+    긴 질의일수록 절대 점수가 낮게 나오기도 해서, 그대로 더하면 특정 질의가 통째로
+    묻힌다. 순위 기반이면 '여러 질의가 공통으로 위에 올린 청크'가 자연히 위로 온다.
+
+    반환 hit의 score는 원 검색 점수 중 최댓값을 유지한다 — 뒤에 붙는 리랭커가 다시
+    채점하므로 여기 점수는 폴백(리랭커 off)일 때만 순서에 쓰인다.
+    """
+    fused: dict[UUID, tuple[float, SearchHit]] = {}
+    for hits in ranked_lists:
+        for rank, hit in enumerate(hits):
+            weight = 1.0 / (_RRF_K + rank + 1)
+            prev = fused.get(hit.chunk_id)
+            if prev is None:
+                fused[hit.chunk_id] = (weight, hit)
+            else:
+                best = prev[1] if prev[1].score >= hit.score else hit
+                fused[hit.chunk_id] = (prev[0] + weight, best)
+    order = sorted(fused.values(), key=lambda x: x[0], reverse=True)
+    return [hit for _, hit in order[:limit]]
+
+
 def _topic_anchor(topic: str | None) -> str:
     """주제문에서 앵커로 쓸 앞머리만. 줄바꿈은 공백으로 눕힌다."""
     text = " ".join((topic or "").split())
@@ -170,21 +284,47 @@ async def retrieve_for_section(
     summary_fetcher: SummaryFetcher | None = None,
     topic: str | None = None,
     translate: QueryTranslator | None = None,
+    analyst_catalog: dict | None = None,
 ) -> list[RetrievedChunk]:
     """한 섹션의 근거 청크를 검색해 RetrievedChunk 리스트로 반환.
 
     reranker가 주어지면 넓게(fetch_k) 검색한 뒤 cross-encoder로 재채점해 top_k로
-    줄인다. 1차 검색은 절 제목(재현율), 재채점·요약 검색은 주제 앵커 쿼리
+    줄인다. 1차 검색은 절 질의 집합(section_query_set — 기본 제목 + 핵심 포인트 +
+    에이전트 관점)을 각각 던져 RRF로 병합하고, 재채점·요약 검색은 주제 앵커 쿼리
     (_rerank_query)를 쓴다 — 주제 이탈 청크를 채점 단계에서 걸러낸다.
+
+    analyst_catalog가 없으면 질의는 기본 하나로 줄어든다(옛 동작) — 카탈로그를 못
+    읽는 호출부(테스트·미리보기)에서도 검색 자체는 정상 동작해야 한다.
 
     summary_fetcher(RAPTOR)가 있으면 요약 노드(is_summary=True)를 뒤에 덧붙인다 —
     리랭킹 대상이 아니며, 후보 생성에서 인용 불가 배경 맥락으로만 쓰인다.
     실패는 삼킨다(맥락 부재가 검색 실패가 되어선 안 된다).
     """
-    query = section_search_query(section)
+    queries = section_query_set(section, topic, analyst_catalog)
+    query = queries[0]
     anchored = _rerank_query(section, topic)
     width = max(fetch_k, top_k) if reranker is not None else top_k
-    hits = await client.search(query, project_id, track, width)
+    if len(queries) == 1:
+        hits = await client.search(query, project_id, track, width)
+    else:
+        # 질의별로 같은 폭을 받아 RRF로 병합한 뒤 다시 width로 캡한다 — 리랭커가 보는
+        # 후보 수는 그대로고(비용 불변), 그 안의 다양성만 올라간다.
+        results = await asyncio.gather(
+            *(client.search(q, project_id, track, width) for q in queries),
+            return_exceptions=True,
+        )
+        ranked = [r for r in results if isinstance(r, list)]
+        failed = len(results) - len(ranked)
+        if failed:
+            # 보조 질의 하나가 죽었다고 절 검색을 통째로 버리지 않는다.
+            logger.warning("retrieval.multi_query_partial", failed=failed, total=len(queries))
+        hits = fuse_by_rank(ranked, width) if ranked else []
+        logger.info(
+            "retrieval.multi_query",
+            n_queries=len(queries),
+            n_fused=len(hits),
+            section=section.prompt_label(),
+        )
     if translate is not None:
         hits = await _merged_with_translation(
             hits,
@@ -224,8 +364,13 @@ def make_section_retriever(
     summary_fetcher: SummaryFetcher | None = None,
     topic: str | None = None,
     translate: QueryTranslator | None = None,
+    analyst_catalog: dict | None = None,
 ) -> SectionRetriever:
-    """프로젝트·검색기에 바인딩된 SectionRetriever를 만든다 (write 루프 주입용)."""
+    """프로젝트·검색기에 바인딩된 SectionRetriever를 만든다 (write 루프 주입용).
+
+    analyst_catalog는 배정된 에이전트의 검색 질의(AnalystSpec.queries)를 풀기 위한
+    것이다 — 없으면 절 제목 질의 하나로 돌아간다.
+    """
 
     async def _retrieve(section: SectionPlan) -> list[RetrievedChunk]:
         # 다관점 절(에이전트 2개 이상)은 다룰 축이 늘어 분량 목표도 커진다 — 재료를
@@ -243,6 +388,7 @@ def make_section_retriever(
             summary_fetcher=summary_fetcher,
             topic=topic,
             translate=translate,
+            analyst_catalog=analyst_catalog,
         )
         return await _with_source_titles(chunks)
 

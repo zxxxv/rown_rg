@@ -1048,6 +1048,24 @@ def _hyde_enabled_for(state: ProjectState) -> bool:
     return bool(opts.get("hyde_enabled", settings.hyde_enabled))
 
 
+def _sync_analyst_catalog(state: ProjectState) -> dict:
+    """DB 없이 조립하는 에이전트 카탈로그 — 동기 팩토리(_default_retriever_factory)용.
+
+    검색이 배정 에이전트의 질의(AnalystSpec.queries)를 쓰려면 카탈로그가 필요한데,
+    팩토리는 동기라 DB를 못 본다. 런 시작 스냅샷(config.analysts)과 파일 카탈로그만으로
+    만든다 — 스냅샷이 이미 그 런이 쓸 개인·공유 에이전트를 담고 있어 DB가 필요 없다.
+    스냅샷이 없는 옛 런·미리보기는 파일 카탈로그만으로 돌아간다(시스템 질의는 그대로).
+    """
+    from src.services.prompts import specs_from_snapshot
+
+    frozen = state.options.get("analysts") if isinstance(state.options, dict) else None
+    catalog: dict = {}
+    for spec in specs_from_snapshot(frozen if isinstance(frozen, list) else []):
+        catalog[spec.id] = spec
+        catalog[spec.name] = spec
+    return catalog
+
+
 def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
     """실검색 retriever — 프로젝트 인덱스 대상 hybrid 검색에 바인딩.
 
@@ -1113,6 +1131,7 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
         reranker=reranker,
         summary_fetcher=summary_fetcher,
         translate=translator,
+        analyst_catalog=_sync_analyst_catalog(state),
         # 주제 앵커 — 재채점·RAPTOR 검색이 절 제목만으로 표류하지 않게(주제 표류 실측 대응)
         topic=state.topic,
         # 절당 근거 공급량 — 분량의 1차 병목 레버(config.retrieval_top_k)
