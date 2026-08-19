@@ -158,6 +158,11 @@ class SectionPlan(BaseModel):
     # spec.queries가 전부 빈 배열이었던 이유) 기본값을 기계가 만든다. 사람은 브리프
     # 게이트 화면에서 보고 고친다. 비어 있으면 절 제목·핵심 포인트만으로 검색한다.
     search_queries: list[str] = Field(default_factory=list)
+    # 이 절이 앞 절의 확정값 위에서 쓰는 의존 계약 — 표기는 core/builds_on.parse_ref
+    # ("4.1" | "4.1(총사업비)" | "4.*"). 사람 소유(폼·프리셋), 자유주제만 플래너가
+    # 절 번호 한정으로 생성. 값 전달은 서술 요약이 아니라 사실 대장 엔트리로 한다
+    # (요약 체인은 무근거 +39% 실측 - services/ledger).
+    builds_on: list[str] = Field(default_factory=list)
 
     def prompt_label(self) -> str:
         """프롬프트에 싣는 절 표기 — '2.3 국내 기업 대응수준 진단 (2장 EU CBAM)'.

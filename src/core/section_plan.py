@@ -52,6 +52,7 @@ def dump_section_plan(plan: Sequence[SectionPlan]) -> list[dict[str, Any]]:
             "key_points": list(s.key_points),
             "analysts": list(s.analysts),
             "search_queries": list(s.search_queries),
+            "builds_on": list(s.builds_on),
         }
         for s in plan
     ]
@@ -79,6 +80,7 @@ def load_section_plan(items: Any) -> list[SectionPlan]:
                     key_points=[str(k) for k in (item.get("key_points") or [])],
                     analysts=[str(a) for a in (item.get("analysts") or [])],
                     search_queries=[str(q) for q in (item.get("search_queries") or [])],
+                    builds_on=[str(b) for b in (item.get("builds_on") or [])],
                 )
             )
         except (KeyError, TypeError, ValueError):
