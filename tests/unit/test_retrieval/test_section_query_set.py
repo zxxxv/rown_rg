@@ -155,6 +155,26 @@ class TestQuerySet:
         qs = section_query_set(_section(title="적용 범위", key_points=["적용 범위"]))
         assert len(qs) == 1
 
+    def test_brief_queries_are_included(self):
+        """설계 브리프가 만든 절별 질의 - 사람이 안 채워도 각도가 생긴다."""
+        qs = section_query_set(
+            _section(search_queries=["CBAM 전환기간 신고 의무", "CBAM reporting obligation"])
+        )
+        assert any("전환기간 신고 의무" in q for q in qs)
+        assert any("reporting obligation" in q for q in qs)
+
+    def test_brief_queries_go_before_analyst_queries(self):
+        """상한에 걸려 잘리는 쪽이 뒤가 되도록 - 절 맞춤이 관점 재사용보다 앞선다."""
+        catalog = {"SWOT분석": _spec("SWOT분석", ["{topic} SWOT"])}
+        qs = section_query_set(
+            _section(search_queries=["브리프 질의"], analysts=["SWOT분석"]), "주제", catalog
+        )
+        assert qs.index("브리프 질의") < next(i for i, q in enumerate(qs) if "SWOT" in q)
+
+    def test_empty_brief_queries_change_nothing(self):
+        """계획 콜이 실패해도 검색은 절 제목·핵심 포인트로 그대로 돈다."""
+        assert section_query_set(_section(search_queries=[])) == section_query_set(_section())
+
     def test_flag_off_returns_single_query(self, monkeypatch):
         """되돌리기·통제 실험이 설정 한 줄이어야 한다."""
         from src.core import config

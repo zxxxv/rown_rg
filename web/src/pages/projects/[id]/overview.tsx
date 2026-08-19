@@ -333,6 +333,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               <AccordionContent className="px-4 pb-4">
                 <ProjectConfigForm
                   mode="edit"
+                  frozen={project.status === "completed" || project.status === "archived"}
                   defaultValues={editDefaults}
                   submitting={isUpdating}
                   onSubmit={onSaveConfig}

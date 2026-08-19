@@ -589,6 +589,37 @@ def source_dedup_key(url: str | None, title: str | None) -> str:
     return (url or title or "").strip().lower()
 
 
+def _with_brief_queries(state: ProjectState, ai_plan: dict | None) -> ProjectState:
+    """AI 계획의 절별 search_queries를 section_plan에 병합한다.
+
+    계획이 없거나(콜 실패) 질의가 비면 plan은 그대로다 — 검색은 절 제목·핵심 포인트로
+    돌아가고 실행이 막히지 않는다. 게이트에서 사람이 목차를 고쳐 replan하면 이 함수가
+    다시 돌아 질의도 새 목차 기준으로 갈린다.
+    """
+    if not isinstance(ai_plan, dict):
+        return state
+    by_label = {
+        f"{s.get('chapter')}.{s.get('section')}": s.get("search_queries") or []
+        for s in (ai_plan.get("sections") or [])
+        if isinstance(s, dict)
+    }
+    if not any(by_label.values()):
+        return state
+    updated = [
+        sec.model_copy(
+            update={
+                "search_queries": [
+                    str(q) for q in by_label.get(f"{sec.chapter_number}.{sec.section_number}", [])
+                ]
+            }
+        )
+        for sec in state.section_plan
+    ]
+    n = sum(len(sec.search_queries) for sec in updated)
+    logger.info("brief.section_queries", n_queries=n, n_sections=len(updated))
+    return state.with_section_plan(updated)
+
+
 async def plan_brief(state: ProjectState) -> ProjectState:
     """설계 브리프 단계 — 목차를 실행 계획(section_plan)으로 확정한다. **수집 전**.
 
@@ -649,6 +680,11 @@ async def plan_brief(state: ProjectState) -> ProjectState:
         client=_brief_client,
     )
     brief["ai_plan"] = ai_plan
+    # 계획이 만든 절별 검색 질의를 plan에 싣는다 — 검색 질의를 사람이 쓰게 하면 대부분
+    # 비워 둔다(개인 에이전트 spec.queries가 전부 빈 배열이었던 이유). 기계가 기본값을
+    # 만들고 사람은 게이트 화면에서 보고 고친다. plan에 실어야 config._section_plan으로
+    # 영속되어 재개·작성까지 같은 질의를 쓴다.
+    state = _with_brief_queries(state, ai_plan)
     emit_step(pid, "research", "AI 실행 계획", "completed" if ai_plan else "failed")
     state = state.model_copy(update={"design_brief": brief})
     return state

@@ -394,6 +394,8 @@ function SectionRow({
   onPlanChange?: (label: string, fields: PlanFields) => void;
   /** 이 절이 앞 절들에서 받는 입력(AI 판단 flows의 수신측) */
   incoming?: { from: string; carries: string }[];
+  /** 계획이 만든 이 절의 추가 검색 질의 - 실제 검색에 그대로 쓰인다 */
+  planQueries?: string[];
 }) {
   const [editingPlan, setEditingPlan] = useState(false);
   const label = `${section.chapter_number}.${section.section_number}`;
@@ -431,6 +433,18 @@ function SectionRow({
           {section.search_query || "(빈 질의)"}
         </code>
       </div>
+      {planQueries?.length ? (
+        // 계획이 만든 추가 질의 - 실제로 이 질의들로도 자료를 찾는다(장식 아님).
+        // 절 제목이 장마다 반복되는 목차에서 장 안의 절들을 갈라 주는 몫이다.
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 pl-1">
+          <span className="text-[11px] text-fg-tertiary">계획 질의:</span>
+          {planQueries.map((q) => (
+            <code key={q} className="break-all font-mono text-xs text-fg-secondary">
+              {q}
+            </code>
+          ))}
+        </div>
+      ) : null}
       {incoming?.length ? (
         <div className="flex flex-col gap-0.5">
           {incoming.map((f) => (
@@ -814,6 +828,10 @@ export default function BriefPage() {
                             : undefined
                         }
                         incoming={incomingFlows.get(`${s.chapter_number}.${s.section_number}`)}
+                        planQueries={
+                          sectionPlans.get(`${s.chapter_number}.${s.section_number}`)
+                            ?.search_queries
+                        }
                       />
                     ))}
                   </ul>

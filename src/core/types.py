@@ -153,6 +153,11 @@ class SectionPlan(BaseModel):
     direction: str = ""
     key_points: list[str] = Field(default_factory=list)
     analysts: list[str] = Field(default_factory=list)
+    # 이 절을 자료 풀에서 찾을 검색 질의 — 설계 브리프 단계에서 LLM이 절마다 만들어
+    # 넣는다(brief_ai). 검색 질의를 사람이 쓰게 하면 대부분 비워 두므로(개인 에이전트
+    # spec.queries가 전부 빈 배열이었던 이유) 기본값을 기계가 만든다. 사람은 브리프
+    # 게이트 화면에서 보고 고친다. 비어 있으면 절 제목·핵심 포인트만으로 검색한다.
+    search_queries: list[str] = Field(default_factory=list)
 
     def prompt_label(self) -> str:
         """프롬프트에 싣는 절 표기 — '2.3 국내 기업 대응수준 진단 (2장 EU CBAM)'.

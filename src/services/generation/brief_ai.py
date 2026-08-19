@@ -50,6 +50,14 @@ SYSTEM_PROMPT = """너는 정부·공공 보고서의 실행 계획을 세우는
 2. source_strategy — 어떤 기관·자료 유형을 어떤 각도로 찾을 것인가
    (1~2문장, 기관·자료 유형을 구체적으로)
 3. writing_plan — 어떤 순서·구성으로 쓸 것인가 (1문장)
+4. search_queries — 이 절을 자료 풀에서 찾을 **검색 질의 2~3개**. 규칙:
+   - 절 제목을 그대로 쓰지 마라. 이미 기본 질의로 던진다 — 여기엔 **절 제목에 없는
+     말**(기관명·지표명·제도명·영문 표기)을 넣어 다른 각도를 만든다.
+   - 같은 틀이 여러 장에 반복되는 목차에서는(예: 장마다 "개요"·"시사점") 그 장의
+     대상이 무엇인지를 질의에 반드시 넣어라 — 안 넣으면 장 안의 절들이 같은 자료를
+     받는다.
+   - 짧게. 검색어 나열이지 문장이 아니다(각 30자 안팎).
+   - 해외 자료가 필요한 절은 영문 질의를 하나 섞어라.
 
 목차 전체에 대해:
 - chapters: 장마다 goal 1문장.
@@ -69,10 +77,39 @@ SYSTEM_PROMPT = """너는 정부·공공 보고서의 실행 계획을 세우는
 - 간결한 한국어. 절당 3문장 이내.
 - 마지막에 아래 형태의 JSON만 출력한다(설명 문장 없이):
 {"chapters":[{"chapter":1,"goal":"..."}],
- "sections":[{"chapter":1,"section":1,"goal":"...","source_strategy":"...","writing_plan":"..."}],
+ "sections":[{"chapter":1,"section":1,"goal":"...","source_strategy":"...","writing_plan":"...",
+   "search_queries":["...","..."]}],
  "flows":[{"from":"1.2","to":"1.3","carries":"..."}],
  "orphans":["4.1"],
  "query_splits":[{"section":"1.3","query":"..."}]}"""
+
+
+# 절당 질의 상한. 검색 왕복이 그만큼 늘고, 절 질의 집합 전체 상한
+# (retrieval.section.MAX_SECTION_QUERIES)에서 기본·핵심 포인트 몫을 남겨야 한다.
+MAX_BRIEF_QUERIES = 3
+MAX_BRIEF_QUERY_CHARS = 80
+
+
+def _clean_queries(raw: Any) -> list[str]:
+    """LLM이 낸 검색 질의 목록을 다듬는다 — 문장·중복·과장 길이를 걷어낸다.
+
+    계획 산출을 그대로 검색에 던지므로 여기서 안 다듬으면 잡음이 그대로 질의가 된다.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        text = " ".join(item.split())[:MAX_BRIEF_QUERY_CHARS].strip()
+        key = text.lower()
+        if text and key not in seen:
+            seen.add(key)
+            out.append(text)
+        if len(out) >= MAX_BRIEF_QUERIES:
+            break
+    return out
 
 
 def _compact_input(brief: dict[str, Any]) -> str:
@@ -148,6 +185,7 @@ def _validate(raw: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any] | No
                 "goal": str(s.get("goal") or ""),
                 "source_strategy": str(s.get("source_strategy") or ""),
                 "writing_plan": str(s.get("writing_plan") or ""),
+                "search_queries": _clean_queries(s.get("search_queries")),
             }
         )
     if not sections:

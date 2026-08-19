@@ -262,6 +262,8 @@ export const AiPlanSchema = z.object({
         goal: z.string().default(""),
         source_strategy: z.string().default(""),
         writing_plan: z.string().default(""),
+        // 이 절을 자료 풀에서 찾을 검색 질의 - 계획이 만들고 실제 검색이 그대로 쓴다.
+        search_queries: z.array(z.string()).default([]),
       }),
     )
     .default([]),

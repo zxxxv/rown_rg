@@ -22,6 +22,9 @@ export type ProjectConfigFormMode = "create" | "edit";
 
 export interface ProjectConfigFormProps {
   mode: ProjectConfigFormMode;
+  /** 완료·보관된 보고서 - 읽기 전용. 저장할 '다음 단계'가 없고, 목차를 바꾸면 절
+   * 재작성이 배열 위치로 계획을 되살리므로 다른 절의 계획이 섞인다(서버도 거부한다). */
+  frozen?: boolean;
   defaultValues?: Partial<ProjectFormValues>;
   onSubmit?: (values: ProjectFormValues) => void | Promise<void>;
   onCancel?: () => void;
@@ -43,6 +46,7 @@ const EMPTY_DEFAULTS: ProjectFormValues = {
 
 export function ProjectConfigForm({
   mode,
+  frozen = false,
   defaultValues,
   onSubmit,
   onCancel,
@@ -119,6 +123,12 @@ export function ProjectConfigForm({
               있습니다.
             </p>
           ) : null}
+          {frozen ? (
+            <p className="rounded border border-border bg-bg-secondary px-3 py-2 text-xs text-fg-secondary">
+              완성된 보고서라 설정은 읽기 전용입니다. 목차를 바꾸면 이미 쓰인 절과 어긋나므로 고칠
+              수 없습니다 - 다른 구성으로 쓰려면 새 프로젝트로 시작하세요.
+            </p>
+          ) : null}
           <Section number={1} title="기본 정보" badge={isEdit ? "수정 불가" : undefined}>
             <BasicInfo readOnly={isEdit} />
           </Section>
@@ -178,13 +188,15 @@ export function ProjectConfigForm({
                   취소
                 </Button>
               ) : null}
-              <Button
-                type="button"
-                onClick={() => void onClickSubmit()}
-                disabled={submitting || isSubmitting}
-              >
-                {submitting || isSubmitting ? "처리 중…" : "저장"}
-              </Button>
+              {frozen ? null : (
+                <Button
+                  type="button"
+                  onClick={() => void onClickSubmit()}
+                  disabled={submitting || isSubmitting}
+                >
+                  {submitting || isSubmitting ? "처리 중…" : "저장"}
+                </Button>
+              )}
             </div>
           </div>
         ) : (

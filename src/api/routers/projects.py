@@ -795,6 +795,14 @@ def _active_step_labels(status: str, project_id: UUID) -> list[str] | None:
     return labels or None
 
 
+# 설정을 얼리는 상태 — 완료·보관은 '다음 단계'가 없어 저장이 반영될 자리가 없다.
+# 취소·실패는 재개 대상이라 얼리지 않는다(사람이 옵션을 고쳐 다시 돌린다).
+_CONFIG_FROZEN_STATUSES = (
+    ProjectStage.COMPLETED.value,
+    ProjectStage.ARCHIVED.value,
+)
+
+
 @router.patch("/{project_id}/config", response_model=ProjectRead)
 async def update_project_config(
     project_id: UUID,
@@ -806,8 +814,19 @@ async def update_project_config(
 
     다음 단계부터 반영된다(이미 지나간 단계는 재실행하지 않음). 제목·주제는
     생성 후 변경 불가(프론트 edit 모드도 readonly).
+
+    **완료·보관된 프로젝트는 거부한다.** 다음 단계가 없으므로 저장은 아무 일도 못 하는
+    시늉이고, 목차를 바꾸면 실제로 해롭다: merge_config_update가 _section_plan·
+    _design_plan을 버리고, 절 재작성이 config.outline을 **배열 위치로** 읽어 방향·
+    핵심 포인트·에이전트를 복원하므로(_plan_for_row) 절을 더하거나 지우면 그 뒤 절들이
+    **다른 절의 계획으로** 재작성된다 — 경고 없이.
     """
     project = await _get_authorized_project(project_id, session, current_user)
+    if project.status in _CONFIG_FROZEN_STATUSES:
+        raise ValidationError(
+            message="완료된 보고서의 설정은 바꿀 수 없습니다",
+            code="PROJECT_CONFIG_FROZEN",
+        )
     _validate_outline_config(data.config, await _known_analyst_names(session, current_user.id))
     await _validate_rules_config(session, current_user.id, data.config)
     # 옵션 교체가 파이프라인이 남긴 내부 키까지 지우면 안 된다 - 취소 복귀 지점과

@@ -214,8 +214,12 @@ def section_query_set(
     핵심 포인트와 담당 에이전트 관점을 **각각 독립 질의로** 올린다 — 한 질의에 모두
     이어 붙이면 dense 질의 벡터가 흐려진다(그래서 기본 질의는 여전히 짧게 둔다).
 
-    순서가 우선순위다: 기본(재현율 담당) → 핵심 포인트 → 에이전트 관점. 상한에
-    걸려 잘리는 쪽이 뒤가 되도록 둔다. 중복은 제거한다.
+    순서가 우선순위다: 기본(재현율 담당) → 핵심 포인트 → 브리프 질의 → 에이전트 관점.
+    상한에 걸려 잘리는 쪽이 뒤가 되도록 둔다. 중복은 제거한다.
+
+    브리프 질의는 설계 브리프 단계에서 LLM이 절마다 만들어 plan에 실어 둔 것이다
+    (stages._with_brief_queries) — 검색 질의를 사람이 쓰게 하면 대부분 비워 두므로
+    기본값을 기계가 만든다. 에이전트 질의는 그 위에 얹는 전문가용 재사용 자산이다.
     """
     from src.core.config import settings
 
@@ -228,6 +232,13 @@ def section_query_set(
         q = _keypoint_query(title, point)
         if q:
             queries.append(q)
+    # 설계 브리프가 만든 절별 질의 — 목차 전체를 본 LLM이 "이 절만의 각도"를 넣는다.
+    # 절 제목이 형식어인 목차("개요"·"시사점"이 장마다 반복)에서 특히 크다: 장 안에서
+    # 갈릴 게 없어 다섯 절이 거의 같은 근거를 보던 자리다.
+    for q in section.search_queries:
+        text = " ".join((q or "").split())
+        if text:
+            queries.append(text)
     queries.extend(_analyst_queries(section, topic, catalog))
 
     seen: set[str] = set()

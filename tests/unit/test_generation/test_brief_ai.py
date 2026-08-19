@@ -86,6 +86,39 @@ class TestValidate:
         assert plan is not None
         assert plan["query_splits"] == [{"section": "1.1", "query": "글로벌 RE100 참여 현황"}]
 
+    def test_검색_질의를_다듬어_싣는다(self) -> None:
+        """계획 산출이 그대로 검색 질의가 되므로 문장·중복·과장 길이를 걷어낸다."""
+        out = _validate(
+            {
+                "sections": [
+                    {
+                        "chapter": 1,
+                        "section": 1,
+                        "goal": "g",
+                        "search_queries": [
+                            "  CBAM 전환기간 신고 의무  ",
+                            "cbam 전환기간 신고 의무",  # 대소문자만 다른 중복
+                            "가" * 200,  # 과장 길이
+                            "CBAM reporting obligation",
+                            "네 번째는 상한에 걸려 잘린다",
+                        ],
+                    }
+                ]
+            },
+            _BRIEF,
+        )
+        assert out is not None
+        qs = out["sections"][0]["search_queries"]
+        assert qs[0] == "CBAM 전환기간 신고 의무"
+        assert len(qs) <= 3
+        assert all(len(q) <= 80 for q in qs)
+
+    def test_검색_질의가_없어도_계획은_유효하다(self) -> None:
+        """계획이 질의를 안 내도 실행은 절 제목·핵심 포인트로 그대로 돈다."""
+        out = _validate({"sections": [{"chapter": 1, "section": 1, "goal": "g"}]}, _BRIEF)
+        assert out is not None
+        assert out["sections"][0]["search_queries"] == []
+
     def test_유효_절이_하나도_없으면_None(self) -> None:
         assert _validate({"sections": [{"chapter": 9, "section": 9}]}, _BRIEF) is None
 
