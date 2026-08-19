@@ -60,7 +60,7 @@ _KST = timezone(timedelta(hours=9))
 # 렌더 규칙을 바꿀 때마다 올린다. 다운로드는 "본문이 파일보다 새것인가"로만 재렌더를
 # 판단하는데, 코드를 고쳐도 본문 수정 시각은 그대로라 옛 파일이 그대로 내려갔다
 # (2026-08-11 지적). 버전을 파일명에 섞어 새 코드가 옛 산출물을 집지 않게 한다.
-EXPORT_RENDER_VERSION = 8  # r8: 표 출처 줄 라벨 변형("* 출처: (출처 n)") 실서지 변환(2026-08-15)
+EXPORT_RENDER_VERSION = 9  # r9: 표 셀 가운데 정렬·안 여백 복원, 개조식 들여쓰기 한 칸(2026-08-20)
 
 
 def export_filename(project_id: UUID | str) -> str:
