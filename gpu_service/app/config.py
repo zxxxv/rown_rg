@@ -34,6 +34,14 @@ class ServiceConfig:
     max_passages: int
     max_concurrency: int
     intra_op_threads: int | None = None
+    # 임베딩은 리랭킹과 **다른 모델**이다(bge-m3 vs bge-reranker-v2-m3). 같은 카드에
+    # 둘 다 올리므로 fp16이 사실상 필수다 - fp32 두 벌은 8GB에 들어가지 않는다
+    # (리랭커 fp32 하나가 4,910MiB였다, 2026-08-20 실측).
+    embed_model_dir: str = ""
+    # 한 forward의 누적 글자 수 상한. 비우면 VRAM 여유분에서 자동으로 고른다.
+    # 앱은 이 값을 호스트 RAM에서 고르지만 여기서는 그러면 안 된다 - 이 컨테이너의
+    # 제약은 시스템 RAM이 아니라 VRAM이다.
+    embed_max_chars: int = 0
 
     @classmethod
     def from_env(cls) -> ServiceConfig:
@@ -54,6 +62,10 @@ class ServiceConfig:
             # GPU 실행에서는 CPU 스레드가 거의 안 쓰이지만, CPU 폴백이나 개발용으로
             # 띄울 때 전 코어를 잡으면 그 PC의 다른 작업이 굳는다. 0이면 코어 수 - 1.
             intra_op_threads=_int("GPU_INTRA_OP_THREADS", 0) or None,
+            # 비우면 임베딩 엔드포인트를 띄우지 않는다 - 리랭커만 쓰는 배포에서
+            # 없는 모델을 찾다가 컨테이너가 죽는 것을 막는다.
+            embed_model_dir=os.environ.get("GPU_EMBED_MODEL_DIR", "").strip(),
+            embed_max_chars=_int("GPU_EMBED_MAX_CHARS", 0),
         )
 
     def validate(self) -> None:
@@ -65,3 +77,8 @@ class ServiceConfig:
             )
         if self.device not in {"cuda", "cpu"}:
             raise RuntimeError(f"GPU_DEVICE는 cuda 또는 cpu여야 합니다: {self.device}")
+
+    @property
+    def embed_enabled(self) -> bool:
+        """임베딩 모델 경로가 지정됐을 때만 /v1/embed를 연다."""
+        return bool(self.embed_model_dir)

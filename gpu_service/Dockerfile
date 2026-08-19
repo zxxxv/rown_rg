@@ -17,7 +17,7 @@ WORKDIR /app
 # 앱 코드 중 **채점 알맹이만** 들어온다. src.core.config가 딸려오면 이미지가 깨진다
 # (DB·LLM 키를 요구한다). onnx_cross_encoder.py의 맨 위 계약이 그 이유다.
 COPY src/__init__.py src/__init__.py
-COPY src/clients/__init__.py src/clients/onnx_cross_encoder.py src/clients/
+COPY src/clients/__init__.py src/clients/onnx_cross_encoder.py src/clients/onnx_text_embedder.py src/clients/
 COPY gpu_service gpu_service
 
 # 모델은 볼륨으로 마운트한다 — 이미지에 2GB를 굽지 않는다.

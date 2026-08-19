@@ -17,10 +17,14 @@ logger = logging.getLogger("gpu_service")
 
 
 class RerankService:
-    def __init__(self, config: ServiceConfig) -> None:
+    def __init__(
+        self, config: ServiceConfig, *, semaphore: asyncio.Semaphore | None = None
+    ) -> None:
         self._config = config
         self._encoder: OnnxCrossEncoder | None = None
-        self._semaphore = asyncio.Semaphore(config.max_concurrency)
+        # 세마포어를 밖에서 받는 이유: 임베딩 서비스와 **같은 카드**를 쓴다. 각자
+        # 하나씩 가지면 리랭킹과 색인이 겹쳐 돌아 VRAM이 두 배로 필요해진다.
+        self._semaphore = semaphore or asyncio.Semaphore(config.max_concurrency)
         self._warmup_ms: float | None = None
 
     @property
