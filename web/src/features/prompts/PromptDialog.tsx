@@ -106,6 +106,9 @@ export function PromptDialog({
   const [maxChars, setMaxChars] = useState<string>(
     existing?.spec?.max_chars ? String(existing.spec.max_chars) : (draft?.maxChars ?? ""),
   );
+  // 이 관점으로 자료를 찾을 검색 질의(줄마다 하나). 이 칸이 없어서 개인 에이전트는
+  // 질의가 늘 비어 있었고, 그래서 배정해도 검색은 절 제목만으로 돌았다.
+  const [queries, setQueries] = useState<string>((existing?.spec?.queries ?? []).join("\n"));
   // 무엇을 덮어쓸지는 만들 때만 정한다(생성 시 확정, 이후 불변).
   const [baseRef, setBaseRef] = useState<string>(existing?.base_ref ?? draft?.baseRef ?? "");
   // 쓰는 동안 자동 저장 - 실수로 닫거나 새로고침해도 다시 열면 이어서 쓴다.
@@ -225,6 +228,12 @@ export function PromptDialog({
     }
     // 칸을 쓰면 서버가 그걸로 본문을 조합한다(자유 편집이면 content 원문 그대로).
     if (kind === "agent" && !freeform && hasSections) spec.sections = sections;
+    if (kind === "agent") {
+      spec.queries = queries
+        .split("\n")
+        .map((q) => q.trim())
+        .filter(Boolean);
+    }
     try {
       if (existing) {
         const saved = await update.mutateAsync({
@@ -412,6 +421,24 @@ export function PromptDialog({
             />
             {descriptionError ? <p className="text-xs text-fg-danger">{descriptionError}</p> : null}
           </div>
+          {kind === "agent" ? (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="prompt-queries">검색 질의</Label>
+              <p className="text-xs text-fg-tertiary">
+                이 관점으로 자료를 찾을 검색어를 줄마다 하나씩. {"{topic}"} 자리에는 그 절의 장·절
+                제목이 들어갑니다. 비워 두면 절 제목만으로 검색합니다.
+              </p>
+              <Textarea
+                id="prompt-queries"
+                value={queries}
+                onChange={(e) => setQueries(e.target.value)}
+                placeholder={"{topic} SWOT\n{topic} 경쟁 구도 분석"}
+                rows={3}
+                disabled={pending}
+                className="font-mono text-sm"
+              />
+            </div>
+          ) : null}
           {kind === "agent" ? (
             <div className="flex items-start gap-3 rounded border border-border bg-bg-secondary p-3">
               <Switch

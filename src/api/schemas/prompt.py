@@ -117,6 +117,9 @@ class SystemPromptRead(BaseModel):
     # 이 에이전트의 목표 분량(자) — 복제 시작 시 폼의 숫자 칸을 채운다.
     min_chars: int | None = None
     max_chars: int | None = None
+    # 이 관점의 검색 질의 — 복제 시작 시 그대로 이어받는다. 안 실어 주면 복제본이
+    # 검색은 못 하는 반쪽 에이전트가 된다.
+    queries: list[str] = Field(default_factory=list)
 
 
 class PromptPreviewRequest(BaseModel):

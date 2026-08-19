@@ -153,6 +153,7 @@ def _system_agent(a) -> SystemPromptRead:
         sections=parse_agent_prompt(a.prompt),
         min_chars=v.min_chars if v else None,
         max_chars=v.max_chars if v else None,
+        queries=list(a.queries or []),
     )
 
 
