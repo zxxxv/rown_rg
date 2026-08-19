@@ -99,7 +99,8 @@ from src.services.stats.source_usage import build_source_usage
 from src.services.user_presets import (
     create_user_preset,
     delete_user_preset,
-    get_user_preset,
+    get_readable_preset,
+    list_public_presets,
     list_user_presets,
     parse_personal_key,
     personal_preset_key,
@@ -262,6 +263,25 @@ async def get_presets(
                 updated_at=row.updated_at,
             )
         )
+    # 남이 공개한 프리셋 — 덮어쓰지 않고 뒤에 붙기만 한다(에이전트 공유와 같은 규약).
+    taken = {p.name for p in items}
+    for row, owner_name in await list_public_presets(session, current_user.id):
+        n_ch, n_sec = _preset_counts(row.outline)
+        # 이름이 겹칠 때만 소유자를 덧붙인다 — 안 겹치면 원래 이름 그대로 보인다.
+        name = row.name if row.name not in taken else f"{row.name} ({owner_name})"
+        taken.add(name)
+        items.append(
+            PresetRead(
+                id=personal_preset_key(row.id),
+                name=name,
+                desc=row.description or f"{owner_name}이 공개한 목차 구성",
+                n_chapters=n_ch,
+                n_sections=n_sec,
+                scope="shared",
+                owner_name=owner_name,
+                updated_at=row.updated_at,
+            )
+        )
     return items
 
 
@@ -280,6 +300,7 @@ async def create_personal_preset(
         name=data.name.strip(),
         description=data.description,
         outline={"chapters": [ch.model_dump() for ch in data.chapters]},
+        is_public=data.is_public,
     )
     n_ch, n_sec = _preset_counts(row.outline)
     return UserPresetRead(
@@ -289,6 +310,7 @@ async def create_personal_preset(
         description=row.description,
         n_chapters=n_ch,
         n_sections=n_sec,
+        is_public=row.is_public,
         updated_at=row.updated_at,
     )
 
@@ -307,6 +329,7 @@ async def update_personal_preset(
         name=data.name.strip(),
         description=data.description,
         outline={"chapters": [ch.model_dump() for ch in data.chapters]},
+        is_public=data.is_public,
     )
     n_ch, n_sec = _preset_counts(row.outline)
     return UserPresetRead(
@@ -316,6 +339,7 @@ async def update_personal_preset(
         description=row.description,
         n_chapters=n_ch,
         n_sections=n_sec,
+        is_public=row.is_public,
         updated_at=row.updated_at,
     )
 
@@ -342,7 +366,8 @@ async def get_preset_detail(
     """
     personal_id = parse_personal_key(preset_key)
     if personal_id is not None:
-        row = await get_user_preset(session, current_user.id, personal_id)
+        # 내 것이거나 공개된 것 — 골격을 봐야 목차 편집기의 초기값으로 쓸 수 있다.
+        row = await get_readable_preset(session, current_user.id, personal_id)
         return PresetDetailRead(
             id=preset_key,
             name=row.name,
@@ -426,7 +451,8 @@ async def create_project(
         personal_id = parse_personal_key(data.preset)
         if personal_id is not None:
             try:
-                await get_user_preset(session, current_user.id, personal_id)
+                # 남이 공개한 프리셋으로도 프로젝트를 만들 수 있어야 공유가 성립한다.
+                await get_readable_preset(session, current_user.id, personal_id)
             except NotFoundError:
                 raise ValidationError(
                     message=f"알 수 없는 프리셋입니다: {data.preset}", code="UNKNOWN_PRESET"
@@ -907,6 +933,9 @@ def _to_source_item(row: ProjectSource) -> SourceItemRead:
             library_node_id=row.library_node_id,
             indexing=indexing,
             index_error=index_error,
+            size_bytes=meta.get("size_bytes"),
+            page_count=meta.get("page_count"),
+            n_chunks=chunks,
             created_at=row.created_at,
             published_year=meta.get("published_year"),
         )
@@ -1044,6 +1073,14 @@ async def delete_project_source(
 
 # 색인 백그라운드 태스크 참조 — GC로 사라지지 않게 붙잡아 둔다.
 _INDEX_TASKS: set[asyncio.Task] = set()
+# 동시 색인 상한. PDF 파싱(docling 레이아웃 모델)은 파일당 수 GB를 쓴다 — 여러 건을
+# 한꺼번에 돌리면 메모리가 터지고 **조용히 저품질 파서로 폴백**한다. 2026-08-20 실측:
+# 13건을 한 번에 올렸더니 9건이 OSError 1455(페이징 파일 부족)로 docling에 실패해
+# pymupdf4llm으로 떨어졌다 — 표 구조가 빠져 수치 근거가 통째로 약해진다(v2 업로드
+# 청크의 11.8%가 표였다). 실패가 예외가 아니라 폴백이라 화면에는 정상으로 보였다.
+# 1로 두는 이유: 순차면 각 파일이 메모리를 다 쓸 수 있어 docling이 성공한다. 총 시간은
+# 늘지만 색인은 백그라운드라 사용자를 막지 않는다.
+_INDEX_SEMAPHORE = asyncio.Semaphore(1)
 
 
 async def _index_in_background(source: SourceInput, error_context: str) -> None:
@@ -1052,13 +1089,16 @@ async def _index_in_background(source: SourceInput, error_context: str) -> None:
     수백 페이지 PDF는 파싱·임베딩에 수 분이 걸린다. 요청 안에서 처리하면 프론트
     타임아웃에 걸려 '실패'로 보이지만 실제로는 뒤에서 끝나 있었다(2026-08-10 지적).
     placeholder 행을 먼저 만들고 여기서 채우므로 화면은 '색인 중'을 보여줄 수 있다.
+
+    동시 실행은 _INDEX_SEMAPHORE로 1건씩 직렬화한다(위 주석의 메모리 폭주 실측).
     """
     from src.services.indexing.vector import build_vector_indexing_service
 
     error: str | None = None
     indexed: object | None = None
     try:
-        indexed = await build_vector_indexing_service().index_source(source)
+        async with _INDEX_SEMAPHORE:
+            indexed = await build_vector_indexing_service().index_source(source)
     except Exception as exc:
         error = _index_error_message(exc)
         logger.warning("source.index_failed_bg", context=error_context, exc_info=True)

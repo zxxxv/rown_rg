@@ -1,9 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
-
-import { type ProjectStatus, ProjectStatusSchema } from "@/api/types";
 import { apiClient } from "@/api/client";
+import { type ProjectStatus, ProjectStatusSchema } from "@/api/types";
 import type { PhaseName } from "@/api/ws-messages";
 
 // ─── 실계약: GET /projects/{id}/progress ────────────────────────────────

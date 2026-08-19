@@ -16,9 +16,10 @@ export function UploadProgressList({ uploading }: { uploading: UploadingFile[] }
         <li key={f.id} className="flex items-center gap-3 rounded border border-border bg-bg p-2.5">
           <FileText className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
           <span className="flex-1 truncate text-sm text-fg-secondary">{f.name}</span>
-          {/* 전송이 끝나면 서버가 저장을 마칠 때까지 응답을 기다린다 - 숫자 대신 상태로 */}
+          {/* 업로드는 전송 → 색인 두 단계다. 이 목록은 **전송**만 책임진다 - 서버가
+              자리 행을 만들면 아래 자료 목록이 '색인 중'을 이어받는다. */}
           <span className="font-mono text-xs text-fg-tertiary">
-            {f.progress >= 100 ? "저장 중…" : `${f.progress}%`}
+            {f.progress >= 100 ? "저장 중…" : `전송 중 ${f.progress}%`}
           </span>
           <div
             className="h-1.5 w-24 overflow-hidden rounded-full bg-bg-tertiary"

@@ -49,7 +49,7 @@ export const promptsHandlers = [
       description: body.description ?? null,
       spec: { queries: [], sections: {}, ...(body.spec ?? {}) },
       is_public: false,
-    updated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
     PERSONAL_PROMPTS.unshift(created);
     return HttpResponse.json({ data: created }, { status: 201 });

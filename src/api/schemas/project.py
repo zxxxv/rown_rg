@@ -36,8 +36,10 @@ class PresetRead(BaseModel):
     desc: str
     n_chapters: int
     n_sections: int
-    scope: Literal["system", "personal"] = "system"
+    scope: Literal["system", "personal", "shared"] = "system"
     updated_at: datetime | None = None
+    # shared일 때 누구 것인지 — 같은 이름이 둘일 때 가려 고르는 단서(에이전트와 같은 규약).
+    owner_name: str | None = None
 
 
 class PresetSectionRead(BaseModel):
@@ -84,6 +86,8 @@ class UserPresetUpsert(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = Field(None, max_length=500)
     chapters: list[UserPresetChapterIn] = Field(..., min_length=1, max_length=50)
+    # 켜면 전 계정의 프리셋 선택지에 뜬다(본인 토글).
+    is_public: bool = False
 
     @model_validator(mode="after")
     def _check_sections(self) -> UserPresetUpsert:
@@ -101,6 +105,7 @@ class UserPresetRead(BaseModel):
     description: str | None
     n_chapters: int
     n_sections: int
+    is_public: bool = False
     updated_at: datetime
 
 
@@ -179,6 +184,12 @@ class SourceItemRead(BaseModel):
     indexing: bool = False
     # 색인 실패 사유(사람이 읽는 한 줄). 실패를 조용히 삼키면 0조각 자료가 방치된다.
     index_error: str | None = None
+    # 파일 자료의 실물 신호 — 목록에서 "올라갔나·본문이 들어갔나"를 눈으로 가른다.
+    # 2026-08-20 사고: 동시 색인 메모리 부족으로 8건이 조각 0으로 들어왔는데 화면은
+    # 파일명만 보여줘서 정상과 구분이 안 됐다. 조각 수가 그 차이를 가르는 신호다.
+    size_bytes: int | None = None
+    page_count: int | None = None
+    n_chunks: int | None = None
     created_at: datetime
 
 

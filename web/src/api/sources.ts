@@ -25,6 +25,11 @@ export const SourceItemSchema = z.object({
   /** 색인이 뒤에서 도는 중 - 목록은 이 값이 있는 동안 자동 새로고침한다 */
   indexing: z.boolean().default(false),
   index_error: z.string().nullish(),
+  /** 파일 자료의 실물 신호 - 목록에서 "올라갔나·본문이 들어갔나"를 눈으로 가른다.
+   * 조각 0이면 파일은 있는데 본문을 못 뽑은 것이다(2026-08-20 동시 색인 사고). */
+  size_bytes: z.number().int().nullish(),
+  page_count: z.number().int().nullish(),
+  n_chunks: z.number().int().nullish(),
   created_at: z.string(),
   /** 자료 발간연도(색인 추출 또는 page_age 파생) - '24년 이후' 기준 판단용, null=미상 */
   published_year: z.number().int().nullish(),
@@ -61,6 +66,9 @@ function toLegacySource(projectId: string, s: SourceItem): Source {
     library_file_id: s.library_node_id ?? undefined,
     indexing: s.indexing,
     index_error: s.index_error ?? undefined,
+    size_bytes: s.size_bytes ?? undefined,
+    page_count: s.page_count ?? undefined,
+    n_chunks: s.n_chunks ?? undefined,
   };
 }
 

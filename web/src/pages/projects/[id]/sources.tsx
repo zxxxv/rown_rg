@@ -119,12 +119,32 @@ export default function SourcesPage() {
   const counts = useMemo(() => {
     let included = 0;
     let excluded = 0;
+    // 출처 경로별 건수 - 웹 수집이 몇 건이고 내가 올린 게 몇 건인지 한눈에 본다.
+    // 총계만 있으면 "추가 검색이 실제로 자료를 늘렸나"를 화면에서 알 수 없었다.
+    let web = 0;
+    let files = 0;
+    // 본문(조각)이 없는 파일 자료 - 올라갔는데 못 읽은 것. 총계에는 잡히지만 근거로는 못 쓴다.
+    let emptyFiles = 0;
     for (const s of items) {
       if (s.is_included === false) excluded++;
       else included++;
+      if (s.source_kind === "web_search") web++;
+      else {
+        files++;
+        if (!s.indexing && s.n_chunks === 0) emptyFiles++;
+      }
     }
-    return { included, excluded };
+    return { included, excluded, web, files, emptyFiles };
   }, [items]);
+
+  // 업로드는 두 단계다: ①전송(브라우저→서버, 진행률 실측) ②색인(서버, 파싱·임베딩).
+  // 서버가 자리 행을 먼저 만들고 색인을 뒤에서 돌리므로, 행이 생긴 뒤에도 전송 목록에
+  // 남겨 두면 같은 파일이 "저장 중"과 "색인 중"으로 두 번 보인다(2026-08-20 지적).
+  // 행이 생기는 순간 아래 목록이 이어받게 하고 전송 목록에서는 뺀다.
+  const transferring = useMemo(
+    () => uploading.filter((u) => !items.some((s) => s.title === u.name)),
+    [uploading, items],
+  );
 
   // 직접 업로드 → 저장 + 즉시 색인(백엔드). 진행률은 XHR 전송 바이트 실측 -
   // 전송이 끝나면 "저장 중…"으로 바뀌고, 색인은 목록 행의 상태가 이어받는다.
@@ -232,6 +252,17 @@ export default function SourcesPage() {
               <Badge variant="outline" className="px-2.5 py-1 font-mono text-sm">
                 총 {items.length}
               </Badge>
+              <Badge variant="outline" className="px-2.5 py-1 font-mono text-sm">
+                웹 {counts.web}
+              </Badge>
+              <Badge variant="outline" className="px-2.5 py-1 font-mono text-sm">
+                업로드 {counts.files}
+              </Badge>
+              {counts.emptyFiles > 0 ? (
+                <Badge className="border-fg-danger/30 bg-bg-danger px-2.5 py-1 font-mono text-sm text-fg-danger">
+                  본문 없음 {counts.emptyFiles}
+                </Badge>
+              ) : null}
               <Badge className="border-fg-success/30 bg-bg-success px-2.5 py-1 font-mono text-sm text-fg-success">
                 채택 {counts.included}
               </Badge>
@@ -266,7 +297,7 @@ export default function SourcesPage() {
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <LibraryTreePanel projectId={projectId} />
             <div className="flex flex-col gap-2">
-              <UploadDropzone onFiles={handleFiles} uploading={uploading} />
+              <UploadDropzone onFiles={handleFiles} uploading={transferring} />
               <FileSourceRows items={fileItems} onDelete={canDelete ? handleDelete : undefined} />
             </div>
           </div>
@@ -522,6 +553,25 @@ function FinalizeBar({
   );
 }
 
+/** 파일 자료 한 줄 요약 - "용량 · 쪽수 · 조각 수". 조각 수가 "본문이 실제로
+ * 들어갔나"를 가르는 신호다(파일명만으로는 알 수 없다). */
+function fileFacts(s: Source): string {
+  const parts: string[] = [];
+  if (s.size_bytes) {
+    const mb = s.size_bytes / (1024 * 1024);
+    parts.push(mb >= 1 ? `${mb.toFixed(1)}MB` : `${Math.round(s.size_bytes / 1024)}KB`);
+  }
+  if (s.page_count) parts.push(`${s.page_count}쪽`);
+  if (s.indexing) parts.push("색인 중…");
+  else if (s.n_chunks !== undefined) {
+    parts.push(
+      s.n_chunks > 0 ? `조각 ${s.n_chunks.toLocaleString()}개` : "조각 0 - 다시 올려주세요",
+    );
+  }
+  if (s.index_error) parts.push(`색인 실패: ${s.index_error}`);
+  return parts.join(" · ");
+}
+
 /** 파일 자료(업로드·라이브러리) 컴팩트 나열 - 카드 목록 대신 업로드 공간 아래.
 
 onDelete가 있으면(검토 중) 삭제 버튼을 붙인다 - 삭제는 색인 청크까지 제거되며,
@@ -536,7 +586,21 @@ function FileSourceRows({ items, onDelete }: { items: Source[]; onDelete?: (s: S
           className="flex items-center gap-2 rounded border border-border bg-bg px-2.5 py-1.5"
         >
           <FileText className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
-          <span className="flex-1 truncate text-sm text-fg">{s.title}</span>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-sm text-fg">{s.title}</span>
+            <span className="truncate text-[11px] text-fg-tertiary">{fileFacts(s)}</span>
+          </div>
+          {s.indexing ? (
+            <Badge variant="secondary" className="shrink-0 text-xs font-normal">
+              색인 중
+            </Badge>
+          ) : s.n_chunks === 0 ? (
+            // 파일은 올라갔는데 본문을 못 뽑은 상태 - 파일명만 보면 정상과 구분이 안 된다
+            // (2026-08-20: 동시 색인 메모리 부족으로 8건이 조용히 이 상태가 됐다).
+            <Badge variant="destructive" className="shrink-0 text-xs font-normal">
+              본문 없음
+            </Badge>
+          ) : null}
           <Badge variant="outline" className="shrink-0 text-xs font-normal">
             {s.source_kind === "library" ? "라이브러리" : "업로드"}
           </Badge>

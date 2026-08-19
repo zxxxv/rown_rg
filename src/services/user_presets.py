@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import NotFoundError, ValidationError
+from src.db.models.user import User
 from src.db.models.user_preset import UserPreset
 
 PERSONAL_PRESET_PREFIX = "u:"
@@ -46,6 +47,39 @@ async def get_user_preset(session: AsyncSession, owner_id: UUID, preset_id: UUID
     return row
 
 
+async def list_public_presets(
+    session: AsyncSession, viewer_id: UUID | None = None
+) -> list[tuple[UserPreset, str]]:
+    """공개된 남의 목차 프리셋 + 소유자 이름. viewer_id를 주면 그 사람 것은 뺀다.
+
+    자기 것은 개인 층에서 이미 나오므로 공개 층에서 또 넣으면 목록에 두 벌 뜬다
+    (에이전트 공유와 같은 규약 — services/prompts/personal.list_public_agents).
+    """
+    stmt = (
+        select(UserPreset, User.name)
+        .join(User, User.id == UserPreset.owner_id)
+        .where(UserPreset.is_public.is_(True))
+    )
+    if viewer_id is not None:
+        stmt = stmt.where(UserPreset.owner_id != viewer_id)
+    stmt = stmt.order_by(UserPreset.name)
+    return [(row[0], row[1]) for row in (await session.execute(stmt)).all()]
+
+
+async def get_readable_preset(
+    session: AsyncSession, viewer_id: UUID, preset_id: UUID
+) -> UserPreset:
+    """볼 수 있는 프리셋 1건 — 내 것이거나 공개된 것.
+
+    골격 조회·프로젝트 생성 검증이 이걸 쓴다. 소유자 전용(get_user_preset)은 수정·삭제
+    경로가 계속 쓴다 — 남의 공개 프리셋을 고칠 수 있으면 공유가 아니라 공용 편집이 된다.
+    """
+    row = await session.get(UserPreset, preset_id)
+    if row is None or (row.owner_id != viewer_id and not row.is_public):
+        raise NotFoundError(message="프리셋을 찾을 수 없습니다", code="PRESET_NOT_FOUND")
+    return row
+
+
 async def _check_name_free(
     session: AsyncSession, owner_id: UUID, name: str, exclude_id: UUID | None = None
 ) -> None:
@@ -65,9 +99,16 @@ async def create_user_preset(
     name: str,
     description: str | None,
     outline: dict,
+    is_public: bool = False,
 ) -> UserPreset:
     await _check_name_free(session, owner_id, name)
-    row = UserPreset(owner_id=owner_id, name=name, description=description, outline=outline)
+    row = UserPreset(
+        owner_id=owner_id,
+        name=name,
+        description=description,
+        outline=outline,
+        is_public=is_public,
+    )
     session.add(row)
     await session.flush()
     await session.refresh(row)
@@ -82,12 +123,15 @@ async def update_user_preset(
     name: str,
     description: str | None,
     outline: dict,
+    is_public: bool | None = None,
 ) -> UserPreset:
     row = await get_user_preset(session, owner_id, preset_id)
     await _check_name_free(session, owner_id, name, exclude_id=preset_id)
     row.name = name
     row.description = description
     row.outline = outline
+    if is_public is not None:
+        row.is_public = is_public
     await session.flush()
     await session.refresh(row)
     return row
