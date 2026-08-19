@@ -56,6 +56,8 @@ class PresetSection(BaseModel):
     direction: str
     key_points: list[str] = []
     agents: list[str] = []
+    # 의존 계약("4.1"|"4.1(지표)"|"4.*") — 의존형 프리셋(예타 등)만 사전 작성한다.
+    builds_on: list[str] = []
 
 
 class PresetChapter(BaseModel):

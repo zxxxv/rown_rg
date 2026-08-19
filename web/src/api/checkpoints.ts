@@ -79,6 +79,7 @@ export const QaSelectPlanEntrySchema = z.object({
   direction: z.string().default(""),
   key_points: z.array(z.string()).default([]),
   analysts: z.array(z.string()).default([]),
+  builds_on: z.array(z.string()).default([]),
 });
 export type QaSelectPlanEntry = z.infer<typeof QaSelectPlanEntrySchema>;
 
@@ -213,6 +214,7 @@ export const BriefSectionSchema = z.object({
   direction: z.string().default(""),
   key_points: z.array(z.string()).default([]),
   analysts: z.array(z.string()).default([]),
+  builds_on: z.array(z.string()).default([]),
   search_query: z.string().default(""),
   volume: BriefVolumeSchema.nullish(),
 });

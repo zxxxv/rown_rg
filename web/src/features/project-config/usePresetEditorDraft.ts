@@ -46,6 +46,7 @@ function toSection(v: unknown): DraftSection {
     direction: typeof s.direction === "string" ? s.direction : "",
     key_points: strArray(s.key_points),
     analysts: strArray(s.analysts),
+    builds_on: strArray(s.builds_on),
   };
 }
 

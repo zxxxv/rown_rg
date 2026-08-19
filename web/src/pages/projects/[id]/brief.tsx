@@ -54,6 +54,7 @@ function toDraftChapters(sections: BriefSection[]): DraftChapter[] {
       direction: s.direction,
       key_points: s.key_points,
       analysts: s.analysts,
+      builds_on: s.builds_on ?? [],
     });
   }
   return [...byChapter.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c);

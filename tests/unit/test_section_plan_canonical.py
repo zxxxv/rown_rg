@@ -39,6 +39,8 @@ def _plan() -> list[SectionPlan]:
             direction="글로벌 RE100의 일반현황을 제시",
             key_points=["참여 기업 수", "이행 수단"],
             analysts=["탄소규제동향분석"],
+            search_queries=["RE100 참여 현황 2024"],
+            builds_on=["1.1", "2.*"],
         ),
         SectionPlan(
             section_id=_ID2,

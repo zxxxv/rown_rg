@@ -66,6 +66,11 @@ export const OutlineSectionSchema = z.object({
   key_points: z.array(z.string()),
   // 분석 에이전트 name 참조 - 배정된 관점을 모두 반영한다(분량 목표는 최댓값)
   analysts: z.array(z.string()),
+  // 의존 계약("4.1"|"4.1(지표)"|"4.*") - 앞 절 확정값(사실 대장)을 받아 쓴다.
+  // catch([]): 이 필드 이전에 만든 프로젝트의 config.outline에는 이 키가 없다 -
+  // required로 두면 파싱 실패가 ProjectSchema의 config.catch(DEFAULT)로 번져
+  // **기존 프로젝트의 설정 화면이 통째로 기본값으로 둔갑**한다(조용한 열화).
+  builds_on: z.array(z.string()).catch([]),
 });
 export type OutlineSection = z.infer<typeof OutlineSectionSchema>;
 

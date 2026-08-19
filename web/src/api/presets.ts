@@ -28,6 +28,7 @@ export const PresetSectionDetailSchema = z.object({
   direction: z.string().default(""),
   key_points: z.array(z.string()).default([]),
   agents: z.array(z.string()).default([]),
+  builds_on: z.array(z.string()).default([]),
 });
 export type PresetSectionDetail = z.infer<typeof PresetSectionDetailSchema>;
 

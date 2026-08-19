@@ -57,6 +57,7 @@ from src.api.schemas.section import (
 )
 from src.api.schemas.source_stats import SourceUsageResponse
 from src.api.uploads import read_validated_upload
+from src.core.builds_on import clean_refs
 from src.core.charts import has_chart_fence
 from src.core.citations import numbers_in_order
 from src.core.clock import now as clock_now
@@ -178,6 +179,30 @@ def _validate_outline_config(config: dict, known_analysts: set[str]) -> None:
             message=f"알 수 없는 분석 에이전트: {', '.join(unknown)}",
             code="UNKNOWN_ANALYST",
         )
+    # builds_on 검증 — 유령 절·자기 참조·상한 초과는 생성 시점에 막는다. 실행 시점
+    # (clean_refs·assign_levels)에도 같은 가드가 있지만 그건 절단·경고이고, 여기는
+    # 사람이 고칠 수 있는 마지막 자리라 명시적으로 알린다.
+    labels: list[str] = []
+    for ci, ch in enumerate(parsed.chapters, start=1):
+        for si, _sec in enumerate(ch.sections, start=1):
+            labels.append(f"{ci}.{si}")
+    known_labels = set(labels)
+    known_chapters = {int(label.split(".")[0]) for label in labels}
+    for ci, ch in enumerate(parsed.chapters, start=1):
+        for si, sec in enumerate(ch.sections, start=1):
+            if not sec.builds_on:
+                continue
+            _cleaned, ref_warnings = clean_refs(
+                list(sec.builds_on),
+                self_label=f"{ci}.{si}",
+                known_labels=known_labels,
+                known_chapters=known_chapters,
+            )
+            if ref_warnings:
+                raise ValidationError(
+                    message=f"{ci}.{si}절 builds_on 오류: {ref_warnings[0]}",
+                    code="INVALID_BUILDS_ON",
+                )
 
 
 async def _validate_rules_config(session: AsyncSession, owner_id: UUID, config: dict) -> None:
@@ -422,6 +447,7 @@ async def get_preset_detail(
                         direction=s.direction,
                         key_points=list(s.key_points),
                         agents=list(s.agents),
+                        builds_on=list(s.builds_on),
                     )
                     for s in ch.sections
                 ],

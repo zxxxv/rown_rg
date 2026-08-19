@@ -181,6 +181,7 @@ def build_design_brief(
             "direction": s.direction,
             "key_points": list(s.key_points),
             "analysts": list(s.analysts),
+            "builds_on": list(s.builds_on),
             # 검색기가 실제로 쓰는 문자열. 화면과 실행이 같아야 이 게이트가 의미 있다.
             "search_query": section_search_query(s),
             "volume": _volume(s, catalog),

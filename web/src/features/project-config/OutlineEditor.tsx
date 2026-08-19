@@ -23,6 +23,8 @@ export interface DraftSection {
   direction: string;
   key_points: string[];
   analysts: string[];
+  /** 의존 계약("4.1"|"4.1(지표)"|"4.*") - 앞 절 확정값을 받아 쓴다(사실 대장 주입) */
+  builds_on: string[];
 }
 
 export interface DraftChapter {
@@ -34,7 +36,7 @@ export interface DraftChapter {
 export const draftId = () => crypto.randomUUID();
 
 export function emptySection(): DraftSection {
-  return { _id: draftId(), title: "", direction: "", key_points: [], analysts: [] };
+  return { _id: draftId(), title: "", direction: "", key_points: [], analysts: [], builds_on: [] };
 }
 
 export function emptyChapter(): DraftChapter {
@@ -51,6 +53,7 @@ export function fromPreset(detail: PresetDetail): DraftChapter[] {
       direction: s.direction,
       key_points: [...s.key_points],
       analysts: [...s.agents],
+      builds_on: [...s.builds_on],
     })),
   }));
 }
@@ -67,6 +70,7 @@ export function toOutline(chapters: DraftChapter[]): Outline | undefined {
           direction: s.direction.trim(),
           key_points: s.key_points.map((k) => k.trim()).filter(Boolean),
           analysts: s.analysts,
+          builds_on: s.builds_on.map((b) => b.trim()).filter(Boolean),
         })),
     }))
     .filter((ch) => ch.sections.length > 0);
@@ -85,6 +89,7 @@ export function toPresetChapters(chapters: DraftChapter[]): PresetChapterDetail[
           direction: s.direction.trim(),
           key_points: s.key_points.map((k) => k.trim()).filter(Boolean),
           agents: s.analysts,
+          builds_on: s.builds_on.map((b) => b.trim()).filter(Boolean),
         })),
     }))
     .filter((ch) => ch.sections.length > 0);
@@ -435,6 +440,22 @@ function SectionEditor({
         selected={section.analysts}
         onChange={(analysts) => onChange({ ...section, analysts })}
       />
+      <Field hint="앞 절 이어받기(선택) - 이어받을 절 번호를 쉼표로. 예: 6.2 또는 6.2(총사업비), 장 전체는 2.* (그 절의 확정 수치를 그대로 받아 다시 찾지 않습니다)">
+        <Input
+          value={section.builds_on.join(", ")}
+          placeholder="예: 6.2(총사업비), 2.*"
+          onChange={(e) =>
+            onChange({
+              ...section,
+              builds_on: e.target.value
+                .split(",")
+                .map((b) => b.trim())
+                .filter(Boolean),
+            })
+          }
+          className="h-8 bg-bg font-mono text-sm"
+        />
+      </Field>
       <button
         type="button"
         className="self-start text-[11px] text-fg-tertiary underline"

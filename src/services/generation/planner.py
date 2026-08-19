@@ -134,6 +134,7 @@ def plan_from_outline(outline: dict[str, Any]) -> list[SectionPlan]:
             direction = sec.get("direction")
             key_points = sec.get("key_points")
             analysts = sec.get("analysts")
+            builds_on = sec.get("builds_on")
             plan.append(
                 SectionPlan(
                     chapter_number=ci,
@@ -146,6 +147,9 @@ def plan_from_outline(outline: dict[str, Any]) -> list[SectionPlan]:
                     else [],
                     analysts=[a for a in analysts if isinstance(a, str)]
                     if isinstance(analysts, list)
+                    else [],
+                    builds_on=[b for b in builds_on if isinstance(b, str)]
+                    if isinstance(builds_on, list)
                     else [],
                 )
             )

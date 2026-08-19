@@ -49,6 +49,8 @@ class PresetSectionRead(BaseModel):
     direction: str = ""
     key_points: list[str] = Field(default_factory=list)
     agents: list[str] = Field(default_factory=list)
+    # 이 절이 앞 절의 확정값 위에서 쓰는 의존("4.1"|"4.1(지표)"|"4.*") - 사실 대장 주입
+    builds_on: list[str] = Field(default_factory=list)
 
 
 class PresetChapterRead(BaseModel):
@@ -73,6 +75,7 @@ class UserPresetSectionIn(BaseModel):
     direction: str = Field("", max_length=1000)
     key_points: list[str] = Field(default_factory=list, max_length=30)
     agents: list[str] = Field(default_factory=list, max_length=5)
+    builds_on: list[str] = Field(default_factory=list, max_length=4)
 
 
 class UserPresetChapterIn(BaseModel):
@@ -130,6 +133,8 @@ class OutlineSectionIn(BaseModel):
     direction: str = ""
     key_points: list[str] = Field(default_factory=list)
     analysts: list[str] = Field(default_factory=list)
+    # 의존 계약 - 검증(유령 절·자기 참조·상한)은 라우터 _validate_outline_config가 한다.
+    builds_on: list[str] = Field(default_factory=list)
 
 
 class OutlineChapterIn(BaseModel):
