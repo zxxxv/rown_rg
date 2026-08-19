@@ -100,6 +100,7 @@ from src.services.user_presets import (
     create_user_preset,
     delete_user_preset,
     get_readable_preset,
+    import_public_preset,
     list_public_presets,
     list_user_presets,
     parse_personal_key,
@@ -331,6 +332,34 @@ async def update_personal_preset(
         outline={"chapters": [ch.model_dump() for ch in data.chapters]},
         is_public=data.is_public,
     )
+    n_ch, n_sec = _preset_counts(row.outline)
+    return UserPresetRead(
+        id=row.id,
+        key=personal_preset_key(row.id),
+        name=row.name,
+        description=row.description,
+        n_chapters=n_ch,
+        n_sections=n_sec,
+        is_public=row.is_public,
+        updated_at=row.updated_at,
+    )
+
+
+@presets_router.post(
+    "/personal/import/{source_id}",
+    response_model=UserPresetRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_shared_preset(
+    source_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> UserPresetRead:
+    """공개된 남의 목차 프리셋을 내 것으로 가져온다(복제, 비공개로).
+
+    바로 쓰는 건 목록에서 고르면 되고(3층 병합), 가져오기는 고쳐 쓸 때를 위한 것이다.
+    """
+    row = await import_public_preset(session, current_user.id, source_id)
     n_ch, n_sec = _preset_counts(row.outline)
     return UserPresetRead(
         id=row.id,

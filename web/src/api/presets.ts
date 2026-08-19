@@ -11,7 +11,9 @@ export const PresetReadSchema = z.object({
   desc: z.string(),
   n_chapters: z.number().int().nonnegative(),
   n_sections: z.number().int().nonnegative(),
-  scope: z.enum(["system", "personal"]).default("system"),
+  // shared = 남이 공개한 프리셋. 골라 쓸 수는 있고 고치려면 가져와야 한다.
+  scope: z.enum(["system", "personal", "shared"]).default("system"),
+  owner_name: z.string().nullish(),
   updated_at: z.string().nullish(),
 });
 export type PresetRead = z.infer<typeof PresetReadSchema>;
@@ -90,6 +92,8 @@ export const UserPresetSchema = z.object({
   description: z.string().nullish(),
   n_chapters: z.number().int().nonnegative(),
   n_sections: z.number().int().nonnegative(),
+  /** 켜면 사내 전원의 프리셋 선택지에 뜬다 */
+  is_public: z.boolean().default(false),
   updated_at: z.string(),
 });
 export type UserPreset = z.infer<typeof UserPresetSchema>;
@@ -98,6 +102,7 @@ export interface UserPresetBody {
   name: string;
   description?: string | null;
   chapters: PresetChapterDetail[];
+  is_public?: boolean;
 }
 
 export function useCreateUserPreset() {
@@ -116,6 +121,19 @@ export function useUpdateUserPreset() {
   return useMutation({
     mutationFn: async ({ id, ...body }: UserPresetBody & { id: string }) => {
       const data = await apiClient.put<unknown>(`presets/personal/${id}`, { json: body });
+      return UserPresetSchema.parse(data);
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: presetKeys.all }),
+  });
+}
+
+/** 남이 공개한 목차 프리셋을 내 것으로 복제한다(비공개 사본). 바로 쓰는 건 목록에서
+ * 고르면 되고, 이건 **고쳐 쓸 때**를 위한 것이다. */
+export function useImportSharedPreset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (sourceId: string) => {
+      const data = await apiClient.post<unknown>(`presets/personal/import/${sourceId}`);
       return UserPresetSchema.parse(data);
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: presetKeys.all }),

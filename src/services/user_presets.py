@@ -137,6 +137,42 @@ async def update_user_preset(
     return row
 
 
+async def import_public_preset(
+    session: AsyncSession, owner_id: UUID, source_id: UUID
+) -> UserPreset:
+    """공개된 남의 목차 프리셋을 내 것으로 복제한다(에이전트 가져오기와 같은 규약).
+
+    공개 여부는 승계하지 않는다 — 가져왔다고 내 이름으로 자동 재공개되면 곤란하다.
+    이름이 겹치면 "(사본)"을 붙인다(owner_id+name 유니크).
+    """
+    src = await session.get(UserPreset, source_id)
+    if src is None or not (src.is_public or src.owner_id == owner_id):
+        raise NotFoundError(message="가져올 프리셋을 찾을 수 없습니다", code="PRESET_NOT_FOUND")
+    taken = set(
+        (await session.execute(select(UserPreset.name).where(UserPreset.owner_id == owner_id)))
+        .scalars()
+        .all()
+    )
+    name = src.name
+    if name in taken:
+        name = f"{src.name} (사본)"
+        n = 2
+        while name in taken:
+            name = f"{src.name} (사본 {n})"
+            n += 1
+    row = UserPreset(
+        owner_id=owner_id,
+        name=name,
+        description=src.description,
+        outline=dict(src.outline or {}),
+        is_public=False,
+    )
+    session.add(row)
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
 async def delete_user_preset(session: AsyncSession, owner_id: UUID, preset_id: UUID) -> None:
     row = await get_user_preset(session, owner_id, preset_id)
     await session.delete(row)

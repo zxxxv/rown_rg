@@ -31,6 +31,7 @@ from src.services.prompts import (
     create_personal,
     delete_personal,
     get_personal,
+    import_public_agent,
     list_personal,
     resolve_analysts,
     resolve_rules,
@@ -124,6 +125,26 @@ async def update_my_prompt(
         spec=data.spec.model_dump(exclude_none=True) if data.spec is not None else None,
         is_public=data.is_public,
     )
+    return PersonalPromptRead.model_validate(row)
+
+
+@router.post(
+    "/personal/import/{source_id}",
+    response_model=PersonalPromptRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_shared_prompt(
+    source_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> PersonalPromptRead:
+    """공개된 남의 에이전트를 내 것으로 가져온다(복제).
+
+    "바로 쓰기"는 이미 된다(3층 병합으로 목록에 뜬다). 가져오기는 **고쳐 쓰고 싶을 때**를
+    위한 것이다 — 남의 자산을 직접 고칠 수 있으면 공유가 아니라 공용 편집이 된다.
+    복사본은 base_ref 없이, 비공개로 만들어진다(services/prompts/personal 참조).
+    """
+    row = await import_public_agent(session, current_user.id, source_id)
     return PersonalPromptRead.model_validate(row)
 
 

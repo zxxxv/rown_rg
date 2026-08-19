@@ -131,6 +131,9 @@ function MyPresetsSection() {
                     key: p.id,
                     name: p.name,
                     description: p.desc,
+                    // 목록에는 공개 여부가 안 실려 온다(카탈로그 표면) - 편집 다이얼로그가
+                    // 상세를 다시 읽어 채운다. 여기선 기본값으로 둔다.
+                    is_public: false,
                     n_chapters: p.n_chapters,
                     n_sections: p.n_sections,
                     updated_at: p.updated_at ?? "",

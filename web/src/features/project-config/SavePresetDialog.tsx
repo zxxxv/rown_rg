@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { type DraftChapter, toPresetChapters } from "./OutlineEditor";
 
 /** 목차 편집기의 현재 구성을 내 프리셋으로 저장 - 같은 구성으로 다음 보고서를
@@ -27,6 +28,8 @@ export function SavePresetDialog({
   const create = useCreateUserPreset();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  // 켜면 사내 전원의 프리셋 선택지에 뜬다(에이전트 공개와 같은 규약).
+  const [isPublic, setIsPublic] = useState(false);
   const cleaned = toPresetChapters(chapters);
   const nSections = cleaned.reduce((n, ch) => n + ch.sections.length, 0);
   const valid = name.trim() !== "" && cleaned.length > 0;
@@ -37,6 +40,7 @@ export function SavePresetDialog({
       const saved = await create.mutateAsync({
         name: name.trim(),
         description: description.trim() || null,
+        is_public: isPublic,
         chapters: cleaned,
       });
       toast.success(`"${saved.name}" 프리셋 저장됨`, {
@@ -80,6 +84,24 @@ export function SavePresetDialog({
               placeholder="목록에서 이 구성을 알아볼 설명"
               disabled={create.isPending}
             />
+          </div>
+          <div className="flex items-start gap-3 rounded border border-border bg-bg-secondary p-3">
+            <Switch
+              id="preset-public"
+              checked={isPublic}
+              onCheckedChange={setIsPublic}
+              disabled={create.isPending}
+            />
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor="preset-public" className="cursor-pointer">
+                사내에 공개
+              </Label>
+              <p className="text-xs text-fg-tertiary">
+                {isPublic
+                  ? "사내 모든 사람이 이 구성을 골라 새 보고서를 시작할 수 있습니다. 고치는 건 나만 할 수 있고, 남은 자기 것으로 가져가 고칩니다."
+                  : "나만 씁니다. 켜면 사내 모든 사람의 보고서 유형 목록에 나타납니다."}
+              </p>
+            </div>
           </div>
           {cleaned.length === 0 ? (
             <p className="text-xs text-fg-danger">

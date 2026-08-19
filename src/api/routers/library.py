@@ -48,9 +48,10 @@ from src.db.models.library_node import LibraryNode
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.user import User
-from src.prompts import catalog_file_stat, list_analysts, list_components
+from src.prompts import catalog_file_stat, list_analysts, list_components, list_presets
 from src.services.export.report import export_filename
-from src.services.prompts import list_personal
+from src.services.prompts import list_personal, list_public_agents
+from src.services.user_presets import list_public_presets, list_user_presets
 
 router = APIRouter(prefix="/library", tags=["library"])
 
@@ -332,6 +333,16 @@ async def _build_prompts_folder(
     rules: list[LibraryTreeFolder | LibraryTreeFile] = [
         node(p) for p in personals if p.kind == "rule"
     ]
+    presets: list[LibraryTreeFolder | LibraryTreeFile] = [
+        _prompt_file(
+            f"upreset-{row.id}",
+            row.name,
+            PromptRef(scope="personal", kind="preset", ref=str(row.id), editable=True),
+            user_name,
+            row.updated_at,
+        )
+        for row in await list_user_presets(session, user_id)
+    ]
     return LibraryTreeFolder(
         id=f"{prefix}-prompts",
         name="프롬프트",
@@ -342,6 +353,11 @@ async def _build_prompts_folder(
             ),
             LibraryTreeFolder(
                 id=f"{prefix}-rules", name="내 작성 규칙", virtual=True, children=rules
+            ),
+            # 목차 프리셋도 '내가 만들어 재사용하는 자산'이라 같은 자리에 둔다 —
+            # 프롬프트 화면에서만 보이면 라이브러리가 개인 자산의 전체 그림이 못 된다.
+            LibraryTreeFolder(
+                id=f"{prefix}-presets", name="내 목차 프리셋", virtual=True, children=presets
             ),
         ],
     )
@@ -371,6 +387,16 @@ def _system_prompts_folder() -> LibraryTreeFolder:
     rules: list[LibraryTreeFolder | LibraryTreeFile] = [
         _sys(f"syscomp-{name}", name, "rule", name) for name in list_components()
     ]
+    presets: list[LibraryTreeFolder | LibraryTreeFile] = [
+        _prompt_file(
+            f"syspreset-{p.id}",
+            p.name,
+            PromptRef(scope="system", kind="preset", ref=p.id, editable=False),
+            "시스템",
+            _PROMPT_EPOCH,
+        )
+        for p in list_presets()
+    ]
     return LibraryTreeFolder(
         id="sys-prompts",
         name="시스템 프롬프트",
@@ -378,6 +404,64 @@ def _system_prompts_folder() -> LibraryTreeFolder:
         children=[
             LibraryTreeFolder(id="sys-agents", name="에이전트", virtual=True, children=agents),
             LibraryTreeFolder(id="sys-rules", name="작성 규칙", virtual=True, children=rules),
+            LibraryTreeFolder(id="sys-presets", name="목차 프리셋", virtual=True, children=presets),
+        ],
+    )
+
+
+async def _shared_folder(session: AsyncSession, viewer_id: UUID) -> LibraryTreeFolder:
+    """회사 공유의 '동료 공개' 폴더 — 남이 공개 토글을 켠 개인 자산(읽기 전용).
+
+    종류별로 묶는다(2026-08-19 사용자 결정) — 시스템 프롬프트 폴더와 같은 모양이라
+    "무엇을 찾을 때 어디를 여는가"가 하나로 통일된다. 사람별로 묶으면 사람이 늘수록
+    폴더가 길어진다.
+
+    여기서는 고칠 수 없다(editable=False). 고치려면 '내 것으로 가져오기'로 복제한다 —
+    남의 자산을 라이브러리에서 직접 고칠 수 있으면 공유가 아니라 공용 편집이 된다.
+    """
+    agents: list[LibraryTreeFolder | LibraryTreeFile] = [
+        _prompt_file(
+            f"shared-agent-{row.id}",
+            row.name,
+            PromptRef(
+                scope="shared",
+                kind="agent",
+                ref=str(row.id),
+                editable=False,
+                owner_name=owner_name,
+                importable=True,
+            ),
+            owner_name,
+            row.updated_at,
+        )
+        for row, owner_name in await list_public_agents(session, viewer_id)
+    ]
+    presets: list[LibraryTreeFolder | LibraryTreeFile] = [
+        _prompt_file(
+            f"shared-preset-{row.id}",
+            row.name,
+            PromptRef(
+                scope="shared",
+                kind="preset",
+                ref=str(row.id),
+                editable=False,
+                owner_name=owner_name,
+                importable=True,
+            ),
+            owner_name,
+            row.updated_at,
+        )
+        for row, owner_name in await list_public_presets(session, viewer_id)
+    ]
+    return LibraryTreeFolder(
+        id="shared-prompts",
+        name="동료 공개",
+        virtual=True,
+        children=[
+            LibraryTreeFolder(id="shared-agents", name="에이전트", virtual=True, children=agents),
+            LibraryTreeFolder(
+                id="shared-presets", name="목차 프리셋", virtual=True, children=presets
+            ),
         ],
     )
 
@@ -502,7 +586,11 @@ async def get_tree(
         virtual=True,
         writable=WritableTarget(parent_id=None, scope="company"),
         # 실 공유 노드(seed 포함) + 시스템 프롬프트(읽기전용) 카탈로그.
-        children=[*company_roots, _system_prompts_folder()],
+        children=[
+            *company_roots,
+            _system_prompts_folder(),
+            await _shared_folder(session, current_user.id),
+        ],
     )
 
     tree: list[LibraryTreeFolder | LibraryTreeFile] = [me_root, company_root]

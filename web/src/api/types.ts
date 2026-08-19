@@ -364,10 +364,13 @@ export type WritableTarget = z.infer<typeof WritableTargetSchema>;
 
 // 프롬프트 파일 노드 마커 - 있으면 상세 패널이 프롬프트 에디터/뷰어를 연다.
 export const PromptRefSchema = z.object({
-  scope: z.enum(["personal", "system"]),
-  kind: z.enum(["agent", "rule"]),
+  // shared = 남이 공개한 개인 자산. 읽기 전용이되 '내 것으로 가져오기'가 된다.
+  scope: z.enum(["personal", "system", "shared"]),
+  kind: z.enum(["agent", "rule", "preset"]),
   ref: z.string(),
   editable: z.boolean(),
+  owner_name: z.string().nullish(),
+  importable: z.boolean().default(false),
 });
 export type PromptRef = z.infer<typeof PromptRefSchema>;
 

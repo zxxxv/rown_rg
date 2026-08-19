@@ -1,15 +1,69 @@
-import { BookOpen, ExternalLink, Wand2 } from "lucide-react";
+import { BookOpen, Copy, ExternalLink, Wand2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { type PromptKind, usePersonalPrompt, useSystemPrompt } from "@/api/prompts";
+import { toast } from "sonner";
+import { ApiError } from "@/api/client";
+import { useImportSharedPreset } from "@/api/presets";
+import { useImportSharedPrompt, usePersonalPrompt, useSystemPrompt } from "@/api/prompts";
 import type { PromptRef } from "@/api/types";
 import { Button } from "@/components/ui/button";
 
-const KIND_LABEL: Record<PromptKind, string> = { agent: "에이전트", rule: "작성 규칙" };
+const KIND_LABEL: Record<PromptRef["kind"], string> = {
+  agent: "에이전트",
+  rule: "작성 규칙",
+  preset: "목차 프리셋",
+};
 
 /** 프롬프트 파일 노드 상세 - 라이브러리에선 읽기 전용. 편집·추가는 '프롬프트 관리' 페이지에서. */
 export function PromptBody({ prompt }: { prompt: PromptRef }) {
+  if (prompt.scope === "shared") return <SharedPromptView prompt={prompt} />;
   if (prompt.scope === "system") return <SystemPromptView prompt={prompt} />;
   return <PersonalPromptView prompt={prompt} />;
+}
+
+/** '내 것으로 가져오기' - 복제해야 고쳐 쓸 수 있다. 복사본은 비공개로 만들어지고,
+ * 에이전트는 base_ref 없이 들어온다(남의 오버라이드가 내 시스템 항목을 갈아끼우면 안 된다). */
+function ImportButton({ prompt }: { prompt: PromptRef }) {
+  const importPrompt = useImportSharedPrompt();
+  const importPreset = useImportSharedPreset();
+  const pending = importPrompt.isPending || importPreset.isPending;
+  if (!prompt.importable) return null;
+  const run = async () => {
+    try {
+      const saved =
+        prompt.kind === "preset"
+          ? await importPreset.mutateAsync(prompt.ref)
+          : await importPrompt.mutateAsync(prompt.ref);
+      toast.success(`"${saved.name}"을(를) 내 것으로 가져왔습니다`, {
+        description: "이제 고쳐 쓸 수 있습니다. 공개는 꺼진 상태입니다.",
+      });
+    } catch (err) {
+      toast.error("가져오지 못했습니다", {
+        description: err instanceof ApiError ? err.message : "다시 시도해 주세요.",
+      });
+    }
+  };
+  return (
+    <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => void run()}>
+      <Copy className="mr-1 h-3.5 w-3.5" aria-hidden />
+      {pending ? "가져오는 중…" : "내 것으로 가져오기"}
+    </Button>
+  );
+}
+
+/** 남이 공개한 자산 - 라이브러리에선 읽기 전용이다. 여기서 고칠 수 있으면 공유가
+ * 아니라 공용 편집이 된다. 고쳐 쓰려면 '내 것으로 가져오기'로 복제한다. */
+function SharedPromptView({ prompt }: { prompt: PromptRef }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2 rounded border border-border bg-bg-secondary px-3 py-2 text-xs text-fg-tertiary">
+        <BookOpen className="h-3.5 w-3.5" aria-hidden />
+        {prompt.owner_name ? `${prompt.owner_name}님이` : "동료가"} 공개한 {KIND_LABEL[prompt.kind]}{" "}
+        - 그대로 골라 쓸 수 있고, 고쳐 쓰려면 아래에서 내 것으로 가져오세요. 원본은 주인만 고칠 수
+        있습니다.
+      </div>
+      <ImportButton prompt={prompt} />
+    </div>
+  );
 }
 
 function SystemPromptView({ prompt }: { prompt: PromptRef }) {

@@ -164,6 +164,19 @@ export function useUpdatePersonalPrompt(id: string) {
   });
 }
 
+/** 남이 공개한 에이전트를 내 것으로 복제한다(base_ref 없이, 비공개로). */
+export function useImportSharedPrompt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...promptKeys.all, "import"],
+    mutationFn: async (sourceId: string) => {
+      const data = await apiClient.post<unknown>(`prompts/personal/import/${sourceId}`);
+      return PersonalPromptSchema.parse(data);
+    },
+    onSuccess: () => invalidatePrompts(qc),
+  });
+}
+
 export function useDeletePersonalPrompt() {
   const qc = useQueryClient();
   return useMutation({

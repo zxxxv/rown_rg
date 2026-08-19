@@ -64,14 +64,21 @@ class PromptRef(BaseModel):
     """프롬프트 파일 노드 마커 — 이 노드는 자료 파일이 아니라 프롬프트다.
 
     프론트는 이 마커가 있으면 상세 패널에서 프롬프트 에디터/뷰어를 연다.
-    - scope=personal: ref=user_prompt id, editable=True → PATCH /prompts/personal/{ref}
-    - scope=system  : ref=에이전트 id 또는 조각 이름, editable=False (읽기전용)
+    - scope=personal: ref=user_prompt id(agent·rule) 또는 user_preset id(preset),
+      editable=True → PATCH /prompts/personal/{ref} · PUT /presets/personal/{ref}
+    - scope=system  : ref=에이전트 id·조각 이름·프리셋 키, editable=False (읽기전용)
+    - scope=shared  : 남이 공개한 것. 읽기 전용이되 '내 것으로 가져오기'가 가능하다 —
+      남의 자산을 라이브러리에서 고칠 수 있으면 공유가 아니라 공용 편집이 된다.
     """
 
-    scope: Literal["personal", "system"]
-    kind: Literal["agent", "rule"]
+    scope: Literal["personal", "system", "shared"]
+    kind: Literal["agent", "rule", "preset"]
     ref: str
     editable: bool = False
+    # shared일 때 누구 것인지. 같은 이름이 둘일 때 사람이 가려 고르는 단서다.
+    owner_name: str | None = None
+    # 가져오기가 가능한가(shared 전용). 프론트가 '내 것으로 가져오기' 버튼을 띄운다.
+    importable: bool = False
 
 
 class LibraryTreeFile(BaseModel):

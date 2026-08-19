@@ -301,6 +301,54 @@ async def resolve_analysts(session: AsyncSession, owner_id: UUID) -> list[Analys
     return merged
 
 
+async def import_public_agent(session: AsyncSession, owner_id: UUID, source_id: UUID) -> UserPrompt:
+    """공개된 남의 에이전트를 내 것으로 복제한다.
+
+    복사본은 **base_ref=None**으로 만든다 — 남이 시스템 에이전트를 덮어쓴 변형본이라도
+    내 시스템 에이전트까지 조용히 갈아끼우면 안 된다(3층 병합에서 공개분을 덮어쓰기로
+    쓰지 않는 것과 같은 원칙). 공개 여부도 승계하지 않는다 — 남의 것을 가져왔다고
+    내 이름으로 자동 재공개되면 곤란하다.
+
+    이름이 겹치면 "(사본)"을 붙인다(owner_id+kind+name 유니크).
+    """
+    src = await session.get(UserPrompt, source_id)
+    if src is None or src.kind != "agent" or not (src.is_public or src.owner_id == owner_id):
+        raise NotFoundError(message="가져올 에이전트를 찾을 수 없습니다", code="PROMPT_NOT_FOUND")
+    taken = set(
+        (
+            await session.execute(
+                select(UserPrompt.name).where(
+                    UserPrompt.owner_id == owner_id, UserPrompt.kind == "agent"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    name = src.name
+    if name in taken:
+        name = f"{src.name} (사본)"
+        n = 2
+        while name in taken:
+            name = f"{src.name} (사본 {n})"
+            n += 1
+    row = UserPrompt(
+        owner_id=owner_id,
+        kind="agent",
+        name=name,
+        content=src.content,
+        base_ref=None,
+        cat=src.cat,
+        description=src.description,
+        spec=dict(src.spec or {}),
+        is_public=False,
+    )
+    session.add(row)
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
 async def snapshot_agents(session: AsyncSession, owner_id: UUID) -> list[dict]:
     """런 시작 시점의 DB 출신 에이전트를 얼려 둘 형태로 돌려준다.
 
