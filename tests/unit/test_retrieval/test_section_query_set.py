@@ -15,6 +15,7 @@ from src.core.types import SectionPlan
 from src.prompts import AnalystSpec
 from src.services.retrieval.base import SearchHit
 from src.services.retrieval.section import (
+    MAX_KEYPOINT_CHARS,
     MAX_SECTION_QUERIES,
     interleave_by_query,
     section_query_set,
@@ -123,6 +124,36 @@ class TestQuerySet:
         )
         assert len(qs) == len(set(qs))
         assert len(qs) <= MAX_SECTION_QUERIES
+
+    def test_long_key_point_survives_but_is_bounded(self):
+        """긴 서술은 그 절에만 있는 문구라 변별력이 크다 - 자르면 분화가 나빠졌다
+        (실측: 캡 60자에서 절쌍 자카드 0.061→0.072). 병적인 입력만 막는다."""
+        long_point = "진단 프레임워크 설계 " + "가나다라마바사아자차카타파하 " * 50
+        qs = section_query_set(_section(key_points=[long_point]))
+        kp = [q for q in qs if "진단 프레임워크" in q][0]
+        assert len(kp) > 200  # 통째로는 아니어도 넉넉히 살아남는다
+        assert len(kp) <= len(section_search_query(_section())) + MAX_KEYPOINT_CHARS + 1
+
+    def test_leading_number_marker_is_stripped(self):
+        """'(1-3-1)' 같은 앞머리 번호표는 검색에 값이 없고 키워드 토큰만 늘린다."""
+        qs = section_query_set(_section(key_points=["(1-3-1) 진단 프레임워크 설계"]))
+        kp = [q for q in qs if "진단 프레임워크" in q][0]
+        assert "(1-3-1)" not in kp
+        assert "진단 프레임워크 설계" in kp
+
+    def test_circled_marker_is_stripped(self):
+        qs = section_query_set(_section(key_points=["① 배출량 관리 역량"]))
+        assert any("배출량 관리 역량" in q and "①" not in q for q in qs)
+
+    def test_year_in_body_is_not_eaten(self):
+        """번호표 제거가 본문을 갉아먹으면 안 된다."""
+        qs = section_query_set(_section(key_points=["2026년 시행 일정"]))
+        assert any("2026년 시행 일정" in q for q in qs)
+
+    def test_key_point_already_in_title_is_skipped(self):
+        """절 제목이 이미 담은 말이면 같은 질의가 하나 더 생길 뿐이다."""
+        qs = section_query_set(_section(title="적용 범위", key_points=["적용 범위"]))
+        assert len(qs) == 1
 
     def test_flag_off_returns_single_query(self, monkeypatch):
         """되돌리기·통제 실험이 설정 한 줄이어야 한다."""

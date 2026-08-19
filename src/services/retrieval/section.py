@@ -7,6 +7,7 @@ write 루프는 SectionPlan 하나를 받아 근거 청크를 돌려주는 Secti
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -37,6 +38,17 @@ MAX_SECTION_QUERIES = 6
 MAX_KEYPOINT_QUERIES = 2
 # 에이전트 1종이 기여할 질의 수. 다관점 절에서 한 관점이 질의를 독식하지 않게 한다.
 MAX_QUERIES_PER_ANALYST = 2
+# 핵심 포인트에서 질의로 실을 길이 — 병적인 입력만 막는 안전망이다(BGE-M3 입력
+# 상한 512토큰 ≈ 한글 1,000자 근처에서 모델이 조용히 자른다).
+#
+# 처음엔 60자로 조였다 — 사용자가 핵심 포인트를 한 줄 서술로 길게 적어(탄소규제 런
+# 실측 250자) 질의 벡터가 흐려질 거라 봤다. **실측이 반대였다**(2026-08-19, v2 색인
+# 진단 절 8개): 캡 60자에서 절쌍 자카드 평균 0.061→0.072·최대 0.333→0.412, 절당
+# 고유자료 9.38→8.75로 분화가 모두 나빠졌다(재현율만 0.411→0.421). 긴 서술은 그 절에만
+# 있는 문구라 오히려 변별력이 크다. "핵심 포인트를 이어 붙이면 벡터가 흐려진다"는
+# section_search_query의 경고는 **한 질의에 다 이어 붙일 때**의 이야기이고, 독립 질의로
+# 던지면 반대로 작동한다.
+MAX_KEYPOINT_CHARS = 300
 
 
 def hit_to_chunk(hit: SearchHit) -> RetrievedChunk:
@@ -173,6 +185,26 @@ def _analyst_queries(section: SectionPlan, topic: str | None, catalog: dict | No
     return out
 
 
+# 핵심 포인트 앞머리의 번호표("(1-3-1)", "①") — 검색에 값이 없고 키워드 토큰만 늘린다.
+# 보수적으로 괄호로 닫힌 짧은 번호 묶음과 원문자만 걷는다("2026년" 같은 본문은 안 건드린다).
+_LEADING_MARKER_RE = re.compile(r"^(?:\(\s*\d[^)]{0,12}\)|[①-⑳])\s*")
+
+
+def _keypoint_query(title: str, point: str) -> str | None:
+    """핵심 포인트 하나 → 질의. 절 맥락을 앞에 붙이고 길이를 캡한다.
+
+    핵심 포인트만 단독으로 던지면 '관련 법률' 같은 일반어가 주제를 벗어나므로 절
+    맥락을 붙이고, 길면 잘라 dense 질의 벡터가 흐려지지 않게 한다.
+    """
+    text = " ".join((point or "").split())
+    text = _LEADING_MARKER_RE.sub("", text).strip()
+    if not text:
+        return None
+    if text in title:
+        return None  # 절 제목이 이미 담은 말이면 같은 질의가 하나 더 생길 뿐이다
+    return f"{title} {text[:MAX_KEYPOINT_CHARS]}".strip()
+
+
 def section_query_set(
     section: SectionPlan, topic: str | None = None, catalog: dict | None = None
 ) -> list[str]:
@@ -193,12 +225,9 @@ def section_query_set(
     queries = [base]
     title = _with_chapter(section)
     for point in section.key_points[:MAX_KEYPOINT_QUERIES]:
-        text = " ".join((point or "").split())
-        if not text:
-            continue
-        # 핵심 포인트만 단독으로 던지면 '관련 법률' 같은 일반어가 주제를 벗어난다 —
-        # 절 맥락을 앞에 붙여 묶되 짧게 유지한다.
-        queries.append(f"{title} {text}" if text not in title else title)
+        q = _keypoint_query(title, point)
+        if q:
+            queries.append(q)
     queries.extend(_analyst_queries(section, topic, catalog))
 
     seen: set[str] = set()
