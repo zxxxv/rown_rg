@@ -36,7 +36,7 @@ import {
   useSectionEvidence,
 } from "@/api/sections";
 import type { ChapterNode, SectionCitation, SectionNode, SectionStatus } from "@/api/types";
-import { useVerifyReport } from "@/api/verify";
+import { useVerifyReport, verifyKeys } from "@/api/verify";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
@@ -136,7 +136,16 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   }, [qaPayload, selectedId]);
 
   // 선택된 절의 PM 경고만 본문 위에 인라인 표시 - 고칠 대상 옆에 고칠 이유를 둔다.
-  const verifyQuery = useVerifyReport(projectId);
+  const verifyQuery = useVerifyReport(projectId, true, isGenerating);
+  // 완료 전이 순간에 한 번 더 - 생성 중 폴링(4초)의 마지막 회차와 pm_verify 저장
+  // 사이의 레이스를 닫는다. 전이 후엔 폴링이 꺼지므로 이게 없으면 그 창에 쓰인
+  // 경고는 새로고침 전까지 안 보인다.
+  const verifyQc = useQueryClient();
+  useEffect(() => {
+    if (projectStatus === "completed" || projectStatus === "archived") {
+      void verifyQc.invalidateQueries({ queryKey: verifyKeys.report(projectId) });
+    }
+  }, [projectStatus, projectId, verifyQc]);
   const selectedRef = useMemo(() => {
     if (!selectedId) return null;
     for (const [ci, ch] of tree.entries()) {

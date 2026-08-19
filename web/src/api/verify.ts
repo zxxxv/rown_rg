@@ -31,14 +31,17 @@ export async function getVerifyReport(projectId: string): Promise<VerifyFinding[
   return VerifyReportSchema.parse(data);
 }
 
-export function useVerifyReport(projectId: string, enabled = true) {
+export function useVerifyReport(projectId: string, enabled = true, generating = false) {
   const running = useVerifyStatus(projectId, enabled).data?.running ?? false;
   return useQuery({
     queryKey: verifyKeys.report(projectId),
     queryFn: () => getVerifyReport(projectId),
     enabled: Boolean(projectId) && enabled,
-    // 재검증이 도는 동안만 따라간다 - 끝나면 스스로 멈춘다.
-    refetchInterval: running ? 4000 : false,
+    // 두 창을 따라간다: ①수동 재검증(running) ②첫 생성(generating). ②가 없으면
+    // 완주 전에 열어 둔 화면이 빈 배열을 한 번 받고 멈춰, 조립 직후 pm_verify가
+    // 쓴 경고가 새로고침 전엔 안 보였다(2026-08-20 3차 런에서 사용자 발견 - 89건이
+    // DB에 있는데 화면은 0건). 끝나면 스스로 멈추는 건 그대로다.
+    refetchInterval: running || generating ? 4000 : false,
   });
 }
 
