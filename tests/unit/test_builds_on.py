@@ -127,14 +127,22 @@ class TestAssignLevels:
         assert levels["4.5"] == 1
         assert not any("순환" in w for w in warns)
 
+    def test_cross_chapter_chain_fits_in_three_levels(self):
+        """장 간 전달 부활(8/20)의 형태 - 1.1 → 4.1(비교 기준점) → 4.5(장 종합)."""
+        plan = [_plan("1.1"), _plan("4.1", ["1.1"]), _plan("4.2"), _plan("4.5", ["4.*"])]
+        levels, warns = assign_levels(plan)
+        assert levels["1.1"] == 0 and levels["4.1"] == 1 and levels["4.5"] == 2
+        assert warns == []
+
     def test_depth_cap_demotes(self):
         plan = [
             _plan("1.1"),
             _plan("1.2", ["1.1"]),
-            _plan("1.3", ["1.2"]),  # 레벨 2 → 캡(2)에 걸려 1로 강등
+            _plan("1.3", ["1.2"]),
+            _plan("1.4", ["1.3"]),  # 레벨 3 → 캡(3)에 걸려 마지막 레벨로 강등
         ]
         levels, warns = assign_levels(plan)
-        assert levels["1.3"] == MAX_DEPTH - 1
+        assert levels["1.4"] == MAX_DEPTH - 1
         assert any("깊이" in w for w in warns)
 
     def test_cycle_cut_with_warning(self):
