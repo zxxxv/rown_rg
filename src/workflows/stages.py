@@ -330,8 +330,19 @@ def _chapter_groups(state: ProjectState) -> list[tuple[int, str, list[str]]]:
 _PDF_PAGE_LIMIT_SIGNAL = "maximum of 100 pdf pages"
 
 
+# 서버 도구 루프가 쌓아 올린 대화가 모델 입력 상한을 넘겼을 때의 신호. pause_turn
+# 재전송은 직전 턴까지를 통째로 다시 보내므로 회수한 페이지 본문이 계속 누적된다 —
+# base64 PDF는 재전송에서 걷어내지만(adapters/anthropic._scrub_base64_sources) HTML
+# 본문 텍스트는 그대로 쌓인다. 2026-08-19 스모크 실측: 1,136,960 토큰 > 200,000.
+_CONTEXT_OVERFLOW_SIGNAL = "prompt is too long"
+
+
 def _is_pdf_page_limit_error(exc: Exception) -> bool:
     return _PDF_PAGE_LIMIT_SIGNAL in str(exc).lower()
+
+
+def _is_context_overflow_error(exc: Exception) -> bool:
+    return _CONTEXT_OVERFLOW_SIGNAL in str(exc).lower()
 
 
 async def _collect_chapter(
@@ -341,10 +352,19 @@ async def _collect_chapter(
     project_id: UUID,
     chapter: int,
 ) -> ResearchResult:
-    """챕터 1개 수집 — PDF 100페이지 400이면 회수 횟수를 1로 줄여 1회 재시도.
+    """챕터 1개 수집 — 회수(web_fetch)가 원인인 400이면 회수 횟수를 1로 줄여 1회 재시도.
 
-    재시도가 없으면 큰 PDF 하나가 챕터를 통째로 0건으로 만든다(2026-08-06 실측:
-    12콜 중 6콜 전멸 → 자료 6건). 재시도는 1회로 캡해 무한성을 유지한다.
+    두 가지가 같은 처방을 쓴다:
+    - PDF 100페이지 400: 재시도가 없으면 큰 PDF 하나가 챕터를 통째로 0건으로 만든다
+      (2026-08-06 실측: 12콜 중 6콜 전멸 → 자료 6건).
+    - 입력 상한 초과: 회수한 페이지 본문이 pause_turn 재전송에 누적돼 터진다
+      (2026-08-19 스모크: 1,136,960 > 200,000 토큰으로 1장이 통째로 실패, 자료 2건).
+
+    재호출은 요청을 처음부터 새로 만들므로 누적분이 사라지고, 회수를 1회로 줄여
+    다시 쌓이지 않게 한다. 재시도는 1회로 캡해 무한성을 유지한다.
+
+    회수 횟수 자체를 낮추는 처방은 이미 실패했다 — 2로 조였더니 HTML 회수가 목 졸려
+    자료가 18건에서 9건으로 반토막 났다(config.research_max_fetch_uses 주석).
     """
     service = _research_service_factory()
     try:
@@ -356,12 +376,14 @@ async def _collect_chapter(
             max_tokens=settings.research_max_tokens,
         )
     except LLMClientError as exc:
-        if not _is_pdf_page_limit_error(exc):
+        overflow = _is_context_overflow_error(exc)
+        if not (_is_pdf_page_limit_error(exc) or overflow):
             raise
         logger.warning(
-            "research.pdf_page_limit_retry",
+            "research.fetch_limit_retry",
             project_id=str(project_id),
             chapter=chapter,
+            reason="context_overflow" if overflow else "pdf_page_limit",
             fetch_uses=settings.research_max_fetch_uses,
         )
         return await service.collect(
