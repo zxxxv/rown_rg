@@ -429,12 +429,22 @@ class TestPdfParserFallback:
             assert lonely_line not in result.markdown, f"단독 페이지 번호 '{n}' 남음"
 
     async def test_cache_hit_on_second_parse(self, tmp_path: Path):
+        """pymupdf 캐시본은 docling을 다시 시도할 수 없는 조건에서만 적중한다.
+
+        v3부터 pymupdf 결과는 "그때 docling이 안 됐다"의 기록이라, 지금 docling이
+        가능하면 캐시를 무시하고 재파싱한다. 여기서는 large 버킷(medium 상한 0)으로
+        docling 자격 자체를 없애 캐시 적중을 확인한다 - 재시도 동작 자체는
+        test_pdf_parser_remote.py의 캐시 판정 테스트가 검증한다.
+        """
+        from src.clients.parser import PdfParser
+
         pdf = tmp_path / "cache.pdf"
         _make_pdf(pdf, pages=2)
-        parser = self._make_force_fallback_parser(tmp_path)
+        parser = PdfParser(cache=ParseCache(root=tmp_path / "cache"), medium_pdf_max_bytes=0)
 
         first = await parser.parse(pdf)
         assert first.cached is False
+        assert first.parser_name == "pymupdf"
         second = await parser.parse(pdf)
         assert second.cached is True
         # 캐시 적중 시 메타데이터가 동일해야 함

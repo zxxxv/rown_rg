@@ -54,6 +54,7 @@ class TextParser(ParserClient):
         char_count, table_count, heading_count = _measure_markdown(markdown)
         result = ParseResult(
             source_path=path,
+            parser_name="text",
             markdown=markdown,
             metadata=ParseMetadata(
                 page_count=None,

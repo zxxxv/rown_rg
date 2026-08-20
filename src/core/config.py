@@ -250,6 +250,27 @@ class Settings(BaseSettings):
     # 안전하지만, 사용자 결정은 "GPU 우선·CPU 폴백 유지"라 기본은 local이다.
     embedding_remote_fallback: str = "local"
 
+    # 원격 GPU 파싱(docling) — url이 비면 로컬 docling(기본). 동기는 속도보다 품질이다:
+    # 앱 서버에서 docling이 메모리 부족으로 죽으면 pymupdf로 **조용히** 떨어져 표
+    # 구조가 사라진다(2026-08-20 실사고: 13건 중 9건). 전용 GPU 박스로 옮기면 그
+    # 폴백 계급 자체가 없어진다.
+    parser_remote_url: str = ""
+    parser_remote_token: str = ""
+    # 파싱은 건당 수 분이다(12.5MB/368p가 GPU에서 234초 실측). read 타임아웃이 곧
+    # 총 예산이다 - 서버 데드라인(570초)보다 길어야 깔끔한 504를 받는다.
+    parser_remote_timeout_s: float = 600.0
+    parser_remote_connect_timeout_s: float = 5.0
+    # 리랭커(60초)보다 훨씬 길다 - 실패 1회의 비용이 최대 600초라, 죽은 서비스에
+    # 문서마다 10분씩 버리면 업로드 대기열이 통째로 굳는다.
+    parser_remote_cooldown_s: float = 300.0
+    # 이 크기 미만만 원격으로 보낸다. 25MB인 이유: 17MB 표 밀집 PDF가 GPU에서도
+    # 15분을 넘긴 실측이 있다 - 더 큰 파일은 600초를 태우고 실패할 공산이 크다.
+    # 운영 실측(13~25MB 구간 파싱 시간) 후 올린다. 초과분은 기존처럼 pymupdf.
+    parser_remote_max_bytes: int = 25 * 1024 * 1024
+    # local = 앱 서버 로컬 docling(품질 동일·느림·메모리 위험은 색인 직렬화로 완화)
+    # pymupdf = 로컬 docling 생략(앱 서버를 줄인 배포용 - 표 품질 손해는 이제 기록됨)
+    parser_remote_fallback: str = "local"
+
     # 자료 라이브러리 — 업로드 파일 저장 위치
     library_dir: str = "./data/library"
 

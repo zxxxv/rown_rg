@@ -97,6 +97,7 @@ class HwpxParser(ParserClient):
 
         result = ParseResult(
             source_path=path,
+            parser_name="hwpx",
             markdown=markdown,
             metadata=ParseMetadata(
                 page_count=None,

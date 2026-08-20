@@ -1,6 +1,7 @@
-"""PDF 어댑터 — docling 1차, pymupdf4llm 폴백.
+"""PDF 어댑터 — 원격 GPU docling → 로컬 docling → pymupdf4llm 사슬.
 
-docling import는 무거워 호출 시점까지 지연.
+docling import는 무거워 호출 시점까지 지연. 원격 클라이언트(remote.py)도
+지연 import다 - 원격을 안 쓰는 배포에서 httpx 경로를 끌어올 이유가 없다.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from src.clients.parser.base import (
     _strip_page_numbers,
     strip_replacement_chars,
 )
+from src.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
@@ -220,8 +222,13 @@ class PdfParser(ParserClient):
         medium_pdf_max_bytes: int | None = None,
         small_pdf_timeout_s: float | None = None,
         medium_pdf_timeout_s: float | None = None,
+        remote_enabled: bool = True,
     ) -> None:
         self.cache = cache or ParseCache()
+        # 원격 GPU 파싱 사용 여부. pdf_fetch(웹 수집 PDF)가 False로 끈다 - 신뢰할 수
+        # 없는 인터넷 파일을 GPU 박스로 보내지 않기 위한 명시적 옵트아웃이다.
+        # True여도 settings.parser_remote_url이 비어 있으면 원격 경로는 없다.
+        self._remote_enabled = remote_enabled
         # 인스턴스 오버라이드는 단위 테스트에서 timeout=0.001로 강제 폴백 경로를 자극하기 위함.
         self._small_pdf_max_bytes = (
             small_pdf_max_bytes if small_pdf_max_bytes is not None else self.SMALL_PDF_MAX_BYTES
@@ -244,17 +251,26 @@ class PdfParser(ParserClient):
         if not path.exists():
             raise FileNotFoundError(path)
 
+        size_bytes = path.stat().st_size
         cached = self.cache.load(path)
         if cached is not None:
-            logger.info("pdf.parse.cache_hit", path=str(path))
-            return cached
-
-        size_bytes = path.stat().st_size
+            # pymupdf 폴백 결과는 "그때 docling이 안 됐다"의 기록이지 이 파일의
+            # 최선이 아니다. 지금이라면 docling(원격이든 로컬이든)을 시도할 수 있는
+            # 상황이면 캐시를 무시하고 재파싱해 같은 키에 덮어쓴다 - 안 그러면
+            # 저품질본이 영원히 재사용된다(실사고의 두 번째 층). docling 결과와
+            # v3 이전(파서 미기록) 캐시본은 그대로 신뢰한다.
+            if cached.parser_name == "pymupdf" and self._docling_would_attempt(size_bytes):
+                logger.info(
+                    "pdf.parse.cache_bypass_pymupdf", path=str(path), size_bytes=size_bytes
+                )
+            else:
+                logger.info("pdf.parse.cache_hit", path=str(path))
+                return cached
         logger.info("pdf.parse.started", path=str(path), size_bytes=size_bytes)
         t0 = time.perf_counter()
 
         warnings: list[str] = []
-        markdown, page_count, image_count = await self._convert(
+        markdown, page_count, image_count, parser_name = await self._convert(
             path=path,
             size_bytes=size_bytes,
             warnings=warnings,
@@ -262,13 +278,10 @@ class PdfParser(ParserClient):
         markdown = self._postprocess(markdown)
         char_count, table_count, heading_count = _measure_markdown(markdown)
 
-        # pymupdf4llm 경로(fallback + skip_too_large)는 표가 평문으로 추출됨 — 호출자가
-        # 메타 신뢰도를 낮출 수 있도록 명시. 두 시그널을 한 곳에 모아 분기 누락을 방지.
-        used_pymupdf = any(
-            w.startswith("fallback_to_pymupdf4llm") or w == "skip_docling_too_large"
-            for w in warnings
-        )
-        if used_pymupdf:
+        # pymupdf4llm 경로는 표가 평문으로 추출됨 — 호출자가 메타 신뢰도를 낮출 수
+        # 있도록 명시. 판정은 parser_name 하나로 모은다(경고 문자열 패턴 매칭은
+        # skip_docling_unavailable을 빠뜨렸던 전력이 있다).
+        if parser_name == "pymupdf":
             warnings.append("fallback_tables_as_plaintext")
 
         result = ParseResult(
@@ -283,6 +296,7 @@ class PdfParser(ParserClient):
                 header_footer_removed=False,
             ),
             warnings=warnings,
+            parser_name=parser_name,
         )
         self.cache.store(path, result)
 
@@ -294,9 +308,35 @@ class PdfParser(ParserClient):
             char_count=char_count,
             table_count=table_count,
             image_count=image_count,
+            parser=parser_name,
             warnings=warnings,
         )
         return result
+
+    def _remote_eligible(self, size_bytes: int) -> bool:
+        """이 파일을 지금 원격 GPU로 보낼 수 있는가 — 쿨다운·크기 상한 포함."""
+        if not self._remote_enabled or not settings.parser_remote_url:
+            return False
+        from src.clients.parser.remote import get_remote_docling
+
+        return get_remote_docling().available(size_bytes)
+
+    def _local_docling_eligible(self, size_bytes: int) -> bool:
+        """로컬 docling을 시도할 수 있는가 — 폴백 정책·크기·프로세스 가용성."""
+        return (
+            settings.parser_remote_fallback == "local"
+            and size_bytes < self._medium_pdf_max_bytes
+            and _DOCLING_UNAVAILABLE is None
+        )
+
+    def _docling_would_attempt(self, size_bytes: int) -> bool:
+        """캐시 우회 판단 — pymupdf 캐시본을 지금 다시 파싱할 가치가 있는가.
+
+        원격 적격성에는 쿨다운이 포함되므로 죽은 GPU 박스를 상대로 재색인마다
+        재파싱을 반복하는 폭풍은 나지 않는다. 크기 상한 변경(13MB→25MB)으로
+        "그때는 컸던" 파일이 적격해지는 경우도 이 판정이 자연히 잡는다.
+        """
+        return self._remote_eligible(size_bytes) or self._local_docling_eligible(size_bytes)
 
     async def _convert(
         self,
@@ -304,57 +344,75 @@ class PdfParser(ParserClient):
         path: Path,
         size_bytes: int,
         warnings: list[str],
-    ) -> tuple[str, int | None, int]:
-        """Dispatch by file size; fall back to pymupdf4llm on docling timeout/error.
+    ) -> tuple[str, int | None, int, str]:
+        """변환 사슬: 원격 docling → 로컬 docling → pymupdf4llm.
 
         Returns:
-            ``(markdown, page_count, image_count)``. Mutates ``warnings``
-            in place to record skip/fallback reasons.
+            ``(markdown, page_count, image_count, parser_name)``. 어느 단계로
+            끝났는지가 parser_name이고, 내려온 이유는 ``warnings``에 남는다 -
+            이 둘이 색인 메타로 영속돼 "조용한 폴백"이 화면에 보이게 된다.
         """
-        if size_bytes >= self._medium_pdf_max_bytes:
-            # 5MB+ PDF는 docling이 사실상 끝나지 않음 — 시도 비용도 아끼고 바로 pymupdf로.
+        # 1단계: 원격 GPU docling. 실패해도 여기서 끝나지 않는다 - 품질 사슬의
+        # 다음 단계로 내려갈 뿐이고, 그 사실이 경고로 남는다.
+        if self._remote_eligible(size_bytes):
+            from src.clients.parser.remote import get_remote_docling
+
+            try:
+                markdown, page_count, image_count = await get_remote_docling().convert(path)
+                return markdown, page_count, image_count, "docling-remote"
+            except Exception as e:
+                import httpx
+
+                busy = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
+                warnings.append(
+                    "remote_parse_busy" if busy else f"remote_parse_failed:{type(e).__name__}"
+                )
+
+        # 2단계: 로컬 docling(기존 경로 그대로 - 데몬 스레드 + 타임아웃).
+        if self._local_docling_eligible(size_bytes):
+            timeout_s = (
+                self._small_pdf_timeout_s
+                if size_bytes < self._small_pdf_max_bytes
+                else self._medium_pdf_timeout_s
+            )
+            try:
+                markdown, page_count, image_count = await self._docling_with_daemon_timeout(
+                    path, timeout_s
+                )
+                return markdown, page_count, image_count, "docling-local"
+            except TimeoutError:
+                logger.warning(
+                    "pdf.parse.docling_timeout",
+                    path=str(path),
+                    timeout_sec=timeout_s,
+                    size_bytes=size_bytes,
+                )
+                warnings.append("fallback_to_pymupdf4llm:timeout")
+            except Exception as e:
+                logger.warning(
+                    "pdf.parse.docling_error",
+                    path=str(path),
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                )
+                if _is_environment_failure(e):
+                    # 환경 문제는 다음 파일에서도 똑같이 난다 — 프로세스 내내 건너뛴다.
+                    _disable_docling(type(e).__name__, str(e))
+                warnings.append(f"fallback_to_pymupdf4llm:{type(e).__name__}")
+        elif size_bytes >= self._medium_pdf_max_bytes:
             logger.info(
                 "pdf.parse.docling.skip_too_large",
                 path=str(path),
                 size_bytes=size_bytes,
-                reason="docling impractical for 5MB+ PDFs",
             )
             warnings.append("skip_docling_too_large")
-            return _pymupdf_convert(path)
-
-        if _DOCLING_UNAVAILABLE is not None:
+        elif _DOCLING_UNAVAILABLE is not None:
             warnings.append(f"skip_docling_unavailable:{_DOCLING_UNAVAILABLE}")
-            return _pymupdf_convert(path)
 
-        timeout_s = (
-            self._small_pdf_timeout_s
-            if size_bytes < self._small_pdf_max_bytes
-            else self._medium_pdf_timeout_s
-        )
-
-        try:
-            return await self._docling_with_daemon_timeout(path, timeout_s)
-        except TimeoutError:
-            logger.warning(
-                "pdf.parse.docling_timeout",
-                path=str(path),
-                timeout_sec=timeout_s,
-                size_bytes=size_bytes,
-            )
-            warnings.append("fallback_to_pymupdf4llm:timeout")
-            return _pymupdf_convert(path)
-        except Exception as e:
-            logger.warning(
-                "pdf.parse.docling_error",
-                path=str(path),
-                error_type=type(e).__name__,
-                error_message=str(e),
-            )
-            if _is_environment_failure(e):
-                # 환경 문제는 다음 파일에서도 똑같이 난다 — 프로세스 내내 건너뛴다.
-                _disable_docling(type(e).__name__, str(e))
-            warnings.append(f"fallback_to_pymupdf4llm:{type(e).__name__}")
-            return _pymupdf_convert(path)
+        # 3단계: pymupdf. 이제 이 단계는 조용하지 않다 - parser_name과 경고가
+        # 색인 메타로 남아 화면에서 보인다.
+        markdown, page_count, image_count = _pymupdf_convert(path)
+        return markdown, page_count, image_count, "pymupdf"
 
     async def _docling_with_daemon_timeout(
         self,

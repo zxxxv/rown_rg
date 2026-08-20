@@ -43,7 +43,7 @@ dependencies = [
     "matplotlib>=3.9",
     "optimum[exporters,onnxruntime]>=2.0",
     "onnx>=1.17",
-    "docling>=1.0",
+    "docling==2.105.0",  # 파서 출력 재현성 - gpu_service/requirements.txt와 같은 핀
     "pymupdf>=1.24",
     "pymupdf4llm>=0.0.17",
     "langchain-experimental>=0.4.1",

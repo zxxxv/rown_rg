@@ -49,6 +49,11 @@ class ParseResult(BaseModel):
     metadata: ParseMetadata = Field(default_factory=ParseMetadata)
     warnings: list[str] = Field(default_factory=list)
     cached: bool = False
+    # 어느 파서가 이 결과를 만들었나 - "docling-remote" | "docling-local" | "pymupdf" |
+    # "hwpx" 등. 두 군데서 읽는다: (1) 색인이 project_sources 메타로 영속해 화면에
+    # 저품질 파싱을 드러내고, (2) 캐시 히트 시 pymupdf 결과면 재파싱 자격을 판단한다.
+    # 빈 문자열은 v3 이전 캐시본(발생하면 그대로 신뢰).
+    parser_name: str = ""
 
 
 class ParserError(Exception):
@@ -176,7 +181,11 @@ class ParseCache:
     # 파서 출력 규약이 바뀌면 올린다 - 키에 섞여 옛 캐시를 자연 무효화한다.
     # v2: PDF 페이지 경계 마커 도입(2026-08-14). 마커 없는 캐시본이 재색인에 쓰이면
     # 그 자료만 페이지 없이 색인돼 "왜 이 자료만 점프가 안 되나"가 된다.
-    _VERSION = "v2"
+    # v3: parser_name 기록(2026-08-20). pymupdf 폴백 결과가 캐시에 박혀 docling이
+    # 가능해진 뒤에도 저품질본이 영원히 재사용되던 구멍을 막는 전제 - 정체가
+    # 없는 v2 캐시본으로는 재파싱 자격을 판단할 수 없다. hwpx/docx 캐시가 함께
+    # 1회 무효화되는 비용은 감수한다(클래스 공유 상수).
+    _VERSION = "v3"
 
     @staticmethod
     def _key(file_path: Path) -> str:

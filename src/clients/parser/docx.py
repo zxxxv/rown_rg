@@ -87,6 +87,7 @@ class DocxParser(ParserClient):
 
         result = ParseResult(
             source_path=path,
+            parser_name="docx",
             markdown=markdown,
             metadata=ParseMetadata(
                 page_count=None,
