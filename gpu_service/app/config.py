@@ -42,6 +42,9 @@ class ServiceConfig:
     # 앱은 이 값을 호스트 RAM에서 고르지만 여기서는 그러면 안 된다 - 이 컨테이너의
     # 제약은 시스템 RAM이 아니라 VRAM이다.
     embed_max_chars: int = 0
+    # 대기 중 + 실행 중 요청 수 상한. 넘으면 429로 즉시 돌려보낸다 - 클라이언트가
+    # 60초 타임아웃을 버리는 대신 바로 CPU 폴백으로 가게 한다. 0이면 상한 없음.
+    max_in_flight: int = 8
 
     @classmethod
     def from_env(cls) -> ServiceConfig:
@@ -66,6 +69,7 @@ class ServiceConfig:
             # 없는 모델을 찾다가 컨테이너가 죽는 것을 막는다.
             embed_model_dir=os.environ.get("GPU_EMBED_MODEL_DIR", "").strip(),
             embed_max_chars=_int("GPU_EMBED_MAX_CHARS", 0),
+            max_in_flight=_int("GPU_MAX_IN_FLIGHT", 8),
         )
 
     def validate(self) -> None:

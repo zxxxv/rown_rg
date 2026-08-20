@@ -12,7 +12,6 @@ AWS 앱의 ``RemoteRerankerClient``가 이 서비스를 부른다. 계약은 둘
 
 from __future__ import annotations
 
-import asyncio
 import hmac
 import logging
 import time
@@ -20,22 +19,24 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from gpu_service.app.config import ServiceConfig
 from gpu_service.app.embed_service import EmbedService
+from gpu_service.app.gpu_queue import GpuBusy, GpuQueue
 from gpu_service.app.service import RerankService
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("gpu_service")
 
 config = ServiceConfig.from_env()
-# 리랭커와 임베딩이 **같은 카드**를 쓴다. 세마포어를 하나만 두고 둘이 나눠 갖는다 -
+# 리랭커와 임베딩이 **같은 카드**를 쓴다. 큐를 하나만 두고 둘이 나눠 갖는다 -
 # 각자 하나씩 가지면 리허설과 색인이 겹쳐 돌아 VRAM이 두 배로 필요해진다.
-_gpu_semaphore = asyncio.Semaphore(config.max_concurrency)
-service = RerankService(config, semaphore=_gpu_semaphore)
-embed_service = EmbedService(config, semaphore=_gpu_semaphore) if config.embed_enabled else None
+_gpu_queue = GpuQueue(config.max_concurrency, config.max_in_flight)
+service = RerankService(config, queue=_gpu_queue)
+embed_service = EmbedService(config, queue=_gpu_queue) if config.embed_enabled else None
 
 
 class RerankRequest(BaseModel):
@@ -84,7 +85,56 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
+
+def gpu_metrics() -> dict[str, object] | None:
+    """현재 GPU 상태 — 읽을 수 없으면 None.
+
+    Netdata 같은 GPU 대시보드가 있어도 이걸 /health에 두는 이유: **조용한 CPU 폴백은
+    GPU 지표만으로는 안 잡힌다.** onnxruntime 버전이 어긋나 CPU로 떨어지면 GPU는
+    그냥 한가한 걸로 보인다(2026-08-20 실제로 겪었다). ``on_gpu``와 사용률이 한
+    화면에 같이 있어야 "안 쓰는 중"과 "못 쓰는 중"이 구분된다.
+    """
+    try:
+        import pynvml
+    except ImportError:
+        return None
+    try:
+        pynvml.nvmlInit()
+        try:
+            h = pynvml.nvmlDeviceGetHandleByIndex(0)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+            util = pynvml.nvmlDeviceGetUtilizationRates(h)
+            name = pynvml.nvmlDeviceGetName(h)
+            return {
+                "name": name.decode() if isinstance(name, bytes) else name,
+                "utilization_pct": util.gpu,
+                "memory_used_mib": mem.used // 1024 // 1024,
+                "memory_total_mib": mem.total // 1024 // 1024,
+                "temperature_c": pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU),
+                "power_w": round(pynvml.nvmlDeviceGetPowerUsage(h) / 1000, 1),
+            }
+        finally:
+            pynvml.nvmlShutdown()
+    except Exception:  # noqa: BLE001 — 지표를 못 읽는다고 /health가 죽으면 안 된다
+        return None
+
+
 app = FastAPI(title="rown GPU reranker", lifespan=lifespan)
+
+
+@app.exception_handler(GpuBusy)
+async def _gpu_busy_handler(request: Request, exc: GpuBusy) -> JSONResponse:
+    """큐가 가득 차면 429 — 기다리게 하지 않고 즉시 돌려보낸다.
+
+    클라이언트가 60초 타임아웃을 꼬박 버리는 대신 바로 CPU 폴백으로 가게 하는 것이
+    목적이다. Retry-After는 처리 중인 요청이 대략 끝날 시간을 알려 준다.
+    """
+    logger.warning("gpu busy: in_flight=%d limit=%d", exc.in_flight, exc.limit)
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={"detail": str(exc), "in_flight": exc.in_flight, "limit": exc.limit},
+        headers={"Retry-After": "5"},
+    )
 
 
 @app.get("/health")
@@ -99,6 +149,10 @@ async def health() -> dict[str, object]:
         "batch_size": config.batch_size,
         "max_length": config.max_length,
         "warmup_ms": service.warmup_ms,
+        # 큐가 밀리는지 밖에서 보이게 한다. rejected_total이 0이 아니면 용량을
+        # 다시 봐야 한다는 신호다.
+        "queue": _gpu_queue.snapshot(),
+        "gpu": gpu_metrics(),
         # 임베딩은 선택적으로 켜진다. 꺼져 있으면 embed=None이라 호출부가
         # "느린데 왜지"를 여기서 바로 구분할 수 있다.
         "embed": None

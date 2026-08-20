@@ -90,13 +90,20 @@ class RemoteRerankerClient(RerankerClient):
         try:
             scores = await self._request_scores(query, passages)
         except Exception as exc:  # noqa: BLE001 — 어떤 실패든 폴백으로 살린다
-            self._disabled_until = time.monotonic() + self._cooldown_s
+            # 429(GPU 큐 포화)는 **쿨다운을 걸지 않는다**. 서비스가 죽은 게 아니라
+            # 잠깐 밀린 것이라, 60초를 통째로 건너뛰면 순간적인 몰림 때문에 그 뒤의
+            # 한가한 1분까지 CPU로 처리하게 된다. 429는 이미 즉시 돌아오므로
+            # 매번 시도해도 비용이 거의 없다.
+            busy = isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
+            if not busy:
+                self._disabled_until = time.monotonic() + self._cooldown_s
             logger.warning(
                 "reranker.remote.failed",
                 error=type(exc).__name__,
                 detail=str(exc)[:200],
                 n_passages=len(passages),
-                cooldown_s=self._cooldown_s,
+                cooldown_s=0 if busy else self._cooldown_s,
+                busy=busy,
                 elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
             )
             return await self._fallback_scores(query, passages, reason="error")

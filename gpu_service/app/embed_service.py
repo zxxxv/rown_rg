@@ -12,6 +12,7 @@ import logging
 import time
 
 from gpu_service.app.config import ServiceConfig
+from gpu_service.app.gpu_queue import GpuQueue
 from src.clients.onnx_cross_encoder import CPU_PROVIDERS, CUDA_PROVIDERS
 from src.clients.onnx_text_embedder import (
     DIMENSION,
@@ -66,11 +67,11 @@ def resolve_max_chars(configured: int) -> int:
 
 class EmbedService:
     def __init__(
-        self, config: ServiceConfig, *, semaphore: asyncio.Semaphore | None = None
+        self, config: ServiceConfig, *, queue: GpuQueue | None = None
     ) -> None:
         self._config = config
         self._embedder: OnnxTextEmbedder | None = None
-        self._semaphore = semaphore or asyncio.Semaphore(config.max_concurrency)
+        self._queue = queue or GpuQueue(config.max_concurrency, config.max_in_flight)
         self._warmup_ms: float | None = None
         self._max_chars: int = 0
 
@@ -136,7 +137,7 @@ class EmbedService:
         # 4,000자 hard cap은 여기서도 건다. 앱이 이미 걸고 보내지만, 이 엔드포인트를
         # 다른 호출자가 쓰면 토크나이저가 통째 입력을 메모리에 올려 터진다.
         clamped = clamp_input(texts)
-        async with self._semaphore:
+        async with self._queue.acquire():
             # 전방계산은 스레드로. 안 그러면 이벤트 루프가 멈춰 /health조차 응답이 없다.
             vectors = await asyncio.to_thread(embedder.embed, clamped)
         return vectors.tolist()
