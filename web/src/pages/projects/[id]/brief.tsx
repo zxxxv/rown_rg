@@ -113,7 +113,7 @@ function ReviewSummary({
     },
     {
       id: "check-noagent",
-      label: "담당 없는 절",
+      label: "에이전트 없는 절",
       count: brief.warnings.sections_without_analyst.length,
       danger: true,
     },
