@@ -118,14 +118,19 @@ class RemoteDoclingConverter:
         attempt = 0
         while True:
             with path.open("rb") as fh:
-                response = await client.post(
-                    f"{self._base_url}/v1/parse",
-                    files={"file": (path.name, fh, "application/pdf")},
-                    # 페이지 마커 계약은 앱 소유다 - 서버는 이 문자열을 그대로
-                    # export_to_markdown에 넣는다. 상수를 서버에 복제하면 언젠가
-                    # 어긋나 페이지 점프가 조용히 깨진다.
-                    data={"page_break_placeholder": PAGE_BREAK_MARKER},
-                    headers=headers,
+                # 코루틴 차원 상한 - 터널이 끊은 소켓의 대기가 깨어나지 못한 채
+                # 영구 정지한 실사례(2026-08-21 v6, 임베딩 경로) 대응. 3원격 동일 벨트.
+                response = await asyncio.wait_for(
+                    client.post(
+                        f"{self._base_url}/v1/parse",
+                        files={"file": (path.name, fh, "application/pdf")},
+                        # 페이지 마커 계약은 앱 소유다 - 서버는 이 문자열을 그대로
+                        # export_to_markdown에 넣는다. 상수를 서버에 복제하면 언젠가
+                        # 어긋나 페이지 점프가 조용히 깨진다.
+                        data={"page_break_placeholder": PAGE_BREAK_MARKER},
+                        headers=headers,
+                    ),
+                    timeout=self._timeout_s + 60,
                 )
             if response.status_code == 429 and attempt < self._BUSY_RETRIES:
                 attempt += 1

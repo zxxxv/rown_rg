@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -122,10 +123,15 @@ class RemoteRerankerClient(RerankerClient):
     async def _request_scores(self, query: str, passages: list[str]) -> list[float]:
         client = self._ensure_client()
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
-        response = await client.post(
-            f"{self._base_url}/v1/rerank",
-            json={"query": query, "passages": passages},
-            headers=headers,
+        # 코루틴 차원 상한 - 터널이 끊은 소켓의 대기가 깨어나지 못한 채 영구
+        # 정지한 실사례(2026-08-21 v6, 임베딩 경로) 대응. 임베딩·파서와 동일 벨트.
+        response = await asyncio.wait_for(
+            client.post(
+                f"{self._base_url}/v1/rerank",
+                json={"query": query, "passages": passages},
+                headers=headers,
+            ),
+            timeout=self._timeout_s + 30,
         )
         response.raise_for_status()
         payload = response.json()

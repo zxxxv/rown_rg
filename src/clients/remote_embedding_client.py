@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import threading
 import time
@@ -186,10 +187,17 @@ class RemoteEmbeddingClient(EmbeddingClient):
         out: list[list[float]] = []
         for start in range(0, len(texts), self._chunk):
             batch = texts[start : start + self._chunk]
-            response = await client.post(
-                f"{self._base_url}/v1/embed",
-                json={"texts": batch},
-                headers=headers,
+            # 벨트+서스펜더: httpx 타임아웃이 있어도, 터널이 연결을 끊은 소켓의
+            # 대기가 깨어나지 못한 채 코루틴이 영구 정지한 실사례가 있다
+            # (2026-08-21 v6 색인 25분 정지, Windows Proactor). 코루틴 차원의
+            # 상한을 한 겹 더 - 초과는 실패로 올라가 쿨다운+폴백을 탄다.
+            response = await asyncio.wait_for(
+                client.post(
+                    f"{self._base_url}/v1/embed",
+                    json={"texts": batch},
+                    headers=headers,
+                ),
+                timeout=self._timeout_s + 30,
             )
             response.raise_for_status()
             out.extend(self._validate(response.json(), len(batch)))
