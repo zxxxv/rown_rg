@@ -1726,7 +1726,9 @@ async def assemble(state: ProjectState) -> ProjectState:
     try:
         from src.services.export.glossary import build_glossary, persist_glossary
 
-        glossary = await build_glossary(state)
+        # 코루틴 상한 벨트 - LLM 호출이 응답 없이 영구 정지한 실사례(2026-08-21 v6
+        # 조립, 11분 무응답·비용 동결). 용어집은 장식이라 초과는 건너뛰는 게 정답.
+        glossary = await asyncio.wait_for(build_glossary(state), timeout=240)
         await persist_glossary(state.project_id, glossary)
     except Exception:
         # 설명은 장식 — 실패해도 풀네임만으로 렌더를 계속한다.
