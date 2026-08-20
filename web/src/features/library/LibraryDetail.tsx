@@ -122,7 +122,7 @@ export function LibraryDetail({ node, path, onNavigate, onRequestUpload }: Libra
       {node.type === "folder" ? (
         <FolderBody node={node} onNavigate={onNavigate} onRequestUpload={onRequestUpload} />
       ) : node.prompt ? (
-        <PromptBody prompt={node.prompt} />
+        <PromptBody prompt={node.prompt} meta={node.file_meta} />
       ) : (
         <FileBody node={node} />
       )}

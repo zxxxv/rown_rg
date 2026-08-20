@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { type PresetChapterDetail, useImportSharedPreset, usePresetDetail } from "@/api/presets";
 import { useImportSharedPrompt, usePersonalPrompt, useSystemPrompt } from "@/api/prompts";
-import type { PromptRef } from "@/api/types";
+import type { LibraryFileMeta, PromptRef } from "@/api/types";
 import { Button } from "@/components/ui/button";
 
 const KIND_LABEL: Record<PromptRef["kind"], string> = {
@@ -14,10 +14,46 @@ const KIND_LABEL: Record<PromptRef["kind"], string> = {
 };
 
 /** 프롬프트 파일 노드 상세 - 라이브러리에선 읽기 전용. 편집·추가는 '프롬프트 관리' 페이지에서. */
-export function PromptBody({ prompt }: { prompt: PromptRef }) {
-  if (prompt.scope === "shared") return <SharedPromptView prompt={prompt} />;
-  if (prompt.scope === "system") return <SystemPromptView prompt={prompt} />;
-  return <PersonalPromptView prompt={prompt} />;
+export function PromptBody({ prompt, meta }: { prompt: PromptRef; meta?: LibraryFileMeta }) {
+  return (
+    <div className="flex flex-col gap-4">
+      {prompt.scope === "shared" ? (
+        <SharedPromptView prompt={prompt} />
+      ) : prompt.scope === "system" ? (
+        <SystemPromptView prompt={prompt} />
+      ) : (
+        <PersonalPromptView prompt={prompt} />
+      )}
+      {meta ? <PromptMeta meta={meta} /> : null}
+    </div>
+  );
+}
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(0)} KB`;
+  return `${bytes} B`;
+}
+
+/** 프롬프트 노드도 파일과 같은 메타(소유자·수정일·크기)를 보여준다 - 남의 자산을
+ * 열람할 때 누가 언제 만든 것인지가 본문만큼 중요하다(2026-08-20 지적). */
+function PromptMeta({ meta }: { meta: LibraryFileMeta }) {
+  return (
+    <dl className="grid grid-cols-2 gap-3 rounded border border-border bg-bg p-3 text-sm sm:grid-cols-3">
+      <div className="flex flex-col gap-0.5">
+        <dt className="text-xs text-fg-tertiary">소유자</dt>
+        <dd className="font-mono text-sm text-fg">{meta.registered_by}</dd>
+      </div>
+      <div className="flex flex-col gap-0.5">
+        <dt className="text-xs text-fg-tertiary">수정일</dt>
+        <dd className="font-mono text-sm text-fg">{meta.registered_at.slice(0, 10)}</dd>
+      </div>
+      <div className="flex flex-col gap-0.5">
+        <dt className="text-xs text-fg-tertiary">크기</dt>
+        <dd className="font-mono text-sm text-fg">{formatSize(meta.size_bytes)}</dd>
+      </div>
+    </dl>
+  );
 }
 
 /** '내 것으로 가져오기' - 복제해야 고쳐 쓸 수 있다. 복사본은 비공개로 만들어지고,
@@ -140,7 +176,12 @@ function SystemPromptView({ prompt }: { prompt: PromptRef }) {
 
 function PersonalPromptView({ prompt }: { prompt: PromptRef }) {
   const navigate = useNavigate();
-  const query = usePersonalPrompt(prompt.ref);
+  // 목차 프리셋은 프롬프트 본문이 아니라 목차 골격이다 - /prompts/personal에 물으면
+  // 404가 나 "불러오지 못했습니다"만 보였다(2026-08-20 지적: 내 것·미러 둘 다).
+  // 프리셋 상세 API("u:<uuid>")로 골격을 그대로 보여준다.
+  const isPreset = prompt.kind === "preset";
+  const query = usePersonalPrompt(prompt.ref, !isPreset);
+  const presetQuery = usePresetDetail(isPreset ? `u:${prompt.ref}` : null);
   const loaded = query.data;
   // 관리자 '사용자별 자료' 미러는 editable=false로 내려온다 - 남의 자산은 열람 전용이라
   // "내 프롬프트" 문구와 편집 버튼이 거짓말이 된다.
@@ -150,15 +191,23 @@ function PersonalPromptView({ prompt }: { prompt: PromptRef }) {
       <div className="flex items-center gap-2 rounded border border-dashed border-border bg-bg-secondary px-3 py-2 text-xs text-fg-tertiary">
         <Wand2 className="h-3.5 w-3.5" aria-hidden />
         {readOnly ? "" : "내 "}
-        {loaded ? KIND_LABEL[loaded.kind] : "프롬프트"}
+        {isPreset ? KIND_LABEL.preset : loaded ? KIND_LABEL[loaded.kind] : "프롬프트"}
         {loaded?.base_ref ? ` · 시스템 "${loaded.base_ref}" 덮어쓰기` : loaded ? " · 신규" : ""}
         {readOnly ? " - 열람 전용(소유자만 편집)" : " - 편집·삭제는 프롬프트 관리 페이지에서."}
       </div>
-      <PromptText
-        loading={query.isLoading}
-        error={query.isError || !loaded}
-        content={loaded?.content}
-      />
+      {isPreset ? (
+        <PresetOutlinePreview
+          loading={presetQuery.isLoading}
+          error={presetQuery.isError}
+          chapters={presetQuery.data?.chapters}
+        />
+      ) : (
+        <PromptText
+          loading={query.isLoading}
+          error={query.isError || !loaded}
+          content={loaded?.content}
+        />
+      )}
       {readOnly ? null : (
         <Button variant="outline" size="sm" className="w-fit" onClick={() => navigate("/prompts")}>
           프롬프트 관리에서 편집
