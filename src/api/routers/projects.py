@@ -570,10 +570,16 @@ async def create_project(
             message="목차가 필요합니다 - 생성 화면에서 장·절을 구성하세요 (config.outline)",
             code="OUTLINE_REQUIRED",
         )
+    # 서버 내부 키 제거 — 다른 프로젝트 config를 복사해 생성하는 경로(검증런 복제
+    # 스크립트)가 _section_plan까지 실어 보내면, 새 프로젝트가 **남의 절 id로** 돈다.
+    # sections.id는 전역 PK라 원본 프로젝트의 행이 살아 있는 동안 이 프로젝트의 절
+    # 저장이 전부 duplicate key로 실패한다(2026-08-21 6차 검증런 실사고 — 증분 20회
+    # + 조립 전량 저장까지 침묵 실패, 본문 유실). 계획·스냅샷은 서버가 만든다.
+    stripped_config = {k: v for k, v in data.config.items() if k not in _INTERNAL_CONFIG_KEYS}
     # fresh_ids: sections.id는 전역 PK라, 남의 config를 복사해 만들어도 절 id가
     # 겹치면 안 된다 — 생성은 항상 새 정체성으로 시작한다.
     normalized_config = _validate_outline_config(
-        data.config, await _known_analyst_names(session, current_user.id), fresh_ids=True
+        stripped_config, await _known_analyst_names(session, current_user.id), fresh_ids=True
     )
     await _validate_rules_config(session, current_user.id, normalized_config)
     # 한도 사전 검사 — 초과 상태면 생성 자체를 429로 막는다(만들어놓고 실행 못 하는 orphan·
