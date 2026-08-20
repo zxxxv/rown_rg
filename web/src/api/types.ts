@@ -90,8 +90,11 @@ export type Outline = z.infer<typeof OutlineSchema>;
 // 기본 동작, 웹 검색은 항상 실행, 라이브러리·업로드는 자료 검토 단계의 행위로 붙는다.
 // zod 객체는 미지 키를 버리므로 옛 프로젝트 config에 남은 키들은 무해하다.
 export const ProjectConfigSchema = z.object({
-  // 백엔드 계약: 프리셋은 카탈로그 id/name 문자열 또는 null(자유 주제)
-  preset: z.string().nullable(),
+  // 백엔드 계약: 프리셋은 카탈로그 id/name 문자열 또는 null(자유 주제).
+  // catch(null): API로 만든 프로젝트 config에 이 키가 없을 수 있다 - required면
+  // 파싱 실패가 config.catch(DEFAULT)로 번져 화면 전체가 기본값으로 둔갑한다
+  // (2026-08-20 실사고: premium 런이 "표준"으로 표시). builds_on catch와 같은 규약.
+  preset: z.string().nullable().catch(null),
   // 생성 화면에서 직접 확정한 목차 - 백엔드 필수(OUTLINE_REQUIRED), 편집 중엔 미완성일 수 있어 optional.
   outline: OutlineSchema.optional(),
   // 품질 모드 - 역할별로 모델이 갈린다(백엔드 stages._models_for):

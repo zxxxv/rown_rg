@@ -871,11 +871,27 @@ async def get_progress(
             ).where(TokenUsage.project_id == project.id)
         )
     ).one()
+    percent = _STAGE_PERCENT.get(project.status, 0)
+    if project.status == ProjectStage.WRITING.value:
+        # 작성이 벽시계의 몸통(~35분)인데 단계 고정값이면 내내 60%에 멈춰 보인다
+        # (2026-08-20 지적). 완성 절 수로 60→85 구간을 보간한다 — 분모는 확정 목차,
+        # 분자는 본문이 실제로 채워진 절(draft_store가 절 완료 즉시 영속).
+        outline = (project.config or {}).get("outline") or {}
+        total = sum(len(ch.get("sections") or []) for ch in outline.get("chapters") or [])
+        if total > 0:
+            done = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(Section)
+                    .where(Section.project_id == project.id, func.length(Section.content) > 100)
+                )
+            ).scalar_one()
+            percent = 60 + round(min(int(done), total) / total * 25)
     return ProgressResponse(
         project_id=str(project.id),
         status=ProjectStage(project.status),
         pending_gate=await get_pending_gate(session, project.id),
-        percent=_STAGE_PERCENT.get(project.status, 0),
+        percent=percent,
         tokens_used=int(usage[0]),
         cost_usd=float(usage[1]),
         # 첫 LLM 콜이 끝나기 전(token_usage 0행)엔 상태 전이 시각(updated_at)으로 폴백 —
