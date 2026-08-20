@@ -40,6 +40,9 @@ _gpu_queue = GpuQueue(config.max_concurrency, config.max_wait_s)
 service = RerankService(config, queue=_gpu_queue)
 embed_service = EmbedService(config, queue=_gpu_queue) if config.embed_enabled else None
 _history = StatsHistory()
+# 누적 카운터(completed/rejected)의 기준점. "누적 N회"는 이 시각부터라는 것을
+# 대시보드가 보여줄 수 있어야 한 달 뒤에도 숫자가 해석된다.
+_started_at = time.time()
 
 
 async def _sample_loop() -> None:
@@ -168,6 +171,7 @@ async def _gpu_busy_handler(request: Request, exc: GpuBusy) -> JSONResponse:
 async def health() -> dict[str, object]:
     return {
         "status": "ok" if service.ready else "loading",
+        "started_at": int(_started_at),
         "ready": service.ready,
         "device_requested": config.device,
         "on_gpu": service.on_gpu,
