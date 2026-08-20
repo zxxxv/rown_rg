@@ -1,10 +1,21 @@
+import sys
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from src.core.config import settings
 
-async_engine = create_async_engine(settings.database_url, echo=not settings.is_production)
+_engine_kwargs: dict[str, Any] = {"echo": not settings.is_production}
+if "pytest" in sys.modules:
+    # 테스트에서는 커넥션 풀을 끈다. pytest-asyncio가 테스트마다 새 이벤트 루프를
+    # 만드는데, 풀에 남은 asyncpg 커넥션은 처음 쓴 루프에 묶여 있어 다른 테스트가
+    # 재사용하는 순간 죽는다(Windows proactor '_proactor=None' — 순서 의존 플레이크의
+    # 실체, 2026-08-20 실측: 단독 통과·배치 실패가 이것). NullPool은 체크아웃마다
+    # 새로 열어 루프 간 공유가 원천 차단된다. 운영 경로는 그대로 기본 풀.
+    _engine_kwargs["poolclass"] = NullPool
+async_engine = create_async_engine(settings.database_url, **_engine_kwargs)
 async_session_maker = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
 
