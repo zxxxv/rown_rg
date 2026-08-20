@@ -242,3 +242,30 @@ class TestSnapshot:
             return q.last_wait_ms
 
         assert asyncio.run(scenario()) > 0
+
+
+class TestInitialTaskSeed:
+    """파싱 레인은 건당 수십 초다 — 4.5초 시드로 시작하면 첫 몇 건의 예상 대기가
+    크게 과소평가돼 어차피 타임아웃 날 요청을 통과시킨다."""
+
+    def test_initial_task_s_seeds_estimate(self):
+        q = GpuQueue(concurrency=1, max_wait_s=300.0, initial_task_s=60.0)
+        assert q.snapshot()["avg_task_s"] == 60.0
+
+    def test_default_seed_unchanged(self):
+        q = GpuQueue(concurrency=1, max_wait_s=55.0)
+        assert q.snapshot()["avg_task_s"] == 4.5
+
+    def test_two_queues_have_independent_ewma(self):
+        """리랭킹 큐와 파싱 레인의 통계가 섞이면 리랭킹이 허위 429를 맞는다."""
+
+        async def scenario():
+            fast = GpuQueue(concurrency=1, max_wait_s=55.0)
+            slow = GpuQueue(concurrency=1, max_wait_s=300.0, initial_task_s=60.0)
+            async with fast.acquire():
+                pass
+            return fast.snapshot()["avg_task_s"], slow.snapshot()["avg_task_s"]
+
+        fast_avg, slow_avg = asyncio.run(scenario())
+        assert fast_avg < 60.0
+        assert slow_avg == 60.0

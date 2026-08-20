@@ -48,6 +48,23 @@ class ServiceConfig:
     # 타임아웃을 맞을 요청뿐이다 - 그때는 기다린 시간까지 더해져 더 느려진다.
     # 기본 55초는 클라이언트 타임아웃 60초에서 여유 5초를 뺀 값이다. 0이면 거절 없음.
     max_wait_s: float = 55.0
+    # --- PDF 파싱(docling) --------------------------------------------------
+    # 비우면 /v1/parse를 띄우지 않는다(embed_model_dir 게이트 미러). 이미지는
+    # HF_HUB_OFFLINE=1이라 docling이 가중치를 받으러 나가면 즉시 죽는다 — 미리
+    # 내려받은 모델 폴더(artifacts_path)를 반드시 지정해야 한다.
+    parse_artifacts_dir: str = ""
+    # cpu도 지원한다: VRAM이 빠듯하면 GPU 박스의 CPU로 돌려도 원래 사고(앱 서버
+    # 메모리 폭주로 pymupdf 폴백)는 해결된다. 느려질 뿐이다.
+    parse_device: str = "cuda"
+    # 서버 쪽 수신 상한. 클라이언트 상한(25MB)보다 넉넉히 둔다 - 클라이언트 설정을
+    # 올릴 때 서버 재배포가 같이 필요하지 않게.
+    parse_max_bytes: int = 60 * 1024 * 1024
+    # 서버 쪽 변환 데드라인. 클라이언트 read 타임아웃(600초)보다 짧아야 클라이언트가
+    # 연결이 끊기는 대신 깔끔한 504를 받는다. 데드라인이 없으면 클라이언트가 포기한
+    # 뒤에도 변환이 레인을 계속 점유한다(좀비).
+    parse_timeout_s: float = 570.0
+    # 파싱 레인의 예상 대기 거절 상한. 파싱은 배경 작업이라 리랭킹(55초)보다 관대하다.
+    parse_max_wait_s: float = 300.0
 
     @classmethod
     def from_env(cls) -> ServiceConfig:
@@ -73,6 +90,11 @@ class ServiceConfig:
             embed_model_dir=os.environ.get("GPU_EMBED_MODEL_DIR", "").strip(),
             embed_max_chars=_int("GPU_EMBED_MAX_CHARS", 0),
             max_wait_s=float(os.environ.get("GPU_MAX_WAIT_S", "").strip() or 55.0),
+            parse_artifacts_dir=os.environ.get("GPU_PARSE_ARTIFACTS_DIR", "").strip(),
+            parse_device=os.environ.get("GPU_PARSE_DEVICE", "cuda").strip().lower(),
+            parse_max_bytes=_int("GPU_PARSE_MAX_BYTES", 60 * 1024 * 1024),
+            parse_timeout_s=float(os.environ.get("GPU_PARSE_TIMEOUT_S", "").strip() or 570.0),
+            parse_max_wait_s=float(os.environ.get("GPU_PARSE_MAX_WAIT_S", "").strip() or 300.0),
         )
 
     def validate(self) -> None:
@@ -84,8 +106,15 @@ class ServiceConfig:
             )
         if self.device not in {"cuda", "cpu"}:
             raise RuntimeError(f"GPU_DEVICE는 cuda 또는 cpu여야 합니다: {self.device}")
+        if self.parse_device not in {"cuda", "cpu"}:
+            raise RuntimeError(f"GPU_PARSE_DEVICE는 cuda 또는 cpu여야 합니다: {self.parse_device}")
 
     @property
     def embed_enabled(self) -> bool:
         """임베딩 모델 경로가 지정됐을 때만 /v1/embed를 연다."""
         return bool(self.embed_model_dir)
+
+    @property
+    def parse_enabled(self) -> bool:
+        """docling 모델 폴더가 지정됐을 때만 /v1/parse를 연다."""
+        return bool(self.parse_artifacts_dir)

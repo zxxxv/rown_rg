@@ -15,18 +15,21 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import tempfile
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from gpu_service.app.config import ServiceConfig
 from gpu_service.app.embed_service import EmbedService
 from gpu_service.app.gpu_queue import GpuBusy, GpuQueue
+from gpu_service.app.parse_service import ClientGone, ParseService, ParseTimeout
 from gpu_service.app.service import RerankService
 from gpu_service.app.stats_history import SAMPLE_INTERVAL_S, StatsHistory
 
@@ -39,6 +42,12 @@ config = ServiceConfig.from_env()
 _gpu_queue = GpuQueue(config.max_concurrency, config.max_wait_s)
 service = RerankService(config, queue=_gpu_queue)
 embed_service = EmbedService(config, queue=_gpu_queue) if config.embed_enabled else None
+# 파싱은 **전용 레인**이다. 공유 큐에 넣으면 수 분짜리 변환이 1.5초 리랭킹을 막고
+# EWMA를 오염시켜(200초 1건에 avg 4.5→44초) 리랭킹이 허위 429를 맞는다.
+# initial_task_s=60: 파싱 규모에 맞는 시드 - 4.5초에서 시작하면 첫 몇 건의
+# 예상 대기가 크게 과소평가된다.
+_parse_lane = GpuQueue(1, config.parse_max_wait_s, initial_task_s=60.0)
+parse_service = ParseService(config, lane=_parse_lane) if config.parse_enabled else None
 _history = StatsHistory()
 # 누적 카운터(completed/rejected)의 기준점. "누적 N회"는 이 시각부터라는 것을
 # 대시보드가 보여줄 수 있어야 한 달 뒤에도 숫자가 해석된다.
@@ -98,6 +107,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service.load()
     if embed_service is not None:
         embed_service.load()
+    if parse_service is not None:
+        parse_service.load()
     sampler = asyncio.create_task(_sample_loop())
     try:
         yield
@@ -196,6 +207,17 @@ async def health() -> dict[str, object]:
             "max_chars_per_batch": embed_service.max_chars,
             "warmup_ms": embed_service.warmup_ms,
         },
+        # 파싱도 선택적이다. lane 스냅샷을 따로 내는 이유: 파싱은 전용 레인이라
+        # 위의 queue(리랭킹·임베딩)와 통계가 섞이지 않는다.
+        "parse": None
+        if parse_service is None
+        else {
+            "ready": parse_service.ready,
+            "device": parse_service.device,
+            "docling_version": parse_service.docling_version,
+            "artifacts_dir": config.parse_artifacts_dir,
+            "lane": _parse_lane.snapshot(),
+        },
     }
 
 
@@ -240,6 +262,17 @@ async def metrics() -> str:
             f'rown_gpu_service_ready{{service="embed"}} {int(embed_service.ready)}',
             f'rown_gpu_service_on_gpu{{service="embed"}} {int(embed_service.on_gpu)}',
         ]
+    if parse_service is not None:
+        p = _parse_lane.snapshot()
+        lines += [
+            f'rown_gpu_service_ready{{service="parse"}} {int(parse_service.ready)}',
+            "# TYPE rown_gpu_parse_in_flight gauge",
+            f"rown_gpu_parse_in_flight {p['in_flight']}",
+            "# TYPE rown_gpu_parse_completed_total counter",
+            f"rown_gpu_parse_completed_total {p['completed_total']}",
+            "# TYPE rown_gpu_parse_rejected_total counter",
+            f"rown_gpu_parse_rejected_total {p['rejected_total']}",
+        ]
     return "\n".join(lines) + "\n"
 
 
@@ -269,6 +302,66 @@ async def rerank(
         device="cuda" if service.on_gpu else "cpu",
         elapsed_ms=elapsed_ms,
     )
+
+
+@app.post("/v1/parse")
+async def parse(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    page_break_placeholder: Annotated[str, Form()] = "",
+    _: Annotated[None, Depends(require_token)] = None,
+) -> dict[str, object]:
+    """PDF → 마크다운. 페이지 마커 문자열은 클라이언트가 보낸다(계약은 앱 소유).
+
+    multipart인 이유: 50MB PDF를 base64 JSON으로 싸면 67MB가 된다. 스트리밍으로
+    임시 파일에 쓰면서 바이트를 직접 세는 이유: Content-Length는 클라이언트
+    주장일 뿐이라 믿으면 상한을 우회당한다.
+    """
+    if parse_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="파싱이 꺼져 있습니다 (GPU_PARSE_ARTIFACTS_DIR 미설정)",
+        )
+    if not parse_service.ready:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="parse converter not loaded"
+        )
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    tmp_path = Path(tmp.name)
+    received = 0
+    try:
+        try:
+            while chunk := await file.read(1024 * 1024):
+                received += len(chunk)
+                if received > config.parse_max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail=f"파일이 상한 {config.parse_max_bytes}바이트를 넘습니다",
+                    )
+                tmp.write(chunk)
+        finally:
+            tmp.close()
+        if received == 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="빈 파일")
+
+        try:
+            return await parse_service.parse(
+                tmp_path, page_break_placeholder, request.is_disconnected
+            )
+        except ParseTimeout as exc:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)
+            ) from exc
+        except ClientGone:
+            # 받을 사람이 없다 - 이 응답은 어차피 버려지므로 코드는 로그용이다.
+            logger.info("parse client gone: bytes=%d", received)
+            raise HTTPException(
+                status_code=status.HTTP_408_REQUEST_TIMEOUT, detail="client gone"
+            ) from None
+    finally:
+        with suppress(OSError):
+            tmp_path.unlink()
 
 
 @app.post("/v1/embed", response_model=EmbedResponse)

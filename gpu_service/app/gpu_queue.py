@@ -53,13 +53,18 @@ class GpuQueue:
     필요해진다. 하나를 공유해 한 번에 하나만 GPU에 올린다.
     """
 
-    def __init__(self, concurrency: int, max_wait_s: float) -> None:
+    def __init__(
+        self, concurrency: int, max_wait_s: float, initial_task_s: float = _INITIAL_TASK_S
+    ) -> None:
         self._sem = asyncio.Semaphore(concurrency)
         self._concurrency = max(1, concurrency)
         # 0이면 거절하지 않고 무조건 기다린다(절대 상한만 적용).
         self._max_wait_s = max_wait_s
         self._in_flight = 0
-        self._avg_task_s = _INITIAL_TASK_S
+        # initial_task_s: 이 큐가 다루는 작업의 규모에 맞춘 초기 추정치. 파싱 레인처럼
+        # 건당 수십 초짜리 큐가 4.5초에서 시작하면 첫 몇 건의 예상 대기가 크게
+        # 과소평가돼 어차피 타임아웃 날 요청을 통과시킨다.
+        self._avg_task_s = initial_task_s
         self._completed = 0
         self._last_wait_ms: float = 0.0
         self._rejected = 0
