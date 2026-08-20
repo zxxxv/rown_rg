@@ -10,6 +10,7 @@ from src.db.models.quota_setting import QuotaSettings
 from src.db.models.quota_setting_history import QuotaSettingsHistory
 from src.db.models.raptor_node import RaptorNode
 from src.db.models.refresh_token import RefreshToken
+from src.db.models.report_version import ReportVersion
 from src.db.models.review_point import ReviewPoint
 from src.db.models.section import Section
 from src.db.models.section_rehearsal import SectionRehearsal
@@ -33,6 +34,7 @@ __all__ = [
     "QuotaSettingsHistory",
     "RaptorNode",
     "RefreshToken",
+    "ReportVersion",
     "ReviewPoint",
     "Section",
     "SectionRehearsal",

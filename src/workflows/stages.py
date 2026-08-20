@@ -1695,6 +1695,14 @@ async def assemble(state: ProjectState) -> ProjectState:
         detail = result.detail or "선택된 초안 없음"
         emit_step(pid, "export", "통합·교정·HWPX 변환", "failed")
         raise IncompleteReportError(f"보고서를 완성할 수 없습니다 — {detail}")
+    # 버전 스냅샷 — 완성 게이트를 지난 본문이 곧 한 버전이다(reason=assemble).
+    # 같은 내용의 재조립은 지문이 걸러 새 버전을 만들지 않는다. 실패는 비치명.
+    try:
+        from src.services.sections.versions import snapshot_report_standalone
+
+        await snapshot_report_standalone(pid, reason="assemble")
+    except Exception:
+        logger.warning("assemble.version_snapshot_failed", project_id=str(pid), exc_info=True)
     if settings.pm_verify_enabled and drafts:
         emit_step(pid, "export", "PM 검증 리포트", "started")
         try:

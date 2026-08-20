@@ -255,6 +255,52 @@ class VerifyFindingResolve(BaseModel):
     resolved: bool
 
 
+class ReportVersionRead(BaseModel):
+    """보고서 버전 목록 항목 — 커밋 로그처럼 읽힌다(사유·시각·규모)."""
+
+    version_no: int
+    reason: str  # assemble | reopen | manual
+    created_at: datetime
+    n_sections: int
+    total_chars: int
+
+
+class VersionSection(BaseModel):
+    """버전 스냅샷 속 절 1개 — 저장 JSONB와 같은 모양(source_ids는 응답에서 제외)."""
+
+    section_id: str
+    chapter_number: int
+    section_number: int
+    chapter_title: str = ""
+    title: str
+    content: str
+
+
+class ReportVersionDetail(ReportVersionRead):
+    sections: list[VersionSection]
+
+
+class VersionDiffEntry(BaseModel):
+    """절 하나의 버전 간 판정 — 매칭은 절 안정 id(번호가 밀려도 오판 없음)."""
+
+    section_id: str
+    status: str  # added | removed | modified | unchanged
+    moved: bool = False
+    base: VersionSection | None = None
+    target: VersionSection | None = None
+
+
+class VersionDiffResponse(BaseModel):
+    base_version: int
+    # None = 현재 작업 사본(sections 테이블)과 비교
+    target_version: int | None = None
+    n_added: int
+    n_removed: int
+    n_modified: int
+    n_unchanged: int
+    entries: list[VersionDiffEntry]
+
+
 class ProjectRead(ProjectBase):
     model_config = ConfigDict(from_attributes=True)
 

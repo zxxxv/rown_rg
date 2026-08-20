@@ -32,12 +32,17 @@ from src.api.schemas.project import (
     PresetVisibilityUpdate,
     ProjectCreate,
     ProjectRead,
+    ReportVersionDetail,
+    ReportVersionRead,
     SourceIncludeUpdate,
     SourceItemRead,
     UserPresetRead,
     UserPresetUpsert,
     VerifyFindingRead,
     VerifyFindingResolve,
+    VersionDiffEntry,
+    VersionDiffResponse,
+    VersionSection,
 )
 from src.api.schemas.section import (
     ChapterNode,
@@ -1771,6 +1776,227 @@ async def decide_gate(
         project_id=str(project.id),
         status=ProjectStage.PLANNING if replanning else ProjectStage.RESEARCHING,
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 재개·버전 — report_versions(append-only 스냅샷)이 원천 (2026-08-21 설계).
+# 시차 작성: 완료 보고서를 다시 열어 자료를 보강하고 빈 절·새 절을 이어 쓴다.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@router.post("/{project_id}/reopen", response_model=ProjectRead)
+async def reopen_project(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> Project:
+    """완료된 보고서를 다시 연다 — 현재 완성본을 버전으로 얼리고 자료 단계로 되돌린다.
+
+    되돌리는 지점이 RESEARCHING인 이유: 다음 실행이 색인 단계부터 밟아
+    ① 새로 올린 자료의 잔여 색인(증분 — 이미 청크 있는 자료는 스킵)과
+    ② 검색 리허설(새 절·빈 절의 근거 충분성 판정, 공백이면 자료 게이트 재개방)을
+    거친 뒤 작성으로 간다. 작성은 본문 있는 절을 건너뛰므로(증분 재개) 완성된
+    장은 다시 쓰지 않는다. 상태 전이만 하고 실행은 하지 않는다 — 사람이 자료를
+    올리고 목차를 고친 뒤 직접 시작한다(재개 즉시 실행하면 보강할 틈이 없다).
+
+    completed_at 해제는 상태 전이 리스너가 처리한다(db/models/project.py).
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    if project.status != ProjectStage.COMPLETED.value:
+        raise ValidationError(
+            message="완료된 보고서만 다시 열 수 있습니다",
+            code="PROJECT_NOT_REOPENABLE",
+        )
+    from src.services.sections.versions import snapshot_report
+
+    # 재개 직전 보존 — 완료 후 수동 편집분까지 잡는 마지막 기회. 조립 직후 그대로면
+    # 내용 지문이 같아 새 버전은 생기지 않는다.
+    await snapshot_report(session, project.id, reason="reopen", created_by=current_user.id)
+    project.status = ProjectStage.RESEARCHING.value
+    await session.flush()
+    await session.refresh(project)
+    logger.info("project.reopened", project_id=str(project.id), user_id=str(current_user.id))
+    return project
+
+
+def _version_read(row: Any) -> ReportVersionRead:
+    sections = row.sections or []
+    return ReportVersionRead(
+        version_no=row.version_no,
+        reason=row.reason,
+        created_at=row.created_at,
+        n_sections=len(sections),
+        total_chars=sum(len(s.get("content") or "") for s in sections),
+    )
+
+
+@router.get("/{project_id}/versions", response_model=list[ReportVersionRead])
+async def list_report_versions(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> list[ReportVersionRead]:
+    """버전 히스토리 — 최신부터. 커밋 로그처럼 사유·시각·규모만 싣는다(본문은 상세로)."""
+    project = await _get_authorized_project(project_id, session, current_user)
+    from src.db.models.report_version import ReportVersion
+
+    rows = (
+        (
+            await session.execute(
+                select(ReportVersion)
+                .where(ReportVersion.project_id == project.id)
+                .order_by(ReportVersion.version_no.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [_version_read(r) for r in rows]
+
+
+async def _get_version(session: AsyncSession, project_id: UUID, version_no: int):
+    from src.db.models.report_version import ReportVersion
+
+    row = (
+        await session.execute(
+            select(ReportVersion).where(
+                ReportVersion.project_id == project_id,
+                ReportVersion.version_no == version_no,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise NotFoundError(message="해당 버전이 없습니다", code="VERSION_NOT_FOUND")
+    return row
+
+
+@router.get("/{project_id}/versions/diff", response_model=VersionDiffResponse)
+async def diff_report_versions(
+    project_id: UUID,
+    base: int,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    target: int | None = None,
+) -> VersionDiffResponse:
+    """버전 간 절 단위 비교 — target 생략 시 현재 작업 사본과 비교.
+
+    매칭은 절 안정 id(정체성 수술 2026-08-21) — 번호가 밀려도 '수정'과 '이동'을
+    오판하지 않는다. 문단 안 단어 색칠은 프론트 몫: 서버는 판정과 양쪽 본문만.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    from src.services.sections.versions import current_sections_snapshot, diff_sections
+
+    base_row = await _get_version(session, project.id, base)
+    if target is not None:
+        target_sections = (await _get_version(session, project.id, target)).sections or []
+    else:
+        target_sections = await current_sections_snapshot(session, project.id)
+    entries = diff_sections(base_row.sections or [], target_sections)
+    counts = {"added": 0, "removed": 0, "modified": 0, "unchanged": 0}
+    for e in entries:
+        counts[e["status"]] = counts.get(e["status"], 0) + 1
+    return VersionDiffResponse(
+        base_version=base,
+        target_version=target,
+        n_added=counts["added"],
+        n_removed=counts["removed"],
+        n_modified=counts["modified"],
+        n_unchanged=counts["unchanged"],
+        entries=[VersionDiffEntry.model_validate(e) for e in entries],
+    )
+
+
+@router.get("/{project_id}/versions/{version_no}", response_model=ReportVersionDetail)
+async def get_report_version(
+    project_id: UUID,
+    version_no: int,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> ReportVersionDetail:
+    """버전 상세 — 스냅샷 절 전량(읽기 전용 열람용)."""
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_version(session, project.id, version_no)
+    head = _version_read(row)
+    return ReportVersionDetail(
+        **head.model_dump(),
+        sections=[VersionSection.model_validate(s) for s in row.sections or []],
+    )
+
+
+@router.get("/{project_id}/versions/{version_no}/download")
+async def download_report_version(
+    project_id: UUID,
+    version_no: int,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> FileResponse:
+    """버전 스냅샷을 HWPX로 렌더해 다운로드 — 파일은 보관하지 않고 내용에서 재생한다.
+
+    버전 내용은 불변이라 렌더 결과를 버전별 폴더에 캐시한다(파일이 있으면 그대로
+    서빙 — 렌더러 버전이 바뀌면 파일명이 갈려 자연히 재렌더). 출처 최종장은 현재
+    채택 자료 목록으로 싣는다 — 재개 후 자료가 늘었으면 스냅샷 시점보다 넉넉한
+    목록이 붙는 근사이고, 본문 인용 번호는 스냅샷 시점 값 그대로다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_version(session, project.id, version_no)
+    out_dir = Path(settings.export_dir) / "_versions" / f"{project.id}.v{version_no}"
+    path = out_dir / export_filename(project.id)
+    filename = f"{project.title}.v{version_no}.hwpx"
+    if path.is_file():
+        return FileResponse(path, filename=filename, media_type="application/octet-stream")
+    pseudo_rows = [
+        Section(
+            id=UUID(str(s["section_id"])),
+            project_id=project.id,
+            chapter_number=int(s["chapter_number"]),
+            section_number=int(s["section_number"]),
+            chapter_title=str(s.get("chapter_title") or ""),
+            title=str(s.get("title") or ""),
+            level=2,
+            content=str(s.get("content") or ""),
+            source_ids=[],
+            meta={},
+            qa_status="passed",
+            status="completed",
+        )
+        for s in row.sections or []
+    ]
+    from src.services.export.report import export_report
+
+    owner = await session.get(User, project.owner_id)
+    state = _state_for_export(project, pseudo_rows, author=owner.name if owner else "")
+    src_rows = (
+        (
+            await session.execute(
+                select(ProjectSource)
+                .where(
+                    ProjectSource.project_id == project.id,
+                    ProjectSource.is_included.is_(True),
+                )
+                .order_by(ProjectSource.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    state = state.model_copy(
+        update={
+            "sources": [
+                SourceRef(
+                    id=r.id,
+                    source_type=SourceType(r.source_type),
+                    title=r.title or r.url or "(제목 없음)",
+                    url=r.url,
+                    reliability=r.reliability,
+                )
+                for r in src_rows
+            ]
+        }
+    )
+    path = await asyncio.to_thread(
+        export_report, state, output_dir=out_dir, glossary=project.glossary
+    )
+    return FileResponse(path, filename=filename, media_type="application/octet-stream")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
