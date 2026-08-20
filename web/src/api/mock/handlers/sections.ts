@@ -45,6 +45,29 @@ export const sectionsHandlers = [
     return HttpResponse.json({ data: content }, { status: 200 });
   }),
 
+  // GET /projects/{id}/sections/{sec}/evidence - 근거 추적(데모는 추적 불가 상태)
+  http.get(url("projects/:id/sections/:sec/evidence"), ({ params }) => {
+    return HttpResponse.json(
+      {
+        data: {
+          section_id: String(params.sec),
+          items: [],
+          claims: [],
+          aligned_count: 0,
+          weak_count: 0,
+          unmatched_count: 0,
+          pool_size: 0,
+          cited_count: 0,
+          unused_count: 0,
+          uncited_count: 0,
+          uncited_samples: [],
+          traceable: false,
+        },
+      },
+      { status: 200 },
+    );
+  }),
+
   http.patch(url("projects/:id/sections/:sec"), async ({ params, request }) => {
     const sectionId = String(params.sec);
     const title = findSectionTitle(sectionId);

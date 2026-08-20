@@ -225,6 +225,34 @@ export const projectsHandlers = [
     );
   }),
 
+  // GET /projects/{id}/verify-report/status - 재검증 진행 여부(데모는 항상 idle)
+  http.get(url("projects/:id/verify-report/status"), () => {
+    return HttpResponse.json({ data: { running: false } }, { status: 200 });
+  }),
+
+  // POST /projects/{id}/verify-report - 재검증 시작(데모는 즉시 수락만)
+  http.post(url("projects/:id/verify-report"), () => {
+    return HttpResponse.json({ data: { started: true } }, { status: 202 });
+  }),
+
+  // GET /projects/{id}/verify-coverage - 검사 커버리지(실계약 미러)
+  http.get(url("projects/:id/verify-coverage"), () => {
+    return HttpResponse.json(
+      {
+        data: {
+          n_sections: 35,
+          n_candidates: 412,
+          n_claims: 388,
+          claim_coverage: 0.94,
+          missed_numeric: 0,
+          llm_verify_enabled: true,
+          pm_verify_enabled: true,
+        },
+      },
+      { status: 200 },
+    );
+  }),
+
   // GET /projects/{id}/export - HWPX 파일(더미 blob)
   http.get(url("projects/:id/export"), ({ params }) => {
     const id = String(params.id);
