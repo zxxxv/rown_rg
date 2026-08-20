@@ -44,6 +44,15 @@ def get_embedding_client() -> EmbeddingClient:
     return _singleton
 
 
+def peek_embedding_client() -> EmbeddingClient | None:
+    """이미 만들어진 싱글턴만 돌려준다 — 없으면 None.
+
+    모니터가 쓴다. get_embedding_client()를 부르면 원격 미설정 배포에서 2GB
+    로컬 모델을 조회 목적만으로 로드하게 된다 — 관측이 상태를 바꾸면 안 된다.
+    """
+    return _singleton
+
+
 def reset_embedding_client() -> None:
     """싱글턴 해제 (테스트·재설정용)."""
     global _singleton

@@ -25,6 +25,7 @@ import structlog
 
 from src.clients.embedding_client import EmbeddingClient, EmbeddingResult
 from src.clients.onnx_text_embedder import DIMENSION, clamp_input
+from src.clients.remote_stats import RemoteCallStats
 from src.core.clock import now
 from src.core.config import settings
 
@@ -82,6 +83,7 @@ class RemoteEmbeddingClient(EmbeddingClient):
         # 색인은 한 번에 수천 번 호출한다. 쿨다운이 없으면 죽은 서비스를 상대로
         # 타임아웃을 수천 번 기다린다 - 리랭커(절당 1회)보다 훨씬 치명적이다.
         self._disabled_until: float = 0.0
+        self.stats = RemoteCallStats()
 
         logger.info(
             "embedding.remote.configured",
@@ -150,6 +152,7 @@ class RemoteEmbeddingClient(EmbeddingClient):
             busy = isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
             if not busy:
                 self._disabled_until = time.monotonic() + self._cooldown_s
+            self.stats.last_error = f"{type(exc).__name__}: {str(exc)[:200]}"
             logger.warning(
                 "embedding.remote.failed",
                 error=type(exc).__name__,
@@ -161,6 +164,7 @@ class RemoteEmbeddingClient(EmbeddingClient):
             )
             return await self._fallback_embed(clamped, reason="error")
 
+        self.stats.record_ok()
         logger.info(
             "embedding.remote.completed",
             n_texts=len(clamped),
@@ -230,7 +234,22 @@ class RemoteEmbeddingClient(EmbeddingClient):
     def _in_cooldown(self) -> bool:
         return time.monotonic() < self._disabled_until
 
+    def stats_snapshot(self) -> dict[str, Any]:
+        """모니터 라우터 노출용 — 폴백 누적과 쿨다운 여부.
+
+        ``fallback_items_total``이 핵심이다. local 폴백으로 만들어진 벡터 수 =
+        dtype이 다른 채 색인에 들어갔을 수 있는 벡터 수라, 0이 아니면 재색인을
+        검토해야 한다는 신호다.
+        """
+        return {
+            "mode": "remote",
+            "fallback_policy": self._fallback,
+            "base_url": self._base_url,
+            **self.stats.snapshot(disabled_until_monotonic=self._disabled_until),
+        }
+
     async def _fallback_embed(self, texts: list[str], *, reason: str) -> list[EmbeddingResult]:
+        self.stats.record_fallback(reason, items=len(texts))
         if self._fallback == FALLBACK_ERROR:
             logger.error(
                 "embedding.remote.fallback.error",

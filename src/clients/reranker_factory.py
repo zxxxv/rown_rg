@@ -36,6 +36,14 @@ def get_reranker_client() -> RerankerClient:
     return _singleton
 
 
+def peek_reranker_client() -> RerankerClient | None:
+    """이미 만들어진 싱글턴만 돌려준다 — 없으면 None (embedding_factory 미러).
+
+    모니터 조회가 무거운 로컬 모델 로드를 유발하지 않게 한다.
+    """
+    return _singleton
+
+
 def reset_reranker_client() -> None:
     """싱글턴 해제 (테스트·재설정용)."""
     global _singleton
