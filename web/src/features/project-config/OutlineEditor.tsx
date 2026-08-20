@@ -1,11 +1,10 @@
-import { ChevronDown, ChevronRight, ChevronUp, Copy, Plus, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ChevronDown, ChevronRight, ChevronUp, Copy, Plus, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAnalysts } from "@/api/analysts";
 import type { PresetChapterDetail, PresetDetail } from "@/api/presets";
 import type { Outline } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { PromptDialog } from "@/features/prompts/PromptDialog";
 import { cn } from "@/lib/utils";
 import { PromptPreviewDialog } from "./PromptPreviewDialog";
@@ -427,13 +426,10 @@ function SectionEditor({
           className="h-8 bg-bg text-sm"
         />
       </Field>
-      <Field hint="핵심 포인트 - 반드시 다룰 항목을 줄마다 하나씩(작성 체크리스트 겸 검색 어휘)">
-        <Textarea
-          value={section.key_points.join("\n")}
-          placeholder={"예: 관련 법률\n상위 계획 연계\n국고 지원 필요성"}
-          rows={2}
-          onChange={(e) => onChange({ ...section, key_points: e.target.value.split("\n") })}
-          className="bg-bg text-sm"
+      <Field hint="핵심 포인트 - 반드시 다룰 항목(작성 체크리스트 겸 검색 어휘, 항목마다 검색 1회)">
+        <KeyPointsEditor
+          points={section.key_points}
+          onChange={(key_points) => onChange({ ...section, key_points })}
         />
       </Field>
       <AnalystPicker
@@ -479,6 +475,126 @@ function SectionEditor({
 
 /** 입력 칸 하나 - "무엇을 적는 칸이고 어디에 쓰이는지"를 한 줄 문장으로 붙인다.
  * 빈 상자만 늘어놓으면 무엇을 적는 칸인지 알 수 없다(사용자 지적 2026-08-10). */
+/** 핵심 포인트 편집기 - 항목마다 입력칸 하나. "줄마다 하나"라는 텍스트 규약을 설명
+ * 없이 UI가 그대로 드러낸다(2026-08-20 사용자 제안). 데이터는 원래 string[]라 뷰만
+ * 바뀐다. Enter=아래에 새 항목, 여러 줄 붙여넣기=항목 자동 분리(일괄 입력 유지),
+ * 빈 항목에서 Backspace=그 항목 제거. */
+function KeyPointsEditor({
+  points,
+  onChange,
+}: {
+  points: string[];
+  onChange: (points: string[]) => void;
+}) {
+  // 항목 키는 순번이 아니라 로컬 id - 중간 삽입·삭제 시 뒤 항목 입력칸이 통째로
+  // 갈아끼워지지 않게 한다. 외부 리셋(프리셋 골격 교체)은 길이 재조정으로 흡수.
+  const idsRef = useRef<string[]>([]);
+  if (idsRef.current.length !== points.length) {
+    const ids = idsRef.current.slice(0, points.length);
+    while (ids.length < points.length) ids.push(draftId());
+    idsRef.current = ids;
+  }
+  const rowRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const focusIdx = useRef<number | null>(null);
+  useEffect(() => {
+    if (focusIdx.current !== null) {
+      rowRefs.current[focusIdx.current]?.focus();
+      focusIdx.current = null;
+    }
+  });
+
+  const setAt = (i: number, value: string) => {
+    if (value.includes("\n")) {
+      // 여러 줄 붙여넣기 - 줄마다 항목으로 분리(종전 textarea 워크플로 보존)
+      const lines = value.split("\n");
+      idsRef.current.splice(i, 1, ...lines.map(() => draftId()));
+      focusIdx.current = i + lines.length - 1;
+      onChange([...points.slice(0, i), ...lines, ...points.slice(i + 1)]);
+      return;
+    }
+    onChange(points.map((p, idx) => (idx === i ? value : p)));
+  };
+  const insertAfter = (i: number) => {
+    idsRef.current.splice(i + 1, 0, draftId());
+    focusIdx.current = i + 1;
+    onChange([...points.slice(0, i + 1), "", ...points.slice(i + 1)]);
+  };
+  const removeAt = (i: number) => {
+    idsRef.current.splice(i, 1);
+    focusIdx.current = i > 0 ? i - 1 : null;
+    onChange(points.filter((_, idx) => idx !== i));
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {points.map((point, i) => (
+        <div key={idsRef.current[i]} className="flex items-center gap-1.5">
+          <Input
+            ref={(el) => {
+              rowRefs.current[i] = el;
+            }}
+            value={point}
+            placeholder={i === 0 ? "예: 관련 법률" : undefined}
+            onChange={(e) => setAt(i, e.target.value)}
+            onPaste={(e) => {
+              // input은 붙여넣기 줄바꿈을 브라우저가 지워버린다 - 클립보드를 직접
+              // 읽어 항목으로 분리한다(빈 항목이면 대체, 아니면 아래에 삽입).
+              const text = e.clipboardData.getData("text");
+              if (!text.includes("\n")) return;
+              e.preventDefault();
+              const lines = text
+                .split("\n")
+                .map((l) => l.trim())
+                .filter(Boolean);
+              if (lines.length === 0) return;
+              if (point.trim() === "") {
+                setAt(i, lines.join("\n"));
+              } else {
+                idsRef.current.splice(i + 1, 0, ...lines.map(() => draftId()));
+                focusIdx.current = i + lines.length;
+                onChange([...points.slice(0, i + 1), ...lines, ...points.slice(i + 1)]);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                insertAfter(i);
+              } else if (e.key === "Backspace" && point === "") {
+                e.preventDefault();
+                removeAt(i);
+              }
+            }}
+            className="h-8 bg-bg text-sm"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-label="핵심 포인트 삭제"
+            onClick={() => removeAt(i)}
+            className="h-8 w-8 shrink-0 p-0 text-fg-tertiary hover:text-fg-danger"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+          </Button>
+        </div>
+      ))}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="w-fit"
+        onClick={() => {
+          focusIdx.current = points.length;
+          onChange([...points, ""]);
+        }}
+      >
+        <Plus className="mr-1 h-3.5 w-3.5" aria-hidden />
+        핵심 포인트 추가
+      </Button>
+    </div>
+  );
+}
+
 function Field({ hint, children }: { hint: string; children: React.ReactNode }) {
   // label이 아니라 div - 자식이 Input/Textarea 중 무엇이든 오고, 컨트롤 id를
   // 여기서 알 수 없다(연결 없는 label은 스크린리더에 더 나쁘다).
