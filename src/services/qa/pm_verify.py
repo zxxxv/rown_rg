@@ -248,6 +248,15 @@ async def run_pm_verify(state: ProjectState, *, model: str | None = None) -> int
         rows.extend(await ledger_join_findings(state.project_id))
     except Exception:
         logger.warning("pm_verify.ledger_failed", project_id=str(state.project_id), exc_info=True)
+    try:
+        # 하위 헤딩 번호 검사(결정적) — v5c-2 정독 실측 결함 계급(결번·고아·유령 참조·
+        # 제목 재출력). 형식 결함이라 warning으로만 표면화한다.
+        from src.services.qa.heading_check import heading_findings
+
+        pairs = [(plan, content) for _, secs in _group_by_chapter(state) for plan, content in secs]
+        rows.extend(heading_findings(pairs))
+    except Exception:
+        logger.warning("pm_verify.heading_failed", project_id=str(state.project_id), exc_info=True)
     await persist_findings(state.project_id, rows)
     n_critical = sum(1 for r in rows if r["severity"] == "critical")
     logger.info(

@@ -49,6 +49,7 @@ from src.services.qa.gate import (
     check_structure_complete,
     gate_candidates,
 )
+from src.services.qa.heading_check import strip_title_reprint
 from src.services.retrieval.section import SectionRetriever
 from src.workflows import cancel
 from src.workflows.events import emit_step
@@ -314,6 +315,12 @@ async def run_write_loop(
             return [d.model_copy(update={"split_fallback": fell_back}) for d in drafts]
 
         drafts = await _generate()
+        # 절 제목 재출력 정규화 — 작성기가 첫 헤딩으로 제목을 반복하는 습관(v5c-2 실측
+        # 19/20절). 조립·미리보기가 제목을 따로 다므로 여기서 결정적으로 걷어낸다.
+        drafts = [
+            d.model_copy(update={"content": strip_title_reprint(d.content, section.title)})
+            for d in drafts
+        ]
         if drafts and drafts[0].split_fallback:
             section_meta[section.section_id]["plan_failed"] = True
         min_chars = ctx.min_chars if ctx.min_chars is not None else DEFAULT_MIN_CHARS
