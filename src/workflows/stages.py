@@ -1732,7 +1732,9 @@ async def assemble(state: ProjectState) -> ProjectState:
             state = state.model_copy(update={"author": await _owner_name(state.user_id)})
         except Exception:
             logger.warning("assemble.author_load_failed", project_id=str(pid), exc_info=True)
-    path = _exporter(state, glossary)
+    # HWPX 조립은 순수 파이썬 CPU 작업(수 초) — 루프에서 돌리면 그동안 모든 요청·
+    # WebSocket이 멈춘다(코어 수 무관, 루프는 싱글 스레드).
+    path = await asyncio.to_thread(_exporter, state, glossary)
     logger.info("assemble.exported", project_id=str(state.project_id), path=str(path))
     emit_step(pid, "export", "통합·교정·HWPX 변환", "completed")
     # export/completed 가 프론트의 '완료' 신호(별도 done 프레임 없음).
