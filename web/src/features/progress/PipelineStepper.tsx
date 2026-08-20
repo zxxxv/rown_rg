@@ -1,4 +1,14 @@
-import { AlertTriangle, ArrowRight, Ban, Check, CircleDashed, Loader2 } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Ban,
+  Check,
+  ChevronDown,
+  CircleDashed,
+  Loader2,
+  RotateCcw,
+  User,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -20,14 +30,25 @@ import { cn } from "@/lib/utils";
 // 파이프라인 순서 - 사람 결정이 필요한 단계(자료 검토)는 도달 시 강조되고 해당
 // 작업 화면으로 가는 버튼이 붙는다. 본문 검토(QA) 게이트는 제거됨(2026-08-07) -
 // 작성이 끝나면 곧장 조립·검증되고, 검토·편집은 보고서 화면에서 사후에 한다.
+// human: 사람의 확인·결정이 필요한 단계(단계 지도 이식, 2026-08-21 사용자 요청).
+// loop: 이 단계에서 앞으로 되돌아갈 수 있음 - 회전 아이콘과 한 줄 설명이 붙는다.
 const STEPS = [
-  { key: "brief", label: "설계 검토 · 확정" },
+  { key: "brief", label: "설계 검토 · 확정", human: true },
   { key: "collect", label: "자료 수집" },
-  { key: "review", label: "자료 검토 · 확정" },
-  { key: "index", label: "색인 (임베딩)" },
+  { key: "review", label: "자료 검토 · 확정", human: true },
+  {
+    key: "index",
+    label: "색인 · 리허설",
+    loop: "자료가 부족한 절이 있으면 자료 검토로 되돌아옵니다(최대 2회)",
+  },
   { key: "write", label: "본문 작성" },
   { key: "assemble", label: "조립 · PM 검증" },
-  { key: "done", label: "완성" },
+  {
+    key: "done",
+    label: "완성 검토",
+    human: true,
+    loop: "절 재작성·자료 보강은 전체를 되돌리지 않고 해당 절만 다시 씁니다",
+  },
 ] as const;
 
 type StepPhase = "done" | "active" | "action" | "pending";
@@ -35,6 +56,8 @@ type StepPhase = "done" | "active" | "action" | "pending";
 interface StepView {
   label: string;
   phase: StepPhase;
+  human?: boolean;
+  loop?: string;
   actionLabel?: string;
   actionTo?: string;
 }
@@ -94,9 +117,14 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
   }
 
   return STEPS.map((step, i) => {
-    if (i < current) return { label: step.label, phase: "done" as const };
-    if (i === current) return { label: step.label, phase: currentPhase, actionLabel, actionTo };
-    return { label: step.label, phase: "pending" as const };
+    const base = {
+      label: step.label,
+      human: "human" in step ? step.human : undefined,
+      loop: "loop" in step ? step.loop : undefined,
+    };
+    if (i < current) return { ...base, phase: "done" as const };
+    if (i === current) return { ...base, phase: currentPhase, actionLabel, actionTo };
+    return { ...base, phase: "pending" as const };
   });
 }
 
@@ -185,9 +213,13 @@ export function PipelineStepper({ projectId, snapshot, stalled = false }: Pipeli
         <CardTitle className="text-base">진행 단계</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <ol className="flex flex-col gap-2.5">
-          {steps.map((step) => (
+        <ol className="flex flex-col">
+          {steps.map((step, i) => (
             <li key={step.label} className="flex flex-col gap-1.5">
+              {/* 단계 사이 화살표 - "다음 단계로 간다"를 아이콘 열 아래에 명시 */}
+              {i > 0 ? (
+                <ChevronDown className="my-0.5 ml-0.5 h-3 w-3 text-fg-tertiary" aria-hidden />
+              ) : null}
               <div className="flex items-center gap-2">
                 {step.phase === "done" ? (
                   <Check className="h-4 w-4 shrink-0 text-fg-success" aria-hidden />
@@ -214,12 +246,24 @@ export function PipelineStepper({ projectId, snapshot, stalled = false }: Pipeli
                 >
                   {step.label}
                 </span>
+                {step.human ? (
+                  <User className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="내 확인 필요" />
+                ) : null}
+                {step.loop ? (
+                  <RotateCcw
+                    className="h-3.5 w-3.5 shrink-0 text-fg-tertiary"
+                    aria-label={step.loop}
+                  />
+                ) : null}
                 {step.phase === "action" ? (
                   <span className="ml-auto rounded-sm border border-fg-warning/40 bg-bg-warning px-1.5 py-0.5 text-[10px] font-medium text-fg-warning">
                     결정 필요
                   </span>
                 ) : null}
               </div>
+              {step.loop ? (
+                <p className="ml-6 text-[11px] leading-snug text-fg-tertiary">{step.loop}</p>
+              ) : null}
               {/* 실행 중 세부 단계 - 색인·RAPTOR처럼 수 분짜리 단계의 내부 진행
                   (예: "청킹·임베딩 5/17", "배경 요약 1층 · 40/152") */}
               {step.phase === "active" &&
@@ -270,6 +314,11 @@ export function PipelineStepper({ projectId, snapshot, stalled = false }: Pipeli
             사용자가 실행을 취소했습니다 - 다시 시작하거나 삭제할 수 있습니다.
           </p>
         ) : null}
+
+        <p className="flex items-center gap-1 text-[11px] text-fg-tertiary">
+          <User className="h-3 w-3 text-accent" aria-hidden />
+          표시가 있는 단계에서 내 확인·결정이 필요합니다. 나머지는 자동으로 진행됩니다.
+        </p>
 
         {snapshot ? <ElapsedRow snapshot={snapshot} /> : null}
 

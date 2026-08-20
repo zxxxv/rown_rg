@@ -4,6 +4,8 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  ChevronDown,
+  ChevronRight,
   Loader2,
   Pencil,
   RefreshCw,
@@ -70,40 +72,149 @@ const MODE_LABEL: Record<string, string> = {
 /** 시작 전 규모 - "비싼 런"이 얼마짜리인지 먼저 보여준다(실측 단가 기반 범위 추정).
     남은 한도가 예상 비용에 못 미쳐도 차단하지 않는다 - 숫자 두 개를 나란히 보여주고
     판단은 사람이 한다(경고만, 2026-08-15 결정). */
-function EstimateCard({ brief }: { brief: DesignBriefPayload }) {
+/** 좌측 고정 검토 요약(2026-08-21 개편) - 이 화면의 용무는 '승인 또는 목차 수정'이다.
+    결정에 필요한 요약(규모·비용·한도)과 점검 배지, 결정 버튼이 스크롤 없이 항상
+    보이게 하고, 경고는 개수로 먼저 알린 뒤 클릭으로 해당 카드에 데려간다. */
+function ReviewSummary({
+  brief,
+  gateOpen,
+  submitting,
+  onApprove,
+  onEdit,
+  onReplan,
+  resolvedNote,
+}: {
+  brief: DesignBriefPayload;
+  gateOpen: boolean;
+  submitting: boolean;
+  onApprove: () => void;
+  onEdit: () => void;
+  onReplan: () => void;
+  resolvedNote: string | null;
+}) {
   const est = brief.estimate;
-  if (!est || est.n_sections === 0) return null;
-  const remaining = est.remaining_limit_usd;
+  const remaining = est?.remaining_limit_usd;
   // 경고 기준은 절수 비례 추정이 아니라 모드별 런 1회 고정 예상 비용(고급 $30/표준
   // $20/절약 $15) - 남은 한도가 그보다 적으면 "이 모드로 한 번 돌릴 여유가 없다".
-  const expected = est.expected_run_cost_usd;
+  const expected = est?.expected_run_cost_usd;
   const short = remaining != null && expected != null && remaining < expected;
+  const checks = [
+    {
+      id: "check-overlaps",
+      label: "목차 소재 겹침",
+      count: brief.ai_plan?.outline_overlaps?.length ?? 0,
+      danger: true,
+    },
+    {
+      id: "check-dupq",
+      label: "중복 검색 질의",
+      count: brief.duplicate_queries.length,
+      danger: true,
+    },
+    {
+      id: "check-noagent",
+      label: "담당 없는 절",
+      count: brief.warnings.sections_without_analyst.length,
+      danger: true,
+    },
+    {
+      id: "check-ownership",
+      label: "소재 분담",
+      count: brief.ai_plan?.topic_ownership?.length ?? 0,
+      danger: false,
+    },
+  ].filter((c) => c.count > 0);
+  const jump = (id: string) =>
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   return (
-    <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-bg-secondary px-4 py-3">
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
-        <span className="text-sm font-medium text-fg">예상 규모</span>
-        <span className="text-sm text-fg-secondary">{est.n_sections}개 절</span>
-        <span className="text-sm text-fg-secondary">
-          {est.total_min_chars.toLocaleString()}~{est.total_max_chars.toLocaleString()}자 (A4{" "}
-          {est.pages_min}~{est.pages_max}쪽)
-        </span>
-        <span className="text-sm text-fg-secondary">
-          예상 비용 ${est.cost_usd_min}~${est.cost_usd_max} (
-          {MODE_LABEL[est.model_mode] ?? est.model_mode} 모드)
-        </span>
-        {remaining != null ? (
-          <span className={cn("text-sm", short ? "text-fg-warning" : "text-fg-secondary")}>
-            이번 달 남은 한도 ${remaining}
-          </span>
-        ) : null}
-        <span className="text-[11px] text-fg-tertiary">과거 실측 단가 기반 추정입니다</span>
-      </div>
+    <div className="flex flex-col gap-3 rounded-lg border border-border bg-bg-secondary p-4 lg:sticky lg:top-4">
+      <p className="text-sm font-medium text-fg">검토 요약</p>
+      {est && est.n_sections > 0 ? (
+        <dl className="flex flex-col gap-1 text-xs">
+          <div className="flex justify-between gap-2">
+            <dt className="shrink-0 text-fg-tertiary">규모</dt>
+            <dd className="text-right text-fg-secondary">
+              {est.n_sections}개 절 · A4 {est.pages_min}~{est.pages_max}쪽
+            </dd>
+          </div>
+          <div className="flex justify-between gap-2">
+            <dt className="shrink-0 text-fg-tertiary">예상 비용</dt>
+            <dd className="text-right text-fg-secondary">
+              ${est.cost_usd_min}~${est.cost_usd_max} (
+              {MODE_LABEL[est.model_mode] ?? est.model_mode})
+            </dd>
+          </div>
+          {remaining != null ? (
+            <div className="flex justify-between gap-2">
+              <dt className="shrink-0 text-fg-tertiary">남은 한도</dt>
+              <dd
+                className={cn(
+                  "text-right",
+                  short ? "font-medium text-fg-warning" : "text-fg-secondary",
+                )}
+              >
+                ${remaining}
+              </dd>
+            </div>
+          ) : null}
+          <p className="text-[10px] text-fg-tertiary">과거 실측 단가 기반 추정</p>
+        </dl>
+      ) : null}
       {short ? (
-        <p className="flex items-center gap-1.5 text-xs text-fg-warning">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          남은 한도(${remaining})가 {MODE_LABEL[est.model_mode] ?? est.model_mode} 모드 1회 예상
-          비용(${expected})에 못 미칩니다 - 진행하면 도중에 한도에 걸려 멈출 수 있습니다. 절약
-          모드로 낮추거나 관리자에게 한도 조정을 요청하세요.
+        <p className="flex items-start gap-1.5 text-[11px] leading-snug text-fg-warning">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />이 모드 1회 예상 비용($
+          {expected})보다 한도가 적습니다 - 진행하면 도중에 한도에 걸려 멈출 수 있습니다.
+        </p>
+      ) : null}
+      {checks.length > 0 ? (
+        <div className="flex flex-col gap-0.5 border-t border-border pt-2">
+          {checks.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => jump(c.id)}
+              className="flex items-center justify-between gap-2 rounded px-1 py-1 text-left text-xs hover:bg-bg"
+            >
+              <span
+                className={cn(
+                  "flex items-center gap-1.5",
+                  c.danger ? "text-fg-danger" : "text-fg-secondary",
+                )}
+              >
+                {c.danger ? (
+                  <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
+                ) : (
+                  <Check className="h-3 w-3 shrink-0 text-fg-tertiary" aria-hidden />
+                )}
+                {c.label}
+              </span>
+              <span className="font-mono text-fg-secondary">{c.count}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {gateOpen ? (
+        <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+          <Button size="sm" onClick={onApprove} disabled={submitting}>
+            {submitting ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ArrowRight className="mr-1 h-3.5 w-3.5" />
+            )}
+            이대로 자료 수집 시작
+          </Button>
+          <Button size="sm" variant="outline" onClick={onEdit} disabled={submitting}>
+            <Pencil className="mr-1 h-3.5 w-3.5" />
+            목차 고치기
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onReplan} disabled={submitting}>
+            <RefreshCw className="mr-1 h-3.5 w-3.5" />
+            계획 다시 계산
+          </Button>
+        </div>
+      ) : resolvedNote ? (
+        <p className="border-t border-border pt-2 text-[11px] leading-snug text-fg-tertiary">
+          {resolvedNote}
         </p>
       ) : null}
     </div>
@@ -681,6 +792,31 @@ export default function BriefPage() {
     return [...groups.values()].sort((a, b) => a.chapter_number - b.chapter_number);
   }, [brief]);
 
+  // 경고가 걸린 절(겹침·중복 질의) - 장 아코디언의 기본 펼침과 ⚠ 배지의 근거.
+  const warnSectionLabels = useMemo(() => {
+    const set = new Set<string>(duplicatedLabels);
+    for (const o of brief?.ai_plan?.outline_overlaps ?? []) {
+      for (const label of o.sections) set.add(label);
+    }
+    return set;
+  }, [brief, duplicatedLabels]);
+  // 장별 실행 계획은 기본 접힘 - 20절 목차가 통째로 펼쳐져 경고를 지나치던 것의 처방.
+  // 경고가 걸린 장만 처음부터 열어 둔다(사용자가 토글하면 그 선택이 우선).
+  const defaultOpenChapters = useMemo(() => {
+    const set = new Set<number>();
+    for (const label of warnSectionLabels) set.add(Number(label.split(".")[0]));
+    return set;
+  }, [warnSectionLabels]);
+  const [openChaptersState, setOpenChaptersState] = useState<Set<number> | null>(null);
+  const openChapters = openChaptersState ?? defaultOpenChapters;
+  const toggleChapter = (n: number) =>
+    setOpenChaptersState((prev) => {
+      const next = new Set(prev ?? defaultOpenChapters);
+      if (next.has(n)) next.delete(n);
+      else next.add(n);
+      return next;
+    });
+
   const startEditing = () => {
     // config.outline이 정본 - 서버 발급 절 id가 실려 있어, 여기서 고쳐 보내도
     // 절 정체성(계획·리허설·본문 행)이 보존된다. 게이트 payload 재구성은 id가
@@ -800,11 +936,30 @@ export default function BriefPage() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-col gap-4">
-            <EstimateCard brief={brief} />
-            <DuplicateWarning brief={brief} />
-            <OutlineOverlaps brief={brief} />
-            <TopicOwnership brief={brief} />
+          <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start">
+            <ReviewSummary
+              brief={brief}
+              gateOpen={gateOpen}
+              submitting={submitting}
+              onApprove={() => void submit()}
+              onEdit={startEditing}
+              onReplan={() => void submit(undefined, "replan")}
+              resolvedNote={
+                replanning
+                  ? "계획을 다시 계산하는 중입니다."
+                  : `${resolvedAt ? `${resolvedAt}에 ` : ""}확정된 설계입니다.`
+              }
+            />
+            <div className="flex min-w-0 flex-col gap-4">
+            <div id="check-dupq" className="scroll-mt-4">
+              <DuplicateWarning brief={brief} />
+            </div>
+            <div id="check-overlaps" className="scroll-mt-4">
+              <OutlineOverlaps brief={brief} />
+            </div>
+            <div id="check-ownership" className="scroll-mt-4">
+              <TopicOwnership brief={brief} />
+            </div>
             {!gateOpen ? (
               <div className="flex items-center gap-2 rounded-lg border border-border bg-bg-info px-4 py-3">
                 {replanning ? (
@@ -836,7 +991,7 @@ export default function BriefPage() {
             ) : null}
             <FlowGraph brief={brief} />
             {brief.warnings.sections_without_analyst.length > 0 ? (
-              <p className="text-xs text-fg-tertiary">
+              <p id="check-noagent" className="scroll-mt-4 text-xs text-fg-tertiary">
                 담당 에이전트가 없는 절: {brief.warnings.sections_without_analyst.join(" · ")}
               </p>
             ) : null}
@@ -851,26 +1006,50 @@ export default function BriefPage() {
                   자료 안에서 근거를 찾는 실제 문자열입니다.
                 </p>
               </div>
-              {chapterGroups.map((group) => (
+              {chapterGroups.map((group) => {
+                const isOpen = openChapters.has(group.chapter_number);
+                const warnCount = group.sections.filter((s) =>
+                  warnSectionLabels.has(`${s.chapter_number}.${s.section_number}`),
+                ).length;
+                return (
                 <div key={group.chapter_number} className="border-b border-border last:border-b-0">
-                  <div className="flex flex-col gap-1 bg-bg-secondary px-4 py-2.5">
-                    <span className="text-sm font-semibold text-fg">
+                  <button
+                    type="button"
+                    onClick={() => toggleChapter(group.chapter_number)}
+                    className="flex w-full flex-col gap-1 bg-bg-secondary px-4 py-2.5 text-left hover:bg-bg-secondary/70"
+                  >
+                    <span className="flex items-center gap-1.5 text-sm font-semibold text-fg">
+                      {isOpen ? (
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" aria-hidden />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" aria-hidden />
+                      )}
                       {group.chapter_number}장 {group.title || "(제목 없음)"}
+                      <span className="text-xs font-normal text-fg-tertiary">
+                        ({group.sections.length}절)
+                      </span>
+                      {warnCount > 0 ? (
+                        <span className="flex items-center gap-0.5 rounded-sm border border-fg-danger/30 bg-bg-danger-subtle px-1 py-0.5 text-[10px] font-medium text-fg-danger">
+                          <AlertTriangle className="h-2.5 w-2.5" aria-hidden />
+                          {warnCount}
+                        </span>
+                      ) : null}
                     </span>
-                    {chapterGoals.get(group.chapter_number) ? (
-                      <p className="text-xs text-fg-secondary">
+                    {isOpen && chapterGoals.get(group.chapter_number) ? (
+                      <p className="text-xs font-normal text-fg-secondary">
                         {chapterGoals.get(group.chapter_number)}
                       </p>
                     ) : null}
-                    {group.collection_query ? (
-                      <p className="text-[11px] text-fg-tertiary">
+                    {isOpen && group.collection_query ? (
+                      <p className="text-[11px] font-normal text-fg-tertiary">
                         수집:{" "}
                         <code className="break-all font-mono text-fg-secondary">
                           {group.collection_query}
                         </code>
                       </p>
                     ) : null}
-                  </div>
+                  </button>
+                  {isOpen ? (
                   <ul>
                     {group.sections.map((s) => (
                       <SectionRow
@@ -896,34 +1075,12 @@ export default function BriefPage() {
                       />
                     ))}
                   </ul>
+                  ) : null}
                 </div>
-              ))}
+                );
+              })}
             </div>
-
-            {gateOpen ? (
-              <div className="flex items-center gap-2">
-                <Button onClick={() => void submit()} disabled={submitting}>
-                  {submitting ? (
-                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                  ) : (
-                    <ArrowRight className="mr-1 h-4 w-4" />
-                  )}
-                  이대로 자료 수집 시작
-                </Button>
-                <Button variant="outline" onClick={startEditing} disabled={submitting}>
-                  <Pencil className="mr-1 h-4 w-4" />
-                  목차 고치기
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => void submit(undefined, "replan")}
-                  disabled={submitting}
-                >
-                  <RefreshCw className="mr-1 h-4 w-4" />
-                  계획 다시 계산
-                </Button>
-              </div>
-            ) : null}
+            </div>
           </div>
         )}
       </div>
