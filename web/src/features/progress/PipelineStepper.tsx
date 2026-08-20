@@ -315,11 +315,6 @@ export function PipelineStepper({ projectId, snapshot, stalled = false }: Pipeli
           </p>
         ) : null}
 
-        <p className="flex items-center gap-1 text-[11px] text-fg-tertiary">
-          <User className="h-3 w-3 text-accent" aria-hidden />
-          표시가 있는 단계에서 내 확인·결정이 필요합니다. 나머지는 자동으로 진행됩니다.
-        </p>
-
         {snapshot ? <ElapsedRow snapshot={snapshot} /> : null}
 
         {isActive ? (
