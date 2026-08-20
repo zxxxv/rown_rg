@@ -179,3 +179,38 @@ src/clients/onnx_cross_encoder.py   ← 채점 알맹이. 앱과 이 서비스�
 알맹이를 공유하는 이유: 토크나이즈·배치·시그모이드가 두 벌로 갈라지면
 `max_length` 한 자리 차이로 **에러 없이 순위만 달라진다**. 그 파일은 `src.core.config`를
 import하지 않는 것이 계약이고, 그래서 이 컨테이너에 그 파일만 복사할 수 있다.
+
+## 모니터링 (2026-08-20)
+
+세 겹으로 본다. 겹마다 답하는 질문이 다르다.
+
+| 어디서 | 무엇을 | 왜 따로인가 |
+|---|---|---|
+| 앱 `/admin/gpu` (관리자 화면) | 큐·하드웨어 최근 1시간 + **앱 폴백 누적** | 폰에서도 밖에서도 보인다. 폴백은 앱만 안다 |
+| netdata (GPU 박스 `127.0.0.1:19999`) | 하드웨어(nvidia_smi) + 서비스 지표 장기 보관·알림 | 서비스가 죽어도 하드웨어는 계속 보인다 |
+| `/health` (터널 경유) | 즉석 스냅샷 | 스크립트·헬스체크용 |
+
+서비스가 내는 엔드포인트:
+
+- `GET /stats/history` — 5초 간격 1시간 링버퍼, 필드별 병렬 배열. 관리자 화면의 그래프 원천.
+- `GET /metrics` — 프로메테우스 텍스트. **하드웨어 수치는 없다**(netdata nvidia_smi가 이미 뜬다).
+  서비스만 아는 것을 낸다: 큐 상태와 `on_gpu` 플래그. onnxruntime이 어긋나 CPU로 떨어지면
+  GPU 지표는 그저 한가해 보인다 — 이 플래그가 "못 쓰는 중"과 "안 쓰는 중"을 가른다.
+
+netdata 쪽 설정은 **컨테이너 볼륨(`netdataconfig`)에 있고 이 레포에는 없다.** 재구축 시 복원:
+
+```yaml
+# /etc/netdata/go.d/prometheus.conf
+jobs:
+  - name: rown_gpu
+    url: http://host.docker.internal:8009/metrics
+```
+
+```
+# /etc/netdata/health.d/rown_gpu.conf — 알림 두 개
+#  rown_gpu_on_cpu      (crit)  on_gpu < 1 이 1분 지속 - 조용한 CPU 폴백
+#  rown_gpu_rejections  (warn)  최근 10분 429 거절 > 0 - 용량 재검토 신호
+# 템플릿은 차트 id가 아니라 context(prometheus.rown_gpu.*)에 붙는다.
+```
+
+적용은 `netdatacli reload-health`(알림) / `docker restart netdata`(수집 작업).
