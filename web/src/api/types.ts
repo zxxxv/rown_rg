@@ -61,12 +61,17 @@ export type Analyzer = z.infer<typeof AnalyzerSchema>;
 // 주의: .default()를 쓰면 zod input/output 타입이 갈라져 zodResolver와 어긋난다 -
 // 전 필드 필수(서버는 항상 전 필드 직렬화, 편집기도 항상 채움).
 export const OutlineSectionSchema = z.object({
+  // 절 안정 식별자(서버 발급) - 편집기는 받은 id를 그대로 돌려보내야 목차 편집이
+  // 절 정체성(계획·리허설 캐시·본문 행)을 보존한다. zod는 미지 키를 버리므로
+  // 이 필드가 스키마에 없으면 id가 왕복에서 소실돼 전 절이 재발급된다.
+  id: z.string().optional(),
   title: z.string(),
   direction: z.string(),
   key_points: z.array(z.string()),
   // 분석 에이전트 name 참조 - 배정된 관점을 모두 반영한다(분량 목표는 최댓값)
   analysts: z.array(z.string()),
-  // 의존 계약("4.1"|"4.1(지표)"|"4.*") - 앞 절 확정값(사실 대장)을 받아 쓴다.
+  // 의존 계약 - 저작·표시는 번호("4.1"|"4.1(지표)"|"4.*"), 서버 저장은 id 토큰
+  // ("s:<uuid>"|"c:<uuid>"). 편집기 로드 시 토큰을 현재 번호로 표시 변환한다.
   // catch([]): 이 필드 이전에 만든 프로젝트의 config.outline에는 이 키가 없다 -
   // required로 두면 파싱 실패가 ProjectSchema의 config.catch(DEFAULT)로 번져
   // **기존 프로젝트의 설정 화면이 통째로 기본값으로 둔갑**한다(조용한 열화).
@@ -75,6 +80,7 @@ export const OutlineSectionSchema = z.object({
 export type OutlineSection = z.infer<typeof OutlineSectionSchema>;
 
 export const OutlineChapterSchema = z.object({
+  id: z.string().optional(),
   title: z.string(),
   sections: z.array(OutlineSectionSchema),
 });

@@ -156,14 +156,18 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
     return null;
   }, [tree, selectedId]);
   const sectionFindings = useMemo(() => {
-    if (!selectedRef || !verifyQuery.data) return [];
+    if (!selectedId || !verifyQuery.data) return [];
     return verifyQuery.data.filter((f) => {
+      // 절 안정 id가 정본 - 목차가 바뀌어도 경고가 그 절을 따라간다.
+      if (f.section_id) return f.section_id === selectedId;
+      // id 없는 옛 경고는 번호 표기로 폴백
+      if (!selectedRef) return false;
       const ref = f.section_ref ?? "";
       if (!ref.startsWith(selectedRef)) return false;
       const next = ref[selectedRef.length];
       return next === undefined || !/[0-9]/.test(next); // '1.1'이 '1.12'에 오매칭되지 않게
     });
-  }, [verifyQuery.data, selectedRef]);
+  }, [verifyQuery.data, selectedId, selectedRef]);
   const navigateTo = (id: string) =>
     setParams(
       (prev) => {
@@ -175,15 +179,25 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
     );
 
   // PM 경고 목록에서 §1.1을 누르면 그 절로 이동 - 트리에서 손으로 찾지 않게.
-  const jumpToRef = (ref: string) => {
+  // 절 안정 id가 정본이고, id 없는 옛 경고만 번호를 위치로 해석한다(장 번호가
+  // 비연속이면 엉뚱한 절로 가던 경로 - id가 있으면 그 문제가 없다).
+  const jumpToRef = (target: { section_ref?: string | null; section_id?: string | null }) => {
+    if (target.section_id) {
+      const hit = tree.some((ch) => ch.children.some((s) => s.id === target.section_id));
+      if (hit) {
+        navigateTo(target.section_id);
+        return;
+      }
+    }
+    const ref = target.section_ref ?? "";
     const head = ref.split(" ")[0]; // "1.1 표 1-2-1" 같은 표기에서 앞부분만
     const [ch, sec] = head.split(".").map((n) => Number.parseInt(n, 10));
-    const target = tree[ch - 1]?.children[sec - 1];
-    if (!target) {
-      toast("해당 절을 찾지 못했습니다", { description: ref });
+    const node = tree[ch - 1]?.children[sec - 1];
+    if (!node) {
+      toast("해당 절을 찾지 못했습니다", { description: ref || "위치 정보 없음" });
       return;
     }
-    navigateTo(target.id);
+    navigateTo(node.id);
   };
 
   const selectNode = (id: string, status: SectionStatus, isChapter: boolean) => {

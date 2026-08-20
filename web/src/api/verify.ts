@@ -11,6 +11,8 @@ export const VerifyFindingSchema = z.object({
   severity: z.enum(["critical", "warning"]).catch("warning"),
   category: z.string(),
   section_ref: z.string().nullish(),
+  /** 절 안정 id(sections.id) - 절 매칭·이동 정본. ref 문자열은 사람이 읽는 표시값 */
+  section_id: z.string().nullish(),
   detail: z.string(),
   created_at: z.string(),
   /** 내용 지문 - 재검증이 행을 갈아치워도 완료 표시가 따라온다(id는 매번 바뀐다) */

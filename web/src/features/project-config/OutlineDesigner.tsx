@@ -6,8 +6,8 @@ import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { Button } from "@/components/ui/button";
 import {
   type DraftChapter,
-  draftId,
   emptyChapter,
+  fromOutline,
   fromPreset,
   OutlineEditor,
   toOutline,
@@ -62,13 +62,9 @@ export function OutlineDesigner() {
       prevPresetRef.current = preset ?? null;
       const existing = getValues("config.outline");
       if (existing && existing.chapters.length > 0) {
-        setChapters(
-          existing.chapters.map((ch) => ({
-            _id: draftId(),
-            title: ch.title,
-            sections: ch.sections.map((s) => ({ ...s, _id: draftId() })),
-          })),
-        );
+        // fromOutline: 서버 발급 id를 _id로 잇는다 - 여기서 id를 새로 찍으면
+        // 저장 시 전 절의 정체성(계획·리허설·본문 행)이 리셋된다.
+        setChapters(fromOutline(existing));
         return;
       }
       if (preset) pendingSkeletonRef.current = preset;

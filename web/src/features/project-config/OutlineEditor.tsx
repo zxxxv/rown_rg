@@ -62,14 +62,66 @@ export function fromPreset(detail: PresetDetail): DraftChapter[] {
   }));
 }
 
-/** 제출 가능한 outline로 정리 - _id 제거, 제목 없는 절·빈 장은 버린다(백엔드 검증과 일치). */
+/** builds_on id 토큰("s:<uuid>"|"c:<uuid>") → 현재 번호 표시("4.1"|"4.*").
+ * 번호 문자열은 그대로 통과, 대상이 사라진 토큰은 null(의존도 함께 사라진 것). */
+function tokenToLabel(
+  raw: string,
+  secLabelById: Map<string, string>,
+  chNumById: Map<string, string>,
+): string | null {
+  const s = /^\s*s:([0-9a-fA-F-]{36})(?:\(\s*([^()]+?)\s*\))?\s*$/.exec(raw);
+  if (s) {
+    const label = secLabelById.get(s[1].toLowerCase());
+    if (!label) return null;
+    return s[2] ? `${label}(${s[2]})` : label;
+  }
+  const c = /^\s*c:([0-9a-fA-F-]{36})(?:\.\*)?\s*$/.exec(raw);
+  if (c) {
+    const num = chNumById.get(c[1].toLowerCase());
+    return num ? `${num}.*` : null;
+  }
+  return raw;
+}
+
+/** 저장된 outline → 편집기 초안. 서버 발급 id를 _id로 잇는다(정체성 왕복의 반쪽).
+ * builds_on의 id 토큰은 현재 번호로 표시 변환한다 - 편집기 안은 항상 번호이고,
+ * 번호→토큰 재해석은 저장 시점에 서버가 한다. */
+export function fromOutline(outline: Outline): DraftChapter[] {
+  const secLabelById = new Map<string, string>();
+  const chNumById = new Map<string, string>();
+  outline.chapters.forEach((ch, ci) => {
+    if (ch.id) chNumById.set(ch.id.toLowerCase(), String(ci + 1));
+    ch.sections.forEach((s, si) => {
+      if (s.id) secLabelById.set(s.id.toLowerCase(), `${ci + 1}.${si + 1}`);
+    });
+  });
+  return outline.chapters.map((ch) => ({
+    _id: ch.id ?? draftId(),
+    title: ch.title,
+    sections: ch.sections.map((s) => ({
+      _id: s.id ?? draftId(),
+      title: s.title,
+      direction: s.direction,
+      key_points: [...s.key_points],
+      analysts: [...s.analysts],
+      builds_on: s.builds_on
+        .map((b) => tokenToLabel(b, secLabelById, chNumById))
+        .filter((b): b is string => b !== null),
+    })),
+  }));
+}
+
+/** 제출 가능한 outline로 정리 - _id는 안정 id로 실어 보내고(정체성 왕복),
+ * 제목 없는 절·빈 장은 버린다(백엔드 검증과 일치). */
 export function toOutline(chapters: DraftChapter[]): Outline | undefined {
   const cleaned = chapters
     .map((ch) => ({
+      id: ch._id,
       title: ch.title.trim(),
       sections: ch.sections
         .filter((s) => s.title.trim().length > 0)
         .map((s) => ({
+          id: s._id,
           title: s.title.trim(),
           direction: s.direction.trim(),
           key_points: s.key_points.map((k) => k.trim()).filter(Boolean),

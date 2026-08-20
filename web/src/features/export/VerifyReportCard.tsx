@@ -70,8 +70,9 @@ export function VerifyReportCard({
   /** 접힌 한 줄로 시작 - 편집 화면처럼 경고가 본작업을 가리면 안 되는 곳용 */
   collapsible?: boolean;
   onOpenEditor?: () => void;
-  /** 경고 → 해당 절로 이동. 넘기면 목록 항목이 클릭 가능해진다(§1.1 같은 ref 기준). */
-  onJump?: (sectionRef: string) => void;
+  /** 경고 → 해당 절로 이동. 넘기면 목록 항목이 클릭 가능해진다.
+   * section_id(절 안정 id)가 정본이고 section_ref는 표시값 폴백이다. */
+  onJump?: (target: { section_ref?: string | null; section_id?: string | null }) => void;
 }) {
   const query = useVerifyReport(projectId);
   const projectQuery = useProject(projectId);
@@ -275,11 +276,13 @@ export function VerifyReportCard({
                   />
                   <button
                     type="button"
-                    disabled={!onJump || !f.section_ref}
-                    onClick={() => f.section_ref && onJump?.(f.section_ref)}
+                    disabled={!onJump || (!f.section_ref && !f.section_id)}
+                    onClick={() => (f.section_ref || f.section_id) && onJump?.(f)}
                     className={cn(
                       "flex min-w-0 flex-1 items-start gap-2 text-left text-sm",
-                      onJump && f.section_ref ? "cursor-pointer hover:underline" : "cursor-default",
+                      onJump && (f.section_ref || f.section_id)
+                        ? "cursor-pointer hover:underline"
+                        : "cursor-default",
                       f.resolved && "line-through",
                     )}
                   >

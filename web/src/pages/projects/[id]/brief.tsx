@@ -33,6 +33,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   type DraftChapter,
   draftId,
+  fromOutline,
   OutlineEditor,
   toOutline,
 } from "@/features/project-config/OutlineEditor";
@@ -681,7 +682,15 @@ export default function BriefPage() {
   }, [brief]);
 
   const startEditing = () => {
-    setChapters(toDraftChapters(brief?.sections ?? []));
+    // config.outline이 정본 - 서버 발급 절 id가 실려 있어, 여기서 고쳐 보내도
+    // 절 정체성(계획·리허설·본문 행)이 보존된다. 게이트 payload 재구성은 id가
+    // 없는 옛 프로젝트 폴백(그 경우 서버가 재발급 - 종전 동작과 동일).
+    const outline = projectQuery.data?.config.outline;
+    setChapters(
+      outline && outline.chapters.length > 0
+        ? fromOutline(outline)
+        : toDraftChapters(brief?.sections ?? []),
+    );
     setEditing(true);
   };
 
