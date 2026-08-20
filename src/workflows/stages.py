@@ -1619,6 +1619,18 @@ async def assemble(state: ProjectState) -> ProjectState:
         state = overlay_working_copy(state, await _working_copy(pid))
     except Exception:
         logger.warning("assemble.working_copy_failed", project_id=str(pid), exc_info=True)
+    # 3층 국소 재작성(로드맵 2026-08-20) — 절 간 중복 문단을 참조 전환으로 압축.
+    # renumber 전(본문 확정의 단일 지점 통일). 실패·거부는 원문 유지라 비치명.
+    if settings.write_dedup_rewrite:
+        try:
+            from src.services.qa.dedup_rewrite import dedup_rewrite_state
+
+            emit_step(pid, "export", "중복 문단 압축", "started")
+            state, n_rw = await dedup_rewrite_state(state, model=_models_for(state)["verify"])
+            emit_step(pid, "export", "중복 문단 압축", "completed")
+            logger.info("assemble.dedup_rewrite", project_id=str(pid), n_rewritten=n_rw)
+        except Exception:
+            logger.warning("assemble.dedup_rewrite_failed", project_id=str(pid), exc_info=True)
     # 인용 전역 번호화 — 절-로컬 [n]을 출처장 번호로 재작성(저장·검증·렌더 전부
     # 전역 번호 기준이 되도록 가장 먼저). 실패는 비치명 — 로컬 번호로 계속한다.
     try:
