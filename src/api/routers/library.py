@@ -752,9 +752,10 @@ async def get_source_content(
     """AI 수집 자료(웹 소스)의 수집 원문(content_md)을 반환 — 라이브러리 인라인 뷰어용.
 
     원문은 project_sources.metadata_[content_md]에 수집 시점 저장된다(web.py stage()).
-    가시성: 소속 프로젝트 소유자만 — 라이브러리 프로젝트 뷰가 소유자 스코프라 관리자도
-    타인 프로젝트를 트리에서 못 보므로, 여기서도 admin 우회 없이 owner로만 한정한다.
-    타인 자료·미존재는 존재 은닉을 위해 모두 404로 통일한다.
+    가시성: 소속 프로젝트 소유자 + 관리자. '사용자별 자료' 미러가 타인 프로젝트 트리를
+    관리자에게 보여주므로, 여기만 소유자 전용이면 트리엔 보이는데 원문만 404가 나
+    화면에선 "안 보인다"가 된다(2026-08-20 사용자 결정: 관리자는 전부 열람).
+    그 외 타인 자료·미존재는 존재 은닉을 위해 모두 404로 통일한다.
     """
     row = (
         await session.execute(
@@ -766,7 +767,7 @@ async def get_source_content(
     if row is None:
         raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
     src, owner_id = row
-    if owner_id != current_user.id:
+    if owner_id != current_user.id and not _is_admin(current_user):
         raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
     content_md = (src.metadata_ or {}).get("content_md") or ""
     if not content_md.strip():
