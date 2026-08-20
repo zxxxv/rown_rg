@@ -53,6 +53,8 @@ import { BlockEvidence, partitionBlockEvidence } from "@/features/preview/Eviden
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { type SourceLocation, SourceViewer } from "@/features/preview/SourceViewer";
 import { findTable, isTableCaption, type MarkdownTable } from "@/features/preview/tableToChart";
+import { VersionDiffView } from "@/features/versions/VersionDiffView";
+import { VersionHistoryCard } from "@/features/versions/VersionHistoryCard";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
@@ -120,6 +122,12 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   const handleEvidenceOpenChange = useCallback((open: boolean) => setEvidenceOpen(open), []);
   const tree = sectionsQuery.data?.tree ?? [];
   const selectedId = params.get("section") ?? findFirstViewable(tree);
+  // 버전 비교 모드 - URL 파라미터(?compare=1)라 새로고침·링크 공유에도 유지된다.
+  const compareBase = useMemo(() => {
+    const raw = params.get("compare");
+    const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [params]);
   // 선택된 id가 '장'이면 장 통합 뷰(하위 절 이어 보기), 아니면 절 본문.
   const selectedChapter = useMemo(
     () => tree.find((c) => c.id === selectedId) ?? null,
@@ -237,7 +245,39 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
             절을 선택하면 그 절의 경고만 본문 위에 인라인 표시된다. */}
       <VerifyReportCard projectId={projectId} collapsible onJump={jumpToRef} />
 
-      {sectionsQuery.isLoading ? (
+      {/* 버전 기록 - 조립 완성·재개 직전 자동 스냅샷. "현재와 비교"를 누르면 아래
+            본문 영역이 절 단위 diff 뷰로 바뀐다(URL 파라미터라 링크 공유 가능). */}
+      <VersionHistoryCard
+        projectId={projectId}
+        projectTitle={projectQuery.data?.title ?? "보고서"}
+        onCompare={(v) =>
+          setParams(
+            (prev) => {
+              const next = new URLSearchParams(prev);
+              next.set("compare", String(v));
+              return next;
+            },
+            { replace: true },
+          )
+        }
+      />
+
+      {compareBase !== null ? (
+        <VersionDiffView
+          projectId={projectId}
+          base={compareBase}
+          onClose={() =>
+            setParams(
+              (prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete("compare");
+                return next;
+              },
+              { replace: true },
+            )
+          }
+        />
+      ) : sectionsQuery.isLoading ? (
         <LoadingSkeleton variant="block" />
       ) : tree.length === 0 && qaPayload ? (
         <PayloadDraftList payload={qaPayload} />

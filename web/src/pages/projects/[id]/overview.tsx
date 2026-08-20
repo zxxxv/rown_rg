@@ -4,6 +4,7 @@ import {
   ClipboardList,
   Download,
   FileSearch,
+  FolderSync,
   PieChart,
   PlayCircle,
   Settings2,
@@ -54,6 +55,7 @@ import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
 import { presetLabel } from "@/features/project-config/presets";
 import type { ProjectFormValues } from "@/features/project-config/schema";
 import { SourceUsageCard } from "@/features/stats/SourceUsageCard";
+import { ReopenDialog } from "@/features/versions/ReopenDialog";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import { ReportWorkspace } from "@/pages/projects/[id]/preview";
@@ -438,6 +440,7 @@ function PrimaryAction({
   const queryClient = useQueryClient();
   const run = useRunProject();
   const { download, pending: downloading } = useDownload();
+  const [reopening, setReopening] = useState(false);
   // 같은 버튼이 '처음 시작'과 '멈춘 런 이어받기' 둘 다를 처리한다 - 안내 문구가
   // 실제 동작과 어긋나면 사용자가 수집이 다시 도는 줄 안다(2026-08-09 보고).
   const status = liveStatus ?? project.status;
@@ -491,21 +494,35 @@ function PrimaryAction({
   if (status === "completed") {
     // '다운로드' 버튼은 즉시 다운로드해야 한다 - 페이지 이동이면 이름이 거짓말
     // (출력 상세·검증 배너는 요약 카드의 '완료일' 타일로 진입).
+    // '다시 열기'는 시차 작성 진입점 - 현재 완성본을 버전으로 얼리고 자료 단계로
+    // 되돌린다(2026-08-21 설계). 실행은 자료·목차를 손본 뒤 사람이 시작한다.
     return (
-      <Button
-        size="lg"
-        disabled={downloading}
-        onClick={() =>
-          void download({
-            url: `${env.VITE_API_BASE_URL.replace(/\/$/, "")}/projects/${project.id}/export`,
-            filename: `${project.title}.hwpx`,
-            label: "HWPX",
-          })
-        }
-      >
-        <Download className="mr-1 h-4 w-4" />
-        {downloading ? "준비 중…" : "HWPX 다운로드"}
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="lg"
+          disabled={downloading}
+          onClick={() =>
+            void download({
+              url: `${env.VITE_API_BASE_URL.replace(/\/$/, "")}/projects/${project.id}/export`,
+              filename: `${project.title}.hwpx`,
+              label: "HWPX",
+            })
+          }
+        >
+          <Download className="mr-1 h-4 w-4" />
+          {downloading ? "준비 중…" : "HWPX 다운로드"}
+        </Button>
+        <Button
+          size="lg"
+          variant="outline"
+          onClick={() => setReopening(true)}
+          title="자료를 보강하고 새 장·빈 절을 이어 씁니다 - 지금 완성본은 버전으로 보관"
+        >
+          <FolderSync className="mr-1 h-4 w-4" />
+          다시 열기
+        </Button>
+        <ReopenDialog projectId={project.id} open={reopening} onOpenChange={setReopening} />
+      </div>
     );
   }
   if (status === "archived") {
