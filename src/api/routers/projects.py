@@ -1446,6 +1446,16 @@ async def attach_library_source(
     # 프론트는 이미 indexing/index_error 메타를 읽고 4초 폴링하므로 그대로 동작한다.
     # 형식 오류(UnsupportedFormat 등)도 _index_error_message가 메타로 변환한다.
     row = await _placeholder_source(session, source)
+    if project.status in _INDEX_DEFER_STATUSES:
+        # 업로드 경로와 같은 유예 규칙(비대칭 수리 2026-08-21) — 실행 전 첨부는 색인을
+        # 런의 색인 단계로 미룬다. 여기만 즉시 색인하면 자료 게이트 전에 임베딩 비용이
+        # 나가고, 게이트에서 제외해도 청크가 이미 만들어져 있었다.
+        meta = dict(row.metadata_ or {})
+        meta["indexing"] = False
+        meta["index_deferred"] = True
+        row.metadata_ = meta
+        await session.commit()
+        return _to_source_item(row)
     await session.commit()
     task = asyncio.create_task(_index_in_background(source, f"library:{project.id}:{node.id}"))
     _INDEX_TASKS.add(task)
