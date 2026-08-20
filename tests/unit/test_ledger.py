@@ -97,6 +97,31 @@ class TestExtract:
         es = extract_entries(body, "2.1", POOL)
         assert es == []
 
+    def test_source_footer_line_is_not_an_entry(self):
+        """4차 해부 최다 오탐(611건) - 표 아래 출처 줄의 마커 번호가 값으로 적립됐다.
+        '출처'는 지표 블랙리스트 + 마커 번호는 값 추출 전에 걷어낸다."""
+        es = extract_entries(
+            "* 출처: 제조 수출기업의 RE100 대응 실태와 과제(출처 13)\n", "1.1", POOL
+        )
+        assert es == []
+
+    def test_regulation_number_is_not_a_value(self):
+        """4차 해부 - '모법: 규정(EU) 2023/956'의 956은 규정 번호지 값이 아니다."""
+        es = extract_entries("- 모법: 규정(EU) 2023/956에 따라 시행됨(출처 3)\n", "2.1", POOL)
+        assert es == []
+
+    def test_marker_number_is_not_a_value(self):
+        """값이 될 숫자가 인용 마커뿐인 줄 - 마커 번호를 값으로 오인하면 안 된다."""
+        es = extract_entries("- 이행 수단: 자가발전과 인증서 구매를 활용(출처 44)\n", "1.2", POOL)
+        assert es == []
+
+    def test_marker_still_resolves_after_noise_strip(self):
+        """마커는 값에서만 빠지고 chunk_id 해소엔 계속 쓰인다."""
+        es = extract_entries("- 연간 부담액: 3,400억 원 추정(출처 3)\n", "3.1", POOL)
+        assert len(es) == 1
+        assert es[0]["value"] == "3400"
+        assert es[0]["chunk_ids"] == ["chunk-3"]
+
 
 class TestInjection:
     def test_prose_never_injected(self):
@@ -225,11 +250,63 @@ def _e(section, metric, value, unit="달러", source_kind="table", **q):
 
 class TestJoin:
     def test_same_metric_different_value_is_critical(self):
-        """3차 런 실측 유형 - CCA 탄소가격 60 vs 55."""
-        finds = join_conflicts([_e("3.1", "탄소가격", "60"), _e("3.4", "탄소가격", "55")])
+        """3차 런 실측 유형 - CCA 탄소가격 60 vs 55. 시점이 양쪽에서 확인될 때 critical."""
+        finds = join_conflicts(
+            [
+                _e("3.1", "탄소가격", "60", 시점="2024년"),
+                _e("3.4", "탄소가격", "55", 시점="2024년"),
+            ]
+        )
         assert len(finds) == 1
         assert finds[0]["severity"] == "critical"
         assert "60" in finds[0]["detail"] and "55" in finds[0]["detail"]
+
+    def test_empty_qualifiers_downgrade_to_warning(self):
+        """4차 해부 - 한정자 양쪽 공백 쌍은 다른 설문 항목·다른 표의 행 라벨일 수
+        있어(비-마커 오탐 152건의 몸통) critical 승격 금지, 확인 필요 티어."""
+        finds = join_conflicts([_e("1.3", "인지", "45.2"), _e("2.5", "인지", "15")])
+        assert len(finds) == 1
+        assert finds[0]["severity"] == "warning"
+        assert "확인 필요" in finds[0]["detail"]
+
+    def test_different_table_columns_are_not_a_conflict(self):
+        """다른 표의 같은 행 라벨('철강') - 열 머리가 양쪽에 있고 다르면 다른 지표라
+        경고도 내지 않는다(4차 해부: 수출액 표 vs 비용 표의 행 라벨 수십 건)."""
+        finds = join_conflicts(
+            [
+                _e("1.2", "철강", "38", 시점="2024년", 열="수출 비중"),
+                _e("3.4", "철강", "12", 시점="2024년", 열="비용 증가율"),
+            ]
+        )
+        assert finds == []
+
+    def test_same_column_still_joins(self):
+        """열 머리까지 같으면 같은 지표 - 시점 일치 시 critical 유지."""
+        finds = join_conflicts(
+            [
+                _e("1.2", "철강", "38", 시점="2024년", 열="수출 비중"),
+                _e("3.4", "철강", "12", 시점="2024년", 열="수출 비중"),
+            ]
+        )
+        assert len(finds) == 1
+        assert finds[0]["severity"] == "critical"
+
+    def test_multi_valued_metric_in_one_section_is_ambiguous(self):
+        """한 절에서 여러 값을 갖는 지표명은 목록 범주(설문 보기 나열) - 조인 제외.
+        4차 해부: '정책과제' 6값×5값 짝조합 20건."""
+        finds = join_conflicts(
+            [
+                _e("4.2", "정책과제", "29.2"),
+                _e("4.2", "정책과제", "16.4"),
+                _e("4.5", "정책과제", "15.7"),
+            ]
+        )
+        assert finds == []
+
+    def test_substring_metrics_do_not_join(self):
+        """4차 해부 - 포함일치('인지'⊆'인지도')가 과결합을 만들어 완전일치로 조임."""
+        finds = join_conflicts([_e("1.3", "인지", "45.2"), _e("2.5", "인지도", "15")])
+        assert finds == []
 
     def test_qualifier_mismatch_downgrades(self):
         finds = join_conflicts(

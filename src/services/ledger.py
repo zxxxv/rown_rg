@@ -49,6 +49,45 @@ _YEAR_RE = re.compile(r"(?:20\d{2}|[’']\d{2})\s*년?")
 # range 표기: "0.9~2.7조 원" — max를 point로 승격하는 패턴의 원천.
 _RANGE_RE = re.compile(r"([0-9][0-9,.]*)\s*[~∼–-]\s*([0-9][0-9,.]*)")
 
+# 값·한정자 추출 전에 걷어내는 잡음 — 4차 런 오탐 763건 해부의 직접 산물.
+# 인용 마커의 번호가 값으로 적립된 게 611건("* 출처: …(출처 13)" → 출처=13),
+# 규정·법안 번호가 값 행세한 게 그다음(모법=956 ← "규정(EU) 2023/956").
+# 마커는 chunk_id 해소에 계속 쓰므로 원문에서 먼저 뽑고, 값 추출만 정제본을 본다.
+_NOISE_RES = (
+    _MARKER_RE,
+    re.compile(r"(?:\((?:EU|EC)\)\s*)?(?:19|20)\d{2}\s*/\s*\d{1,5}"),  # 규정 2023/956
+    re.compile(r"\d{1,5}\s*/\s*(?:19|20)\d{2}"),  # 구형 표기 1907/2006
+    re.compile(r"\b[SH]\.\s?(?:R\.\s?)?\d{2,5}\b"),  # 미 의회 법안 S. 4355
+    re.compile(r"제?\s*\d{2,3}\s*대\s*(?:의회|국회)"),  # 회기 "117대 의회"
+    re.compile(r"제\s*\d+\s*호"),  # 법률 제18469호
+)
+
+# 지표가 될 수 없는 라벨 — 표기 장치(출처 줄·각주)와 표의 관용어. 정규화 완전일치 비교.
+_METRIC_BLACKLIST = {
+    "출처",
+    "자료",
+    "자료출처",
+    "출전",
+    "근거",
+    "각주",
+    "주석",
+    "비고",
+    "참고",
+    "구분",
+    "합계",
+    "총계",
+    "소계",
+    "기타",
+    "그림",
+    "표",
+}
+
+
+def _strip_value_noise(text: str) -> str:
+    for rx in _NOISE_RES:
+        text = rx.sub(" ", text)
+    return text
+
 
 def _markers_in(text: str) -> list[int]:
     out: list[int] = []
@@ -155,9 +194,12 @@ def extract_entries(
 
     def add(e: dict[str, Any]) -> None:
         key = (e["metric"], e["value"])
-        if e["metric"] and e["value"] and key not in seen:
-            seen.add(key)
-            entries.append(e)
+        if not e["metric"] or not e["value"] or key in seen:
+            return
+        if _norm_metric(e["metric"]) in _METRIC_BLACKLIST:
+            return
+        seen.add(key)
+        entries.append(e)
 
     # ── 표: 행 라벨 = 지표, 열 머리 = 한정자. 출처는 블록 전체 마커 ∪ 출처 줄.
     for block, block_text in _table_blocks(content):
@@ -170,11 +212,12 @@ def extract_entries(
             if not row_label:
                 continue
             for ci, cell in enumerate(row[1:], start=1):
-                found = _first_value(cell)
+                cell_clean = _strip_value_noise(cell)
+                found = _first_value(cell_clean)
                 if found is None:
                     continue
                 value, unit = found
-                q = _qualifiers_of(cell)
+                q = _qualifiers_of(cell_clean)
                 col = _clean_label(header[ci]) if ci < len(header) else ""
                 if col:
                     q["열"] = col
@@ -202,7 +245,8 @@ def extract_entries(
         m = _EXPLICIT_RE.match(line)
         if m:
             metric = _clean_label(m.group(1))
-            found = _first_value(m.group(2))
+            tail = _strip_value_noise(m.group(2))
+            found = _first_value(tail)
             if metric and found:
                 value, unit = found
                 add(
@@ -210,7 +254,7 @@ def extract_entries(
                         metric=metric,
                         value=value,
                         unit=unit,
-                        qualifiers=_qualifiers_of(m.group(2)),
+                        qualifiers=_qualifiers_of(tail),
                         section_ref=section_ref,
                         chunk_ids=chunk_ids,
                         source_kind="explicit",
@@ -219,7 +263,8 @@ def extract_entries(
                 continue
         b = _BULLET_LABEL_RE.match(line)
         if b:
-            found = _first_value(b.group(2))
+            btail = _strip_value_noise(b.group(2))
+            found = _first_value(btail)
             if found:
                 value, unit = found
                 add(
@@ -227,7 +272,7 @@ def extract_entries(
                         metric=_clean_label(b.group(1)),
                         value=value,
                         unit=unit,
-                        qualifiers=_qualifiers_of(b.group(2)),
+                        qualifiers=_qualifiers_of(btail),
                         section_ref=section_ref,
                         chunk_ids=chunk_ids,
                         source_kind="prose",
@@ -332,19 +377,15 @@ def _norm_metric(text: str) -> str:
 
 
 def _same_metric(a: str, b: str) -> bool:
-    """지표명 동일성 v1 — 정규화 후 동일 또는 포함(길이 3+).
+    """지표명 동일성 — 정규화 완전일치.
 
-    임계 재캘리브레이션 전의 보수 기본값이다. 임베딩 클러스터링(consistency_graph의
-    subject 정규화 실증)은 지표명 표본으로 임계를 새로 잰 뒤 붙인다 — 문장 중복 0.9는
-    짧은 지표명에 전이되지 않는다(분포가 다름).
+    v1은 포함일치(3자+)였는데 4차 런 해부에서 '인지'⊆'인지도'류 과결합이 비-마커
+    오탐의 한 축으로 실측돼 완전일치로 조였다. 참조 지정("6.2(총사업비)")의 매칭은
+    사용자가 쓴 지표명이라 select_for_refs 쪽 부분일치를 유지한다. 임베딩 클러스터링은
+    지표명 표본으로 임계를 새로 잰 뒤에 붙인다(문장 중복 0.9는 전이 불가).
     """
     na, nb = _norm_metric(a), _norm_metric(b)
-    if not na or not nb:
-        return False
-    if na == nb:
-        return True
-    shorter, longer = (na, nb) if len(na) <= len(nb) else (nb, na)
-    return len(shorter) >= 3 and shorter in longer
+    return bool(na) and na == nb
 
 
 def _values_conflict(a: dict[str, Any], b: dict[str, Any]) -> bool:
@@ -360,12 +401,29 @@ def _values_conflict(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return lo > 0 and (hi - lo) / hi > 0.02  # 반올림·절사 허용(2%)
 
 
-def _qualifiers_match(a: dict[str, Any], b: dict[str, Any]) -> bool:
+def _qualifiers_confirmed(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """critical 승격 조건 — 같은 것을 말했다는 **적극적** 확인이 있을 때만.
+
+    v1은 '불일치만 아니면 일치'여서 한정자가 양쪽 다 빈 쌍이 전부 critical로
+    승격됐다(4차 해부: 다른 설문 항목의 '인지', 다른 표의 행 라벨 '철강'류가
+    비-마커 오탐 152건의 몸통). 설계 확정본 원문이 "미상 → 확인 필요"다.
+    시점이 양쪽에 있고 같아야 confirmed, 표 열 머리·시나리오는 있으면 같아야 한다.
+    """
     qa, qb = a.get("qualifiers") or {}, b.get("qualifiers") or {}
-    for key in ("시점", "시나리오"):
-        if key in qa and key in qb and qa[key] != qb[key]:
-            return False
-    return True
+    if "시나리오" in qa and "시나리오" in qb and qa["시나리오"] != qb["시나리오"]:
+        return False
+    return "시점" in qa and "시점" in qb and qa["시점"] == qb["시점"]
+
+
+def _different_table_column(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """열 머리가 양쪽에 있고 서로 다르면 아예 다른 지표다 — 경고도 내지 않는다.
+
+    4차 해부: '철강'이 3.2 표(수출액)와 3.4 표(비용 증가율)에서 행 라벨로 겹쳐
+    수십 건이 걸렸다. 행 라벨은 대상이고 지표의 정체는 열 머리에 있다.
+    """
+    ca = (a.get("qualifiers") or {}).get("열")
+    cb = (b.get("qualifiers") or {}).get("열")
+    return bool(ca) and bool(cb) and ca != cb
 
 
 def _range_promotion(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any] | None:
@@ -386,17 +444,34 @@ def join_conflicts(all_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """문서 취합 조인 — 같은 지표, 다른 절, 다른 값.
 
     티어(오탐 비용 비대칭 설계):
-    - critical: 지표 일치 + 한정자 일치 + 값 상이 — "같은 것을 다르게 말했다"
-    - warning(확인 필요): 한정자 불일치/미상 — 1.8조=기준 vs 2.7조=상단일 수 있다
+    - critical: 지표 일치 + 시점 한정자 **적극 일치**(양쪽에 있고 같음) + 값 상이
+      — "같은 시점의 같은 것을 다르게 말했다"
+    - warning(확인 필요): 한정자 불일치·미상 — 1.8조=기준 vs 2.7조=상단일 수 있고,
+      한정자 없는 쌍은 다른 설문 항목·다른 표의 같은 행 라벨일 수 있다(4차 실측)
     - warning(범위 승격): range의 max가 딴 절에서 point로 굳음
     """
     findings: list[dict[str, Any]] = []
     reported: set[tuple[str, str, str, str]] = set()
+    # 한 절 안에서 여러 값을 갖는 지표명은 식별자가 아니라 목록 범주다("정책과제:
+    # 29.2%·16.4%·…" 같은 설문 보기 나열 — 4차 해부에서 짝조합 20건 폭발). 조인 제외.
+    values_by_key: dict[tuple[str, str], set[str]] = {}
+    for e in all_entries:
+        values_by_key.setdefault((_norm_metric(e["metric"]), e["section_ref"]), set()).add(
+            str(e["value"])
+        )
+    ambiguous = {k for k, vals in values_by_key.items() if len(vals) > 1}
     for i, a in enumerate(all_entries):
         for b in all_entries[i + 1 :]:
             if a["section_ref"] == b["section_ref"]:
                 continue
+            if (_norm_metric(a["metric"]), a["section_ref"]) in ambiguous or (
+                _norm_metric(b["metric"]),
+                b["section_ref"],
+            ) in ambiguous:
+                continue
             if not _same_metric(a["metric"], b["metric"]):
+                continue
+            if _different_table_column(a, b):
                 continue
             promo = _range_promotion(a, b)
             if promo:
@@ -419,7 +494,7 @@ def join_conflicts(all_entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 continue
             if not _values_conflict(a, b):
                 continue
-            confirmed = _qualifiers_match(a, b)
+            confirmed = _qualifiers_confirmed(a, b)
             key = (
                 min(a["section_ref"], b["section_ref"]),
                 max(a["section_ref"], b["section_ref"]),
