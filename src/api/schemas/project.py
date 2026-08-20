@@ -40,6 +40,8 @@ class PresetRead(BaseModel):
     updated_at: datetime | None = None
     # shared일 때 누구 것인지 — 같은 이름이 둘일 때 가려 고르는 단서(에이전트와 같은 규약).
     owner_name: str | None = None
+    # personal일 때 내 프리셋의 공개 여부 — 목록에서 바로 토글하려면 실려 와야 한다.
+    is_public: bool = False
 
 
 class PresetSectionRead(BaseModel):
@@ -97,6 +99,12 @@ class UserPresetUpsert(BaseModel):
         if not any(ch.sections for ch in self.chapters):
             raise ValueError("절이 1개 이상 있어야 프리셋으로 저장할 수 있습니다")
         return self
+
+
+class PresetVisibilityUpdate(BaseModel):
+    """공개 토글 전용 부분 수정 — 목록 화면이 outline 없이 켜고 끈다."""
+
+    is_public: bool
 
 
 class UserPresetRead(BaseModel):

@@ -389,6 +389,8 @@ export type LibraryNode =
       children: LibraryNode[];
       virtual?: boolean;
       writable?: WritableTarget | null;
+      // 폴더의 등록자(소유자) - 파일은 file_meta.registered_by, 폴더는 이 필드.
+      owner_name?: string | null;
     }
   | {
       id: string;
@@ -411,6 +413,7 @@ export const LibraryNodeSchema: z.ZodType<LibraryNode> = z.lazy(() =>
       children: z.array(LibraryNodeSchema),
       virtual: z.boolean().optional(),
       writable: WritableTargetSchema.nullish(),
+      owner_name: z.string().nullish(),
     }),
     z.object({
       id: z.string(),

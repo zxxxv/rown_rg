@@ -15,6 +15,8 @@ export const PresetReadSchema = z.object({
   scope: z.enum(["system", "personal", "shared"]).default("system"),
   owner_name: z.string().nullish(),
   updated_at: z.string().nullish(),
+  // personal일 때 내 프리셋의 공개 여부 - 목록에서 바로 토글한다.
+  is_public: z.boolean().default(false),
 });
 export type PresetRead = z.infer<typeof PresetReadSchema>;
 
@@ -122,6 +124,20 @@ export function useUpdateUserPreset() {
   return useMutation({
     mutationFn: async ({ id, ...body }: UserPresetBody & { id: string }) => {
       const data = await apiClient.put<unknown>(`presets/personal/${id}`, { json: body });
+      return UserPresetSchema.parse(data);
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: presetKeys.all }),
+  });
+}
+
+/** 목록에서 바로 켜고 끄는 공개 토글 - PUT은 목차 전체를 요구해 토글용으로 못 쓴다. */
+export function useSetPresetVisibility() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, isPublic }: { id: string; isPublic: boolean }) => {
+      const data = await apiClient.patch<unknown>(`presets/personal/${id}/visibility`, {
+        json: { is_public: isPublic },
+      });
       return UserPresetSchema.parse(data);
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: presetKeys.all }),

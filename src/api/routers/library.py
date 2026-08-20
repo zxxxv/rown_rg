@@ -14,6 +14,7 @@ GET files/{id}/download, PATCH nodes/{id}/visibility.
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -219,10 +220,18 @@ def _project_folder(
             if s.source_type == source_type
         ]
         children.append(
-            LibraryTreeFolder(id=f"{base}-{suffix}", name=label, virtual=True, children=files)
+            LibraryTreeFolder(
+                id=f"{base}-{suffix}",
+                name=label,
+                virtual=True,
+                owner_name=owner_name,
+                children=files,
+            )
         )
 
-    return LibraryTreeFolder(id=base, name=title, virtual=True, children=children)
+    return LibraryTreeFolder(
+        id=base, name=title, virtual=True, owner_name=owner_name, children=children
+    )
 
 
 async def _build_projects_folder(
@@ -241,7 +250,13 @@ async def _build_projects_folder(
             .order_by(Project.created_at.desc())
         )
     ).all()
-    empty = LibraryTreeFolder(id=f"{prefix}-projects", name="프로젝트", virtual=True, children=[])
+    empty = LibraryTreeFolder(
+        id=f"{prefix}-projects",
+        name="프로젝트",
+        virtual=True,
+        owner_name=user_name,
+        children=[],
+    )
     if not projs:
         return empty
 
@@ -309,12 +324,19 @@ def _prompt_file(
 
 
 async def _build_prompts_folder(
-    session: AsyncSession, user_id: UUID, user_name: str, *, prefix: str = "me"
+    session: AsyncSession,
+    user_id: UUID,
+    user_name: str,
+    *,
+    prefix: str = "me",
+    editable: bool = True,
 ) -> LibraryTreeFolder:
     """개인 루트의 '프롬프트' 폴더 — 해당 사용자의 에이전트/작성 규칙(개인 DB).
 
     prefix로 폴더 id를 네임스페이스한다(사용자별 자료 뷰 중복 방지). 프롬프트 파일 id는
-    개인 프롬프트 UUID라 사용자 간 충돌하지 않는다.
+    개인 프롬프트 UUID라 사용자 간 충돌하지 않는다. editable=False는 관리자 미러 —
+    열람만 되고 수정 경로는 소유자 전용이라, 편집 가능으로 내리면 저장에서 404가 난다.
+    크기는 본문 바이트 수 — 0 B 고정으로 보이던 문제(2026-08-20 운영 지적).
     """
     personals = await list_personal(session, user_id)
 
@@ -322,9 +344,10 @@ async def _build_prompts_folder(
         return _prompt_file(
             f"uprompt-{p.id}",  # type: ignore[attr-defined]
             p.name,  # type: ignore[attr-defined]
-            PromptRef(scope="personal", kind=p.kind, ref=str(p.id), editable=True),  # type: ignore[attr-defined]
+            PromptRef(scope="personal", kind=p.kind, ref=str(p.id), editable=editable),  # type: ignore[attr-defined]
             user_name,
             p.updated_at,  # type: ignore[attr-defined]
+            size_bytes=len((p.content or "").encode("utf-8")),  # type: ignore[attr-defined]
         )
 
     agents: list[LibraryTreeFolder | LibraryTreeFile] = [
@@ -337,9 +360,10 @@ async def _build_prompts_folder(
         _prompt_file(
             f"upreset-{row.id}",
             row.name,
-            PromptRef(scope="personal", kind="preset", ref=str(row.id), editable=True),
+            PromptRef(scope="personal", kind="preset", ref=str(row.id), editable=editable),
             user_name,
             row.updated_at,
+            size_bytes=len(json.dumps(row.outline or {}, ensure_ascii=False).encode("utf-8")),
         )
         for row in await list_user_presets(session, user_id)
     ]
@@ -387,24 +411,38 @@ def _system_prompts_folder() -> LibraryTreeFolder:
     rules: list[LibraryTreeFolder | LibraryTreeFile] = [
         _sys(f"syscomp-{name}", name, "rule", name) for name in list_components()
     ]
-    presets: list[LibraryTreeFolder | LibraryTreeFile] = [
-        _prompt_file(
-            f"syspreset-{p.id}",
-            p.name,
-            PromptRef(scope="system", kind="preset", ref=p.id, editable=False),
-            "시스템",
-            _PROMPT_EPOCH,
+    presets: list[LibraryTreeFolder | LibraryTreeFile] = []
+    for p in list_presets():
+        # 파일명은 name과 같다 — id로 stat이 안 잡히면 name으로 한 번 더.
+        stat = catalog_file_stat("preset", p.id) or catalog_file_stat("preset", p.name)
+        presets.append(
+            _prompt_file(
+                f"syspreset-{p.id}",
+                p.name,
+                PromptRef(scope="system", kind="preset", ref=p.id, editable=False),
+                "시스템",
+                datetime.fromtimestamp(stat[1], tz=UTC) if stat else _PROMPT_EPOCH,
+                size_bytes=stat[0] if stat else 0,
+            )
         )
-        for p in list_presets()
-    ]
     return LibraryTreeFolder(
         id="sys-prompts",
         name="시스템 프롬프트",
         virtual=True,
         children=[
-            LibraryTreeFolder(id="sys-agents", name="에이전트", virtual=True, children=agents),
-            LibraryTreeFolder(id="sys-rules", name="작성 규칙", virtual=True, children=rules),
-            LibraryTreeFolder(id="sys-presets", name="목차 프리셋", virtual=True, children=presets),
+            LibraryTreeFolder(
+                id="sys-agents", name="에이전트", virtual=True, owner_name="시스템", children=agents
+            ),
+            LibraryTreeFolder(
+                id="sys-rules", name="작성 규칙", virtual=True, owner_name="시스템", children=rules
+            ),
+            LibraryTreeFolder(
+                id="sys-presets",
+                name="목차 프리셋",
+                virtual=True,
+                owner_name="시스템",
+                children=presets,
+            ),
         ],
     )
 
@@ -433,6 +471,7 @@ async def _shared_folder(session: AsyncSession, viewer_id: UUID) -> LibraryTreeF
             ),
             owner_name,
             row.updated_at,
+            size_bytes=len((row.content or "").encode("utf-8")),
         )
         for row, owner_name in await list_public_agents(session, viewer_id)
     ]
@@ -450,6 +489,7 @@ async def _shared_folder(session: AsyncSession, viewer_id: UUID) -> LibraryTreeF
             ),
             owner_name,
             row.updated_at,
+            size_bytes=len(json.dumps(row.outline or {}, ensure_ascii=False).encode("utf-8")),
         )
         for row, owner_name in await list_public_presets(session, viewer_id)
     ]
@@ -501,9 +541,11 @@ async def get_tree(
             )
         children = [built for c in children_map[n.id] if (built := build(c)) is not None]
         scope: Literal["personal", "company"] = "personal" if n.is_personal else "company"
+        creator = n.__dict__.get("creator")
         return LibraryTreeFolder(
             id=str(n.id),
             name=n.name,
+            owner_name=creator.name if creator is not None else None,
             children=children,
             writable=WritableTarget(parent_id=str(n.id), scope=scope),
         )
@@ -539,11 +581,16 @@ async def get_tree(
             for uid, name, is_active in user_rows:
                 prefix = f"u{uid}"
                 projects_f = await _build_projects_folder(session, uid, name, prefix=prefix)
-                prompts_f = await _build_prompts_folder(session, uid, name, prefix=prefix)
+                # 미러는 열람 전용 — editable로 내리면 편집기가 열리고 저장에서 404가 난다
+                # (수정 경로는 소유자 전용 유지).
+                prompts_f = await _build_prompts_folder(
+                    session, uid, name, prefix=prefix, editable=False
+                )
                 files_f = LibraryTreeFolder(
                     id=f"{prefix}-files",
                     name="내 자료",
                     virtual=True,
+                    owner_name=name,
                     children=[b for n in nodes_by_user.get(uid, []) if (b := build(n)) is not None],
                 )
                 user_folders.append(
@@ -551,6 +598,7 @@ async def get_tree(
                         id=f"admin-user-{uid}",
                         name=f"{name}{'' if is_active else ' (비활성)'}",
                         virtual=True,
+                        owner_name=name,
                         children=[projects_f, prompts_f, files_f],
                     )
                 )

@@ -33,15 +33,21 @@ export function PresetSelect({ onPresetChange, disabled }: PresetSelectProps) {
   const toOption = (p: (typeof rows)[number]): PresetOption => ({
     value: p.id,
     label: p.name,
-    description: `${p.desc} · ${p.n_chapters}챕터 ${p.n_sections}섹션 골격`,
+    // 공유는 누구 것인지 앞에 박는다 - 같은 이름의 프리셋이 사람마다 있을 수 있다.
+    description: `${p.scope === "shared" && p.owner_name ? `${p.owner_name} 공개 · ` : ""}${p.desc} · ${p.n_chapters}챕터 ${p.n_sections}섹션 골격`,
   });
   // 내가 저장한 목차 구성은 시스템 프리셋과 동급 선택지 - 같은 구성으로 여러
   // 정책을 분석하는 재사용 동선(2026-08-12 QA 2번 확장). 자유 주제는 빈 목차 시작.
+  // 동료 공개는 시스템에 뭉치지 않고 제 그룹으로 - 출처가 보여야 고를 수 있다(2026-08-20).
   const groups: { title: string | null; options: PresetOption[] }[] = [
-    { title: "시스템 프리셋", options: rows.filter((p) => p.scope !== "personal").map(toOption) },
+    { title: "시스템 프리셋", options: rows.filter((p) => p.scope === "system").map(toOption) },
     {
       title: "내 프리셋 - 저장한 목차 구성 불러오기",
       options: rows.filter((p) => p.scope === "personal").map(toOption),
+    },
+    {
+      title: "동료 공개 - 다른 사용자가 공개한 구성",
+      options: rows.filter((p) => p.scope === "shared").map(toOption),
     },
     { title: null, options: [FREE_TOPIC_OPTION] },
   ].filter((g) => g.options.length > 0);

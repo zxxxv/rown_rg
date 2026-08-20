@@ -67,15 +67,17 @@ async def list_public_presets(
 
 
 async def get_readable_preset(
-    session: AsyncSession, viewer_id: UUID, preset_id: UUID
+    session: AsyncSession, viewer_id: UUID, preset_id: UUID, *, is_admin: bool = False
 ) -> UserPreset:
-    """볼 수 있는 프리셋 1건 — 내 것이거나 공개된 것.
+    """볼 수 있는 프리셋 1건 — 내 것이거나 공개된 것, 관리자는 전부(감사·지원 미러).
 
     골격 조회·프로젝트 생성 검증이 이걸 쓴다. 소유자 전용(get_user_preset)은 수정·삭제
     경로가 계속 쓴다 — 남의 공개 프리셋을 고칠 수 있으면 공유가 아니라 공용 편집이 된다.
+    is_admin은 라이브러리 '사용자별 자료'에서 열람만 뚫는다 — 트리가 노드를 보여주면서
+    상세가 404를 내면 화면에선 "안 보인다"가 된다(2026-08-20 운영 실측).
     """
     row = await session.get(UserPreset, preset_id)
-    if row is None or (row.owner_id != viewer_id and not row.is_public):
+    if row is None or (row.owner_id != viewer_id and not row.is_public and not is_admin):
         raise NotFoundError(message="프리셋을 찾을 수 없습니다", code="PRESET_NOT_FOUND")
     return row
 

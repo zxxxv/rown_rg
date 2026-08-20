@@ -433,7 +433,7 @@ export function PromptDialog({
               />
               <div className="flex flex-col gap-0.5">
                 <Label htmlFor="prompt-public" className="cursor-pointer">
-                  사내에 공개
+                  공개
                 </Label>
                 <p className="text-xs text-fg-tertiary">
                   {isPublic

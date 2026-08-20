@@ -2,7 +2,12 @@ import { ChevronDown, ChevronRight, FilePlus2, Pencil, ScrollText, Trash2 } from
 import { useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
-import { type UserPreset, useDeleteUserPreset, usePresets } from "@/api/presets";
+import {
+  type UserPreset,
+  useDeleteUserPreset,
+  usePresets,
+  useSetPresetVisibility,
+} from "@/api/presets";
 import {
   type PersonalPrompt,
   type PromptKind,
@@ -10,6 +15,7 @@ import {
   useDeletePersonalPrompt,
   useListPersonalPrompts,
   useListSystemPrompts,
+  useUpdatePersonalPrompt,
 } from "@/api/prompts";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { AppShell } from "@/components/layout/AppShell";
@@ -24,9 +30,72 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { PresetEditorDialog } from "@/features/project-config/PresetEditorDialog";
 import { PromptDialog, SECTION_FIELDS } from "@/features/prompts/PromptDialog";
 import { useAuth } from "@/hooks/useAuth";
+
+/** 목록에서 바로 켜고 끄는 공개 스위치(에이전트) - 편집을 열지 않아도 된다(2026-08-20). */
+function AgentPublicToggle({ prompt }: { prompt: PersonalPrompt }) {
+  const update = useUpdatePersonalPrompt(prompt.id);
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-fg-secondary">
+      공개
+      <Switch
+        checked={prompt.is_public}
+        disabled={update.isPending}
+        onCheckedChange={(on) =>
+          update.mutate(
+            { is_public: on },
+            {
+              onSuccess: () =>
+                toast.success(on ? "회사 전체에 공개했습니다" : "공개를 껐습니다", {
+                  description: on
+                    ? "동료의 에이전트 선택 목록과 라이브러리 동료 공개에 바로 뜹니다."
+                    : "진행 중이던 런은 시작 시점 내용으로 계속됩니다.",
+                }),
+              onError: (err) =>
+                toast.error("공개 설정 실패", {
+                  description: err instanceof ApiError ? err.message : "다시 시도해 주세요.",
+                }),
+            },
+          )
+        }
+      />
+    </span>
+  );
+}
+
+/** 목록에서 바로 켜고 끄는 공개 스위치(목차 프리셋). */
+function PresetPublicToggle({ id, isPublic }: { id: string; isPublic: boolean }) {
+  const update = useSetPresetVisibility();
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-fg-secondary">
+      공개
+      <Switch
+        checked={isPublic}
+        disabled={update.isPending}
+        onCheckedChange={(on) =>
+          update.mutate(
+            { id, isPublic: on },
+            {
+              onSuccess: () =>
+                toast.success(on ? "회사 전체에 공개했습니다" : "공개를 껐습니다", {
+                  description: on
+                    ? "동료의 보고서 유형 선택지와 라이브러리 동료 공개에 바로 뜹니다."
+                    : undefined,
+                }),
+              onError: (err) =>
+                toast.error("공개 설정 실패", {
+                  description: err instanceof ApiError ? err.message : "다시 시도해 주세요.",
+                }),
+            },
+          )
+        }
+      />
+    </span>
+  );
+}
 
 const KIND_META: Record<PromptKind, { title: string; desc: string; placeholder: string }> = {
   agent: {
@@ -122,6 +191,7 @@ function MyPresetsSection() {
                 </span>
                 <span className="truncate text-[11px] text-fg-tertiary">{p.desc}</span>
               </div>
+              <PresetPublicToggle id={p.id.replace(/^u:/, "")} isPublic={p.is_public} />
               <Button
                 variant="ghost"
                 size="sm"
@@ -131,9 +201,7 @@ function MyPresetsSection() {
                     key: p.id,
                     name: p.name,
                     description: p.desc,
-                    // 목록에는 공개 여부가 안 실려 온다(카탈로그 표면) - 편집 다이얼로그가
-                    // 상세를 다시 읽어 채운다. 여기선 기본값으로 둔다.
-                    is_public: false,
+                    is_public: p.is_public,
                     n_chapters: p.n_chapters,
                     n_sections: p.n_sections,
                     updated_at: p.updated_at ?? "",
@@ -216,14 +284,14 @@ function KindSection({ kind }: { kind: PromptKind }) {
                       신규
                     </Badge>
                   )}
-                  {/* 공개 중인지는 목록에서 바로 보여야 한다 - 편집을 열어야만
-                      알 수 있으면 열어 둔 걸 잊는다. */}
-                  {p.is_public ? <Badge className="shrink-0 text-[10px]">사내 공개</Badge> : null}
                 </span>
                 <span className="truncate font-mono text-[11px] text-fg-tertiary">
                   변경 {p.updated_at.slice(0, 10)}
                 </span>
               </div>
+              {/* 공개는 목록에서 바로 켜고 끈다(2026-08-20) - 편집을 열어야만 보이면
+                  열어 둔 걸 잊는다. 작성 규칙은 공개 대상이 아니라 스위치가 없다. */}
+              {kind === "agent" ? <AgentPublicToggle prompt={p} /> : null}
               <Button variant="ghost" size="sm" onClick={() => setEditing(p)}>
                 <Pencil className="mr-1 h-3.5 w-3.5" />
                 편집

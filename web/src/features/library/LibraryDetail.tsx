@@ -210,7 +210,7 @@ function FolderBody({
           kind: "폴더",
           sizeBytes: sub.bytes,
           pages: null,
-          registrant: null,
+          registrant: child.owner_name ?? null,
           date: sub.latest,
           isProject: false,
         };

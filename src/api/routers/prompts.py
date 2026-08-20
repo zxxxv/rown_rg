@@ -30,7 +30,7 @@ from src.prompts import list_analysts, list_components, load_analyst, load_compo
 from src.services.prompts import (
     create_personal,
     delete_personal,
-    get_personal,
+    get_personal_readable,
     import_public_agent,
     list_personal,
     resolve_analysts,
@@ -103,7 +103,14 @@ async def get_my_prompt(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> PersonalPromptRead:
-    row = await get_personal(session, current_user.id, prompt_id)
+    # 열람은 소유자·공개·관리자까지(라이브러리 '사용자별 자료' 미러) — 수정·삭제는
+    # 아래 엔드포인트들이 get_personal(소유자 전용)으로 그대로 막는다.
+    row = await get_personal_readable(
+        session,
+        current_user.id,
+        prompt_id,
+        is_admin=current_user.role in ("admin", "super_admin"),
+    )
     return PersonalPromptRead.model_validate(row)
 
 

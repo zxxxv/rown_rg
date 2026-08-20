@@ -29,6 +29,7 @@ from src.api.schemas.project import (
     PresetDetailRead,
     PresetRead,
     PresetSectionRead,
+    PresetVisibilityUpdate,
     ProjectCreate,
     ProjectRead,
     SourceIncludeUpdate,
@@ -101,6 +102,7 @@ from src.services.user_presets import (
     create_user_preset,
     delete_user_preset,
     get_readable_preset,
+    get_user_preset,
     import_public_preset,
     list_public_presets,
     list_user_presets,
@@ -287,6 +289,7 @@ async def get_presets(
                 n_sections=n_sec,
                 scope="personal",
                 updated_at=row.updated_at,
+                is_public=row.is_public,
             )
         )
     # 남이 공개한 프리셋 — 덮어쓰지 않고 뒤에 붙기만 한다(에이전트 공유와 같은 규약).
@@ -370,6 +373,34 @@ async def update_personal_preset(
     )
 
 
+@presets_router.patch("/personal/{preset_id}/visibility", response_model=UserPresetRead)
+async def set_preset_visibility(
+    preset_id: UUID,
+    data: PresetVisibilityUpdate,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> UserPresetRead:
+    """공개 토글 전용 — 목록에서 바로 켜고 끈다(2026-08-20 사용자 요청).
+
+    PUT은 목차 전체를 요구해 토글용으로 못 쓴다(목록 화면은 outline을 안 들고 있다).
+    """
+    row = await get_user_preset(session, current_user.id, preset_id)
+    row.is_public = data.is_public
+    await session.flush()
+    await session.refresh(row)
+    n_ch, n_sec = _preset_counts(row.outline)
+    return UserPresetRead(
+        id=row.id,
+        key=personal_preset_key(row.id),
+        name=row.name,
+        description=row.description,
+        n_chapters=n_ch,
+        n_sections=n_sec,
+        is_public=row.is_public,
+        updated_at=row.updated_at,
+    )
+
+
 @presets_router.post(
     "/personal/import/{source_id}",
     response_model=UserPresetRead,
@@ -421,7 +452,13 @@ async def get_preset_detail(
     personal_id = parse_personal_key(preset_key)
     if personal_id is not None:
         # 내 것이거나 공개된 것 — 골격을 봐야 목차 편집기의 초기값으로 쓸 수 있다.
-        row = await get_readable_preset(session, current_user.id, personal_id)
+        # 관리자는 비공개도 열람만 가능(라이브러리 '사용자별 자료' 미러).
+        row = await get_readable_preset(
+            session,
+            current_user.id,
+            personal_id,
+            is_admin=current_user.role in ("admin", "super_admin"),
+        )
         return PresetDetailRead(
             id=preset_key,
             name=row.name,

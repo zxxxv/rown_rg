@@ -583,42 +583,58 @@ function AnalystPicker({
         {analystsQuery.isLoading ? (
           <p className="text-xs text-fg-tertiary">카탈로그 불러오는 중…</p>
         ) : (
-          analysts.map((a) => {
-            const active = selected.includes(a.name);
-            const order = selected.indexOf(a.name);
-            return (
-              <button
-                key={a.id}
-                type="button"
-                onClick={() => toggle(a.name)}
-                title={[
-                  a.shared && a.owner_name ? `${a.owner_name} 공개` : "",
-                  a.desc,
-                  a.pages ? `${a.pages}p` : "",
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-                aria-pressed={active}
-                className={cn(
-                  "rounded-full border px-2.5 py-1 text-xs transition-colors",
-                  active
-                    ? "border-accent bg-bg-info font-medium text-fg"
-                    : "border-border bg-bg text-fg-secondary hover:border-fg-tertiary",
-                )}
-              >
-                {active ? `${order + 1}. ` : ""}
-                {a.name}
-                <span className="ml-1 text-[10px] text-fg-tertiary">{a.cat}</span>
-                {/* 남이 공개한 것임을 칩에서 바로 알린다 - 이름만 보면 내 것과
-                    구분이 안 되는데, 주인이 고치면 다음 실행부터 글이 달라진다. */}
-                {a.shared ? (
-                  <span className="ml-1 text-[10px] text-accent">
-                    공유{a.owner_name ? ` · ${a.owner_name}` : ""}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })
+          // 출처별 구분(사용자 요청 2026-08-20): 이름만 보면 시스템/내 것/남의 공유가
+          // 안 갈린다. 개인·공유는 id가 "u-"로 시작하고 공유는 shared 플래그가 선다.
+          [
+            {
+              label: "시스템",
+              items: analysts.filter((a) => !a.shared && !a.id.startsWith("u-")),
+            },
+            {
+              label: "내 에이전트",
+              items: analysts.filter((a) => !a.shared && a.id.startsWith("u-")),
+            },
+            { label: "공유 (다른 사람 공개)", items: analysts.filter((a) => a.shared) },
+          ]
+            .filter((g) => g.items.length > 0)
+            .map((g) => (
+              <div key={g.label} className="flex w-full flex-wrap items-center gap-1.5">
+                <span className="w-full text-[11px] font-medium text-fg-tertiary">{g.label}</span>
+                {g.items.map((a) => {
+                  const active = selected.includes(a.name);
+                  const order = selected.indexOf(a.name);
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => toggle(a.name)}
+                      title={[
+                        a.shared && a.owner_name ? `${a.owner_name} 공개` : "",
+                        a.desc,
+                        a.pages ? `${a.pages}p` : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                      aria-pressed={active}
+                      className={cn(
+                        "rounded-full border px-2.5 py-1 text-xs transition-colors",
+                        active
+                          ? "border-accent bg-bg-info font-medium text-fg"
+                          : "border-border bg-bg text-fg-secondary hover:border-fg-tertiary",
+                      )}
+                    >
+                      {active ? `${order + 1}. ` : ""}
+                      {a.name}
+                      <span className="ml-1 text-[10px] text-fg-tertiary">{a.cat}</span>
+                      {/* 주인이 고치면 다음 실행부터 글이 달라지므로 누구 것인지 칩에 남긴다 */}
+                      {a.shared && a.owner_name ? (
+                        <span className="ml-1 text-[10px] text-accent">{a.owner_name}</span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ))
         )}
         <button
           type="button"

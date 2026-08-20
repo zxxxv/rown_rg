@@ -113,6 +113,11 @@ def catalog_file_stat(kind: str, ref: str) -> tuple[int, float] | None:
     """
     if kind == "rule":
         path = _COMPONENTS_DIR / f"{ref}.md"
+    elif kind == "preset":
+        # 프리셋 파일명은 name과 같다("예비타당성조사.json") — id로도 폴백 탐색.
+        path = _PRESETS_DIR / f"{ref}.json"
+        if not path.is_file():
+            path = next((p for p in _indexed_files(_PRESETS_DIR) if p.stem == ref), None)
     else:
         path = next(
             (p for p in _indexed_files(_ANALYSTS_DIR) if p.stem.startswith(f"{ref}_")), None

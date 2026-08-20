@@ -108,6 +108,9 @@ class LibraryTreeFolder(BaseModel):
     virtual: bool = False
     # 업로드·폴더생성 대상이면 컨텍스트, 아니면 None(쓰기 불가).
     writable: WritableTarget | None = None
+    # 폴더의 등록자(소유자) 표시용 — 파일은 file_meta.registered_by가 담지만 폴더 행은
+    # 담을 곳이 없어 목록에서 "-"로 비었다(2026-08-20 운영 지적). 없으면 종전 표시.
+    owner_name: str | None = None
 
 
 class LibraryTreeResponse(BaseModel):

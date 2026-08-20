@@ -102,6 +102,21 @@ async def get_personal(session: AsyncSession, owner_id: UUID, prompt_id: UUID) -
     return row
 
 
+async def get_personal_readable(
+    session: AsyncSession, viewer_id: UUID, prompt_id: UUID, *, is_admin: bool = False
+) -> UserPrompt:
+    """열람용 로드 — 소유자·공개된 것·관리자(감사·지원 미러)만.
+
+    라이브러리 '사용자별 자료'가 남의 프롬프트 노드를 보여주는데 상세 GET이 소유자
+    전용이라 404가 났다(2026-08-20 운영 실측: "안 보인다"의 실체). 쓰기 경로는
+    get_personal(소유자 전용) 그대로 — 열람만 넓힌다.
+    """
+    row = await session.get(UserPrompt, prompt_id)
+    if row is None or (row.owner_id != viewer_id and not row.is_public and not is_admin):
+        raise NotFoundError(message="프롬프트를 찾을 수 없습니다", code="PROMPT_NOT_FOUND")
+    return row
+
+
 def _content_from(kind: str, name: str, content: str, spec: dict | None) -> str:
     """칸 값(spec.sections)이 오면 프롬프트를 조합해 쓴다 — 자유 편집이면 원문 그대로.
 

@@ -2,7 +2,7 @@ import { BookOpen, Copy, ExternalLink, Wand2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
-import { useImportSharedPreset } from "@/api/presets";
+import { type PresetChapterDetail, useImportSharedPreset, usePresetDetail } from "@/api/presets";
 import { useImportSharedPrompt, usePersonalPrompt, useSystemPrompt } from "@/api/prompts";
 import type { PromptRef } from "@/api/types";
 import { Button } from "@/components/ui/button";
@@ -53,6 +53,10 @@ function ImportButton({ prompt }: { prompt: PromptRef }) {
 /** 남이 공개한 자산 - 라이브러리에선 읽기 전용이다. 여기서 고칠 수 있으면 공유가
  * 아니라 공용 편집이 된다. 고쳐 쓰려면 '내 것으로 가져오기'로 복제한다. */
 function SharedPromptView({ prompt }: { prompt: PromptRef }) {
+  // 배너+가져오기 버튼뿐이라 본문이 안 보였다(2026-08-20 지적) - 열람은 공개의 본질이라
+  // 에이전트는 프롬프트 원문을, 프리셋은 목차 골격을 그대로 보여준다.
+  const agentQuery = usePersonalPrompt(prompt.ref, prompt.kind !== "preset");
+  const presetQuery = usePresetDetail(prompt.kind === "preset" ? `u:${prompt.ref}` : null);
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 rounded border border-border bg-bg-secondary px-3 py-2 text-xs text-fg-tertiary">
@@ -61,13 +65,59 @@ function SharedPromptView({ prompt }: { prompt: PromptRef }) {
         - 그대로 골라 쓸 수 있고, 고쳐 쓰려면 아래에서 내 것으로 가져오세요. 원본은 주인만 고칠 수
         있습니다.
       </div>
+      {prompt.kind === "preset" ? (
+        <PresetOutlinePreview
+          loading={presetQuery.isLoading}
+          error={presetQuery.isError}
+          chapters={presetQuery.data?.chapters}
+        />
+      ) : (
+        <PromptText
+          loading={agentQuery.isLoading}
+          error={agentQuery.isError}
+          content={agentQuery.data?.content}
+        />
+      )}
       <ImportButton prompt={prompt} />
     </div>
   );
 }
 
+function PresetOutlinePreview({
+  loading,
+  error,
+  chapters,
+}: {
+  loading: boolean;
+  error: boolean;
+  chapters?: PresetChapterDetail[];
+}) {
+  if (loading) return <p className="text-xs text-fg-tertiary">목차를 불러오는 중…</p>;
+  if (error || !chapters)
+    return <p className="text-xs text-fg-danger">목차를 불러오지 못했습니다</p>;
+  return (
+    <ol className="flex flex-col gap-1.5 rounded border border-border bg-bg p-3 text-xs">
+      {chapters.map((c, i) => (
+        <li key={`${c.title}:${c.sections.map((s) => s.title).join("|")}`}>
+          <span className="font-medium text-fg">
+            {i + 1}. {c.title}
+          </span>
+          <span className="ml-2 text-fg-tertiary">
+            {c.sections.map((s) => s.title).join(" · ")}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function SystemPromptView({ prompt }: { prompt: PromptRef }) {
-  const query = useSystemPrompt(prompt.kind, prompt.ref);
+  // 프리셋은 프롬프트 본문이 아니라 목차 골격이다 - /prompts/system은 agent·rule만
+  // 알아서 preset을 물으면 "불러오지 못했습니다"가 났다(2026-08-20 지적). 프리셋 상세
+  // API(GET /presets/{key})로 골격을 그대로 보여준다.
+  const isPreset = prompt.kind === "preset";
+  const query = useSystemPrompt(prompt.kind, prompt.ref, !isPreset);
+  const presetQuery = usePresetDetail(isPreset ? prompt.ref : null);
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 rounded border border-border bg-bg-secondary px-3 py-2 text-xs text-fg-tertiary">
@@ -75,7 +125,15 @@ function SystemPromptView({ prompt }: { prompt: PromptRef }) {
         시스템 {KIND_LABEL[prompt.kind]} - 읽기 전용입니다. 내 것으로 만들려면 프롬프트 관리
         페이지에서 같은 이름으로 저장하세요.
       </div>
-      <PromptText loading={query.isLoading} error={query.isError} content={query.data?.content} />
+      {isPreset ? (
+        <PresetOutlinePreview
+          loading={presetQuery.isLoading}
+          error={presetQuery.isError}
+          chapters={presetQuery.data?.chapters}
+        />
+      ) : (
+        <PromptText loading={query.isLoading} error={query.isError} content={query.data?.content} />
+      )}
     </div>
   );
 }
@@ -84,23 +142,29 @@ function PersonalPromptView({ prompt }: { prompt: PromptRef }) {
   const navigate = useNavigate();
   const query = usePersonalPrompt(prompt.ref);
   const loaded = query.data;
+  // 관리자 '사용자별 자료' 미러는 editable=false로 내려온다 - 남의 자산은 열람 전용이라
+  // "내 프롬프트" 문구와 편집 버튼이 거짓말이 된다.
+  const readOnly = !prompt.editable;
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 rounded border border-dashed border-border bg-bg-secondary px-3 py-2 text-xs text-fg-tertiary">
-        <Wand2 className="h-3.5 w-3.5" aria-hidden />내{" "}
+        <Wand2 className="h-3.5 w-3.5" aria-hidden />
+        {readOnly ? "" : "내 "}
         {loaded ? KIND_LABEL[loaded.kind] : "프롬프트"}
-        {loaded?.base_ref ? ` · 시스템 "${loaded.base_ref}" 덮어쓰기` : loaded ? " · 신규" : ""} -
-        편집·삭제는 프롬프트 관리 페이지에서.
+        {loaded?.base_ref ? ` · 시스템 "${loaded.base_ref}" 덮어쓰기` : loaded ? " · 신규" : ""}
+        {readOnly ? " - 열람 전용(소유자만 편집)" : " - 편집·삭제는 프롬프트 관리 페이지에서."}
       </div>
       <PromptText
         loading={query.isLoading}
         error={query.isError || !loaded}
         content={loaded?.content}
       />
-      <Button variant="outline" size="sm" className="w-fit" onClick={() => navigate("/prompts")}>
-        프롬프트 관리에서 편집
-        <ExternalLink className="ml-1 h-3.5 w-3.5" aria-hidden />
-      </Button>
+      {readOnly ? null : (
+        <Button variant="outline" size="sm" className="w-fit" onClick={() => navigate("/prompts")}>
+          프롬프트 관리에서 편집
+          <ExternalLink className="ml-1 h-3.5 w-3.5" aria-hidden />
+        </Button>
+      )}
     </div>
   );
 }

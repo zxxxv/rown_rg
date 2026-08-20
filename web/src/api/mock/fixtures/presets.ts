@@ -9,6 +9,7 @@ export const DEMO_PRESETS: PresetRead[] = [
     n_chapters: 7,
     n_sections: 35,
     scope: "system",
+    is_public: false,
   },
   {
     id: "정책기획보고서",
@@ -17,6 +18,7 @@ export const DEMO_PRESETS: PresetRead[] = [
     n_chapters: 6,
     n_sections: 17,
     scope: "system",
+    is_public: false,
   },
   {
     id: "경영컨설팅보고서",
@@ -25,6 +27,7 @@ export const DEMO_PRESETS: PresetRead[] = [
     n_chapters: 6,
     n_sections: 18,
     scope: "system",
+    is_public: false,
   },
   {
     id: "산업동향보고서",
@@ -33,6 +36,7 @@ export const DEMO_PRESETS: PresetRead[] = [
     n_chapters: 6,
     n_sections: 11,
     scope: "system",
+    is_public: false,
   },
   {
     id: "조사분석보고서",
@@ -41,5 +45,6 @@ export const DEMO_PRESETS: PresetRead[] = [
     n_chapters: 6,
     n_sections: 14,
     scope: "system",
+    is_public: false,
   },
 ];
