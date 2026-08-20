@@ -264,8 +264,17 @@ def _collect_abbreviations(text: str, acc: dict[str, str]) -> None:
         acc[abbr] = _clean_inline(match.group("full")).strip()
 
 
+# 행 끝 '|(출처 n)' 꼬리 — 마지막 파이프 **뒤**에 붙은 출처 표기만 잡는다. 근거 열이
+# 있는 표의 정상 셀("…|(출처 17) |")은 뒤에 파이프가 더 있어 매칭되지 않는다.
+_ROW_TAIL_SOURCE_RE = re.compile(r"\|\s*\((?:출처|근거)[^)]*\)\s*$")
+
+
 def _table_cells(line: str) -> list[str]:
-    return [c.strip() for c in line.strip().strip("|").split("|")]
+    # 모델이 표 마지막 행 끝에 출처를 덧붙이는 습관이 칸 수를 늘려, HWPX 렌더에서
+    # 56개 행의 끝 칸이 잘렸다(2026-08-21 v6 실측). 꼬리는 칸이 아니라 표 단위
+    # 출처 표기이므로 떼어낸다 — 출처 줄 규약('* 출처:')이 정본이다.
+    line = _ROW_TAIL_SOURCE_RE.sub("|", line.strip())
+    return [c.strip() for c in line.strip("|").split("|")]
 
 
 def _is_separator_row(cells: list[str]) -> bool:
