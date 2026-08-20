@@ -191,10 +191,11 @@ function TopicOwnership({ brief }: { brief: DesignBriefPayload }) {
   if (topics.length === 0) return null;
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-bg-secondary p-4">
-      <p className="text-sm font-medium text-fg-primary">토픽 소유권</p>
+      <p className="text-sm font-medium text-fg-primary">소재 분담</p>
       <p className="text-xs text-fg-secondary">
-        여러 절이 되풀이 서술할 위험이 있는 공용 토픽을 절 하나에 배정했습니다 - 소유 절이 정본으로
-        완결하고, 다른 절은 참조 한 문장으로 대체합니다.
+        여러 절이 되풀이 서술할 위험이 있는 공용 소재를 절 하나에 배정했습니다 - 담당 절이 정본으로
+        완결하고, 다른 절은 참조 한 문장으로 대체합니다. 자료 단위 담당(정본 배정)은 자료 검토가
+        끝난 뒤 작성 직전에 확정됩니다.
       </p>
       <ul className="flex flex-col gap-1">
         {topics.map((t) => (

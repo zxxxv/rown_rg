@@ -674,29 +674,9 @@ async def plan_brief(state: ProjectState) -> ProjectState:
         model_mode=mode,
         domain_context=domain_context,
     )
-    # 업로드 자료 목록을 계획 입력에 싣는다(소유권 v2, 2026-08-20) — 계획이 코퍼스를
-    # 모르면 "무엇의 수치 제시권"인지 못 정한다(1.4 정독: 같은 실태조사 블록 4회 재유도).
-    try:
-        from sqlalchemy import select as _sel
-
-        from src.db.models.project_source import ProjectSource as _PS
-        from src.db.session import async_session_maker as _asm
-
-        async with _asm() as _s:
-            _rows = (
-                await _s.execute(
-                    _sel(_PS.title, _PS.metadata_).where(
-                        _PS.project_id == state.project_id,
-                        _PS.source_type == "upload",
-                        _PS.is_included.is_(True),
-                    )
-                )
-            ).all()
-        brief["uploads"] = [
-            {"title": (t or "")[:80], "pages": (m or {}).get("page_count")} for t, m in _rows
-        ][:20]
-    except Exception:
-        logger.warning("design_brief.uploads_failed", project_id=str(pid), exc_info=True)
+    # (업로드 목록 주입은 폐지 — 2026-08-21. 설계 시점의 자료명 배정은 자료 검토에서
+    # 제외될 파일을 가리킬 수 있는 유령 배정이었다. 자료명 수준은 코퍼스 확정 후
+    # source_canon(정본 배정)이 맡고, 설계 브리프는 구조 수준만 다룬다.)
     # 예상 비용 옆에 '남은 한도'를 같이 보여준다 — 부족해도 **차단하지 않는다**
     # (2026-08-15 사용자 결정: 경고만). 사람이 게이트에서 숫자 두 개를 보고 판단한다.
     from src.clients.llm.quota_gate import remaining_budget
@@ -1572,6 +1552,22 @@ async def write(state: ProjectState) -> ProjectState:
     작성 중에도 완성분부터 보여준다 — 확정본 전량 교체는 여전히 assemble 몫.
     """
     state = _ensure_section_plan(state)
+    # 정본 배정(2층) — 자료 검토·색인이 끝나 코퍼스가 확정된 지금, 자료명 수준의
+    # 서술 담당을 배정해 설계(1층=구조 수준)의 owns/foreign_topics에 병합한다.
+    # 설계 시점 배정은 이후 제외될 자료를 가리키는 유령이 될 수 있었다(2026-08-21).
+    # 실패는 비치명 — 1층 배정만으로 작성을 계속한다.
+    try:
+        from src.services.generation.source_canon import refresh_source_canon
+
+        emit_step(state.project_id, "writing", "정본 배정(자료-절 담당)", "started")
+        n_canon = await refresh_source_canon(state, model=_models_for(state)["planner"])
+        emit_step(state.project_id, "writing", "정본 배정(자료-절 담당)", "completed")
+        if n_canon:
+            logger.info(
+                "write.source_canon", project_id=str(state.project_id), n_assignments=n_canon
+            )
+    except Exception:
+        logger.warning("write.source_canon_failed", project_id=str(state.project_id), exc_info=True)
     # 리허설↔작성 동근거 계약 — 리허설이 영속해 둔 청크 목록을 같은 index_version이면
     # 재검색 없이 그대로 쓴다. 캐시 미스(옛 런·버전 뒤바뀜)는 실검색 폴백.
     retrieve = await _retrieval_cacher(_retriever_factory(state), state)
