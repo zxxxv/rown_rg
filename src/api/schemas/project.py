@@ -132,6 +132,9 @@ class AnalystRead(BaseModel):
     # 가려 고를 수 있는 유일한 단서라, 목록에 반드시 함께 내려간다.
     shared: bool = False
     owner_name: str | None = None
+    # 검색 질의 템플릿("{topic}"=장·절 제목 치환) — 목차 편집기가 "이 절에서 무엇이
+    # 검색되는가" 미리보기에 쓴다(2026-08-20). 프롬프트 본문은 여전히 안 내려간다.
+    queries: list[str] = []
 
 
 class OutlineSectionIn(BaseModel):

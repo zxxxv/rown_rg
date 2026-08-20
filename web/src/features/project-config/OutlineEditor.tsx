@@ -8,7 +8,12 @@ import { Input } from "@/components/ui/input";
 import { PromptDialog } from "@/features/prompts/PromptDialog";
 import { cn } from "@/lib/utils";
 import { PromptPreviewDialog } from "./PromptPreviewDialog";
-import { duplicatedSectionKeys, duplicateQueryGroups, effectiveSearchQuery } from "./searchPreview";
+import {
+  analystQueryPreviews,
+  duplicatedSectionKeys,
+  duplicateQueryGroups,
+  effectiveSearchQuery,
+} from "./searchPreview";
 
 // ─── 목차 편집기(순수) - 장·절·에이전트 배정을 value/onChange로 편집한다 ───
 // 프로젝트 생성 폼(OutlineDesigner)과 내 프리셋 관리가 같은 편집기를 쓴다.
@@ -386,6 +391,15 @@ function SectionEditor({
 }) {
   const [previewing, setPreviewing] = useState(false);
   const query = effectiveSearchQuery(chapterTitle, section.title);
+  // 에이전트 질의 미리보기 - 정의는 에이전트에 있지만 "이 절에서 뭐가 검색되나"는
+  // 절에서 보여야 한다(2026-08-20 결정). useAnalysts는 무한 캐시라 호출 비용 없음.
+  const analystsQuery = useAnalysts();
+  const agentQueries = analystQueryPreviews(
+    chapterTitle,
+    section.title,
+    section.analysts,
+    analystsQuery.data ?? [],
+  );
   return (
     <div className="flex flex-col gap-2 rounded border border-border bg-bg-secondary p-3">
       <div className="flex items-center gap-2">
@@ -416,6 +430,12 @@ function SectionEditor({
             {query}
           </code>
           {duplicated ? <span className="text-fg-danger"> - 다른 절과 겹칩니다</span> : null}
+        </p>
+      ) : null}
+      {agentQueries.length > 0 ? (
+        <p className="pl-8 text-[11px] text-fg-tertiary">
+          에이전트 검색:{" "}
+          <code className="font-mono text-fg-secondary">{agentQueries.join(" · ")}</code>
         </p>
       ) : null}
       <Field hint="작성 방향 - 이 절이 무엇을 논증해야 하는지 한 줄로">

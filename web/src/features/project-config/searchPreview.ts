@@ -40,6 +40,36 @@ export function effectiveSearchQuery(chapterTitle: string, sectionTitle: string)
   return title;
 }
 
+/** 이 절에 배정된 에이전트가 추가하는 검색 질의 미리보기.
+ *
+ * 백엔드 services/retrieval/section._analyst_queries 규칙의 미러: "{topic}" 자리에
+ * 보고서 주제가 아니라 **장·절 제목**이 꽂히고(획일화 방지), 에이전트당 2개,
+ * 앵커 80자 캡. 정의는 에이전트(재사용 자산)에 있고 확인은 여기(절)에서 한다 -
+ * 확정 값은 실행 후 설계 검토가 서버에서 다시 계산한다. */
+export function analystQueryPreviews(
+  chapterTitle: string,
+  sectionTitle: string,
+  analystNames: string[],
+  catalog: { name: string; queries: string[] }[],
+): string[] {
+  if (analystNames.length === 0) return [];
+  const anchor = effectiveSearchQuery(chapterTitle, sectionTitle).replace(/\s+/g, " ").slice(0, 80);
+  const byName = new Map(catalog.map((a) => [a.name, a]));
+  const out: string[] = [];
+  for (const name of analystNames) {
+    const spec = byName.get(name);
+    if (!spec) continue;
+    for (const template of spec.queries.slice(0, 2)) {
+      const text = template
+        .replace(/\{topic\}/g, anchor)
+        .replace(/\s+/g, " ")
+        .trim();
+      if (text && !out.includes(text)) out.push(text);
+    }
+  }
+  return out;
+}
+
 /** 같은 질의를 쓰는 절 묶음(2개 이상). 비어 있는 절은 제외한다. */
 export function duplicateQueryGroups(chapters: ChapterLike[]): DuplicateQueryGroup[] {
   const byQuery = new Map<string, QueryPreviewSection[]>();

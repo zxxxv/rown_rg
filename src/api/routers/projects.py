@@ -512,6 +512,7 @@ async def get_analysts(
             pages=a.volume_target.pages if a.volume_target else None,
             shared=a.shared,
             owner_name=a.owner_name,
+            queries=list(a.queries),
         )
         for a in await resolve_analysts(session, current_user.id)
     ]

@@ -47,11 +47,33 @@ const DEMO_PRESET_DETAIL: Omit<PresetDetail, "id" | "name" | "desc"> = {
 };
 
 // 실계약 미러: GET /analysts - 배정 UI 선택지(백엔드 21종 중 데모 축약).
+// queries는 "{topic}"이 장·절 제목으로 치환되는 검색 질의 템플릿(미리보기용).
 const DEMO_ANALYSTS = [
-  { id: "a02", name: "정책동향", cat: "정책", desc: "국내외 정책 비교·동향 분석", pages: "8~12" },
-  { id: "a03", name: "시장분석", cat: "시장", desc: "시장 규모·성장률 분석", pages: "8~12" },
+  {
+    id: "a02",
+    name: "정책동향",
+    cat: "정책",
+    desc: "국내외 정책 비교·동향 분석",
+    pages: "8~12",
+    queries: ["{topic} 정책 동향", "{topic} policy trend"],
+  },
+  {
+    id: "a03",
+    name: "시장분석",
+    cat: "시장",
+    desc: "시장 규모·성장률 분석",
+    pages: "8~12",
+    queries: ["{topic} 시장 규모 성장률"],
+  },
   { id: "a11", name: "RFP구조화", cat: "기획", desc: "과업 범위 구조화", pages: "6~10" },
-  { id: "a15", name: "비용편익분석", cat: "경제", desc: "B/C·NPV 산출", pages: "10~15" },
+  {
+    id: "a15",
+    name: "비용편익분석",
+    cat: "경제",
+    desc: "B/C·NPV 산출",
+    pages: "10~15",
+    queries: ["{topic} 비용편익 B/C"],
+  },
   { id: "a17", name: "정책분석", cat: "정책", desc: "법령·규제 영향 평가", pages: "10~15" },
   { id: "a19", name: "수요분석", cat: "시장", desc: "수요 추정·전망", pages: "8~12" },
   { id: "a21", name: "위험분석", cat: "리스크", desc: "위험 식별·대응 전략", pages: "6~10" },

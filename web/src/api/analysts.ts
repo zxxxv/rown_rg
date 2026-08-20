@@ -14,6 +14,8 @@ export const AnalystSchema = z.object({
   // 남이 만들어 공개한 에이전트인지 + 누구 것인지. 같은 이름이 둘일 때 가려 고르는 단서.
   shared: z.boolean().default(false),
   owner_name: z.string().nullish(),
+  // 검색 질의 템플릿("{topic}"=장·절 제목 치환) - 목차 편집기의 검색 미리보기용.
+  queries: z.array(z.string()).default([]),
 });
 export type Analyst = z.infer<typeof AnalystSchema>;
 
