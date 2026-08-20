@@ -395,6 +395,7 @@ _TITLE_REJECT_RE = re.compile(r"intentionally omitted|^\||^[-=_*\s]+$|^\d+$|^pag
 def _clean_title_line(line: str) -> str:
     text = re.sub(r"^#{1,4}\s*", "", line.strip())
     text = re.sub(r"[*_`]+", "", text)
+    text = re.sub(r"\s*\d+\)\s*$", "", text)  # 표제 끝 각주 마커("… 시사점 1)") 제거
     return " ".join(text.split())
 
 
@@ -408,14 +409,29 @@ def _extract_doc_title(markdown: str) -> str | None:
         return None  # 표제를 논할 크기가 아니다(테스트 더미·빈 파일 방어)
     lines = markdown.split("\n")[:40]
     fallback: str | None = None
-    for raw in lines:
+    for i, raw in enumerate(lines):
         line = raw.strip()
         if not line or _TITLE_REJECT_RE.search(line):
             continue
         cleaned = _clean_title_line(line)
         if not (4 <= len(cleaned) <= 90):
             continue
+        tokens = cleaned.split()
+        if len(tokens) >= 3 and all(len(t) == 1 for t in tokens):
+            # "산 업 경 제 분 석" — 자간을 벌린 잡지 러브릭·장식 표제. 표제가 아니다
+            # (2026-08-21 실측: KIET 표지에서 오인).
+            continue
         if line.startswith("#"):
+            # 표제가 두 줄로 접힌 경우 — 연결어로 끝나면 다음 실속 줄을 이어붙인다
+            # (2026-08-21 실측: "EU 탄소국경조정제도의" 에서 잘림).
+            if cleaned[-1] in "의및과와를은는·,":
+                for nxt in lines[i + 1 : i + 4]:
+                    nxt_clean = _clean_title_line(nxt)
+                    if nxt_clean and not _TITLE_REJECT_RE.search(nxt.strip()):
+                        joined = f"{cleaned} {nxt_clean}"
+                        if len(joined) <= 90:
+                            cleaned = joined
+                        break
             return cleaned
         if fallback is None:
             fallback = cleaned
