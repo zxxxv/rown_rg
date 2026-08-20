@@ -258,3 +258,60 @@ class TestChapterTitlePersisted:
             update={"section_plan": [SectionPlan(chapter_number=3, section_number=1, title="개요")]}
         )
         assert _chapter_titles(state) == {3: "3장"}
+
+
+class TestOwnershipArcInjection:
+    """소유권·아크 필드 렌더링 - 4차 실측(절 간 중복 463문장)의 처방이 프롬프트에 닿는 지점."""
+
+    def _state(self, design_plan: dict | None) -> ProjectState:
+        options = {"_design_plan": design_plan} if design_plan is not None else {}
+        return ProjectState(
+            project_id=uuid4(),
+            user_id=uuid4(),
+            topic="주제",
+            section_plan=_plan(),
+            options=options,
+        )
+
+    def test_소유_토픽과_금지_토픽이_렌더된다(self) -> None:
+        from src.workflows.write_loop import design_plan_note
+
+        state = self._state(
+            {
+                str(_ID1): {
+                    "goal": "g",
+                    "owns": "RE100 실태조사",
+                    "foreign_topics": "CBAM 제도 연혁(2.1절 소관)",
+                }
+            }
+        )
+        note = design_plan_note(state, state.section_plan[0])
+        assert "정본으로 서술할 토픽: RE100 실태조사" in note
+        assert "재서술 금지" in note
+        assert "CBAM 제도 연혁(2.1절 소관)" in note
+        assert "확정된 값으로 주입된 수치를 인용하는 것은 허용" in note
+
+    def test_아크_한_줄이_렌더된다(self) -> None:
+        from src.workflows.write_loop import design_plan_note
+
+        state = self._state(
+            {
+                str(_ID1): {
+                    "goal": "g",
+                    "receives": "1.1절이 참여 기준 정의를 다룬다",
+                    "establishes": "총부담 추정 → 4.5절이 받는다",
+                }
+            }
+        )
+        note = design_plan_note(state, state.section_plan[0])
+        assert "이어받는 전제: 1.1절이 참여 기준 정의를 다룬다" in note
+        assert "세워 넘길 것: 총부담 추정" in note
+
+    def test_소유권_필드가_비면_기존_렌더와_동일(self) -> None:
+        from src.workflows.write_loop import design_plan_note
+
+        state = self._state(
+            {str(_ID1): {"goal": "g", "owns": "", "foreign_topics": "", "receives": ""}}
+        )
+        note = design_plan_note(state, state.section_plan[0])
+        assert note == "설계 검토에서 승인된 이 절의 실행 계획:\n- 목표: g"

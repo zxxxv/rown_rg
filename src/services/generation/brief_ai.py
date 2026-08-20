@@ -32,7 +32,8 @@ logger = structlog.get_logger(__name__)
 # 출력 상한은 절 수에 비례해야 한다 — 고정 6000은 20절 목차에서 JSON을 중간에 끊어
 # 통파싱 실패를 만들었다(2026-08-14 첫 실전 브리프: 토큰 14,013 소모 후 ai_plan=None).
 # 절당 3문장(한국어 ≈ 400~600토큰) + 장 목표·흐름 몫. 상한 캡은 폭주 방지.
-_BASE_TOKENS = 2000
+# 기본 몫 3000: 토픽 소유권 블록(전역, 절 수 무관)이 추가되면서 상향(2026-08-20).
+_BASE_TOKENS = 3000
 _TOKENS_PER_SECTION = 700
 _MAX_TOKENS_CAP = 16000
 
@@ -67,13 +68,19 @@ SYSTEM_PROMPT = """너는 정부·공공 보고서의 실행 계획을 세우는
   독립적이어도 정상일 수 있다.
 - query_splits: 입력 duplicate_queries에 있는 절들에만, 서로 갈라질 검색 질의를 제안.
   중복이 없으면 빈 배열.
+- topic_ownership: 여러 절이 저마다 다시 서술할 위험이 큰 공용 토픽을 골라 **가장
+  적합한 절 하나**에 소유를 배정한다(3~8건). 위험 토픽의 전형: 조사·통계의 개요와
+  주요 결과, 제도·정책의 배경과 연혁, 방법론 설명 — 특히 여러 장이 같은 대상을
+  다른 각도로 다루는 목차에서 반드시 지정하라. topic은 자료명·조사명·제도명 수준으로
+  구체적으로 쓴다("현황"·"배경" 같은 일반어 금지). 소유 절이 그 토픽을 정본으로
+  완결하고, 다른 모든 절은 참조 한 문장으로 대체하게 된다.
 
 규칙:
 - 사실·수치·기관 통계를 지어내지 마라. 이것은 계획이지 본문이 아니다.
 - source_strategy에는 **외부에서 찾을 자료만** 적는다. 앞 절의 산출을 받아 쓰는 관계는
   flows에만 표현하고, source_strategy에 "N.M절의 결과를 내부 자료로 활용" 같은 지시를
-  넣지 마라 — 작성 단계는 절 간 산출을 전달받지 못하므로 그 지시는 작성기가 없는 것을
-  참조하게 만든다(없는 근거의 창작 유도).
+  넣지 마라 — 절 간 전달은 flows와 값 주입 경로가 처리하며, source_strategy에 넣으면
+  작성기가 전달받지 않은 것을 참조하게 만든다(없는 근거의 창작 유도).
 - 간결한 한국어. 절당 3문장 이내.
 - 마지막에 아래 형태의 JSON만 출력한다(설명 문장 없이):
 {"chapters":[{"chapter":1,"goal":"..."}],
@@ -81,13 +88,18 @@ SYSTEM_PROMPT = """너는 정부·공공 보고서의 실행 계획을 세우는
    "search_queries":["...","..."]}],
  "flows":[{"from":"1.2","to":"1.3","carries":"..."}],
  "orphans":["4.1"],
- "query_splits":[{"section":"1.3","query":"..."}]}"""
+ "query_splits":[{"section":"1.3","query":"..."}],
+ "topic_ownership":[{"topic":"제조수출기업 RE100 실태조사","owner":"1.3"}]}"""
 
 
 # 절당 질의 상한. 검색 왕복이 그만큼 늘고, 절 질의 집합 전체 상한
 # (retrieval.section.MAX_SECTION_QUERIES)에서 기본·핵심 포인트 몫을 남겨야 한다.
 MAX_BRIEF_QUERIES = 3
 MAX_BRIEF_QUERY_CHARS = 80
+
+# 토픽 소유권 상한 — 열 개를 넘으면 소유권이 아니라 목차 재서술이다.
+MAX_OWNERSHIP_TOPICS = 10
+MAX_OWNERSHIP_TOPIC_CHARS = 60
 
 
 def _clean_queries(raw: Any) -> list[str]:
@@ -140,19 +152,67 @@ def _compact_input(brief: dict[str, Any]) -> str:
     )
 
 
+def _salvage_json(candidate: str) -> dict[str, Any] | None:
+    """잘린 JSON에서 완성된 앞부분을 건진다.
+
+    상한 절단(stop_reason=length)이면 통파싱이 실패해 계획 전체가 버려졌다 — 20절
+    계획에서 마지막 항목 하나가 잘렸다고 앞의 19절 몫까지 버리는 건 손해가 크다.
+    문자열 밖 괄호를 스택으로 추적해, 뒤에서부터 요소 경계('}'/']')마다 잘라 닫는
+    괄호를 보충해 파싱을 시도한다. _validate가 어차피 항목 단위로 거르므로 부분
+    산출로 충분하다.
+    """
+    stack: list[str] = []
+    in_str = esc = False
+    cut_points: list[tuple[int, tuple[str, ...]]] = []
+    for i, ch in enumerate(candidate):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            cut_points.append((i, tuple(stack)))
+    for i, snap in reversed(cut_points[-80:]):  # 시도 횟수 상한
+        closers = "".join("}" if c == "{" else "]" for c in reversed(snap))
+        try:
+            data = json.loads(candidate[: i + 1] + closers)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data.get("sections"):
+            return data
+    return None
+
+
 def _extract_json(text: str) -> dict[str, Any] | None:
-    """응답에서 JSON 오브젝트 추출 — ```json``` 블록 우선, 없으면 마지막 {...}."""
+    """응답에서 JSON 오브젝트 추출 — ```json``` 블록 우선, 없으면 마지막 {...}.
+
+    통파싱이 실패하면(대개 상한 절단) 완성 항목까지만 건지는 구제 경로를 탄다.
+    """
     fenced = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     candidate = fenced[-1] if fenced else None
     if candidate is None:
         start, end = text.find("{"), text.rfind("}")
         candidate = text[start : end + 1] if start != -1 and end > start else None
+    if candidate is None and "{" in text:
+        candidate = text[text.find("{") :]  # 닫는 괄호가 아예 없는 절단 — 구제만 가능
     if not candidate:
         return None
     try:
         data = json.loads(candidate)
     except json.JSONDecodeError:
-        return None
+        salvaged = _salvage_json(candidate)
+        if salvaged is not None:
+            logger.info("brief_ai.salvaged_truncated_json", n_sections=len(salvaged["sections"]))
+        return salvaged
     return data if isinstance(data, dict) else None
 
 
@@ -211,12 +271,26 @@ def _validate(raw: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any] | No
         and str(q.get("section")) in dup_labels
         and str(q.get("query") or "").strip()
     ]
+    # 토픽 소유권 — 유령 절(owner가 목차에 없음)·빈 토픽·중복 토픽은 버린다.
+    topic_ownership: list[dict[str, str]] = []
+    seen_topics: set[str] = set()
+    for t in raw.get("topic_ownership") or []:
+        if not isinstance(t, dict):
+            continue
+        topic = " ".join(str(t.get("topic") or "").split())[:MAX_OWNERSHIP_TOPIC_CHARS]
+        owner = str(t.get("owner") or "").strip()
+        if topic and owner in known and topic.lower() not in seen_topics:
+            seen_topics.add(topic.lower())
+            topic_ownership.append({"topic": topic, "owner": owner})
+        if len(topic_ownership) >= MAX_OWNERSHIP_TOPICS:
+            break
     return {
         "chapters": chapters,
         "sections": sections,
         "flows": flows,
         "orphans": orphans,
         "query_splits": query_splits,
+        "topic_ownership": topic_ownership,
     }
 
 

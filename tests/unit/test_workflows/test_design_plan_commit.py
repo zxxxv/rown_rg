@@ -77,3 +77,59 @@ class TestCommitDesignPlan:
         before = dict(project.config)
         await _commit_design_plan(_FakeSession(project), project.id, {}, {"action": "approve"})
         assert project.config == before
+
+
+def _two_section_project() -> tuple[Project, SectionPlan, SectionPlan]:
+    a = SectionPlan(chapter_number=1, section_number=1, title="개요")
+    b = SectionPlan(chapter_number=4, section_number=1, title="국내 대응")
+    project = Project(id=uuid.uuid4(), title="t", topic="주제", owner_id=uuid.uuid4())
+    project.config = config_with_plan({}, [a, b])
+    return project, a, b
+
+
+class TestOwnershipAndArcCommit:
+    async def test_소유권이_소유_절과_나머지_절로_갈려_커밋된다(self) -> None:
+        project, a, b = _two_section_project()
+        payload = {
+            "ai_plan": {
+                "sections": [
+                    {"chapter": 1, "section": 1, "goal": "g1"},
+                    {"chapter": 4, "section": 1, "goal": "g4"},
+                ],
+                "topic_ownership": [{"topic": "RE100 실태조사", "owner": "1.1"}],
+            }
+        }
+        await _commit_design_plan(_FakeSession(project), project.id, payload, None)
+        notes = project.config["_design_plan"]
+        assert notes[str(a.section_id)]["owns"] == "RE100 실태조사"
+        assert notes[str(a.section_id)]["foreign_topics"] == ""
+        assert notes[str(b.section_id)]["owns"] == ""
+        assert "RE100 실태조사(1.1절 소관)" in notes[str(b.section_id)]["foreign_topics"]
+
+    async def test_flows가_아크_한_줄로_내려간다(self) -> None:
+        project, a, b = _two_section_project()
+        payload = {
+            "ai_plan": {
+                "sections": [
+                    {"chapter": 1, "section": 1, "goal": "g1"},
+                    {"chapter": 4, "section": 1, "goal": "g4"},
+                ],
+                "flows": [{"from": "1.1", "to": "4.1", "carries": "참여 기준 정의"}],
+            }
+        }
+        await _commit_design_plan(_FakeSession(project), project.id, payload, None)
+        notes = project.config["_design_plan"]
+        assert "참여 기준 정의 → 4.1절이 받는다" in notes[str(a.section_id)]["establishes"]
+        assert "1.1절이 참여 기준 정의를 다룬다" in notes[str(b.section_id)]["receives"]
+
+    async def test_carries_없는_flow는_아크로_안_내려간다(self) -> None:
+        project, a, b = _two_section_project()
+        payload = {
+            "ai_plan": {
+                "sections": [{"chapter": 1, "section": 1, "goal": "g1"}],
+                "flows": [{"from": "1.1", "to": "4.1", "carries": ""}],
+            }
+        }
+        await _commit_design_plan(_FakeSession(project), project.id, payload, None)
+        notes = project.config["_design_plan"]
+        assert notes[str(a.section_id)].get("establishes") == ""

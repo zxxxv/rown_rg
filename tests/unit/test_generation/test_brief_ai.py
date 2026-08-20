@@ -143,3 +143,64 @@ class TestGenerate:
     async def test_API_예외도_None(self) -> None:
         """게이트를 막지 않는다 — 어떤 실패든 결정적 브리프만으로 뜬다."""
         assert await generate_ai_plan(_BRIEF, model="m", client=_BrokenClient()) is None
+
+
+class TestOwnership:
+    def test_소유권은_아는_절에만_중복_토픽은_처음_것만(self) -> None:
+        out = _validate(
+            {
+                "sections": [{"chapter": 1, "section": 1, "goal": "g"}],
+                "topic_ownership": [
+                    {"topic": "RE100 실태조사", "owner": "1.1"},
+                    {"topic": "유령 절 소유", "owner": "9.9"},
+                    {"topic": "re100 실태조사", "owner": "2.1"},
+                    {"topic": "", "owner": "1.1"},
+                ],
+            },
+            _BRIEF,
+        )
+        assert out is not None
+        assert out["topic_ownership"] == [{"topic": "RE100 실태조사", "owner": "1.1"}]
+
+    def test_소유권_상한(self) -> None:
+        out = _validate(
+            {
+                "sections": [{"chapter": 1, "section": 1, "goal": "g"}],
+                "topic_ownership": [{"topic": f"토픽{i}", "owner": "1.1"} for i in range(20)],
+            },
+            _BRIEF,
+        )
+        assert out is not None
+        assert len(out["topic_ownership"]) == 10
+
+
+class TestSalvage:
+    """상한 절단 구제 - 마지막 항목이 잘려도 앞의 완성 항목은 살린다."""
+
+    def test_잘린_JSON에서_완성_절을_건진다(self) -> None:
+        from src.services.generation.brief_ai import _extract_json
+
+        truncated = (
+            '{"chapters":[{"chapter":1,"goal":"g"}],'
+            '"sections":[{"chapter":1,"section":1,"goal":"참여 현황"},'
+            '{"chapter":2,"section":1,"goal":"CBAM 개'
+        )
+        raw = _extract_json(truncated)
+        assert raw is not None
+        assert raw["sections"][0]["goal"] == "참여 현황"
+
+    def test_sections_없는_조각은_구제하지_않는다(self) -> None:
+        from src.services.generation.brief_ai import _extract_json
+
+        assert _extract_json('{"chapters":[{"chapter":1,"goal":"g"}],"flo') is None
+
+    def test_문자열_안_괄호는_구제를_흔들지_않는다(self) -> None:
+        from src.services.generation.brief_ai import _extract_json
+
+        truncated = (
+            '{"sections":[{"chapter":1,"section":1,"goal":"괄호 {중첩} 포함"},'
+            '{"chapter":2,"section":1,"goal":"잘'
+        )
+        raw = _extract_json(truncated)
+        assert raw is not None
+        assert raw["sections"][0]["goal"] == "괄호 {중첩} 포함"

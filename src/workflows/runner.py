@@ -155,6 +155,27 @@ async def _commit_design_plan(
         (p.chapter_number, p.section_number): str(p.section_id)
         for p in plan_from_config(project.config)
     }
+    # 아크 한 줄 — 계획의 flows(from/to/carries)를 절별 두 문장으로 내린다.
+    # flows는 지금까지 게이트 화면 표시로만 쓰고 커밋에서 버려졌는데(작성기가 절 간
+    # 산출을 전달받지 못하던 시절의 결정), builds_on 값 주입이 생긴 지금은 토픽 수준
+    # 접속 지시로 내려보내는 게 안전하다 — 내용이 아니라 역할만 전달하므로 창작 유도 없음.
+    receives: dict[str, list[str]] = {}
+    establishes: dict[str, list[str]] = {}
+    for f in ai.get("flows") or []:
+        if not isinstance(f, dict):
+            continue
+        src, dst = str(f.get("from") or ""), str(f.get("to") or "")
+        carries = " ".join(str(f.get("carries") or "").split())[:120]
+        if not (src and dst and carries):
+            continue
+        establishes.setdefault(src, []).append(f"{carries} → {dst}절이 받는다")
+        receives.setdefault(dst, []).append(f"{src}절이 {carries}를 다룬다")
+    # 토픽 소유권 — 소유 절엔 정본 목록을, 나머지 전 절엔 금지 목록을 내린다.
+    ownership = [
+        t
+        for t in (ai.get("topic_ownership") or [])
+        if isinstance(t, dict) and t.get("topic") and t.get("owner")
+    ]
     notes: dict[str, dict[str, str]] = {}
     for s in sections:
         if not isinstance(s, dict):
@@ -162,10 +183,19 @@ async def _commit_design_plan(
         sid = by_num.get((s.get("chapter"), s.get("section")))
         if sid is None:
             continue
+        label = f"{s.get('chapter')}.{s.get('section')}"
         note = {
             key: str(s.get(key) or "").strip()[:_PLAN_FIELD_MAX_CHARS]
             for key in ("goal", "source_strategy", "writing_plan")
         }
+        note["owns"] = " · ".join(t["topic"] for t in ownership if t["owner"] == label)[
+            :_PLAN_FIELD_MAX_CHARS
+        ]
+        note["foreign_topics"] = " · ".join(
+            f"{t['topic']}({t['owner']}절 소관)" for t in ownership if t["owner"] != label
+        )[:_PLAN_FIELD_MAX_CHARS]
+        note["receives"] = "; ".join(receives.get(label, []))[:_PLAN_FIELD_MAX_CHARS]
+        note["establishes"] = "; ".join(establishes.get(label, []))[:_PLAN_FIELD_MAX_CHARS]
         if any(note.values()):
             notes[sid] = note
     if not notes:

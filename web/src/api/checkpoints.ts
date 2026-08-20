@@ -274,6 +274,12 @@ export const AiPlanSchema = z.object({
     .default([]),
   orphans: z.array(z.string()).default([]),
   query_splits: z.array(z.object({ section: z.string(), query: z.string() })).default([]),
+  // 토픽 소유권 - 여러 절이 재서술할 위험이 있는 공용 토픽을 절 하나에 배정.
+  // 소유 절이 정본으로 쓰고 나머지 절은 참조 한 문장으로 대체한다. catch: 옛 payload 호환.
+  topic_ownership: z
+    .array(z.object({ topic: z.string(), owner: z.string() }))
+    .catch([])
+    .default([]),
 });
 export type AiPlan = z.infer<typeof AiPlanSchema>;
 

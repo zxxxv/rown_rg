@@ -81,6 +81,31 @@ def design_plan_note(state: ProjectState, section: SectionPlan) -> str:
         return ""
     labels = (("goal", "목표"), ("source_strategy", "자료 활용"), ("writing_plan", "구성"))
     lines = [f"- {label}: {note[key]}" for key, label in labels if str(note.get(key) or "").strip()]
+    # 토픽 소유권 + 아크 한 줄 — 4차 실측(절 간 중복 463문장, 4장이 1장 재서술)의 처방.
+    # 병렬 작성기는 다른 절이 뭘 쓰는지 모르므로, 경계(누가 정본인가)와 역할(무엇을
+    # 세워 넘기는가)을 계획 시점에 선언해 내려보낸다. 값 인용 허용 단서는 builds_on
+    # 주입("앞 절에서 확정된 값")과의 충돌을 막는 문장이다 — 값은 쓰되 서사는 참조로.
+    owns = str(note.get("owns") or "").strip()
+    if owns:
+        lines.append(f"- 이 절이 정본으로 서술할 토픽: {owns} — 개요·수치·맥락을 여기서 완결하라")
+    foreign = str(note.get("foreign_topics") or "").strip()
+    if foreign:
+        lines.append(
+            f"- 타 절 소관 토픽(재서술 금지): {foreign} — 이 토픽들의 배경·개요·세부를 다시 쓰지"
+            ' 마라. 필요하면 "(N.M절 참조)" 한 문장으로 접속하고 이 절의 고유한 몫만 전개하라.'
+            " 앞 절에서 확정된 값으로 주입된 수치를 인용하는 것은 허용된다"
+        )
+    rcv = str(note.get("receives") or "").strip()
+    if rcv:
+        lines.append(
+            f"- 이어받는 전제: {rcv} — 전제의 세부를 재서술하지 말고 한 문장으로 접속한 뒤 전개하라"
+        )
+    est = str(note.get("establishes") or "").strip()
+    if est:
+        lines.append(
+            f"- 이 절이 세워 넘길 것: {est} — "
+            "뒤 절이 그대로 받아 쓸 수 있게 본문에서 명시적으로 확정하라"
+        )
     if not lines:
         return ""
     return "설계 검토에서 승인된 이 절의 실행 계획:\n" + "\n".join(lines)
