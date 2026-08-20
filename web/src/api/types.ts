@@ -117,10 +117,12 @@ export const ProjectConfigSchema = z.object({
   hyde_enabled: z.boolean().optional(),
   // 완료 알림 채널 - 발송 기능은 준비 중이지만 선택은 저장해 둔다(구현 시 소급 적용).
   notification_channels: z.array(z.enum(["email", "naver_works"])).optional(),
-  // 분석 배정은 목차 설계로 일원화 - 레거시(항상 빈 값), 기존 config 호환용
-  enabled_analyzers: z.array(AnalyzerSchema),
-  depth_mode: DepthModeSchema,
-  output_formats: z.array(z.enum(["hwpx", "markdown"])),
+  // 분석 배정은 목차 설계로 일원화 - 레거시(항상 빈 값), 기존 config 호환용.
+  // 아래 셋도 catch: preset과 같은 이유 - API로 만든 config에 키가 빠질 수 있고,
+  // required 하나가 실패하면 config.catch(DEFAULT)로 화면 전체가 둔갑한다(2026-08-20).
+  enabled_analyzers: z.array(AnalyzerSchema).catch([]),
+  depth_mode: DepthModeSchema.catch("full_report"),
+  output_formats: z.array(z.enum(["hwpx", "markdown"])).catch(["hwpx"]),
 });
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
 
