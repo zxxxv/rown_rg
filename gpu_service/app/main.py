@@ -17,25 +17,39 @@ import hmac
 import logging
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from gpu_service.app.config import ServiceConfig
 from gpu_service.app.embed_service import EmbedService
+from gpu_service.app.gpu_queue import GpuBusy, GpuQueue
 from gpu_service.app.service import RerankService
+from gpu_service.app.stats_history import SAMPLE_INTERVAL_S, StatsHistory
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("gpu_service")
 
 config = ServiceConfig.from_env()
-# 리랭커와 임베딩이 **같은 카드**를 쓴다. 세마포어를 하나만 두고 둘이 나눠 갖는다 -
+# 리랭커와 임베딩이 **같은 카드**를 쓴다. 큐를 하나만 두고 둘이 나눠 갖는다 -
 # 각자 하나씩 가지면 리허설과 색인이 겹쳐 돌아 VRAM이 두 배로 필요해진다.
-_gpu_semaphore = asyncio.Semaphore(config.max_concurrency)
-service = RerankService(config, semaphore=_gpu_semaphore)
-embed_service = EmbedService(config, semaphore=_gpu_semaphore) if config.embed_enabled else None
+_gpu_queue = GpuQueue(config.max_concurrency, config.max_wait_s)
+service = RerankService(config, queue=_gpu_queue)
+embed_service = EmbedService(config, queue=_gpu_queue) if config.embed_enabled else None
+_history = StatsHistory()
+
+
+async def _sample_loop() -> None:
+    """5초마다 큐·GPU 상태를 이력에 남긴다 — 대시보드의 최근 1시간 그래프 원천."""
+    while True:
+        try:
+            _history.record(t=time.time(), queue=_gpu_queue.snapshot(), gpu=gpu_metrics())
+        except Exception:  # noqa: BLE001 — 샘플 한 번 실패로 루프가 죽으면 이력이 통째로 끊긴다
+            logger.exception("stats sample failed")
+        await asyncio.sleep(SAMPLE_INTERVAL_S)
 
 
 class RerankRequest(BaseModel):
@@ -81,10 +95,73 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service.load()
     if embed_service is not None:
         embed_service.load()
-    yield
+    sampler = asyncio.create_task(_sample_loop())
+    try:
+        yield
+    finally:
+        sampler.cancel()
+        with suppress(asyncio.CancelledError):
+            await sampler
+
+
+
+def gpu_metrics() -> dict[str, object] | None:
+    """현재 GPU 상태 — 읽을 수 없으면 None.
+
+    Netdata 같은 GPU 대시보드가 있어도 이걸 /health에 두는 이유: **조용한 CPU 폴백은
+    GPU 지표만으로는 안 잡힌다.** onnxruntime 버전이 어긋나 CPU로 떨어지면 GPU는
+    그냥 한가한 걸로 보인다(2026-08-20 실제로 겪었다). ``on_gpu``와 사용률이 한
+    화면에 같이 있어야 "안 쓰는 중"과 "못 쓰는 중"이 구분된다.
+    """
+    try:
+        import pynvml
+    except ImportError:
+        return None
+    try:
+        pynvml.nvmlInit()
+        try:
+            h = pynvml.nvmlDeviceGetHandleByIndex(0)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(h)
+            util = pynvml.nvmlDeviceGetUtilizationRates(h)
+            name = pynvml.nvmlDeviceGetName(h)
+            return {
+                "name": name.decode() if isinstance(name, bytes) else name,
+                "utilization_pct": util.gpu,
+                "memory_used_mib": mem.used // 1024 // 1024,
+                "memory_total_mib": mem.total // 1024 // 1024,
+                "temperature_c": pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU),
+                "power_w": round(pynvml.nvmlDeviceGetPowerUsage(h) / 1000, 1),
+            }
+        finally:
+            pynvml.nvmlShutdown()
+    except Exception:  # noqa: BLE001 — 지표를 못 읽는다고 /health가 죽으면 안 된다
+        return None
 
 
 app = FastAPI(title="rown GPU reranker", lifespan=lifespan)
+
+
+@app.exception_handler(GpuBusy)
+async def _gpu_busy_handler(request: Request, exc: GpuBusy) -> JSONResponse:
+    """예상 대기가 클라이언트 타임아웃을 넘을 때만 429.
+
+    큐가 길다는 이유만으로 거절하지 않는다 - 기다렸다 GPU로 처리하는 편이 CPU
+    폴백보다 거의 항상 빠르기 때문이다. 여기 오는 요청은 기다려 봐야 타임아웃 후
+    폴백이라 총 시간이 더 나빠지는 경우뿐이다.
+    """
+    logger.warning(
+        "gpu busy: in_flight=%d 예상대기=%.1fs 상한=%.0fs",
+        exc.in_flight, exc.estimated_wait_s, exc.limit_s,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={
+            "detail": str(exc),
+            "in_flight": exc.in_flight,
+            "estimated_wait_s": round(exc.estimated_wait_s, 1),
+        },
+        headers={"Retry-After": "5"},
+    )
 
 
 @app.get("/health")
@@ -99,6 +176,10 @@ async def health() -> dict[str, object]:
         "batch_size": config.batch_size,
         "max_length": config.max_length,
         "warmup_ms": service.warmup_ms,
+        # 큐가 밀리는지 밖에서 보이게 한다. rejected_total이 0이 아니면 용량을
+        # 다시 봐야 한다는 신호다.
+        "queue": _gpu_queue.snapshot(),
+        "gpu": gpu_metrics(),
         # 임베딩은 선택적으로 켜진다. 꺼져 있으면 embed=None이라 호출부가
         # "느린데 왜지"를 여기서 바로 구분할 수 있다.
         "embed": None
@@ -112,6 +193,50 @@ async def health() -> dict[str, object]:
             "warmup_ms": embed_service.warmup_ms,
         },
     }
+
+
+@app.get("/stats/history")
+async def stats_history() -> dict[str, object]:
+    """최근 1시간의 큐·GPU 시계열 — 앱 대시보드가 그래프를 그리는 원천.
+
+    /health처럼 인증이 없다. 양쪽 다 루프백에만 묶인 터널로만 닿을 수 있고,
+    수치에는 비밀이 없다.
+    """
+    return _history.series()
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+async def metrics() -> str:
+    """Prometheus 텍스트 — netdata go.d의 prometheus 수집기가 긁는다.
+
+    하드웨어 수치(사용률·VRAM·온도)는 여기 없다 - netdata의 nvidia_smi 수집기가
+    이미 뜬다. 여기 두는 것은 **서비스만 아는 것**이다: 큐가 얼마나 밀렸는지,
+    그리고 모델이 정말 GPU에 있는지(``on_gpu``). onnxruntime이 어긋나 CPU로
+    떨어지면 GPU 지표는 그저 한가해 보인다 - 이 플래그가 있어야 알림을 걸 수 있다.
+    """
+    q = _gpu_queue.snapshot()
+    lines = [
+        "# TYPE rown_gpu_queue_in_flight gauge",
+        f"rown_gpu_queue_in_flight {q['in_flight']}",
+        "# TYPE rown_gpu_queue_estimated_wait_seconds gauge",
+        f"rown_gpu_queue_estimated_wait_seconds {q['estimated_wait_s']}",
+        "# TYPE rown_gpu_queue_avg_task_seconds gauge",
+        f"rown_gpu_queue_avg_task_seconds {q['avg_task_s']}",
+        "# TYPE rown_gpu_queue_completed_total counter",
+        f"rown_gpu_queue_completed_total {q['completed_total']}",
+        "# TYPE rown_gpu_queue_rejected_total counter",
+        f"rown_gpu_queue_rejected_total {q['rejected_total']}",
+        "# TYPE rown_gpu_service_ready gauge",
+        f'rown_gpu_service_ready{{service="rerank"}} {int(service.ready)}',
+        "# TYPE rown_gpu_service_on_gpu gauge",
+        f'rown_gpu_service_on_gpu{{service="rerank"}} {int(service.on_gpu)}',
+    ]
+    if embed_service is not None:
+        lines += [
+            f'rown_gpu_service_ready{{service="embed"}} {int(embed_service.ready)}',
+            f'rown_gpu_service_on_gpu{{service="embed"}} {int(embed_service.on_gpu)}',
+        ]
+    return "\n".join(lines) + "\n"
 
 
 @app.post("/v1/rerank", response_model=RerankResponse)

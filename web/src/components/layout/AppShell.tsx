@@ -62,7 +62,9 @@ export function AppShell({ user, onLogout, children }: AppShellProps) {
             </Sheet>
             <div className="truncate text-sm text-fg-tertiary">AI 보고서 자동생성 시스템</div>
           </div>
-          <div className="flex items-center gap-4">
+          {/* shrink-0: 좁은 폭에서 이쪽이 짓눌리면 한글·숫자가 한 글자씩 세로로
+              꺾인다(2026-08-20 폰 실측). 양보는 왼쪽 제목의 truncate가 한다. */}
+          <div className="flex shrink-0 items-center gap-2 sm:gap-4">
             {demoMode ? (
               <button
                 type="button"
@@ -93,7 +95,11 @@ export function AppShell({ user, onLogout, children }: AppShellProps) {
                   >
                     {user.name.slice(0, 1)}
                   </span>
-                  <span className="text-sm text-fg">{user.name}</span>
+                  {/* 이름이 아주 길면 여기가 다시 헤더를 밀어낸다 - 폰에서는 상한을 두고
+                      말줄임. 전체 이름은 마이페이지에서 본다. */}
+                  <span className="max-w-[6rem] truncate whitespace-nowrap text-sm text-fg sm:max-w-none">
+                    {user.name}
+                  </span>
                 </Link>
                 {onLogout ? (
                   <Button variant="ghost" size="sm" onClick={onLogout} aria-label="로그아웃">

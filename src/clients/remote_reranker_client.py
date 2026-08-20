@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 import structlog
 
+from src.clients.remote_stats import RemoteCallStats
 from src.clients.reranker_client import RerankerClient
 from src.core.clock import now
 from src.core.config import settings
@@ -70,6 +71,7 @@ class RemoteRerankerClient(RerankerClient):
         # 연속 실패 시 매 절마다 타임아웃을 다시 기다리지 않도록 잠시 원격을 끈다.
         # 20절 × 60초 = 20분을 죽은 서비스를 기다리며 버리는 사고를 막는다.
         self._disabled_until: float = 0.0
+        self.stats = RemoteCallStats()
 
         logger.info(
             "reranker.remote.configured",
@@ -90,17 +92,26 @@ class RemoteRerankerClient(RerankerClient):
         try:
             scores = await self._request_scores(query, passages)
         except Exception as exc:  # noqa: BLE001 — 어떤 실패든 폴백으로 살린다
-            self._disabled_until = time.monotonic() + self._cooldown_s
+            # 429(GPU 큐 포화)는 **쿨다운을 걸지 않는다**. 서비스가 죽은 게 아니라
+            # 잠깐 밀린 것이라, 60초를 통째로 건너뛰면 순간적인 몰림 때문에 그 뒤의
+            # 한가한 1분까지 CPU로 처리하게 된다. 429는 이미 즉시 돌아오므로
+            # 매번 시도해도 비용이 거의 없다.
+            busy = isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
+            if not busy:
+                self._disabled_until = time.monotonic() + self._cooldown_s
+            self.stats.last_error = f"{type(exc).__name__}: {str(exc)[:200]}"
             logger.warning(
                 "reranker.remote.failed",
                 error=type(exc).__name__,
                 detail=str(exc)[:200],
                 n_passages=len(passages),
-                cooldown_s=self._cooldown_s,
+                cooldown_s=0 if busy else self._cooldown_s,
+                busy=busy,
                 elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
             )
             return await self._fallback_scores(query, passages, reason="error")
 
+        self.stats.record_ok()
         logger.info(
             "reranker.remote.completed",
             n_passages=len(passages),
@@ -155,9 +166,19 @@ class RemoteRerankerClient(RerankerClient):
     def _in_cooldown(self) -> bool:
         return time.monotonic() < self._disabled_until
 
+    def stats_snapshot(self) -> dict[str, Any]:
+        """모니터 라우터 노출용 — 폴백 누적과 쿨다운 여부."""
+        return {
+            "mode": "remote",
+            "fallback_policy": self._fallback,
+            "base_url": self._base_url,
+            **self.stats.snapshot(disabled_until_monotonic=self._disabled_until),
+        }
+
     async def _fallback_scores(
         self, query: str, passages: list[str], *, reason: str
     ) -> list[float]:
+        self.stats.record_fallback(reason, items=len(passages))
         if self._fallback == FALLBACK_PASSTHROUGH:
             logger.warning(
                 "reranker.remote.fallback.passthrough",

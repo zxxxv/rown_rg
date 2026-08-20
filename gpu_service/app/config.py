@@ -42,6 +42,12 @@ class ServiceConfig:
     # 앱은 이 값을 호스트 RAM에서 고르지만 여기서는 그러면 안 된다 - 이 컨테이너의
     # 제약은 시스템 RAM이 아니라 VRAM이다.
     embed_max_chars: int = 0
+    # 예상 대기가 이 초를 넘으면 429로 즉시 돌려보낸다. **큐 길이가 아니라 시간**이
+    # 기준인 이유: 기다렸다 GPU로 처리하는 편이 CPU 폴백보다 거의 항상 빠르다
+    # (리랭킹 GPU 1.5초 vs CPU 140초). 거절이 이득인 경우는 어차피 클라이언트
+    # 타임아웃을 맞을 요청뿐이다 - 그때는 기다린 시간까지 더해져 더 느려진다.
+    # 기본 55초는 클라이언트 타임아웃 60초에서 여유 5초를 뺀 값이다. 0이면 거절 없음.
+    max_wait_s: float = 55.0
 
     @classmethod
     def from_env(cls) -> ServiceConfig:
@@ -66,6 +72,7 @@ class ServiceConfig:
             # 없는 모델을 찾다가 컨테이너가 죽는 것을 막는다.
             embed_model_dir=os.environ.get("GPU_EMBED_MODEL_DIR", "").strip(),
             embed_max_chars=_int("GPU_EMBED_MAX_CHARS", 0),
+            max_wait_s=float(os.environ.get("GPU_MAX_WAIT_S", "").strip() or 55.0),
         )
 
     def validate(self) -> None:

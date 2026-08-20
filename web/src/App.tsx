@@ -10,6 +10,7 @@ import { RequireAuth } from "@/components/auth/RequireAuth";
 import { Toaster } from "@/components/ui/sonner";
 import ForbiddenPage from "@/pages/403";
 import AdminDashboardPage from "@/pages/admin/dashboard";
+import AdminGpuPage from "@/pages/admin/gpu";
 import AdminIpPage from "@/pages/admin/ip";
 import AdminSettingsPage from "@/pages/admin/settings";
 import AdminTokensPage from "@/pages/admin/tokens";
@@ -165,6 +166,14 @@ const routes = [
     element: (
       <RequireAuth minRole="admin">
         <AdminDashboardPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/admin/gpu",
+    element: (
+      <RequireAuth minRole="super_admin">
+        <AdminGpuPage />
       </RequireAuth>
     ),
   },

@@ -7,6 +7,7 @@ import logging
 import time
 
 from gpu_service.app.config import ServiceConfig
+from gpu_service.app.gpu_queue import GpuQueue
 from src.clients.onnx_cross_encoder import (
     CPU_PROVIDERS,
     CUDA_PROVIDERS,
@@ -18,13 +19,13 @@ logger = logging.getLogger("gpu_service")
 
 class RerankService:
     def __init__(
-        self, config: ServiceConfig, *, semaphore: asyncio.Semaphore | None = None
+        self, config: ServiceConfig, *, queue: GpuQueue | None = None
     ) -> None:
         self._config = config
         self._encoder: OnnxCrossEncoder | None = None
-        # 세마포어를 밖에서 받는 이유: 임베딩 서비스와 **같은 카드**를 쓴다. 각자
-        # 하나씩 가지면 리랭킹과 색인이 겹쳐 돌아 VRAM이 두 배로 필요해진다.
-        self._semaphore = semaphore or asyncio.Semaphore(config.max_concurrency)
+        # 큐를 밖에서 받는 이유: 임베딩 서비스와 **같은 카드**를 쓴다. 각자 하나씩
+        # 가지면 리랭킹과 색인이 겹쳐 돌아 VRAM이 두 배로 필요해진다.
+        self._queue = queue or GpuQueue(config.max_concurrency, config.max_wait_s)
         self._warmup_ms: float | None = None
 
     @property
@@ -82,6 +83,6 @@ class RerankService:
         if self._encoder is None:
             raise RuntimeError("모델이 아직 적재되지 않았습니다")
         encoder = self._encoder
-        async with self._semaphore:
+        async with self._queue.acquire():
             # 전방계산은 스레드로. 안 그러면 이벤트 루프가 멈춰 /health조차 응답이 없다.
             return await asyncio.to_thread(encoder.score, query, passages)

@@ -25,7 +25,9 @@ export function UsageMeter({ usage }: { usage: MyTokenUsage }) {
 
   return (
     // tabular-nums: 값이 바뀔 때 자리폭이 흔들리지 않게(헤더가 미세하게 들썩였다)
-    <div className="flex items-center text-xs tabular-nums">
+    // whitespace-nowrap + shrink-0: 짓눌리면 "비용 $12.34"가 글자 단위로 꺾여
+    // 세로로 보인다 - 이 표시는 줄어들 바에야 통째로 자리를 지켜야 읽힌다.
+    <div className="flex shrink-0 items-center whitespace-nowrap text-xs tabular-nums">
       <span
         className="flex flex-col gap-1"
         title={
