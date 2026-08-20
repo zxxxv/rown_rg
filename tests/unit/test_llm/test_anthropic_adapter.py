@@ -269,6 +269,23 @@ class TestEffort:
         )
         assert "output_config" not in fake.messages.calls[0]
 
+    @pytest.mark.asyncio
+    async def test_fable_takes_effort_and_drops_temperature(self, tmp_path: Path) -> None:
+        """Fable 5는 effort를 받고 temperature는 400으로 거부한다 — 둘 다 걸려야 한다."""
+        adapter = _make_adapter(tmp_path)
+        fake = _FakeClient([self._result("claude-fable-5")])
+        adapter._client = fake
+
+        await adapter._call_provider(
+            CompletionRequest(
+                messages=[Message(role="user", content="절 작성")],
+                model="claude-fable-5",
+                effort="low",
+            )
+        )
+        assert fake.messages.calls[0]["output_config"] == {"effort": "low"}
+        assert "temperature" not in fake.messages.calls[0]
+
 
 class TestWebSearchCaching:
     @pytest.mark.asyncio

@@ -16,6 +16,9 @@ pm_verify는 콜 수가 적어 절감 실익이 없고 판정·구조 품질을 
 from src.clients.llm.models import thinking_default_on
 from src.core import app_settings
 
+# Fable 계열은 설정 키를 따로 쓴다 — 아래 write_effort 독스트링 참조.
+_FABLE_PREFIX = "claude-fable"
+
 
 def write_effort(model: str, *, synthesis: bool = False) -> str | None:
     """작성 콜에 적용할 effort. thinking 기본-on 모델이 아니면 None(파라미터 생략).
@@ -28,9 +31,13 @@ def write_effort(model: str, *, synthesis: bool = False) -> str | None:
     임무)로, 별도 설정(write_effort_synthesis, 기본 medium)을 쓴다. 8/14 low A/B는
     일반 절 기준이라 종합 절의 통찰 깊이는 미검증(2026-08-20 사용자 가설) — 정독의
     "뻔한 단계론" 일반론이 종합 절에 몰린 것과 정합해 절 범위 한정으로 상향한다.
+
+    Fable 계열은 fable_ 접두 키(fable_write_effort·fable_write_effort_synthesis)를
+    읽는다 — 추론을 끌 수 없고 같은 effort에서도 토큰이 더 나올 수 있어 Opus와 한
+    키를 공유하면 한쪽을 조일 때 다른 쪽이 딸려 온다(2026-08-20 결정).
     """
     if not thinking_default_on(model):
         return None
-    if synthesis:
-        return app_settings.get_str("write_effort_synthesis") or None
-    return app_settings.get_str("write_effort") or None
+    prefix = "fable_" if model.startswith(_FABLE_PREFIX) else ""
+    key = f"{prefix}write_effort_synthesis" if synthesis else f"{prefix}write_effort"
+    return app_settings.get_str(key) or None

@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     # 사용자 가설: low가 시사점류의 통찰 깊이를 깎았을 수 있다 - 8/14 A/B는 일반 절
     # 기준이라 종합 절은 미검증). 20절 중 4~6절만 해당해 비용 +$2~3/런. 6차 검증 축.
     write_effort_synthesis: str = "medium"
+    # Fable 5 전용 추론 깊이 — Opus와 독립 튜닝한다(2026-08-20 결정). Fable은 추론을
+    # 끌 수 없고(설정 시 400) 같은 effort에서도 Opus보다 토큰이 더 나올 수 있어,
+    # 한 키를 공유하면 한쪽을 조일 때 다른 쪽이 딸려 온다. 기본값은 Opus와 같은
+    # 자리에서 출발하되 실전 비용을 보고 이 두 줄만 조정한다.
+    fable_write_effort: str = "low"
+    fable_write_effort_synthesis: str = "medium"
     # 웹 리서치 비용 노브 — 검색/회수 횟수와 응답 상한 (챕터당 1콜 분할 수집이라
     # 총 수집 폭 = 챕터 수 × max_uses)
     # 절당 후보 수. 1 = 기본(2026-08-07 확정). 후보 2개는 비용을 두 배로 쓰면서

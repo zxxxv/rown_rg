@@ -56,6 +56,16 @@ class ModelSpec:
 MODELS: tuple[ModelSpec, ...] = (
     # Anthropic (Claude)
     ModelSpec(
+        # 최고급 모드의 본문·파트계획 모델. 단가가 Opus 5의 정확히 2배라 모드를
+        # 갈아끼우지 않고 별도 모드로만 노출한다(2026-08-20 결정).
+        # cached_input은 카탈로그 관행(입력의 10%) — 첫 실호출 후 token_usage의
+        # 캐시 읽기 비용으로 검산할 것.
+        "claude-fable-5",
+        "anthropic",
+        ModelPricing(Decimal("10"), Decimal("50"), Decimal("1.00")),
+        thinking_default_on=True,
+    ),
+    ModelSpec(
         "claude-opus-5",
         "anthropic",
         ModelPricing(Decimal("5"), Decimal("25"), Decimal("0.50")),

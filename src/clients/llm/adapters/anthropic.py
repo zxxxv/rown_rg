@@ -50,6 +50,7 @@ def _web_tool_types(model: str) -> tuple[str, str]:
 
 # temperature를 받지 않는 모델 접두사 — 지정하면 400(deprecated for this model).
 _NO_TEMPERATURE_PREFIXES = (
+    "claude-fable-5",
     "claude-sonnet-5",
     "claude-opus-5",
     "claude-opus-4-8",
@@ -64,6 +65,7 @@ def _accepts_temperature(model: str) -> bool:
 # output_config.effort를 받는 모델 접두사 — 그 외(Haiku 4.5 등)에 보내면 400.
 # effort는 추론(thinking) 깊이와 토큰 지출을 낮추는 GA 파라미터(베타 헤더 불요).
 _EFFORT_PREFIXES = (
+    "claude-fable-5",
     "claude-opus-5",
     "claude-opus-4-8",
     "claude-opus-4-7",

@@ -13,6 +13,11 @@ class TestCostCalculatorNewModels:
     @pytest.mark.parametrize(
         ("model", "input_tokens", "output_tokens", "cached_input_tokens", "expected"),
         [
+            # Anthropic — Fable 5는 Opus 5의 정확히 2배 단가($10/$50)
+            ("claude-fable-5", 1_000_000, 1_000_000, 0, Decimal("60.00")),
+            ("claude-opus-5", 1_000_000, 1_000_000, 0, Decimal("30.00")),
+            # 캐시 읽기는 입력의 10%로 등록했다(카탈로그 관행)
+            ("claude-fable-5", 0, 0, 1_000_000, Decimal("1.00")),
             # Gemini
             ("gemini-3.1-flash-lite", 1_000_000, 1_000_000, 0, Decimal("1.75")),
             ("gemini-3.5-flash-lite", 1_000_000, 1_000_000, 0, Decimal("2.80")),
