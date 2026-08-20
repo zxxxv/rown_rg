@@ -19,4 +19,12 @@ nvidia-ml-py>=12
 # PDF 파싱(/v1/parse). ==로 정확히 고정하는 이유: 파서 출력이 캐시 키·평가 기준선의
 # 전제라 버전이 다르면 같은 PDF에서 다른 마크다운이 나온다. 앱(uv.lock)과 같은
 # 버전이어야 원격/로컬 폴백 사이에 출력이 갈라지지 않는다.
+#
+# torch는 **CUDA 12.6 빌드를 명시 핀**한다. PyPI 기본 torch는 CUDA 13 빌드라
+# nvidia_*_cu13 휠을 끌고 오는데, (1) 드라이버 560.94는 CUDA 12.6까지만 지원해
+# torch GPU가 안 돌고, (2) onnxruntime-gpu가 시스템 cuDNN 대신 그 cu13 cuDNN을
+# 집어 써서 **리랭커·임베딩까지** CUDNN 1001로 죽는다(2026-08-20 실사고 - 부팅 사망).
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.6.0+cu126
+torchvision==0.21.0+cu126
 docling==2.105.0
