@@ -1225,6 +1225,22 @@ _INDEX_SEMAPHORE = asyncio.Semaphore(1)
 _INDEX_DEFER_STATUSES = ("created", "planning", "researching")
 
 
+async def _title_in_background(source_id: UUID, file_path: Path, error_context: str) -> None:
+    """색인 유예 업로드의 표제 선추출 — 자료 검토 게이트가 실제 문서 제목을 보게 한다.
+
+    파싱은 원격 GPU(폴백 사슬)라 앱 부담이 작고, 결과는 파스 캐시로 남아 런 색인이
+    재사용한다. 실패해도 파일명 표시로 남을 뿐이라 경고만 남긴다. _INDEX_SEMAPHORE를
+    같이 쓴다 — 로컬 docling 폴백일 때 동시 파싱 폭주를 막는다(29GB 실사고 계보).
+    """
+    from src.services.indexing.vector import extract_and_apply_doc_title
+
+    try:
+        async with _INDEX_SEMAPHORE:
+            await extract_and_apply_doc_title(source_id, file_path)
+    except Exception:
+        logger.warning("source.title_extract_failed_bg", context=error_context, exc_info=True)
+
+
 async def _index_in_background(source: SourceInput, error_context: str) -> None:
     """업로드/라이브러리 자료를 요청 밖에서 색인하고 결과를 행 메타에 남긴다.
 
@@ -1397,6 +1413,14 @@ async def upload_project_source(
         meta["index_deferred"] = True
         row.metadata_ = meta
         await session.commit()
+        # 색인은 미루지만 표제 선추출은 지금 한다(2026-08-21 사용자 요청) — 자료 검토
+        # 게이트가 "A38B4BB2CA_….pdf" 대신 실제 문서 제목을 보게. 파스 캐시가 남아
+        # 런 색인이 재사용하므로 이중 비용이 없다.
+        title_task = asyncio.create_task(
+            _title_in_background(row.id, dest, f"upload-title:{project.id}:{safe_name}")
+        )
+        _INDEX_TASKS.add(title_task)
+        title_task.add_done_callback(_INDEX_TASKS.discard)
         return _to_source_item(row)
     await session.commit()
     task = asyncio.create_task(_index_in_background(source, f"upload:{project.id}:{safe_name}"))

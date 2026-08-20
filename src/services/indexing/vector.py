@@ -436,3 +436,31 @@ def _extract_doc_title(markdown: str) -> str | None:
         if fallback is None:
             fallback = cleaned
     return fallback
+
+
+async def extract_and_apply_doc_title(source_id: UUID, file_path: Path) -> None:
+    """업로드 직후 표제만 선추출해 자료 행에 반영한다(색인 유예와 독립).
+
+    색인이 런의 색인 단계로 유예되면(1dd66ad) 자료 검토 게이트가 ID형 파일명을
+    그대로 보게 된다(2026-08-21 지적) — 파싱과 표제 추출만 가볍게 먼저 한다.
+    파싱 결과는 파스 캐시에 남아 런 색인이 재사용하므로 이중 비용이 없다.
+    """
+    from src.clients.parser import ParserRegistry
+    from src.db.session import async_session_maker
+
+    parsed = await ParserRegistry().parse(file_path)
+    title = _extract_doc_title(parsed.markdown)
+    if not title:
+        return
+    async with async_session_maker() as session:
+        row = await session.get(ProjectSource, source_id)
+        if row is None:
+            return
+        meta = dict(row.metadata_ or {})
+        if meta.get("doc_title") != title:
+            meta["doc_title"] = title
+            row.metadata_ = meta  # JSONB는 재할당해야 dirty로 잡힌다
+        if _looks_like_id_filename(row.title or ""):
+            logger.info("upload.title_from_document", source_id=str(source_id), new=title)
+            row.title = title
+        await session.commit()
