@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends
 
 from src.api.dependencies.permissions import require_role
 from src.clients.embedding_factory import peek_embedding_client
+from src.clients.parser.remote import peek_remote_docling
 from src.clients.reranker_factory import peek_reranker_client
 from src.core.config import settings
 from src.core.types import Role
@@ -44,7 +45,11 @@ async def gpu_monitor(
     # 폴백 에러 문자열에 내부 주소가 섞일 수 있다.
     _: Annotated[User, Depends(require_role(Role.SUPER_ADMIN))],
 ) -> dict[str, Any]:
-    base_url = (settings.reranker_remote_url or settings.embedding_remote_url).rstrip("/")
+    base_url = (
+        settings.reranker_remote_url
+        or settings.embedding_remote_url
+        or settings.parser_remote_url
+    ).rstrip("/")
 
     service: dict[str, Any]
     if not base_url:
@@ -74,5 +79,6 @@ async def gpu_monitor(
         "clients": {
             "reranker": _client_stats(peek_reranker_client()),
             "embedding": _client_stats(peek_embedding_client()),
+            "parser": _client_stats(peek_remote_docling()),
         },
     }

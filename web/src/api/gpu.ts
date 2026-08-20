@@ -30,6 +30,15 @@ export interface GpuEmbedStatus {
   warmup_ms: number | null;
 }
 
+export interface GpuParseStatus {
+  ready: boolean;
+  device: string;
+  docling_version: string;
+  artifacts_dir: string;
+  /** 파싱 전용 레인 — 리랭킹·임베딩 queue와 통계가 분리돼 있다 */
+  lane: GpuQueueSnapshot;
+}
+
 export interface GpuHealth {
   status: string;
   /** 서비스 기동 시각(epoch 초) — 누적 카운터의 기준점 */
@@ -41,6 +50,7 @@ export interface GpuHealth {
   queue: GpuQueueSnapshot;
   gpu: GpuHwMetrics | null;
   embed: GpuEmbedStatus | null;
+  parse?: GpuParseStatus | null;
 }
 
 /** 필드별 병렬 배열 — gpu_service/app/stats_history.py의 series()와 1:1 */
@@ -78,6 +88,7 @@ export interface GpuMonitorData {
   clients: {
     reranker: RemoteClientStats;
     embedding: RemoteClientStats;
+    parser?: RemoteClientStats;
   };
 }
 

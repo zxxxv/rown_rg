@@ -25,6 +25,7 @@ import {
 import {
   type GpuHistory,
   type GpuMonitorData,
+  type GpuParseStatus,
   type RemoteClientStats,
   useGpuMonitor,
 } from "@/api/gpu";
@@ -146,6 +147,16 @@ function MonitorBody({ data }: { data: GpuMonitorData }) {
           itemNoun="텍스트"
           itemsAreSevere
         />
+        {data.clients.parser ? (
+          <FallbackCard
+            title="파서 폴백 (PDF)"
+            stats={data.clients.parser}
+            itemNoun="문서"
+            itemsAreSevere
+            severeNote="원격 파싱이 실패해 낮은 단계 파서로 처리된 문서가 있습니다 — 표 품질을 확인하세요."
+          />
+        ) : null}
+        {svc.reachable && svc.health.parse ? <ParseStatusCard parse={svc.health.parse} /> : null}
       </section>
     </>
   );
@@ -399,17 +410,64 @@ function ChartCard({
   );
 }
 
+function ParseStatusCard({ parse }: { parse: GpuParseStatus }) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-base">원격 파싱 (docling)</CardTitle>
+          {parse.ready ? (
+            <Badge className="bg-bg-success text-fg-success">
+              {parse.device === "cuda" ? "GPU" : "CPU"} 동작 중
+            </Badge>
+          ) : (
+            <Badge className="bg-bg-danger text-fg-danger">로드 안 됨</Badge>
+          )}
+        </div>
+        <CardDescription>
+          docling {parse.docling_version} · 전용 레인 (리랭킹과 분리)
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-fg-secondary">
+        <span>
+          대기 <b className="font-mono text-fg">{parse.lane.in_flight}</b>건
+        </span>
+        <span>
+          예상 대기 <b className="font-mono text-fg">{parse.lane.estimated_wait_s.toFixed(0)}s</b>
+          {" / "}상한 {parse.lane.max_wait_s.toFixed(0)}s
+        </span>
+        <span>
+          처리 <b className="font-mono text-fg">{parse.lane.completed_total.toLocaleString()}</b>
+        </span>
+        <span>
+          거절{" "}
+          <b
+            className={cn(
+              "font-mono",
+              parse.lane.rejected_total > 0 ? "text-fg-warning" : "text-fg",
+            )}
+          >
+            {parse.lane.rejected_total.toLocaleString()}
+          </b>
+        </span>
+      </CardContent>
+    </Card>
+  );
+}
+
 function FallbackCard({
   title,
   stats,
   itemNoun,
   itemsAreSevere = false,
+  severeNote,
 }: {
   title: string;
   stats: RemoteClientStats;
   itemNoun: string;
-  // 임베딩만 true - 폴백으로 만든 벡터는 dtype이 달라 색인 품질을 해친다.
+  // 임베딩·파서만 true - 폴백 산출물이 품질을 조용히 해치는 경우다.
   itemsAreSevere?: boolean;
+  severeNote?: string;
 }) {
   if (stats.mode === "unused") {
     return (
@@ -469,7 +527,8 @@ function FallbackCard({
         {severe ? (
           <p className="flex items-start gap-1.5 text-xs text-fg-warning">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-            CPU 폴백으로 만든 벡터가 색인에 들어갔을 수 있습니다 — 재색인 검토가 필요합니다.
+            {severeNote ??
+              "CPU 폴백으로 만든 벡터가 색인에 들어갔을 수 있습니다 — 재색인 검토가 필요합니다."}
           </p>
         ) : null}
         {stats.last_fallback_at ? (
