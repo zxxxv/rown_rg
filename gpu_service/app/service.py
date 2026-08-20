@@ -25,7 +25,7 @@ class RerankService:
         self._encoder: OnnxCrossEncoder | None = None
         # 큐를 밖에서 받는 이유: 임베딩 서비스와 **같은 카드**를 쓴다. 각자 하나씩
         # 가지면 리랭킹과 색인이 겹쳐 돌아 VRAM이 두 배로 필요해진다.
-        self._queue = queue or GpuQueue(config.max_concurrency, config.max_in_flight)
+        self._queue = queue or GpuQueue(config.max_concurrency, config.max_wait_s)
         self._warmup_ms: float | None = None
 
     @property

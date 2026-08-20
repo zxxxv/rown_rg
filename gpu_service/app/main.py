@@ -34,7 +34,7 @@ logger = logging.getLogger("gpu_service")
 config = ServiceConfig.from_env()
 # 리랭커와 임베딩이 **같은 카드**를 쓴다. 큐를 하나만 두고 둘이 나눠 갖는다 -
 # 각자 하나씩 가지면 리허설과 색인이 겹쳐 돌아 VRAM이 두 배로 필요해진다.
-_gpu_queue = GpuQueue(config.max_concurrency, config.max_in_flight)
+_gpu_queue = GpuQueue(config.max_concurrency, config.max_wait_s)
 service = RerankService(config, queue=_gpu_queue)
 embed_service = EmbedService(config, queue=_gpu_queue) if config.embed_enabled else None
 
@@ -124,15 +124,23 @@ app = FastAPI(title="rown GPU reranker", lifespan=lifespan)
 
 @app.exception_handler(GpuBusy)
 async def _gpu_busy_handler(request: Request, exc: GpuBusy) -> JSONResponse:
-    """큐가 가득 차면 429 — 기다리게 하지 않고 즉시 돌려보낸다.
+    """예상 대기가 클라이언트 타임아웃을 넘을 때만 429.
 
-    클라이언트가 60초 타임아웃을 꼬박 버리는 대신 바로 CPU 폴백으로 가게 하는 것이
-    목적이다. Retry-After는 처리 중인 요청이 대략 끝날 시간을 알려 준다.
+    큐가 길다는 이유만으로 거절하지 않는다 - 기다렸다 GPU로 처리하는 편이 CPU
+    폴백보다 거의 항상 빠르기 때문이다. 여기 오는 요청은 기다려 봐야 타임아웃 후
+    폴백이라 총 시간이 더 나빠지는 경우뿐이다.
     """
-    logger.warning("gpu busy: in_flight=%d limit=%d", exc.in_flight, exc.limit)
+    logger.warning(
+        "gpu busy: in_flight=%d 예상대기=%.1fs 상한=%.0fs",
+        exc.in_flight, exc.estimated_wait_s, exc.limit_s,
+    )
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        content={"detail": str(exc), "in_flight": exc.in_flight, "limit": exc.limit},
+        content={
+            "detail": str(exc),
+            "in_flight": exc.in_flight,
+            "estimated_wait_s": round(exc.estimated_wait_s, 1),
+        },
         headers={"Retry-After": "5"},
     )
 

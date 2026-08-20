@@ -1,8 +1,12 @@
-"""GPU 큐 — 동시 실행 제한과 과부하 시 빠른 거절.
+"""GPU 큐 — 동시 실행 제한과 "타임아웃 날 요청만" 거절.
 
-여기서 지키려는 것: **과부하가 조용한 지연으로 나타나지 않는다.** 세마포어만 쓰면
-줄이 길어져도 아무도 모르고, 뒤쪽 요청은 클라이언트 타임아웃(60초)을 꼬박 버린 뒤
-폴백한다. 상한을 넘으면 즉시 거절해서 그 60초를 아끼는 것이 목적이다.
+여기서 지키려는 것 둘:
+
+1. **큐가 길다는 이유만으로 거절하지 않는다.** 기다렸다 GPU로 처리하는 편이 CPU
+   폴백보다 거의 항상 빠르다(리랭킹 GPU 1.5초 vs CPU 140초). 성급한 거절은 31초면
+   끝날 일을 140초로 만든다.
+2. **어차피 타임아웃 날 요청은 미리 돌려보낸다.** 60초 기다린 뒤 폴백하면 200초가
+   되어 즉시 폴백(140초)보다 나쁘다.
 """
 
 from __future__ import annotations
@@ -14,14 +18,19 @@ import pytest
 from gpu_service.app.gpu_queue import GpuBusy, GpuQueue
 
 
+async def _hold(q: GpuQueue, started: asyncio.Event, release: asyncio.Event) -> None:
+    async with q.acquire():
+        started.set()
+        await release.wait()
+
+
 class TestConcurrencyLimit:
     def test_only_one_runs_at_a_time(self):
         """리랭킹과 임베딩이 같은 카드를 쓴다 - 겹쳐 돌면 VRAM이 두 배로 필요해진다."""
 
         async def scenario():
-            q = GpuQueue(concurrency=1, max_in_flight=0)
-            peak = 0
-            running = 0
+            q = GpuQueue(concurrency=1, max_wait_s=0)
+            peak = running = 0
 
             async def worker():
                 nonlocal peak, running
@@ -38,9 +47,8 @@ class TestConcurrencyLimit:
 
     def test_concurrency_two_allows_two(self):
         async def scenario():
-            q = GpuQueue(concurrency=2, max_in_flight=0)
-            peak = 0
-            running = 0
+            q = GpuQueue(concurrency=2, max_wait_s=0)
+            peak = running = 0
 
             async def worker():
                 nonlocal peak, running
@@ -56,66 +64,125 @@ class TestConcurrencyLimit:
         assert asyncio.run(scenario()) == 2
 
 
-class TestAdmissionControl:
-    def test_rejects_when_full(self):
-        """상한을 넘으면 기다리지 않고 즉시 GpuBusy."""
+class TestWaitingIsPreferred:
+    """가장 중요한 성질 — 웬만하면 줄을 세운다."""
+
+    def test_long_queue_alone_does_not_reject(self):
+        """큐가 길어도 예상 대기가 상한 안이면 모두 받아야 한다.
+
+        이게 깨지면 31초면 끝날 요청을 140초짜리 CPU 폴백으로 보내게 된다.
+        """
 
         async def scenario():
-            q = GpuQueue(concurrency=1, max_in_flight=2)
-            started = asyncio.Event()
-            release = asyncio.Event()
+            # 평균 1초짜리 작업, 상한 55초 -> 50건이 줄을 서도 예상 50초라 통과해야 한다
+            q = GpuQueue(concurrency=1, max_wait_s=55.0)
+            q._avg_task_s = 1.0  # 학습을 기다리지 않고 고정
+            started, release = asyncio.Event(), asyncio.Event()
+            holder = asyncio.create_task(_hold(q, started, release))
+            await started.wait()
 
-            async def holder():
+            accepted = 0
+
+            async def waiter():
+                nonlocal accepted
                 async with q.acquire():
-                    started.set()
-                    await release.wait()
+                    accepted += 1
+
+            waiters = [asyncio.create_task(waiter()) for _ in range(40)]
+            await asyncio.sleep(0)
+            in_flight_peak = q.in_flight
+            release.set()
+            await asyncio.gather(holder, *waiters)
+            return accepted, in_flight_peak, q.rejected
+
+        accepted, peak, rejected = asyncio.run(scenario())
+        assert rejected == 0, "큐가 길다는 이유만으로 거절했다"
+        assert accepted == 40
+        assert peak > 8, "예전 고정 상한(8)이 아직 걸려 있다"
+
+    def test_rejects_only_when_wait_exceeds_limit(self):
+        """예상 대기가 상한을 넘으면 그때는 거절 - 기다려도 타임아웃이라 더 느리다."""
+
+        async def scenario():
+            q = GpuQueue(concurrency=1, max_wait_s=10.0)
+            q._avg_task_s = 4.0  # 3건만 밀려도 12초 > 10초
+            started, release = asyncio.Event(), asyncio.Event()
+            holder = asyncio.create_task(_hold(q, started, release))
+            await started.wait()
 
             async def waiter():
                 async with q.acquire():
                     pass
 
-            h = asyncio.create_task(holder())
-            await started.wait()
-            w = asyncio.create_task(waiter())  # 2번째 - 대기열에 들어간다
-            await asyncio.sleep(0)  # waiter가 acquire까지 진입하게
-
-            with pytest.raises(GpuBusy) as exc:  # 3번째 - 거절
+            ws = [asyncio.create_task(waiter()) for _ in range(2)]
+            await asyncio.sleep(0)
+            # 이제 3건(실행1 + 대기2) -> 예상 12초 -> 다음은 거절
+            with pytest.raises(GpuBusy) as exc:
                 async with q.acquire():
                     pass
             release.set()
-            await asyncio.gather(h, w)
+            await asyncio.gather(holder, *ws)
             return exc.value
 
         err = asyncio.run(scenario())
-        assert err.limit == 2
-        assert "가득" in str(err)
+        assert err.estimated_wait_s > err.limit_s
+        assert "타임아웃" in str(err)
 
-    def test_zero_means_unlimited(self):
-        """0은 상한 없음 - 운영에서 이 기능을 끄고 싶을 때의 탈출구."""
+    def test_zero_limit_never_rejects(self):
+        """0은 거절 없음 - 운영에서 이 기능을 끄고 싶을 때의 탈출구."""
 
         async def scenario():
-            q = GpuQueue(concurrency=1, max_in_flight=0)
+            q = GpuQueue(concurrency=1, max_wait_s=0)
+            q._avg_task_s = 9999.0
             async with q.acquire():
-                # 상한이 없으므로 안에서 또 확인해도 거절되지 않아야 한다
                 assert q.in_flight == 1
-            return True
+            return q.rejected
 
-        assert asyncio.run(scenario())
+        assert asyncio.run(scenario()) == 0
 
-    def test_slot_is_released_after_rejection(self):
+
+class TestDurationLearning:
+    def test_average_follows_actual_duration(self):
+        """리랭킹(1.5초)과 임베딩(4.5초)은 세 배 차이라 고정값으로는 예측이 안 된다."""
+
+        async def scenario():
+            q = GpuQueue(concurrency=1, max_wait_s=0)
+            for _ in range(30):
+                async with q.acquire():
+                    await asyncio.sleep(0.005)
+            return q.snapshot()["avg_task_s"]
+
+        avg = asyncio.run(scenario())
+        # 초기값 4.5초에서 실제 0.005초 쪽으로 내려와야 한다
+        assert avg < 1.0, f"평균이 실제 처리 시간을 따라가지 않는다: {avg}"
+
+    def test_estimate_scales_with_queue_depth(self):
+        async def scenario():
+            q = GpuQueue(concurrency=1, max_wait_s=0)
+            q._avg_task_s = 2.0
+            base = q.estimated_wait_s()
+            started, release = asyncio.Event(), asyncio.Event()
+            h = asyncio.create_task(_hold(q, started, release))
+            await started.wait()
+            one = q.estimated_wait_s()
+            release.set()
+            await h
+            return base, one
+
+        base, one = asyncio.run(scenario())
+        assert base == 0
+        assert one == pytest.approx(2.0)
+
+
+class TestCounters:
+    def test_slot_released_after_rejection(self):
         """거절이 카운터를 오염시키면 그 뒤로 영원히 거절하게 된다."""
 
         async def scenario():
-            q = GpuQueue(concurrency=1, max_in_flight=1)
-            started = asyncio.Event()
-            release = asyncio.Event()
-
-            async def holder():
-                async with q.acquire():
-                    started.set()
-                    await release.wait()
-
-            h = asyncio.create_task(holder())
+            q = GpuQueue(concurrency=1, max_wait_s=1.0)
+            q._avg_task_s = 5.0
+            started, release = asyncio.Event(), asyncio.Event()
+            h = asyncio.create_task(_hold(q, started, release))
             await started.wait()
             for _ in range(3):
                 with pytest.raises(GpuBusy):
@@ -123,9 +190,6 @@ class TestAdmissionControl:
                         pass
             release.set()
             await h
-            # 홀더가 끝났으니 다시 받아야 한다
-            async with q.acquire():
-                pass
             return q.in_flight, q.rejected
 
         in_flight, rejected = asyncio.run(scenario())
@@ -133,10 +197,8 @@ class TestAdmissionControl:
         assert rejected == 3
 
     def test_counter_returns_to_zero_on_exception(self):
-        """작업이 예외로 죽어도 슬롯은 반납돼야 한다."""
-
         async def scenario():
-            q = GpuQueue(concurrency=1, max_in_flight=2)
+            q = GpuQueue(concurrency=1, max_wait_s=0)
             with pytest.raises(ValueError):
                 async with q.acquire():
                     raise ValueError("작업 실패")
@@ -148,31 +210,25 @@ class TestAdmissionControl:
 class TestSnapshot:
     def test_exposes_state_for_health(self):
         async def scenario():
-            q = GpuQueue(concurrency=1, max_in_flight=4)
+            q = GpuQueue(concurrency=1, max_wait_s=55.0)
             async with q.acquire():
                 pass
             return q.snapshot()
 
         snap = asyncio.run(scenario())
         assert snap["in_flight"] == 0
-        assert snap["max_in_flight"] == 4
+        assert snap["max_wait_s"] == 55.0
         assert snap["rejected_total"] == 0
-        assert isinstance(snap["last_wait_ms"], float)
+        assert snap["completed_total"] == 1
+        assert isinstance(snap["estimated_wait_s"], float)
 
     def test_wait_time_is_recorded(self):
         """last_wait_ms가 0에 머물면 큐가 밀리는지 밖에서 알 수 없다."""
 
         async def scenario():
-            q = GpuQueue(concurrency=1, max_in_flight=0)
-            release = asyncio.Event()
-            started = asyncio.Event()
-
-            async def holder():
-                async with q.acquire():
-                    started.set()
-                    await release.wait()
-
-            h = asyncio.create_task(holder())
+            q = GpuQueue(concurrency=1, max_wait_s=0)
+            started, release = asyncio.Event(), asyncio.Event()
+            h = asyncio.create_task(_hold(q, started, release))
             await started.wait()
 
             async def waiter():

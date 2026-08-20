@@ -71,7 +71,7 @@ class EmbedService:
     ) -> None:
         self._config = config
         self._embedder: OnnxTextEmbedder | None = None
-        self._queue = queue or GpuQueue(config.max_concurrency, config.max_in_flight)
+        self._queue = queue or GpuQueue(config.max_concurrency, config.max_wait_s)
         self._warmup_ms: float | None = None
         self._max_chars: int = 0
 
