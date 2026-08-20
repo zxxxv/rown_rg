@@ -132,6 +132,25 @@ def _headers(text_block: str, limit: int = 20) -> list[str]:
     return out[:limit]
 
 
+_ENTITY_INTRO_RE = re.compile(r"([가-힣A-Za-z0-9·\s]{2,25})\(([A-Za-z][A-Za-z0-9 .,&\-]{2,40})\)")
+
+
+def _entities_introduced(texts: Sequence[str], limit: int = 15) -> list[str]:
+    """앞 파트들이 괄호 영문 표기로 소개한 용어·기관 — 재소개 금지 부정 목록.
+
+    v5c-2 정독 실측: "클라이밋 그룹(Climate Group)" 소개가 한 절 안 두 파트에 반복.
+    소제목·수치 부정 목록은 이 유형을 못 잡는다(소개 문장은 소제목도 수치도 아니다).
+    """
+    seen: list[str] = []
+    for t in texts:
+        for m in _ENTITY_INTRO_RE.finditer(t):
+            name = m.group(1).strip().split()[-1] if m.group(1).strip() else ""
+            token = f"{name}({m.group(2).strip()})"
+            if name and token not in seen:
+                seen.append(token)
+    return seen[:limit]
+
+
 def _numbers_used(texts: Sequence[str], limit: int = 40) -> list[str]:
     """앞 파트들의 수치 토큰(유니크·등장순) — 재서술 금지 부정 목록용."""
     seen: list[str] = []
@@ -154,6 +173,7 @@ def _part_tail(
     allowed: Sequence[int],
     prev_headers: Sequence[str],
     used_numbers: Sequence[str],
+    introduced: Sequence[str] = (),
     per_part_goal: int | None = None,
 ) -> str:
     """파트별 가변 지시 — 공유 프리픽스 뒤에 별도 메시지로 붙는다(캐시 경계 밖)."""
@@ -377,6 +397,7 @@ async def generate_section_split(
                 groups[i - 1],
                 headers,
                 _numbers_used(parts),
+                introduced=_entities_introduced(parts),
                 per_part_goal=goal_per_part,
             )
             request = CompletionRequest(

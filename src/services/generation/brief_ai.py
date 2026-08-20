@@ -74,6 +74,15 @@ SYSTEM_PROMPT = """너는 정부·공공 보고서의 실행 계획을 세우는
   다른 각도로 다루는 목차에서 반드시 지정하라. topic은 자료명·조사명·제도명 수준으로
   구체적으로 쓴다("현황"·"배경" 같은 일반어 금지). 소유 절이 그 토픽을 정본으로
   완결하고, 다른 모든 절은 참조 한 문장으로 대체하게 된다.
+  - **같은 장 안의 절 사이에도 배정하라** — 진단 절과 사례 절처럼 한 장에서 두 절이
+    같은 소재를 요구하면 수치 제시권을 한 절에 몰아라(실측: 같은 실태조사 블록이
+    한 보고서에 네 번 실렸다).
+  - 입력에 uploads(업로드 자료 목록)가 있으면 **자료명 단위**로 소유를 배정하라 —
+    "OO 실태조사의 수치 제시권=1.3" 형태가 "실태조사 결과" 같은 토픽명보다 강하다.
+- outline_overlaps: **같은 소재를 요구하는 절 쌍**과 역할 분담 제안(0~5건). 목차
+  자체가 겹침을 만들 때만 적는다 — sections는 "장.절" 2개, material은 겹치는 소재
+  (자료명·조사명), proposal은 "1.3=수치 정본, 1.4=사례·해석" 형태의 분담 한 줄.
+  이 경고는 게이트에서 사람이 보고 목차를 고칠 근거가 된다.
 
 규칙:
 - 사실·수치·기관 통계를 지어내지 마라. 이것은 계획이지 본문이 아니다.
@@ -89,7 +98,9 @@ SYSTEM_PROMPT = """너는 정부·공공 보고서의 실행 계획을 세우는
  "flows":[{"from":"1.2","to":"1.3","carries":"..."}],
  "orphans":["4.1"],
  "query_splits":[{"section":"1.3","query":"..."}],
- "topic_ownership":[{"topic":"제조수출기업 RE100 실태조사","owner":"1.3"}]}"""
+ "topic_ownership":[{"topic":"제조수출기업 RE100 실태조사","owner":"1.3"}],
+ "outline_overlaps":[{"sections":["1.3","1.4"],"material":"RE100 실태조사",
+   "proposal":"1.3=수치 정본, 1.4=사례·해석(수치는 참조)"}]}"""
 
 
 # 절당 질의 상한. 검색 왕복이 그만큼 늘고, 절 질의 집합 전체 상한
@@ -140,6 +151,9 @@ def _compact_input(brief: dict[str, Any]) -> str:
                 }
                 for s in brief.get("sections", [])
             ],
+            # 업로드 자료 목록 — 소유권을 자료명 단위로 배정할 근거(2026-08-20 v2).
+            # 계획이 코퍼스를 모르면 "무엇의 수치 제시권"인지 정할 수 없다.
+            "uploads": brief.get("uploads", []),
             "duplicate_queries": [
                 {
                     "query": g.get("query", ""),
@@ -284,6 +298,19 @@ def _validate(raw: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any] | No
             topic_ownership.append({"topic": topic, "owner": owner})
         if len(topic_ownership) >= MAX_OWNERSHIP_TOPICS:
             break
+    # 목차 소재 겹침 — 유령 절·자기 쌍은 버리고 상한 5. 게이트 카드가 사람에게
+    # "목차를 고칠 근거"로 보여준다(작성기 주입 아님 — 처방은 소유권이 담당).
+    outline_overlaps: list[dict[str, Any]] = []
+    for o in raw.get("outline_overlaps") or []:
+        if not isinstance(o, dict):
+            continue
+        pair = [str(x).strip() for x in (o.get("sections") or []) if str(x).strip() in known]
+        material = " ".join(str(o.get("material") or "").split())[:60]
+        proposal = " ".join(str(o.get("proposal") or "").split())[:120]
+        if len(pair) == 2 and pair[0] != pair[1] and material:
+            outline_overlaps.append({"sections": pair, "material": material, "proposal": proposal})
+        if len(outline_overlaps) >= 5:
+            break
     return {
         "chapters": chapters,
         "sections": sections,
@@ -291,6 +318,7 @@ def _validate(raw: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any] | No
         "orphans": orphans,
         "query_splits": query_splits,
         "topic_ownership": topic_ownership,
+        "outline_overlaps": outline_overlaps,
     }
 
 

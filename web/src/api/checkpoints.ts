@@ -280,6 +280,18 @@ export const AiPlanSchema = z.object({
     .array(z.object({ topic: z.string(), owner: z.string() }))
     .catch([])
     .default([]),
+  // 목차 소재 겹침 - 같은 소재를 요구하는 절 쌍과 역할 분담 제안. 사람이 목차를
+  // 고칠 근거로 게이트에 표시한다(작성기 주입 아님 - 처방은 소유권이 담당).
+  outline_overlaps: z
+    .array(
+      z.object({
+        sections: z.array(z.string()),
+        material: z.string(),
+        proposal: z.string().default(""),
+      }),
+    )
+    .catch([])
+    .default([]),
 });
 export type AiPlan = z.infer<typeof AiPlanSchema>;
 

@@ -661,6 +661,29 @@ async def plan_brief(state: ProjectState) -> ProjectState:
     brief = build_design_brief(
         state.section_plan, topic=state.topic, catalog=catalog, model_mode=mode
     )
+    # 업로드 자료 목록을 계획 입력에 싣는다(소유권 v2, 2026-08-20) — 계획이 코퍼스를
+    # 모르면 "무엇의 수치 제시권"인지 못 정한다(1.4 정독: 같은 실태조사 블록 4회 재유도).
+    try:
+        from sqlalchemy import select as _sel
+
+        from src.db.models.project_source import ProjectSource as _PS
+        from src.db.session import async_session_maker as _asm
+
+        async with _asm() as _s:
+            _rows = (
+                await _s.execute(
+                    _sel(_PS.title, _PS.metadata_).where(
+                        _PS.project_id == state.project_id,
+                        _PS.source_type == "upload",
+                        _PS.is_included.is_(True),
+                    )
+                )
+            ).all()
+        brief["uploads"] = [
+            {"title": (t or "")[:80], "pages": (m or {}).get("page_count")} for t, m in _rows
+        ][:20]
+    except Exception:
+        logger.warning("design_brief.uploads_failed", project_id=str(pid), exc_info=True)
     # 예상 비용 옆에 '남은 한도'를 같이 보여준다 — 부족해도 **차단하지 않는다**
     # (2026-08-15 사용자 결정: 경고만). 사람이 게이트에서 숫자 두 개를 보고 판단한다.
     from src.clients.llm.quota_gate import remaining_budget

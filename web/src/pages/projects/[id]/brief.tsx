@@ -36,6 +36,7 @@ import {
   OutlineEditor,
   toOutline,
 } from "@/features/project-config/OutlineEditor";
+import { StageMap } from "@/features/project-config/StageMap";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
@@ -158,6 +159,31 @@ function DuplicateWarning({ brief }: { brief: DesignBriefPayload }) {
   );
 }
 
+function OutlineOverlaps({ brief }: { brief: DesignBriefPayload }) {
+  const overlaps = brief.ai_plan?.outline_overlaps ?? [];
+  if (overlaps.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border-danger bg-bg-danger-subtle p-4">
+      <p className="text-sm font-medium text-fg-danger">목차 소재 겹침</p>
+      <p className="text-xs text-fg-secondary">
+        아래 절 쌍은 목차 자체가 같은 소재를 요구합니다 - 역할을 가르지 않으면 같은 내용이
+        반복됩니다. 제안대로 두거나, 목차 편집에서 절의 방향을 고치세요.
+      </p>
+      <ul className="flex flex-col gap-1.5">
+        {overlaps.map((o) => (
+          <li key={o.sections.join("-")} className="text-xs">
+            <span className="font-mono text-fg-primary">{o.sections.join(" ↔ ")}</span>
+            <span className="text-fg-secondary"> {o.material}</span>
+            {o.proposal ? (
+              <span className="block pl-1 text-[11px] text-fg-secondary">→ {o.proposal}</span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 // 그래프 색 - ChartBlock과 같은 CSS 변수 규약(미정의 시 폴백 hex).
 function TopicOwnership({ brief }: { brief: DesignBriefPayload }) {
   const topics = brief.ai_plan?.topic_ownership ?? [];
@@ -166,8 +192,8 @@ function TopicOwnership({ brief }: { brief: DesignBriefPayload }) {
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-bg-secondary p-4">
       <p className="text-sm font-medium text-fg-primary">토픽 소유권</p>
       <p className="text-xs text-fg-secondary">
-        여러 절이 되풀이 서술할 위험이 있는 공용 토픽을 절 하나에 배정했습니다 - 소유 절이
-        정본으로 완결하고, 다른 절은 참조 한 문장으로 대체합니다.
+        여러 절이 되풀이 서술할 위험이 있는 공용 토픽을 절 하나에 배정했습니다 - 소유 절이 정본으로
+        완결하고, 다른 절은 참조 한 문장으로 대체합니다.
       </p>
       <ul className="flex flex-col gap-1">
         {topics.map((t) => (
@@ -725,6 +751,8 @@ export default function BriefPage() {
           </p>
         </div>
 
+        <StageMap current="brief" />
+
         {snapshot.isLoading || (!open && recordQuery.isLoading) ? (
           <LoadingSkeleton />
         ) : !brief ? (
@@ -768,6 +796,7 @@ export default function BriefPage() {
           <div className="flex flex-col gap-4">
             <EstimateCard brief={brief} />
             <DuplicateWarning brief={brief} />
+            <OutlineOverlaps brief={brief} />
             <TopicOwnership brief={brief} />
             {!gateOpen ? (
               <div className="flex items-center gap-2 rounded-lg border border-border bg-bg-info px-4 py-3">
