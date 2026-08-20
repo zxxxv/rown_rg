@@ -12,21 +12,23 @@ AWS 앱의 ``RemoteRerankerClient``가 이 서비스를 부른다. 계약은 둘
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from gpu_service.app.config import ServiceConfig
 from gpu_service.app.embed_service import EmbedService
 from gpu_service.app.gpu_queue import GpuBusy, GpuQueue
 from gpu_service.app.service import RerankService
+from gpu_service.app.stats_history import SAMPLE_INTERVAL_S, StatsHistory
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("gpu_service")
@@ -37,6 +39,17 @@ config = ServiceConfig.from_env()
 _gpu_queue = GpuQueue(config.max_concurrency, config.max_wait_s)
 service = RerankService(config, queue=_gpu_queue)
 embed_service = EmbedService(config, queue=_gpu_queue) if config.embed_enabled else None
+_history = StatsHistory()
+
+
+async def _sample_loop() -> None:
+    """5초마다 큐·GPU 상태를 이력에 남긴다 — 대시보드의 최근 1시간 그래프 원천."""
+    while True:
+        try:
+            _history.record(t=time.time(), queue=_gpu_queue.snapshot(), gpu=gpu_metrics())
+        except Exception:  # noqa: BLE001 — 샘플 한 번 실패로 루프가 죽으면 이력이 통째로 끊긴다
+            logger.exception("stats sample failed")
+        await asyncio.sleep(SAMPLE_INTERVAL_S)
 
 
 class RerankRequest(BaseModel):
@@ -82,7 +95,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     service.load()
     if embed_service is not None:
         embed_service.load()
-    yield
+    sampler = asyncio.create_task(_sample_loop())
+    try:
+        yield
+    finally:
+        sampler.cancel()
+        with suppress(asyncio.CancelledError):
+            await sampler
 
 
 
@@ -174,6 +193,50 @@ async def health() -> dict[str, object]:
             "warmup_ms": embed_service.warmup_ms,
         },
     }
+
+
+@app.get("/stats/history")
+async def stats_history() -> dict[str, object]:
+    """최근 1시간의 큐·GPU 시계열 — 앱 대시보드가 그래프를 그리는 원천.
+
+    /health처럼 인증이 없다. 양쪽 다 루프백에만 묶인 터널로만 닿을 수 있고,
+    수치에는 비밀이 없다.
+    """
+    return _history.series()
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+async def metrics() -> str:
+    """Prometheus 텍스트 — netdata go.d의 prometheus 수집기가 긁는다.
+
+    하드웨어 수치(사용률·VRAM·온도)는 여기 없다 - netdata의 nvidia_smi 수집기가
+    이미 뜬다. 여기 두는 것은 **서비스만 아는 것**이다: 큐가 얼마나 밀렸는지,
+    그리고 모델이 정말 GPU에 있는지(``on_gpu``). onnxruntime이 어긋나 CPU로
+    떨어지면 GPU 지표는 그저 한가해 보인다 - 이 플래그가 있어야 알림을 걸 수 있다.
+    """
+    q = _gpu_queue.snapshot()
+    lines = [
+        "# TYPE rown_gpu_queue_in_flight gauge",
+        f"rown_gpu_queue_in_flight {q['in_flight']}",
+        "# TYPE rown_gpu_queue_estimated_wait_seconds gauge",
+        f"rown_gpu_queue_estimated_wait_seconds {q['estimated_wait_s']}",
+        "# TYPE rown_gpu_queue_avg_task_seconds gauge",
+        f"rown_gpu_queue_avg_task_seconds {q['avg_task_s']}",
+        "# TYPE rown_gpu_queue_completed_total counter",
+        f"rown_gpu_queue_completed_total {q['completed_total']}",
+        "# TYPE rown_gpu_queue_rejected_total counter",
+        f"rown_gpu_queue_rejected_total {q['rejected_total']}",
+        "# TYPE rown_gpu_service_ready gauge",
+        f'rown_gpu_service_ready{{service="rerank"}} {int(service.ready)}',
+        "# TYPE rown_gpu_service_on_gpu gauge",
+        f'rown_gpu_service_on_gpu{{service="rerank"}} {int(service.on_gpu)}',
+    ]
+    if embed_service is not None:
+        lines += [
+            f'rown_gpu_service_ready{{service="embed"}} {int(embed_service.ready)}',
+            f'rown_gpu_service_on_gpu{{service="embed"}} {int(embed_service.on_gpu)}',
+        ]
+    return "\n".join(lines) + "\n"
 
 
 @app.post("/v1/rerank", response_model=RerankResponse)
