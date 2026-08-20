@@ -37,7 +37,6 @@ import {
   OutlineEditor,
   toOutline,
 } from "@/features/project-config/OutlineEditor";
-import { StageMap } from "@/features/project-config/StageMap";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
@@ -760,8 +759,6 @@ export default function BriefPage() {
             {brief?.message ? ` - ${brief.message}` : ""}
           </p>
         </div>
-
-        <StageMap current="brief" />
 
         {snapshot.isLoading || (!open && recordQuery.isLoading) ? (
           <LoadingSkeleton />
