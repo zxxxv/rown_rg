@@ -111,13 +111,14 @@ def _resolve_period_range(
 async def get_admin_dashboard(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     _: Annotated[User, Depends(require_role(*ADMINS))],
-    period: Annotated[DashboardPeriod, Query()] = DashboardPeriod.LAST_30_DAYS,
+    period: Annotated[DashboardPeriod, Query()] = DashboardPeriod.THIS_MONTH,
     start: Annotated[date | None, Query()] = None,
     end: Annotated[date | None, Query()] = None,
 ) -> AdminDashboardData:
     """관리자 대시보드 — KPI·일별 비용·사용자별 사용량·증액 요청을 한 번에 집계한다.
 
-    기본 기간은 최근 30일. period=custom + start/end로 임의 구간을 조회한다.
+    기본 기간은 이번 달(월 한도와 같은 창, 월이 바뀌면 0부터 다시 누적).
+    period=custom + start/end로 임의 구간을 조회한다.
     """
     today = now()
     range_start, range_end = _resolve_period_range(period, today, start, end)

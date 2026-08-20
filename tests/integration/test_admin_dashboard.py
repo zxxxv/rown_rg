@@ -94,32 +94,32 @@ def _last_month_start(today: datetime) -> datetime:
 
 
 class TestAdminDashboardPeriod:
-    async def test_default_period_is_last_30_days(
+    async def test_default_period_is_this_month(
         self,
         test_client: AsyncClient,
         test_session: AsyncSession,
         admin_user: User,
         admin_token: str,
     ) -> None:
-        # 기본 기간은 최근 30일(2026-08-05 변경). 창 밖(30일 이전) 사용량은 제외된다.
+        # 기본 기간은 이번 달(2026-08-20 변경) — 월 한도와 같은 창이라 월이 바뀌면
+        # 0부터 다시 누적된다. 지난달 사용량은 제외된다.
         today = now()
-        midnight = datetime(today.year, today.month, today.day, tzinfo=today.tzinfo)
-        window_start = midnight - timedelta(days=29)
         await _add_usage(test_session, admin_user, Decimal("50"), created_at=today)
         await _add_usage(
             test_session,
             admin_user,
             Decimal("999"),
-            created_at=window_start - timedelta(seconds=1),
+            created_at=_this_month_start(today) - timedelta(seconds=1),
         )
 
         response = await test_client.get("/api/v1/admin/dashboard", headers=_auth(admin_token))
 
         assert response.status_code == 200
         body = response.json()
-        assert body["period"]["type"] == "last_30_days"
+        assert body["period"]["type"] == "this_month"
         assert body["kpis"]["total_cost_usd"] == 50.0
-        assert len(body["daily_costs"]) == 30
+        # 월초~오늘, 하루 한 버킷
+        assert len(body["daily_costs"]) == today.day
 
     async def test_this_month_still_available_via_param(
         self,

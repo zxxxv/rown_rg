@@ -28,10 +28,10 @@ function isValidPeriod(value: string): value is AdminDashboardPeriod {
   return (VALID_PERIODS as readonly string[]).includes(value);
 }
 
-// 기본은 최근 30일. custom은 start/end 둘 다 있어야 유효.
+// 기본은 이번 달(실서버 기본과 동일). custom은 start/end 둘 다 있어야 유효.
 function resolvePeriod(u: URL): { period: AdminDashboardPeriod; start?: string; end?: string } {
-  const raw = u.searchParams.get("period") ?? "last_30_days";
-  const period = isValidPeriod(raw) ? raw : "last_30_days";
+  const raw = u.searchParams.get("period") ?? "this_month";
+  const period = isValidPeriod(raw) ? raw : "this_month";
   const start = u.searchParams.get("start") ?? undefined;
   const end = u.searchParams.get("end") ?? undefined;
   return { period, start, end };

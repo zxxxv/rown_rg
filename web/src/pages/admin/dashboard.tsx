@@ -75,7 +75,7 @@ const PERIOD_LABEL: Record<AdminDashboardPeriod, string> = {
 
 export default function AdminDashboardPage() {
   const { user, logout } = useAuth();
-  const [period, setPeriod] = useState<AdminDashboardPeriod>("last_30_days");
+  const [period, setPeriod] = useState<AdminDashboardPeriod>("this_month");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [detailUserId, setDetailUserId] = useState<string | null>(null);
@@ -159,10 +159,10 @@ function PeriodSelect({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="last_30_days">최근 30일</SelectItem>
-          <SelectItem value="last_7_days">최근 7일</SelectItem>
           <SelectItem value="this_month">이번 달</SelectItem>
           <SelectItem value="last_month">지난 달</SelectItem>
+          <SelectItem value="last_7_days">최근 7일</SelectItem>
+          <SelectItem value="last_30_days">최근 30일</SelectItem>
           <SelectItem value="custom">구간 선택</SelectItem>
         </SelectContent>
       </Select>
