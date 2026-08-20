@@ -754,6 +754,12 @@ async def index(state: ProjectState) -> ProjectState:
     pid = state.project_id
     emit_phase(pid, "indexing", "started")
     emit_step(pid, "indexing", "청킹·임베딩·색인", "started")
+    # 파일 소스(업로드·라이브러리) 색인 — 업로드 시점 색인을 유예한 자료(2026-08-20
+    # 사용자 결정: 색인 소유자를 런 색인 단계 하나로)와, 어떤 이유로든 청크가 없는
+    # 파일 자료를 여기서 파싱·색인한다. 종전엔 이 단계가 웹 본문(content_md)만 알아서
+    # 업로드 청크가 사라지면 재색인 경로가 없었다(v5c 1차 사고: 업로드 13건 0청크로
+    # 웹만 갖고 진행). 순차 처리 — docling 파싱이 파일당 수 GB를 쓴다(동시 색인 OOM 실측).
+    await _index_pending_file_sources(state.project_id)
     # 모델 첫 로드를 루프 밖으로 — _collect_sources와 같은 이유(단일 워커 API 생존).
     indexer = await asyncio.to_thread(_web_indexer_factory)
     staged = await indexer.load_included(state.project_id)
@@ -826,6 +832,100 @@ async def index(state: ProjectState) -> ProjectState:
     state = await _rehearser(state)
     emit_phase(pid, "indexing", "completed")
     return state.mark_indexed(indexed)
+
+
+async def _index_pending_file_sources(project_id: UUID) -> None:
+    """청크 없는 파일 소스(업로드·라이브러리)를 파싱·색인한다 — 런 색인 단계 소유.
+
+    실패는 자료 단위 격리 — 행 메타에 index_error를 남기고 계속 간다. 0청크 잔존분은
+    호출부의 auto_exclude_chunkless가 걷어내고, 리허설 공백이면 자료 게이트가 재개방된다.
+    """
+    from pathlib import Path
+
+    from sqlalchemy import select
+
+    from src.db.models.chunk import Chunk
+    from src.db.models.project_source import ProjectSource
+    from src.db.session import async_session_maker
+    from src.services.indexing.exclusion import apply_index_outcome
+    from src.services.indexing.vector import SourceInput, build_vector_indexing_service
+
+    async with async_session_maker() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(ProjectSource).where(
+                        ProjectSource.project_id == project_id,
+                        # 업로드만 — 라이브러리 참조는 붙일 때 색인되고(attach 경로 유지)
+                        # 원본 파일 경로 해소가 라이브러리 소유라 여기서 다루지 않는다.
+                        ProjectSource.source_type == "upload",
+                        ProjectSource.is_included.is_(True),
+                        ~ProjectSource.id.in_(
+                            select(Chunk.source_id).where(Chunk.project_id == project_id)
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        todo = [r for r in rows if r.upload_path and Path(r.upload_path).is_file()]
+    if not todo:
+        return
+    service = build_vector_indexing_service()
+    for i, row in enumerate(todo, start=1):
+        title = (row.title or "파일")[:24]
+        emit_step(project_id, "indexing", f"업로드 색인 {i}/{len(todo)} · {title}", "started")
+        error: str | None = None
+        result = None
+        try:
+            result = await service.index_source(
+                SourceInput(
+                    project_id=project_id,
+                    source_type=row.source_type,
+                    file_path=Path(row.upload_path),
+                    upload_path=row.upload_path,
+                    title=row.title,
+                )
+            )
+        except Exception:
+            error = "자료를 색인하지 못했습니다. 파일이 손상되지 않았는지 확인해 주세요."
+            logger.warning(
+                "indexing.file_source_failed",
+                project_id=str(project_id),
+                title=title,
+                exc_info=True,
+            )
+        async with async_session_maker() as session:
+            fresh = await session.get(ProjectSource, row.id)
+            if fresh is None:
+                continue
+            meta = dict(fresh.metadata_ or {})
+            meta["indexing"] = False
+            meta.pop("index_deferred", None)
+            if error:
+                meta["index_error"] = error
+            else:
+                meta.pop("index_error", None)
+            if result is not None:
+                meta["origin"] = fresh.source_type
+                meta["chunks"] = result.chunks_created
+                if getattr(result, "page_count", None):
+                    meta["page_count"] = result.page_count
+                if fresh.upload_path and not meta.get("size_bytes"):
+                    try:
+                        meta["size_bytes"] = Path(fresh.upload_path).stat().st_size
+                    except OSError:
+                        pass
+            fresh.metadata_ = meta
+            apply_index_outcome(fresh, int(result.chunks_created) if result else 0)
+            await session.commit()
+        emit_step(
+            project_id,
+            "indexing",
+            f"업로드 색인 {i}/{len(todo)} · {title}",
+            "completed" if result is not None else "failed",
+        )
 
 
 async def _chunked_source_ids(project_id: UUID) -> set[UUID]:

@@ -189,6 +189,7 @@ export const SourceSchema = z.object({
   library_file_id: z.string().optional(),
   /** 색인이 뒤에서 도는 중(업로드 직후) - 목록 폴링·'색인 중' 배지의 근거 */
   indexing: z.boolean().optional(),
+  index_deferred: z.boolean().optional(),
   index_error: z.string().optional(),
   /** 파일 자료의 실물 신호(용량·쪽수·조각 수). 조각 0이면 파일은 올라갔는데 본문을
    * 못 뽑은 것이다 - 목록이 파일명만 보여주던 시절엔 정상과 구분이 안 됐다. */

@@ -24,6 +24,8 @@ export const SourceItemSchema = z.object({
   library_node_id: z.string().nullish(),
   /** 색인이 뒤에서 도는 중 - 목록은 이 값이 있는 동안 자동 새로고침한다 */
   indexing: z.boolean().default(false),
+  /** 실행 전 업로드는 색인이 런의 색인 단계로 미뤄진다(2026-08-20) - 실패가 아니다 */
+  index_deferred: z.boolean().default(false),
   index_error: z.string().nullish(),
   /** 파일 자료의 실물 신호 - 목록에서 "올라갔나·본문이 들어갔나"를 눈으로 가른다.
    * 조각 0이면 파일은 있는데 본문을 못 뽑은 것이다(2026-08-20 동시 색인 사고). */
@@ -65,6 +67,7 @@ function toLegacySource(projectId: string, s: SourceItem): Source {
     matched_sections: s.matched_sections,
     library_file_id: s.library_node_id ?? undefined,
     indexing: s.indexing,
+    index_deferred: s.index_deferred,
     index_error: s.index_error ?? undefined,
     size_bytes: s.size_bytes ?? undefined,
     page_count: s.page_count ?? undefined,

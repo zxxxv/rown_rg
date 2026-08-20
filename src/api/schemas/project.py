@@ -195,6 +195,9 @@ class SourceItemRead(BaseModel):
     library_node_id: UUID | None = None
     # 색인이 뒤에서 도는 중인지(업로드 직후). 화면은 '색인 중' 배지를 띄우고 새로고침한다.
     indexing: bool = False
+    # 실행 전 업로드는 색인을 런의 색인 단계로 미룬다(2026-08-20) - 화면은 "실행 시
+    # 색인" 배지로 '본문 없음'(실패 신호)과 구분한다.
+    index_deferred: bool = False
     # 색인 실패 사유(사람이 읽는 한 줄). 실패를 조용히 삼키면 0조각 자료가 방치된다.
     index_error: str | None = None
     # 파일 자료의 실물 신호 — 목록에서 "올라갔나·본문이 들어갔나"를 눈으로 가른다.

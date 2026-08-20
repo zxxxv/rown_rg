@@ -1006,11 +1006,14 @@ def _to_source_item(row: ProjectSource) -> SourceItemRead:
         chunks = int(meta.get("chunks") or 0)
         label = _FILE_SOURCE_LABEL[row.source_type]
         indexing = bool(meta.get("indexing"))
+        deferred = bool(meta.get("index_deferred"))
         index_error = meta.get("index_error")
         if indexing:
             preview = f"{label} · 색인 중… (수백 페이지 PDF는 몇 분 걸립니다)"
         elif index_error:
             preview = f"{label} · 색인 실패"
+        elif deferred and not chunks:
+            preview = f"{label} · 실행 시 색인됩니다"
         else:
             preview = f"{label} · {chunks}개 조각으로 색인됨" if chunks else f"{label} · 색인 대기"
         return SourceItemRead(
@@ -1024,6 +1027,7 @@ def _to_source_item(row: ProjectSource) -> SourceItemRead:
             has_content=chunks > 0,
             library_node_id=row.library_node_id,
             indexing=indexing,
+            index_deferred=deferred,
             index_error=index_error,
             size_bytes=meta.get("size_bytes"),
             page_count=meta.get("page_count"),
@@ -1173,6 +1177,10 @@ _INDEX_TASKS: set[asyncio.Task] = set()
 # 1로 두는 이유: 순차면 각 파일이 메모리를 다 쓸 수 있어 docling이 성공한다. 총 시간은
 # 늘지만 색인은 백그라운드라 사용자를 막지 않는다.
 _INDEX_SEMAPHORE = asyncio.Semaphore(1)
+
+# 색인 유예 상태 — 아직 런의 색인 단계가 앞에 남아 있어 업로드 파싱·임베딩을 거기로
+# 미룬다. indexing(단계 진행 중)·완성 이후는 즉시 색인(자료 보강 경로는 런을 안 돈다).
+_INDEX_DEFER_STATUSES = ("created", "planning", "researching")
 
 
 async def _index_in_background(source: SourceInput, error_context: str) -> None:
@@ -1380,6 +1388,17 @@ async def upload_project_source(
     # 타임아웃에 걸려 '실패'로 보인다(실제로는 뒤에서 끝나 있었다). 자리 행을 먼저
     # 돌려주고 색인은 뒤에서 돈다.
     row = await _placeholder_source(session, source)
+    if project.status in _INDEX_DEFER_STATUSES:
+        # 실행 전 업로드는 색인을 런의 색인 단계로 미룬다(2026-08-20 사용자 결정 —
+        # 색인의 소유자를 한 곳으로). 업로드는 파일 저장만으로 즉시 끝나고, 파싱·
+        # 임베딩은 자료 게이트 승인 뒤 확정된 자료에만 비용을 쓴다. 완성 후
+        # 자료 보강 업로드는 런이 색인 단계를 다시 밟지 않으므로 종전대로 즉시 색인.
+        meta = dict(row.metadata_ or {})
+        meta["indexing"] = False
+        meta["index_deferred"] = True
+        row.metadata_ = meta
+        await session.commit()
+        return _to_source_item(row)
     await session.commit()
     task = asyncio.create_task(_index_in_background(source, f"upload:{project.id}:{safe_name}"))
     _INDEX_TASKS.add(task)

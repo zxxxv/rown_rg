@@ -131,7 +131,7 @@ export default function SourcesPage() {
       if (s.source_kind === "web_search") web++;
       else {
         files++;
-        if (!s.indexing && s.n_chunks === 0) emptyFiles++;
+        if (!s.indexing && !s.index_deferred && s.n_chunks === 0) emptyFiles++;
       }
     }
     return { included, excluded, web, files, emptyFiles };
@@ -593,6 +593,11 @@ function FileSourceRows({ items, onDelete }: { items: Source[]; onDelete?: (s: S
           {s.indexing ? (
             <Badge variant="secondary" className="shrink-0 text-xs font-normal">
               색인 중
+            </Badge>
+          ) : s.index_deferred && !s.n_chunks ? (
+            // 실행 전 업로드 - 색인은 보고서 실행의 색인 단계에서 GPU로 한꺼번에 돈다.
+            <Badge variant="secondary" className="shrink-0 text-xs font-normal">
+              실행 시 색인
             </Badge>
           ) : s.n_chunks === 0 ? (
             // 파일은 올라갔는데 본문을 못 뽑은 상태 - 파일명만 보면 정상과 구분이 안 된다
