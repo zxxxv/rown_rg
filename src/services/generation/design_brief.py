@@ -164,6 +164,7 @@ def build_design_brief(
     topic: str = "",
     catalog: dict[str, AnalystSpec] | None = None,
     model_mode: str | None = None,
+    domain_context: str = "",
 ) -> dict[str, Any]:
     """게이트 payload로 나갈 브리프. 순수 함수 — DB도 LLM도 안 본다.
 
@@ -192,6 +193,10 @@ def build_design_brief(
     return {
         "message": "자료를 모으기 전에 절별 설계를 확인하세요. 목차를 고치면 다시 계산됩니다.",
         "topic": topic,
+        # 프리셋의 도메인 맥락(보고서 유형의 틀·실측 구조) — AI 계획(brief_ai)이 절별
+        # 질의·자료 전략을 만들 때 참고한다. 플래너 전용이던 시절 죽은 필드였다
+        # (2026-08-20 발견: verbatim 목차 경로에선 어디에도 안 갔다).
+        "domain_context": domain_context,
         "estimate": build_estimate(plan, catalog, model_mode),
         "chapters": collection_plan(plan, topic),
         "sections": sections,

@@ -44,6 +44,8 @@ def _max_tokens(n_sections: int) -> int:
 
 SYSTEM_PROMPT = """너는 정부·공공 보고서의 실행 계획을 세우는 설계 책임자다.
 입력으로 보고서 주제와 이미 확정된 목차(장·절·작성 방향·핵심 포인트·검색 질의)가 JSON으로 주어진다.
+입력에 domain_context(이 보고서 유형의 틀과 관행)가 있으면 source_strategy와 search_queries가
+그 틀에 맞는 기관·자료 유형·용어를 고르는 데 참고하라.
 목차 자체를 바꾸자고 제안하지 마라 — 목차는 확정이고, 너는 그것을 어떻게 실행할지만 계획한다.
 
 각 절에 대해:
@@ -140,6 +142,9 @@ def _compact_input(brief: dict[str, Any]) -> str:
     return json.dumps(
         {
             "topic": brief.get("topic", ""),
+            # 보고서 유형의 도메인 맥락(프리셋) — 절별 질의·자료 전략이 이 틀을 알아야
+            # "무슨 종류의 보고서인가"에 맞는 기관·자료 유형을 고른다.
+            "domain_context": brief.get("domain_context", ""),
             "sections": [
                 {
                     "label": f"{s['chapter_number']}.{s['section_number']}",

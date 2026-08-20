@@ -658,8 +658,21 @@ async def plan_brief(state: ProjectState) -> ProjectState:
 
     catalog = await _analyst_catalog(state.user_id, state.options)
     mode = state.options.get("model_mode") if isinstance(state.options, dict) else None
+    # 프리셋 도메인 맥락 — 개인 프리셋("u:")·자유 주제는 카탈로그에 없어 빈 값.
+    domain_context = ""
+    if state.preset:
+        try:
+            from src.prompts import load_preset
+
+            domain_context = load_preset(state.preset).domain_context
+        except KeyError:
+            pass
     brief = build_design_brief(
-        state.section_plan, topic=state.topic, catalog=catalog, model_mode=mode
+        state.section_plan,
+        topic=state.topic,
+        catalog=catalog,
+        model_mode=mode,
+        domain_context=domain_context,
     )
     # 업로드 자료 목록을 계획 입력에 싣는다(소유권 v2, 2026-08-20) — 계획이 코퍼스를
     # 모르면 "무엇의 수치 제시권"인지 못 정한다(1.4 정독: 같은 실태조사 블록 4회 재유도).
