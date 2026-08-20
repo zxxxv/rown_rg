@@ -173,13 +173,16 @@ def test_임베딩과_청킹이_동시에_돌아도_안_터진다() -> None:
 async def test_리랭커도_동시_호출을_직렬화한다() -> None:
     import asyncio
 
+    from src.clients.onnx_cross_encoder import OnnxCrossEncoder
     from src.clients.reranker_client import BgeRerankerV2M3Client
 
-    client = object.__new__(BgeRerankerV2M3Client)
+    # 락은 OnnxCrossEncoder로 옮겼다 - GPU 추론 서비스도 같은 알맹이를 쓰기 때문이다.
+    # 여기서는 앱 경로(client._score_batch)가 그 락을 실제로 지나는지까지 확인한다.
+    encoder = object.__new__(OnnxCrossEncoder)
     tokenizer = _BorrowCheckingTokenizer()
-    client._tokenizer = tokenizer
-    client._tokenizer_lock = threading.Lock()
-    client._max_length = 512
+    encoder._tokenizer = tokenizer
+    encoder._tokenizer_lock = threading.Lock()
+    encoder.max_length = 512
 
     class _Session:
         @staticmethod
@@ -188,7 +191,10 @@ async def test_리랭커도_동시_호출을_직렬화한다() -> None:
 
             return [np.zeros((1, 1), dtype=np.float32)]
 
-    client._session = _Session()
+    encoder._session = _Session()
+
+    client = object.__new__(BgeRerankerV2M3Client)
+    client._encoder = encoder
 
     async def one() -> None:
         await asyncio.to_thread(client._score_batch, "질의", ["근거"])

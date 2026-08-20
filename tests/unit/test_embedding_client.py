@@ -33,7 +33,8 @@ class TestEmbeddingResult:
 
 class TestEmbeddingCache:
     def test_key_is_deterministic(self):
-        assert EmbeddingCache._key("동일 텍스트") == EmbeddingCache._key("동일 텍스트")
+        cache = EmbeddingCache()
+        assert cache._key("동일 텍스트") == cache._key("동일 텍스트")
 
     @pytest.mark.parametrize(
         "left,right",
@@ -45,11 +46,28 @@ class TestEmbeddingCache:
         ],
     )
     def test_key_differs_for_different_text(self, left: str, right: str):
-        assert EmbeddingCache._key(left) != EmbeddingCache._key(right)
+        cache = EmbeddingCache()
+        assert cache._key(left) != cache._key(right)
+
+    def test_key_differs_by_model_fingerprint(self):
+        """모델이 다르면 같은 텍스트라도 다른 키여야 한다.
+
+        이게 깨지면 모델을 바꾸고 전량 재색인을 돌려도 캐시가 옛 벡터를 그대로
+        돌려줘, 색인이 두 공간에 걸쳐 섞인다. 에러는 하나도 안 난다.
+        """
+        int8 = EmbeddingCache(fingerprint="bge-m3-onnx-int8")
+        fp16 = EmbeddingCache(fingerprint="bge-m3-onnx-fp16")
+        assert int8._key("같은 문장") != fp16._key("같은 문장")
+
+    def test_key_fingerprint_boundary_is_unambiguous(self):
+        """(지문, 텍스트) 경계가 모호하면 다른 쌍이 같은 키로 접힌다."""
+        a = EmbeddingCache(fingerprint="ab")
+        b = EmbeddingCache(fingerprint="a")
+        assert a._key("c") != b._key("bc")
 
     def test_path_shards_into_two_char_prefix(self, tmp_path: Path):
         cache = EmbeddingCache(root=tmp_path)
-        key = EmbeddingCache._key("샘플")
+        key = cache._key("샘플")
         path = cache._path_for(key)
         # 정책: 첫 두 글자가 prefix 디렉토리
         assert path.parent.name == key[:2]

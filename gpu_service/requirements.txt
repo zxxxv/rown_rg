@@ -1,0 +1,18 @@
+# GPU 추론 서비스 전용 — 앱(pyproject.toml)과 별개다.
+# 여기에 DB·LLM SDK를 넣지 말 것. 이 컨테이너가 아는 것은 모델과 HTTP뿐이어야 한다.
+fastapi>=0.115
+uvicorn[standard]>=0.32
+# onnxruntime-gpu는 CPU용 onnxruntime과 같은 namespace를 점유한다 — 둘을 같이 깔면 안 된다.
+# 상한이 중요하다. 1.27+는 CUDA 13을 요구하는데 이 이미지는 CUDA 12.6이다.
+# 1.28은 **에러 없이 CPUExecutionProvider로 떨어지고**(2026-08-20 실측) 1.29는
+# libcublasLt.so.13을 못 찾아 죽는다. GPU 동작을 확인한 범위: 1.22.0~1.26.0.
+onnxruntime-gpu>=1.20,<1.27
+transformers>=4.44
+# XLM-RoBERTa 토크나이저 폴백. 내보낸 폴더에 tokenizer.json이 있으면 안 쓰이지만,
+# 없을 때 조용히 실패하는 대신 느리게라도 뜨게 한다.
+sentencepiece>=0.2
+numpy>=1.26
+# VRAM 조회용. 배치 상한을 시스템 RAM이 아니라 **VRAM**에서 유도해야 한다 -
+# GPU 박스 RAM은 15.9GB지만 카드는 8GB고, 그 위에 모델이 둘 올라간다.
+# 없으면 보수적 기본값으로 떨어지므로 필수는 아니지만 넣어 두는 편이 낫다.
+nvidia-ml-py>=12
