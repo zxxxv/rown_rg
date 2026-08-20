@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from weakref import WeakKeyDictionary
 
+import structlog
 from hwpx import HwpxDocument
 
 from src.export.hwpx_fields import (
@@ -31,6 +32,8 @@ from src.export.hwpx_fields import (
     set_tab_pr,
     wrap_bookmark,
 )
+
+logger = structlog.get_logger(__name__)
 
 # --- 회사 표준 양식 상수 (web ExportPage의 COMPANY_STYLE와 일치시킨다) ---
 BODY_FONT = "함초롬바탕"
@@ -617,7 +620,17 @@ def _add_table(doc: HwpxDocument, table: Table) -> None:
         except Exception:  # noqa: BLE001 — 음영은 장식, 실패해도 표는 유효
             pass
     for row_idx, row in enumerate(table.rows, start=1):
-        for col, value in enumerate(row):
+        # 비정형 행 방어 - 모델이 3열 표에 4칸 행을 쓰는 실사례(2026-08-21 v6:
+        # IndexError로 렌더 전체가 죽었다). 초과 셀은 버리고 로그로 남긴다.
+        if len(row) > n_cols:
+            logger.warning(
+                "hwpx.table.ragged_row",
+                caption=(table.caption or "")[:40],
+                row=row_idx,
+                n_cells=len(row),
+                n_cols=n_cols,
+            )
+        for col, value in enumerate(row[:n_cols]):
             tbl.set_cell_text(row_idx, col, value)
     _fit_table_width(tbl, table.headers, table.rows, table.column_weights)
     _align_cells_center(doc, tbl, n_rows, n_cols)
