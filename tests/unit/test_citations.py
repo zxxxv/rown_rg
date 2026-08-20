@@ -76,3 +76,33 @@ class TestToSourceMark:
 
     def test_markdown_link_untouched(self):
         assert to_source_mark("[1](https://ex.com) 참고") == "[1](https://ex.com) 참고"
+
+
+class TestStripNonnumericSourceMarks:
+    """수치 인용 문장은 (출처 n)을 남기고, 재구성 서술만 걷어낸다(2026-08-21 지시)."""
+
+    def test_numeric_sentence_keeps_mark(self):
+        from src.core.citations import strip_nonnumeric_source_marks
+
+        text = "참여기업 비율은 16.9%로 나타남(출처 10)"
+        assert strip_nonnumeric_source_marks(text) == text
+
+    def test_prose_sentence_drops_mark(self):
+        from src.core.citations import strip_nonnumeric_source_marks
+
+        text = "제도의 취지는 탄소누출 방지에 있음(출처 17)"
+        assert strip_nonnumeric_source_marks(text) == "제도의 취지는 탄소누출 방지에 있음"
+
+    def test_sentence_boundary_isolates_judgement(self):
+        from src.core.citations import strip_nonnumeric_source_marks
+
+        text = "규모는 428개사임(출처 13).\n취지는 전환 유도에 있음(출처 13)"
+        out = strip_nonnumeric_source_marks(text)
+        assert "428개사임(출처 13)" in out
+        assert "전환 유도에 있음(출처 13)" not in out
+
+    def test_direct_quote_untouched(self):
+        from src.core.citations import strip_nonnumeric_source_marks
+
+        text = "원문 인용이다 [3]"
+        assert strip_nonnumeric_source_marks(text) == text

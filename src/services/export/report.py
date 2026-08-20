@@ -37,7 +37,7 @@ from uuid import UUID
 import structlog
 
 from src.core.charts import CHART_FENCE_RE, ChartSpec, ChartSpecError, parse_chart_spec
-from src.core.citations import strip_source_marks
+from src.core.citations import strip_nonnumeric_source_marks, strip_source_marks
 from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import SectionPlan, SourceRef, SourceType
@@ -429,28 +429,57 @@ def _attach_table_sources(blocks: list[Block], titles: dict[int, str]) -> None:
 # "(출처 n)"을 걷어내면 "- 출처:"처럼 라벨만 남는 줄이 생긴다 — 가리키는 것이 없어진
 # 껍데기라 통째로 버린다(2026-08-12 지적: 표 밑에 빈 '출처:'만 떠 있었다).
 _BARE_SOURCE_LABEL_RE = re.compile(r"^[□ㅇ○◦\-*※\s]*(?:출처|자료|참고)\s*[:：]?\s*$")
+# 표 안 어디든 박힌 (출처 n) — 하단 출처 줄이 없는 표의 출처 복원에 쓴다.
+_TABLE_SOURCE_NUM_RE = re.compile(r"\((?:출처|근거)\s*(?P<nums>\d+(?:\s*,\s*\d+)*)\s*\)")
 
 
-def _strip_citation_blocks(blocks: list[Block]) -> list[Block]:
-    """블록들에서 참고 표기 (출처 n)을 걷어낸다 — 문단·표 제목·셀 전부.
+# 표 셀 값으로는 무의미한 회피 문구 — 작성 규칙이 금지하는데도 잔존한다(2026-08-21
+# v6 정독). 실납품 관례인 "-"로 통일한다.
+_EMPTY_CELL_VALUES = frozenset(
+    {"자료 없음", "자료상 미제시", "상동", "해당 없음", "해당사항 없음", "N/A", "n/a"}
+)
 
-    출처 표기만 담고 있던 문단은 빈 껍데기가 되므로 통째로 버린다. 파싱 전에 원문에서
-    걷어내지 않는 이유: 표 하단 출처 줄(_attach_table_sources)이 먼저 살아남아야 한다.
+
+def _clean_cell(value: str) -> str:
+    text = _strip_citations(value).strip()
+    return "-" if text in _EMPTY_CELL_VALUES else text
+
+
+def _strip_citation_blocks(blocks: list[Block], titles: dict[int, str]) -> list[Block]:
+    """블록들에서 참고 표기 (출처 n)을 선별 정리한다.
+
+    - 문단: **수치 없는 문장**의 표기만 걷어낸다(2026-08-21 사용자 지시 — 수치 인용은
+      출처를 문장 자리에 남긴다). 표기만 담고 있던 문단은 빈 껍데기가 되므로 버린다.
+    - 표: 셀·제목의 표기는 전부 걷어내되, 하단 출처 줄이 없는 표는 걷어낸 마커들을
+      모아 출처 줄로 살린다(표 4-4처럼 출처 없는 표가 남지 않게).
+    파싱 전에 원문에서 걷어내지 않는 이유: 표 하단 출처 줄(_attach_table_sources)이
+    먼저 살아남아야 한다.
     """
     out: list[Block] = []
     for block in blocks:
         if isinstance(block, Paragraph):
-            text = _strip_citations(block.text).strip()
+            text = strip_nonnumeric_source_marks(block.text).strip()
             if not text or _BARE_SOURCE_LABEL_RE.match(text):
                 continue
             out.append(replace(block, text=text))
         elif isinstance(block, Table):
+            source = block.source
+            if not source:
+                nums: list[int] = []
+                for chunk in [block.caption, *block.headers, *(c for r in block.rows for c in r)]:
+                    for m in _TABLE_SOURCE_NUM_RE.finditer(chunk):
+                        for n in m.group("nums").replace(" ", "").split(","):
+                            if n.isdigit() and int(n) not in nums:
+                                nums.append(int(n))
+                if nums:
+                    source = "출처: " + "; ".join(titles.get(n, f"자료 {n}") for n in nums)
             out.append(
                 replace(
                     block,
                     caption=_strip_citations(block.caption).strip(),
                     headers=[_strip_citations(h) for h in block.headers],
-                    rows=[[_strip_citations(c) for c in row] for row in block.rows],
+                    rows=[[_clean_cell(c) for c in row] for row in block.rows],
+                    source=source,
                 )
             )
         else:
@@ -477,7 +506,10 @@ def _drop_duplicate_lead_heading(md: str, chapter: int, section: int) -> str:
 # (2026-08-10 지적). 두 단으로 접어 폭을 절반씩 쓴다.
 # 한 표에 담을 행 수(단 하나 기준) — 설명이 두세 줄로 접히는 행을 감안해 한 쪽에 들어갈
 # 만큼만 잡는다. 넘치면 표가 쪽을 걸쳐 잘리고 제목만 남은 빈 쪽이 생긴다.
-_GLOSSARY_ROWS_PER_COLUMN = 10
+# 10이었으나 설명이 길게 접히는 항목이 많은 보고서에서 표 전체가 한 쪽을 넘어
+# "약어 정리" 제목만 남은 빈 쪽이 재발(2026-08-21 v6 실측) — 여유 있게 줄인다.
+# 머리행 반복(repeatHeader)이 켜져 있어 표가 나뉘어도 읽기에 지장이 없다.
+_GLOSSARY_ROWS_PER_COLUMN = 6
 _GLOSSARY_HEADERS = ["약어", "전체 명칭", "설명", "약어", "전체 명칭", "설명"]
 # 약어 표 열 폭은 내용이 아니라 **고정 비율**로 준다. 표마다 내용으로 계산하면 쪽을
 # 넘길 때마다 열 폭이 달라져 같은 표가 여러 모양으로 보인다(2026-08-12 지적).
@@ -598,6 +630,10 @@ def _figures_needed(content: str, visual_count: int, key_points: Sequence[str] =
     return min(needed, max(1, len(key_points)))
 
 
+# 프리셋 키포인트의 파트 라벨 — "(4-5-1)" 같은 내부 번호가 캡션에 새지 않게 걷는다.
+_PART_LABEL_RE = re.compile(r"^\s*\(\d+(?:-\d+)+\)\s*")
+
+
 def _figure_placeholder(plan: SectionPlan, index: int = 0) -> Figure:
     """추천 시각자료(그림) 자리표시자. index는 한 절에서 몇 번째 그림인지.
 
@@ -605,19 +641,16 @@ def _figure_placeholder(plan: SectionPlan, index: int = 0) -> Figure:
     그림이 적합한지 설명을 적어 배치한다. 한 절에 여러 개면 key_points를 하나씩 나눠
     맡겨 같은 설명이 반복되지 않게 한다. 캡션 번호는 조립 단계에서 장 단위로 매긴다.
     """
-    if index < len(plan.key_points):
-        focus = plan.key_points[index]
-    elif plan.key_points:
-        focus = plan.key_points[0]
-    elif plan.direction:
-        focus = plan.direction
-    else:
-        focus = f"{plan.title}의 핵심 내용"
-    description = f"{focus} 관련 핵심 수치·구조를 요약한 도표 또는 그래프"
+    # 캡션이 이미 초점을 말하므로 설명은 반복하지 않는다(2026-08-21 지적: 두 줄이
+    # 같은 문장을 되풀이했다).
+    description = "위 주제의 핵심 수치·구조를 요약한 도표 또는 그래프"
     # 번호 없는 제목만 담는다 — 조립 단계에서 장 단위 일련번호를 붙인다. 제목은 담당
     # key_point로 짓는다: 절 제목을 그대로 쓰면 한 절의 그림 여러 개가 전부 같은
     # 이름이 된다(표 폴백 제목과 같은 문제, 2026-08-11 지적·2026-08-13 재발).
-    caption = plan.key_points[index] if index < len(plan.key_points) else plan.title
+    caption_src = plan.key_points[index] if index < len(plan.key_points) else plan.title
+    # 프리셋 키포인트에 붙는 파트 라벨("(4-5-1) …")은 캡션에 새면 내부 표기 누출이다
+    # (2026-08-21 지적) — 표시용으로만 걷어낸다(키포인트 원문은 불변).
+    caption = _PART_LABEL_RE.sub("", caption_src).split("\n")[0].strip() or plan.title
     return Figure(caption=caption, description=description)
 
 
@@ -654,11 +687,12 @@ def _visual_index_blocks(body: list[Block]) -> list[Block]:
 
 
 def _source_entry(index: int, src: SourceRef) -> str:
-    """참고문헌 목록 한 줄 — '[n] 제목 (유형) URL'."""
+    """참고문헌 목록 한 줄 — '[n] 제목 URL'.
+
+    유형 꼬리("(업로드)"·"(웹)"·"(라이브러리)")는 달지 않는다(2026-08-21 사용자 지시 —
+    내부 수집 경로는 납품물의 서지 정보가 아니다). 웹 자료는 URL이 유형을 말해 준다.
+    """
     line = f"[{index}] {src.title.strip() or '(제목 없음)'}"
-    label = _SOURCE_TYPE_LABEL.get(src.source_type)
-    if label:
-        line += f" ({label})"
     if src.url:
         line += f" {src.url}"
     return line
@@ -738,7 +772,7 @@ def report_blocks(
         )
         section_blocks = markdown_to_blocks(content)
         _attach_table_sources(section_blocks, source_titles)
-        section_blocks = _strip_citation_blocks(section_blocks)
+        section_blocks = _strip_citation_blocks(section_blocks, source_titles)
         visual_count = sum(1 for b in section_blocks if isinstance(b, Table | Chart))
         section_blocks += [
             _figure_placeholder(plan, i)

@@ -69,7 +69,11 @@ class TestFiguresNeeded:
 
 
 class TestFigurePlaceholder:
-    """한 절 그림 여러 개면 제목·설명이 key_point별로 달라야 한다(동일 복제 방지)."""
+    """한 절 그림 여러 개면 **캡션**이 key_point별로 달라야 한다(동일 복제 방지).
+
+    설명은 캡션을 반복하지 않는 고정 문구다(2026-08-21 지적: 두 줄이 같은 문장을
+    되풀이했다) — 구분은 캡션이 담당한다.
+    """
 
     def test_captions_differ_per_key_point(self):
         plan = SectionPlan(
@@ -82,13 +86,24 @@ class TestFigurePlaceholder:
         f1 = _figure_placeholder(plan, 1)
         assert f0.caption == "주요 기업 R&D"
         assert f1.caption == "특허 출원 추이"
-        assert f0.description != f1.description
+        assert f0.caption != f1.caption
 
     def test_without_key_points_uses_section_title(self):
         plan = SectionPlan(chapter_number=3, section_number=2, title="국내 기술개발 동향")
         fig = _figure_placeholder(plan, 0)
         assert fig.caption == "국내 기술개발 동향"
-        assert "국내 기술개발 동향" in fig.description
+        assert fig.description  # 설명은 존재하되 캡션을 반복하지 않는다
+
+    def test_part_label_stripped_from_caption(self):
+        # 프리셋 키포인트의 내부 파트 라벨 "(4-5-1)"이 캡션에 새지 않는다(2026-08-21).
+        plan = SectionPlan(
+            chapter_number=4,
+            section_number=5,
+            title="시사점",
+            key_points=["(4-5-1) 국내 대응 과제 : 계층별 구분 제시"],
+        )
+        fig = _figure_placeholder(plan, 0)
+        assert fig.caption == "국내 대응 과제 : 계층별 구분 제시"
 
 
 class TestGroupStartSpacing:

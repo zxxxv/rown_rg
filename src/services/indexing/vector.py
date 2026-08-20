@@ -17,6 +17,7 @@ this file.
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -123,6 +124,8 @@ class VectorIndexingService:
         self._embedding_client = embedding_client
         self._session_maker = session_maker
 
+    # (문서 제목 추출 헬퍼들은 모듈 하단 _extract_doc_title 참조)
+
     async def index_source(self, source: SourceInput) -> IndexingResult:
         """Run the full pipeline for one source.
 
@@ -155,9 +158,12 @@ class VectorIndexingService:
             markdown_length=len(parse_result.markdown),
         )
 
+        doc_title = _extract_doc_title(parse_result.markdown)
         # 세션 #1: source UPSERT + 기존 chunks 청소. 임베딩 호출 전에 commit하고 닫는다.
         async with self._session_maker() as session:
             source_id = await self._upsert_source(session, source)
+            if doc_title:
+                await self._apply_doc_title(session, source_id, doc_title)
             deleted = await self._delete_existing_chunks(session, source_id)
             await session.commit()
         logger.info(
@@ -258,6 +264,30 @@ class VectorIndexingService:
             parse_warnings=parse_result.warnings,
         )
 
+    async def _apply_doc_title(self, session, source_id: UUID, doc_title: str) -> None:
+        """파싱된 본문에서 뽑은 문서 제목을 자료 행에 반영한다(2026-08-21 사용자 요청).
+
+        참고문헌·화면에 "63_16609_file_pdf_1646878149.pdf" 같은 ID형 파일명이 그대로
+        노출되던 것의 처방 — 표시 제목은 **파일명이 ID형일 때만** 교체하고(멀쩡한
+        한글 파일명은 존중), 추출 제목은 항상 metadata.doc_title로 보존해 이후 UI
+        제안에 쓴다.
+        """
+        row = await session.get(ProjectSource, source_id)
+        if row is None:
+            return
+        meta = dict(row.metadata_ or {})
+        if meta.get("doc_title") != doc_title:
+            meta["doc_title"] = doc_title
+            row.metadata_ = meta  # JSONB는 재할당해야 dirty로 잡힌다
+        if _looks_like_id_filename(row.title or ""):
+            logger.info(
+                "indexing.title_from_document",
+                source_id=str(source_id),
+                old=row.title,
+                new=doc_title,
+            )
+            row.title = doc_title
+
     async def _upsert_source(self, session, source: SourceInput) -> UUID:
         """Upsert into project_sources via the appropriate partial UNIQUE index.
 
@@ -339,3 +369,54 @@ def build_vector_indexing_service() -> VectorIndexingService:
         embedding_client=embedder,
         session_maker=async_session_maker,
     )
+
+
+# --- 문서 제목 추출(2026-08-21) — 파싱된 본문 앞머리에서 실제 표제를 뽑는다 ---
+
+# ID형 파일명 판정 — 한글이 없고, 줄기가 숫자·16진·구분기호 위주면 표제가 아니다.
+_HANGUL_RE = re.compile(r"[가-힣]")
+_IDISH_STEM_RE = re.compile(r"^[0-9A-Za-z_\-.\s\[\]+%()]+$")
+
+
+def _looks_like_id_filename(title: str) -> bool:
+    if not title or _HANGUL_RE.search(title):
+        return False  # 한글 파일명은 사람이 지은 제목으로 존중한다
+    stem = re.sub(r"\.(pdf|docx|hwpx|txt|md)$", "", title.strip(), flags=re.I)
+    if not _IDISH_STEM_RE.fullmatch(stem):
+        return False
+    digits = sum(c.isdigit() for c in stem)
+    return digits >= 4 and digits / max(1, len(stem)) >= 0.3
+
+
+# 제목 후보로 못 쓰는 줄 — 페이지 마커·그림 생략 표기·표 행·구분선.
+_TITLE_REJECT_RE = re.compile(r"intentionally omitted|^\||^[-=_*\s]+$|^\d+$|^page \d+", re.I)
+
+
+def _clean_title_line(line: str) -> str:
+    text = re.sub(r"^#{1,4}\s*", "", line.strip())
+    text = re.sub(r"[*_`]+", "", text)
+    return " ".join(text.split())
+
+
+def _extract_doc_title(markdown: str) -> str | None:
+    """본문 앞 40줄에서 표제 한 줄 — 첫 헤딩 우선, 없으면 첫 실속 있는 줄.
+
+    docling은 표지·첫 장의 표제를 대개 '#' 헤딩이나 첫 줄로 내놓는다. 확신이 없으면
+    None — 잘못된 제목은 ID형 파일명보다 나쁘다(교체는 ID형일 때만 하므로 이중 안전).
+    """
+    if len(markdown) < 200:
+        return None  # 표제를 논할 크기가 아니다(테스트 더미·빈 파일 방어)
+    lines = markdown.split("\n")[:40]
+    fallback: str | None = None
+    for raw in lines:
+        line = raw.strip()
+        if not line or _TITLE_REJECT_RE.search(line):
+            continue
+        cleaned = _clean_title_line(line)
+        if not (4 <= len(cleaned) <= 90):
+            continue
+        if line.startswith("#"):
+            return cleaned
+        if fallback is None:
+            fallback = cleaned
+    return fallback

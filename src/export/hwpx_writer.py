@@ -602,6 +602,31 @@ def _add_table_note(doc: HwpxDocument, text: str, *, align: str, after_pt: float
     )
 
 
+def _reset_table_anchor(doc: HwpxDocument, tbl) -> None:
+    """표·그림 박스의 앵커 문단 들여쓰기를 0으로 되돌린다.
+
+    앵커 문단이 직전 개조식 문단의 서식을 상속해, 박스 전체가 글머리 들여쓰기만큼
+    오른쪽으로 밀려 렌더됐다(2026-08-21 지적). 블록은 본문 위계와 독립이다.
+    """
+    try:
+        idx = doc.paragraphs.index(tbl.paragraph)
+        doc.set_paragraph_format(paragraph_index=idx, indent_left_mm=0.0, first_line_indent_mm=0.0)
+    except Exception:  # noqa: BLE001 — 서식 리셋 실패해도 표는 유효
+        pass
+
+
+def _enable_header_repeat(tbl) -> None:
+    """쪽을 걸치는 표에서 머리행을 반복한다 — 공공 보고서 관례.
+
+    라이브러리가 repeatHeader=0으로 하드코딩해 두어 XML 속성을 직접 바꾼다.
+    """
+    try:
+        tbl.element.set("repeatHeader", "1")
+        tbl.mark_dirty()
+    except Exception:  # noqa: BLE001 — 반복 실패해도 표는 유효
+        pass
+
+
 def _add_table(doc: HwpxDocument, table: Table) -> None:
     if table.caption:
         _add_table_caption(doc, table.caption, table.caption_bookmark)
@@ -612,6 +637,8 @@ def _add_table(doc: HwpxDocument, table: Table) -> None:
     n_cols = len(table.headers)
     # width=본문 폭: 표가 페이지를 넘지 않게 하고, 긴 셀은 열 폭 안에서 줄바꿈된다.
     tbl = doc.add_table(n_rows, n_cols, width=_page_content_width_hwp())
+    _reset_table_anchor(doc, tbl)
+    _enable_header_repeat(tbl)
     for col, head in enumerate(table.headers):
         tbl.set_cell_text(0, col, head)
         try:
@@ -673,6 +700,7 @@ def _add_figure(doc: HwpxDocument, figure: Figure) -> None:
     """그림 플레이스홀더 — 캡션(음영) + 추천 시각자료 설명을 담은 1열 박스로 렌더한다."""
     note = "※ 실제 이미지는 확정 후 삽입되는 자리표시자입니다."
     tbl = doc.add_table(3, 1, width=_page_content_width_hwp())
+    _reset_table_anchor(doc, tbl)
     tbl.set_cell_text(0, 0, figure.caption)
     if figure.caption_bookmark:
         # 자리표시자는 캡션이 박스 첫 칸 안에 있다 — 그 칸의 문단을 책갈피로 감싼다.

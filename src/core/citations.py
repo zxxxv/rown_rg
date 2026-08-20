@@ -99,6 +99,30 @@ def strip_source_marks(content: str) -> str:
     return _SOURCE_MARK_RE.sub("", content)
 
 
+_SENTENCE_BOUNDARY = "。.!?\n"
+
+
+def strip_nonnumeric_source_marks(content: str) -> str:
+    """수치 없는 문장의 ``(출처 n)``만 걷어낸다 — 수치 인용 문장은 표기를 남긴다.
+
+    2026-08-21 사용자 지시: 수치·직접 인용은 출처를 문장 자리에 달고, 원문을 읽고
+    재구성한 서술만 표기 없이 쓴다. '수치 문장' 판정은 마커 앞 같은 문장 구간에
+    숫자가 있는가 — 결정적·보수적이다(연도·조항 번호도 수치로 친다. 표기를 하나 더
+    남기는 쪽이 근거를 지우는 쪽보다 싸다).
+    """
+    out: list[str] = []
+    last = 0
+    for m in _SOURCE_MARK_RE.finditer(content):
+        start = max((content.rfind(ch, 0, m.start()) for ch in _SENTENCE_BOUNDARY), default=-1)
+        sentence = content[start + 1 : m.start()]
+        out.append(content[last : m.start()])
+        if re.search(r"\d", sentence):
+            out.append(m.group(0))
+        last = m.end()
+    out.append(content[last:])
+    return "".join(out)
+
+
 def source_numbers(content: str) -> list[int]:
     """참고 표기가 가리킨 번호들 — 첫 등장 순서, 중복 없이.
 
