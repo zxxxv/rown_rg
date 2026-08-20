@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 import structlog
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -94,6 +94,11 @@ class IndexingResult(BaseModel):
     # 자료 발간연도(본문 머리·파일명 추출) — 자료 검토 게이트·통계의 연도 배지가
     # 자료 단위 값을 원한다(청크 태깅만으론 목록 표시가 안 된다, 2026-08-17).
     published_year: int | None = None
+    # 어느 파서가 본문을 만들었나 + 파싱 경고. project_sources 메타로 영속돼
+    # "pymupdf로 떨어져 표가 평문이 된" 자료를 화면이 구분할 수 있게 한다 -
+    # 전에는 경고가 로그에만 남아 폴백이 화면에서 정상으로 보였다(2026-08-20 실사고).
+    parser_name: str = ""
+    parse_warnings: list[str] = Field(default_factory=list)
 
 
 class VectorIndexingService:
@@ -184,6 +189,8 @@ class VectorIndexingService:
                 elapsed_ms=elapsed,
                 page_count=parse_result.metadata.page_count,
                 published_year=year,
+                parser_name=parse_result.parser_name,
+                parse_warnings=parse_result.warnings,
             )
 
         # 청크별 시작 페이지 - "PDF 원본 p.N 열기" 점프의 재료. 페이지를 모르는
@@ -247,6 +254,8 @@ class VectorIndexingService:
             parse_cached=parse_result.cached,
             elapsed_ms=elapsed,
             published_year=year,
+            parser_name=parse_result.parser_name,
+            parse_warnings=parse_result.warnings,
         )
 
     async def _upsert_source(self, session, source: SourceInput) -> UUID:

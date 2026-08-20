@@ -1311,63 +1311,20 @@ def _index_meta(source: SourceInput, result: object) -> dict:
     year = getattr(result, "published_year", None)
     if year:
         meta["published_year"] = year
+    # 파서 정체·경고 — 전에는 로그에만 남아 pymupdf 폴백(표가 평문으로 뭉개진 자료)이
+    # 화면에서 정상으로 보였다(2026-08-20 실사고). 이제 목록이 저품질 파싱을 표시할
+    # 수 있다. 경고가 없으면 키 자체를 만들지 않아 메타를 어지럽히지 않는다.
+    parser_name = getattr(result, "parser_name", "")
+    if parser_name:
+        meta["parser_name"] = parser_name
+    parse_warnings = getattr(result, "parse_warnings", None)
+    if parse_warnings:
+        meta["parse_warnings"] = list(parse_warnings)
     try:
         meta["size_bytes"] = Path(source.file_path).stat().st_size
     except OSError:
         pass
     return meta
-
-
-async def _index_file_source(
-    session: AsyncSession,
-    source: SourceInput,
-    *,
-    error_context: str,
-) -> ProjectSource:
-    """파일 소스 1건을 색인하고 project_sources 행을 반환한다.
-
-    색인기(index_source)는 자체 세션에서 UPSERT+chunks를 커밋하므로, 커밋된 행을 이 요청
-    세션에서 재조회해 metadata(원산지·조각 수)를 채운다. 지원하지 않는 형식이면 명확한
-    한국어 오류로 변환한다.
-    """
-    from src.clients.parser import UnsupportedFormatError
-    from src.services.indexing.vector import build_vector_indexing_service
-
-    service = build_vector_indexing_service()
-    try:
-        result = await service.index_source(source)
-    except UnsupportedFormatError as exc:
-        raise ValidationError(
-            message="지원하지 않는 파일 형식입니다(PDF·HWPX·DOCX·MD·TXT만 색인할 수 있습니다).",
-            code="UNSUPPORTED_SOURCE_FORMAT",
-        ) from exc
-    except BadZipFile as exc:
-        # HWPX·DOCX는 ZIP 컨테이너다. 구형 .hwp를 확장자만 .hwpx로 바꾼 파일이 가장 흔한
-        # 원인이라(정부 보도자료 배포 관행), 사용자가 바로 조치할 수 있게 짚어준다.
-        logger.warning("source.index_bad_zip", context=error_context)
-        raise ValidationError(
-            message=(
-                "HWPX/DOCX 형식이 아닙니다. 확장자만 바꾼 구형 .hwp 파일일 수 있습니다 — "
-                "한컴오피스에서 열어 '다른 이름으로 저장 → HWPX(*.hwpx)'로 변환해 주세요."
-            ),
-            code="SOURCE_NOT_ZIP_CONTAINER",
-        ) from exc
-    except Exception as exc:  # 파싱·임베딩 실패 — 원인 코드 노출 없이 명확한 메시지
-        logger.warning("source.index_failed", context=error_context, exc_info=True)
-        raise ValidationError(
-            message="자료를 색인하지 못했습니다. 파일이 손상되지 않았는지 확인해 주세요.",
-            code="SOURCE_INDEX_FAILED",
-        ) from exc
-    row = (
-        await session.execute(select(ProjectSource).where(ProjectSource.id == result.source_id))
-    ).scalar_one()
-    row.metadata_ = {
-        **(row.metadata_ or {}),
-        **_index_meta(source, result),
-    }
-    apply_index_outcome(row, result.chunks_created)
-    await session.flush()
-    return row
 
 
 @router.post(
@@ -1455,17 +1412,24 @@ async def attach_library_source(
             message="원본 파일이 없어 불러올 수 없습니다(수집 원문만 있는 자료일 수 있습니다).",
             code="LIBRARY_FILE_MISSING",
         )
-    row = await _index_file_source(
-        session,
-        SourceInput(
-            project_id=project.id,
-            source_type="library",
-            file_path=Path(node.file_path),
-            library_node_id=node.id,
-            title=node.name,
-        ),
-        error_context=f"library:{project.id}:{node.id}",
+    source = SourceInput(
+        project_id=project.id,
+        source_type="library",
+        file_path=Path(node.file_path),
+        library_node_id=node.id,
+        title=node.name,
     )
+    # 업로드와 같은 패턴으로 백그라운드 색인한다(2026-08-20 사용자 결정). 전에는
+    # 요청 안에서 동기 색인했는데 두 가지가 문제였다: (1) _INDEX_SEMAPHORE 밖이라
+    # 업로드 색인과 docling이 **동시에** 돌 수 있었다 - 정확히 메모리 폭주 사고의
+    # 재현 조건. (2) 수백 페이지 PDF는 프론트 타임아웃에 걸려 실패로 보였다.
+    # 프론트는 이미 indexing/index_error 메타를 읽고 4초 폴링하므로 그대로 동작한다.
+    # 형식 오류(UnsupportedFormat 등)도 _index_error_message가 메타로 변환한다.
+    row = await _placeholder_source(session, source)
+    await session.commit()
+    task = asyncio.create_task(_index_in_background(source, f"library:{project.id}:{node.id}"))
+    _INDEX_TASKS.add(task)
+    task.add_done_callback(_INDEX_TASKS.discard)
     return _to_source_item(row)
 
 
