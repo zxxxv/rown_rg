@@ -19,6 +19,14 @@ services:
       # 리랭커 전용 배포로도 쓸 수 있다.
       GPU_EMBED_MODEL_DIR: /models/bge-m3-onnx-fp16
       GPU_DEVICE: cuda
+      # PDF 파싱(/v1/parse). 이미지가 HF_HUB_OFFLINE=1이라 미리 받아둔 모델 폴더가
+      # 필수다(최초 1회):
+      #   docker run --rm --entrypoint sh -e HF_HUB_OFFLINE=0 \
+      #     -v <repo>/models:/models gpu_service-reranker \
+      #     -c "docling-tools models download layout tableformer -o /models/docling-artifacts"
+      # 비우면 /v1/parse가 열리지 않는다. VRAM이 빠듯하면 GPU_PARSE_DEVICE: cpu로
+      # 내려도 원래 사고(앱 서버 메모리 폭주)는 해결된다.
+      GPU_PARSE_ARTIFACTS_DIR: /models/docling-artifacts
     volumes:
       # 모델은 읽기 전용으로 넣는다 - 컨테이너가 가중치를 건드릴 이유가 없다.
       - ../models:/models:ro
