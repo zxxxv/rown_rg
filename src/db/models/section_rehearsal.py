@@ -28,6 +28,10 @@ class SectionRehearsal(Base):
     )
     section_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     index_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 계획 지문(services/retrieval/rehearsal.plan_fingerprint) — 절 id가 안정화되면서
+    # (2026-08-21) "목차가 갈리면 id가 바뀌어 자연히 미스"라는 가정이 깨졌다. 제목·
+    # 방향·핵심 포인트·검색 질의가 바뀐 절은 이 지문이 갈려 재검색한다. ''=옛 행.
+    plan_hash: Mapped[str] = mapped_column(String(40), server_default="", nullable=False)
     # ok(충분) | hyde(HyDE 재검색 수행) | empty(공백) | live(리허설 없이 작성 시점 기록)
     band: Mapped[str] = mapped_column(String(10), nullable=False)
     floor_passed: Mapped[int] = mapped_column(Integer, nullable=False)

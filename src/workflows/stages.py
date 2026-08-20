@@ -1102,6 +1102,7 @@ async def _rehearse(state: ProjectState) -> ProjectState:
         current_index_version,
         empty_floor,
         needed_evidence,
+        plan_fingerprint,
         store_rehearsal,
     )
     from src.services.retrieval.section import _rerank_query
@@ -1163,6 +1164,7 @@ async def _rehearse(state: ProjectState) -> ProjectState:
                 needed=needed,
                 hyde_used=hyde_used,
                 warnings={"constructive": constructive, "raptor_gap": raptor_gap},
+                plan_hash=plan_fingerprint(section),
             )
         except Exception:
             # 영속 실패 → 작성이 실검색 폴백을 쓴다. 리허설이 색인을 막으면 안 된다.

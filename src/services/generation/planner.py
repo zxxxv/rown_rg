@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import structlog
 
@@ -106,16 +106,41 @@ def _to_plan(manifest: dict[str, Any]) -> list[SectionPlan]:
     return plan
 
 
+def _outline_section_id(sec: dict[str, Any], seen: set[UUID]) -> UUID:
+    """outline 항목의 안정 id 채택. 없거나 깨졌거나 중복이면 새로 발급(PK 충돌 방지).
+
+    이 채택이 절 정체성의 전부다: outline id가 곧 SectionPlan.section_id →
+    sections.id → 리허설 캐시 키라서, 목차를 다시 plan으로 내려도 같은 절은
+    같은 id를 유지한다(2026-08-21 절 정체성 수술).
+    """
+    try:
+        sid = UUID(str(sec.get("id")))
+    except (ValueError, TypeError, AttributeError):
+        sid = uuid4()
+    if sid in seen:
+        sid = uuid4()
+    seen.add(sid)
+    return sid
+
+
 def plan_from_outline(outline: dict[str, Any]) -> list[SectionPlan]:
     """사용자 확정 목차(config.outline) → SectionPlan. LLM 호출 없는 결정적 경로.
 
     생성 화면에서 프리셋 골격을 펼쳐 편집·확정한 목차다 — 사용자가 본 것과 실행
     결과가 정확히 일치해야 하므로 LLM을 태우지 않는다. 장·절 번호는 배열 위치
-    (1-base)에서 파생한다 — 편집·재정렬과 번호가 어긋날 수 없다. 제목 없는 절은
+    (1-base)에서 파생한다 — 편집·재정렬과 번호가 어긋날 수 없다. section_id는
+    outline 항목의 안정 id를 채택한다 — 재플래닝이 정체성을 리셋하지 않는다.
+    builds_on의 id 토큰("s:<uuid>")은 **현재** 번호 라벨("4.1")로 되돌려 싣는다 —
+    하류(core/builds_on·ledger)는 종전 라벨 계약 그대로다. 제목 없는 절은
     버리고, 유효 섹션이 없으면 ValueError(빈 목차로 후속 단계를 돌리지 않는다).
     """
-    plan: list[SectionPlan] = []
+    from src.core.outline import position_maps, token_to_label
+
     chapters = outline.get("chapters") if isinstance(outline, dict) else None
+    # 1차 통과: id→현재 위치 지도(builds_on 토큰 해석은 앞뒤 어느 절이든 가리킨다).
+    label_by_sec, num_by_ch, _, _ = position_maps(outline if isinstance(outline, dict) else {})
+    plan: list[SectionPlan] = []
+    seen_ids: set[UUID] = set()
     for ci, chapter in enumerate(chapters or [], start=1):
         if not isinstance(chapter, dict):
             continue
@@ -134,9 +159,20 @@ def plan_from_outline(outline: dict[str, Any]) -> list[SectionPlan]:
             direction = sec.get("direction")
             key_points = sec.get("key_points")
             analysts = sec.get("analysts")
-            builds_on = sec.get("builds_on")
+            builds_on_raw = sec.get("builds_on")
+            builds_on: list[str] = []
+            for b in builds_on_raw if isinstance(builds_on_raw, list) else []:
+                if not isinstance(b, str):
+                    continue
+                label = token_to_label(b, label_by_sec, num_by_ch)
+                if label is None:
+                    # 대상 절이 삭제된 토큰 — 의존만 걷어내고 실행은 계속(절 격리).
+                    logger.warning("planner.builds_on_unresolved", ref=b, section=f"{ci}.{si}")
+                    continue
+                builds_on.append(label)
             plan.append(
                 SectionPlan(
+                    section_id=_outline_section_id(sec, seen_ids),
                     chapter_number=ci,
                     section_number=si,
                     title=title.strip(),
@@ -148,9 +184,7 @@ def plan_from_outline(outline: dict[str, Any]) -> list[SectionPlan]:
                     analysts=[a for a in analysts if isinstance(a, str)]
                     if isinstance(analysts, list)
                     else [],
-                    builds_on=[b for b in builds_on if isinstance(b, str)]
-                    if isinstance(builds_on, list)
-                    else [],
+                    builds_on=builds_on,
                 )
             )
     if not plan:
@@ -159,6 +193,24 @@ def plan_from_outline(outline: dict[str, Any]) -> list[SectionPlan]:
         logger.warning("planner.outline_truncated", planned=len(plan), cap=MAX_SECTIONS)
         plan = plan[:MAX_SECTIONS]
     return plan
+
+
+def merge_section_plan(old_plan: list[SectionPlan], outline: dict[str, Any]) -> list[SectionPlan]:
+    """목차 변경 후 plan 재생성 — 같은 id의 절은 브리프 산출(search_queries)을 승계.
+
+    plan의 다른 필드(방향·핵심 포인트·에이전트·builds_on·번호)는 전부 outline에서
+    파생되므로 재생성이 곧 최신화다. search_queries만 브리프 단계 산출이라 여기서
+    잇는다 — 버리면 목차 옆 절 하나 고쳤다고 전 절이 제목 검색으로 강등된다.
+    """
+    new_plan = plan_from_outline(outline)
+    old_by_id = {p.section_id: p for p in old_plan}
+    merged: list[SectionPlan] = []
+    for p in new_plan:
+        prev = old_by_id.get(p.section_id)
+        if prev is not None and not p.search_queries and prev.search_queries:
+            p = p.model_copy(update={"search_queries": list(prev.search_queries)})
+        merged.append(p)
+    return merged
 
 
 def _resolve_preset(report_type: str) -> ReportPreset | None:

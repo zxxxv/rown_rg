@@ -34,6 +34,10 @@ class VerifyFinding(Base):
     severity: Mapped[str] = mapped_column(String(10), nullable=False)  # critical | warning
     category: Mapped[str] = mapped_column(String(40), nullable=False)
     section_ref: Mapped[str | None] = mapped_column(String(20))  # 예: "2.1"
+    # 절 안정 id(sections.id와 같은 값, FK 없음 — 행 전량 교체 사이에도 남는다).
+    # section_ref는 사람이 읽는 표시값이고, 화면의 절 매칭·이동은 이 id가 정본이다 —
+    # 번호 매칭은 장 번호가 비연속이거나 목차가 바뀌면 엉뚱한 절을 가리켰다.
+    section_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     detail: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

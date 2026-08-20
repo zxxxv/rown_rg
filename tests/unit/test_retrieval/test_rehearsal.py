@@ -67,7 +67,7 @@ class TestCachedRetriever:
         cached = [_chunk(), _chunk()]
         calls: list[str] = []
 
-        async def fake_load(pid, sid, version):
+        async def fake_load(pid, sid, version, plan_hash=""):
             calls.append(f"load:{version}")
             return cached
 
@@ -85,7 +85,7 @@ class TestCachedRetriever:
         live = [_chunk()]
         stored: list[dict] = []
 
-        async def fake_load(pid, sid, version):
+        async def fake_load(pid, sid, version, plan_hash=""):
             return None
 
         async def fake_store(pid, sid, **kwargs):
@@ -105,7 +105,7 @@ class TestCachedRetriever:
         assert stored[0]["band"] == rehearsal.BAND_LIVE
 
     async def test_store_failure_does_not_break_write(self, monkeypatch, section):
-        async def fake_load(pid, sid, version):
+        async def fake_load(pid, sid, version, plan_hash=""):
             return None
 
         async def broken_store(pid, sid, **kwargs):

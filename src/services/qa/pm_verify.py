@@ -104,8 +104,16 @@ def _chapter_input(sections: list[tuple[SectionPlan, str]], prev_digest: list[st
     return "\n".join(lines)[:_MAX_CHAPTER_CHARS]
 
 
-def _to_rows(chapter_number: int, manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    """모델 JSON → 저장 행. 형식이 어긋난 항목은 버리고, 상한을 적용한다."""
+def _to_rows(
+    chapter_number: int,
+    manifest: dict[str, Any],
+    sid_by_label: dict[str, UUID] | None = None,
+) -> list[dict[str, Any]]:
+    """모델 JSON → 저장 행. 형식이 어긋난 항목은 버리고, 상한을 적용한다.
+
+    sid_by_label("2.1" → 절 id)이 있으면 section_ref를 절 안정 id로도 해석해 싣는다 —
+    화면의 절 매칭·이동은 id가 정본이고, ref 문자열은 사람이 읽는 표시값이다.
+    """
     rows: list[dict[str, Any]] = []
     for item in manifest.get("findings", []) or []:
         if not isinstance(item, dict):
@@ -119,14 +127,18 @@ def _to_rows(chapter_number: int, manifest: dict[str, Any]) -> list[dict[str, An
         category_str = category.strip() if isinstance(category, str) else "기타"
         if _is_year_only_duplicate(category_str, detail):
             continue  # 연도 재언급은 결함이 아니다 — 노이즈 차단
+        section_ref = section.strip()[:20] if isinstance(section, str) and section.strip() else None
+        section_id = None
+        if section_ref and sid_by_label:
+            # LLM이 "2.1 표 2-1"처럼 덧붙이기도 한다 — 앞의 번호만 해석한다.
+            section_id = sid_by_label.get(section_ref.split()[0])
         rows.append(
             {
                 "chapter_number": chapter_number,
                 "severity": severity if severity in _SEVERITIES else "warning",
                 "category": category_str[:40],
-                "section_ref": section.strip()[:20]
-                if isinstance(section, str) and section.strip()
-                else None,
+                "section_ref": section_ref,
+                "section_id": section_id,
                 "detail": detail.strip(),
             }
         )
@@ -165,7 +177,11 @@ async def verify_report(
             operation=f"qa.pm_verify:{chapter_number}",
         ):
             response = await client.complete(request)
-        rows.extend(_to_rows(chapter_number, _parse_manifest(response.content)))
+        sid_by_label = {
+            f"{plan.chapter_number}.{plan.section_number}": plan.section_id
+            for plan, _content in sections
+        }
+        rows.extend(_to_rows(chapter_number, _parse_manifest(response.content), sid_by_label))
         seen_texts.extend(content for _, content in sections)
     return rows
 
@@ -182,18 +198,15 @@ async def ledger_join_findings(project_id: UUID) -> list[dict[str, Any]]:
     from src.services.ledger import join_conflicts
 
     async with async_session_maker() as session:
-        metas = (
-            (
-                await session.execute(
-                    select(Section.meta).where(
-                        Section.project_id == project_id, Section.content != ""
-                    )
-                )
+        section_rows = (
+            await session.execute(
+                select(
+                    Section.id, Section.chapter_number, Section.section_number, Section.meta
+                ).where(Section.project_id == project_id, Section.content != "")
             )
-            .scalars()
-            .all()
-        )
-    entries = [e for meta in metas for e in (meta or {}).get("ledger_entries") or []]
+        ).all()
+    sid_by_label = {f"{r.chapter_number}.{r.section_number}": r.id for r in section_rows}
+    entries = [e for r in section_rows for e in (r.meta or {}).get("ledger_entries") or []]
     out: list[dict[str, Any]] = []
     for f in join_conflicts(entries):
         try:
@@ -206,6 +219,7 @@ async def ledger_join_findings(project_id: UUID) -> list[dict[str, Any]]:
                 "severity": f["severity"],
                 "category": f["category"],
                 "section_ref": f["section_ref"],
+                "section_id": sid_by_label.get(str(f["section_ref"])),
                 "detail": f["detail"],
             }
         )

@@ -20,6 +20,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -48,6 +50,28 @@ BAND_HYDE = "hyde"
 BAND_EMPTY = "empty"
 # 리허설 없이 작성 시점에 실검색으로 채워진 행 — 밴드 판정이 아니라 동근거 기록용.
 BAND_LIVE = "live"
+
+
+def plan_fingerprint(plan: SectionPlan) -> str:
+    """검색에 영향을 주는 계획 필드의 지문 — 리허설 캐시의 내용 무효화 열쇠.
+
+    절 id가 안정화되면서(2026-08-21) "목차 편집 = id 재발급 = 캐시 자연 미스"라는
+    가정이 깨졌다. 같은 id의 절이라도 제목·장 제목·방향·핵심 포인트·검색 질의·
+    에이전트가 바뀌면 검색 결과가 달라지므로 지문으로 잡는다. 번호는 넣지 않는다 —
+    순서만 바뀐 절은 같은 근거를 그대로 써도 된다.
+    """
+    payload = json.dumps(
+        [
+            plan.title,
+            plan.chapter_title,
+            plan.direction,
+            list(plan.key_points),
+            list(plan.search_queries),
+            list(plan.analysts),
+        ],
+        ensure_ascii=False,
+    )
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
 def needed_evidence(min_chars: int | None) -> int:
@@ -117,6 +141,7 @@ async def store_rehearsal(
     needed: int,
     hyde_used: bool = False,
     warnings: dict | None = None,
+    plan_hash: str = "",
 ) -> None:
     """리허설 결과 upsert(절당 1행) — 요약(is_summary)은 싣지 않는다(인용 불가 배경)."""
     from src.db.models.section_rehearsal import SectionRehearsal
@@ -127,6 +152,7 @@ async def store_rehearsal(
         project_id=project_id,
         section_id=section_id,
         index_version=index_version,
+        plan_hash=plan_hash,
         band=band,
         floor_passed=floor_passed,
         needed=needed,
@@ -138,6 +164,7 @@ async def store_rehearsal(
         index_elements=[SectionRehearsal.project_id, SectionRehearsal.section_id],
         set_={
             "index_version": stmt.excluded.index_version,
+            "plan_hash": stmt.excluded.plan_hash,
             "band": stmt.excluded.band,
             "floor_passed": stmt.excluded.floor_passed,
             "needed": stmt.excluded.needed,
@@ -152,12 +179,14 @@ async def store_rehearsal(
 
 
 async def load_rehearsal(
-    project_id: UUID, section_id: UUID, index_version: int
+    project_id: UUID, section_id: UUID, index_version: int, plan_hash: str = ""
 ) -> list[RetrievedChunk] | None:
-    """리허설이 본 근거를 그대로 복원. 버전 불일치·청크 유실이면 None(실검색 폴백).
+    """리허설이 본 근거를 그대로 복원. 버전·계획 지문 불일치·청크 유실이면 None(실검색 폴백).
 
     청크 하나라도 사라졌으면(자료 삭제 등) 부분 목록을 돌려주지 않고 통째로
     무효 처리한다 — 반쪽 근거로 쓰는 것보다 다시 검색하는 쪽이 안전하다.
+    plan_hash를 넘기면 저장 시점 지문과 대조한다 — 절 id가 안정화된 뒤로는 목차
+    편집이 id를 안 바꾸므로, 계획 내용 변경은 지문으로만 잡을 수 있다.
     """
     from src.db.models.chunk import Chunk
     from src.db.models.section_rehearsal import SectionRehearsal
@@ -166,6 +195,8 @@ async def load_rehearsal(
     async with async_session_maker() as session:
         row = await session.get(SectionRehearsal, (project_id, section_id))
         if row is None or row.index_version != index_version:
+            return None
+        if plan_hash and row.plan_hash and row.plan_hash != plan_hash:
             return None
         entries = [e for e in (row.chunks or []) if isinstance(e, dict) and e.get("id")]
         if not entries:
@@ -240,7 +271,9 @@ def make_cached_retriever(
     """
 
     async def _retrieve(section: SectionPlan) -> list[RetrievedChunk]:
-        cached = await load_rehearsal(project_id, section.section_id, index_version)
+        cached = await load_rehearsal(
+            project_id, section.section_id, index_version, plan_fingerprint(section)
+        )
         if cached is not None:
             from src.services.retrieval.section import _with_source_titles
 
@@ -262,6 +295,7 @@ def make_cached_retriever(
                 band=BAND_LIVE,
                 floor_passed=len(citable),
                 needed=0,
+                plan_hash=plan_fingerprint(section),
             )
         except Exception:
             # 기록 실패가 작성을 막으면 안 된다 — 동근거 보장만 약해질 뿐.

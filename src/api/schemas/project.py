@@ -140,15 +140,21 @@ class AnalystRead(BaseModel):
 class OutlineSectionIn(BaseModel):
     """사용자 확정 목차의 절 1개 (config.outline). analysts는 카탈로그 이름 참조."""
 
+    # 안정 식별자(uuid 문자열) - 절 정체성의 닻(core/outline.py). 없거나 깨졌으면
+    # 서버가 발급하므로 선택 필드다. 클라이언트는 받은 id를 그대로 돌려보내야
+    # 목차 편집이 절 정체성(계획·리허설·본문 행)을 보존한다.
+    id: str | None = Field(None, max_length=36)
     title: str = Field(..., min_length=1, max_length=255)
     direction: str = ""
     key_points: list[str] = Field(default_factory=list)
     analysts: list[str] = Field(default_factory=list)
-    # 의존 계약 - 검증(유령 절·자기 참조·상한)은 라우터 _validate_outline_config가 한다.
+    # 의존 계약 - 저작은 번호("4.1")·저장은 id 토큰("s:<uuid>"). 검증·정규화는
+    # 라우터 _validate_outline_config → core/outline.normalize_outline이 한다.
     builds_on: list[str] = Field(default_factory=list)
 
 
 class OutlineChapterIn(BaseModel):
+    id: str | None = Field(None, max_length=36)
     title: str = Field("", max_length=255)
     sections: list[OutlineSectionIn] = Field(default_factory=list)
 
@@ -234,6 +240,8 @@ class VerifyFindingRead(BaseModel):
     severity: str  # critical | warning
     category: str
     section_ref: str | None = None
+    # 절 안정 id(sections.id) - 화면의 절 매칭·이동 정본. ref 문자열은 표시값.
+    section_id: UUID | None = None
     detail: str
     created_at: datetime
     # 내용 지문 - 재검증이 행을 전량 교체해도 완료 표시가 따라오게 하는 열쇠(id는 매번 바뀐다)

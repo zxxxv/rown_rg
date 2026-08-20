@@ -58,13 +58,18 @@ from src.api.schemas.section import (
 )
 from src.api.schemas.source_stats import SourceUsageResponse
 from src.api.uploads import read_validated_upload
-from src.core.builds_on import clean_refs
 from src.core.charts import has_chart_fence
 from src.core.citations import numbers_in_order
 from src.core.clock import now as clock_now
 from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
-from src.core.section_plan import SECTION_PLAN_KEY, plan_from_config
+from src.core.outline import normalize_outline
+from src.core.section_plan import (
+    SECTION_PLAN_KEY,
+    dump_section_plan,
+    load_section_plan,
+    plan_from_config,
+)
 from src.core.state import ProjectState
 from src.core.types import (
     ProjectStage,
@@ -150,16 +155,24 @@ presets_router = APIRouter(prefix="/presets", tags=["presets"])
 analysts_router = APIRouter(prefix="/analysts", tags=["analysts"])
 
 
-def _validate_outline_config(config: dict, known_analysts: set[str]) -> None:
-    """config.outline이 있으면 형태·섹션 수·에이전트 이름을 검증한다.
+def _validate_outline_config(
+    config: dict, known_analysts: set[str], *, fresh_ids: bool = False
+) -> dict:
+    """config.outline이 있으면 형태·섹션 수·에이전트 이름을 검증하고 **정규화해 돌려준다**.
 
     outline은 planner LLM을 우회해 그대로 실행되므로 생성/수정 시점에 막는 게
     마지막 방어선이다. known_analysts는 개인→시스템 병합 카탈로그의 id·name 집합
     (개인 에이전트도 배정 가능하도록 호출부에서 resolve_analysts로 계산해 넘긴다).
+
+    정규화(core/outline.normalize_outline)는 두 가지다: ① 장·절에 안정 id를 채운다
+    (절 정체성의 닻 — plan·리허설·본문 행이 이 id를 따른다), ② builds_on의 번호
+    표기("4.1")를 제출된 위치 기준으로 id 토큰("s:<uuid>")으로 바꿔 저장한다 —
+    이후 절을 끼워 넣어도 참조가 말없이 다른 절을 가리키지 않는다. 호출부는
+    **반드시 반환값을 저장**해야 한다(원본 config는 id가 비어 있다).
     """
     outline = config.get("outline")
     if outline is None:
-        return
+        return config
     try:
         parsed = OutlineIn.model_validate(outline)
     except PydanticValidationError as e:
@@ -181,30 +194,16 @@ def _validate_outline_config(config: dict, known_analysts: set[str]) -> None:
             message=f"알 수 없는 분석 에이전트: {', '.join(unknown)}",
             code="UNKNOWN_ANALYST",
         )
-    # builds_on 검증 — 유령 절·자기 참조·상한 초과는 생성 시점에 막는다. 실행 시점
-    # (clean_refs·assign_levels)에도 같은 가드가 있지만 그건 절단·경고이고, 여기는
+    # builds_on 검증+정규화 — 유령 절·자기 참조·상한 초과는 생성 시점에 막는다.
+    # 실행 시점(assign_levels)에도 같은 가드가 있지만 그건 절단·경고이고, 여기는
     # 사람이 고칠 수 있는 마지막 자리라 명시적으로 알린다.
-    labels: list[str] = []
-    for ci, ch in enumerate(parsed.chapters, start=1):
-        for si, _sec in enumerate(ch.sections, start=1):
-            labels.append(f"{ci}.{si}")
-    known_labels = set(labels)
-    known_chapters = {int(label.split(".")[0]) for label in labels}
-    for ci, ch in enumerate(parsed.chapters, start=1):
-        for si, sec in enumerate(ch.sections, start=1):
-            if not sec.builds_on:
-                continue
-            _cleaned, ref_warnings = clean_refs(
-                list(sec.builds_on),
-                self_label=f"{ci}.{si}",
-                known_labels=known_labels,
-                known_chapters=known_chapters,
-            )
-            if ref_warnings:
-                raise ValidationError(
-                    message=f"{ci}.{si}절 builds_on 오류: {ref_warnings[0]}",
-                    code="INVALID_BUILDS_ON",
-                )
+    normalized_outline, ref_errors = normalize_outline(outline, fresh_ids=fresh_ids)
+    if ref_errors:
+        raise ValidationError(
+            message=f"builds_on 오류: {ref_errors[0]}",
+            code="INVALID_BUILDS_ON",
+        )
+    return {**config, "outline": normalized_outline}
 
 
 async def _validate_rules_config(session: AsyncSession, owner_id: UUID, config: dict) -> None:
@@ -566,8 +565,12 @@ async def create_project(
             message="목차가 필요합니다 - 생성 화면에서 장·절을 구성하세요 (config.outline)",
             code="OUTLINE_REQUIRED",
         )
-    _validate_outline_config(data.config, await _known_analyst_names(session, current_user.id))
-    await _validate_rules_config(session, current_user.id, data.config)
+    # fresh_ids: sections.id는 전역 PK라, 남의 config를 복사해 만들어도 절 id가
+    # 겹치면 안 된다 — 생성은 항상 새 정체성으로 시작한다.
+    normalized_config = _validate_outline_config(
+        data.config, await _known_analyst_names(session, current_user.id), fresh_ids=True
+    )
+    await _validate_rules_config(session, current_user.id, normalized_config)
     # 한도 사전 검사 — 초과 상태면 생성 자체를 429로 막는다(만들어놓고 실행 못 하는 orphan·
     # '생성됨'+'실행 실패' 겹침 방지). 메시지는 사람이 읽을 수 있는 사유를 그대로 전달한다.
     from src.clients.llm.quota_gate import check_user_quota
@@ -577,7 +580,7 @@ async def create_project(
         title=data.title,
         topic=data.topic,
         preset=data.preset,
-        config=data.config,
+        config=normalized_config,
         depth_mode=data.depth_mode,
         owner_id=current_user.id,
         status=ProjectStage.CREATED.value,
@@ -951,10 +954,12 @@ async def update_project_config(
     생성 후 변경 불가(프론트 edit 모드도 readonly).
 
     **완료·보관된 프로젝트는 거부한다.** 다음 단계가 없으므로 저장은 아무 일도 못 하는
-    시늉이고, 목차를 바꾸면 실제로 해롭다: merge_config_update가 _section_plan·
-    _design_plan을 버리고, 절 재작성이 config.outline을 **배열 위치로** 읽어 방향·
-    핵심 포인트·에이전트를 복원하므로(_plan_for_row) 절을 더하거나 지우면 그 뒤 절들이
-    **다른 절의 계획으로** 재작성된다 — 경고 없이.
+    시늉이다(재개(reopen) 경로가 이 동결을 푸는 유일한 문이 된다).
+
+    목차가 바뀌면: plan 정본을 절 id 기준으로 병합 재생성하고(merge_config_update),
+    이미 저장된 절 행의 번호·제목도 새 목차에 맞춰 재정렬한다(sync_rows_to_plan) —
+    절 정체성은 outline의 안정 id가 지키므로 삽입·삭제·이동이 다른 절의 계획·본문을
+    건드리지 않는다(2026-08-21 절 정체성 수술).
     """
     project = await _get_authorized_project(project_id, session, current_user)
     if project.status in _CONFIG_FROZEN_STATUSES:
@@ -962,11 +967,20 @@ async def update_project_config(
             message="완료된 보고서의 설정은 바꿀 수 없습니다",
             code="PROJECT_CONFIG_FROZEN",
         )
-    _validate_outline_config(data.config, await _known_analyst_names(session, current_user.id))
-    await _validate_rules_config(session, current_user.id, data.config)
+    normalized_config = _validate_outline_config(
+        data.config, await _known_analyst_names(session, current_user.id)
+    )
+    await _validate_rules_config(session, current_user.id, normalized_config)
+    outline_changed = normalized_config.get("outline") != (project.config or {}).get("outline")
     # 옵션 교체가 파이프라인이 남긴 내부 키까지 지우면 안 된다 - 취소 복귀 지점과
     # 검증 경고 완료 표시·모델 스냅샷은 사용자가 폼에서 만지는 값이 아니다.
-    project.config = merge_config_update(project.config, data.config)
+    project.config = merge_config_update(project.config, normalized_config)
+    if outline_changed:
+        from src.services.sections.store import sync_rows_to_plan
+
+        plan = plan_from_config(project.config)
+        if plan:
+            await sync_rows_to_plan(session, project.id, plan)
     await session.flush()
     await session.refresh(project)
     return project
@@ -1485,6 +1499,7 @@ def _to_finding_read(row: VerifyFinding, resolved: set[str]) -> VerifyFindingRea
         severity=row.severity,
         category=row.category,
         section_ref=row.section_ref,
+        section_id=row.section_id,
         detail=row.detail,
         created_at=row.created_at,
         key=key,
@@ -1733,13 +1748,15 @@ async def decide_gate(
     pending = await get_pending_gate(session, project.id)
     if pending is None:
         raise ValidationError(message="대기 중인 검토 게이트가 없습니다", code="NO_PENDING_GATE")
-    # 브리프 게이트가 목차를 고쳐 보냈다면 생성 시점과 같은 잣대로 검증한다 — 여기서
-    # 막지 않으면 잘못된 목차가 config에 커밋되고 수집 도중에야 터진다.
+    # 브리프 게이트가 목차를 고쳐 보냈다면 생성 시점과 같은 잣대로 검증·정규화한다 —
+    # 여기서 막지 않으면 잘못된 목차가 config에 커밋되고 수집 도중에야 터진다.
+    # 정규화(안정 id·builds_on 토큰)를 거쳐야 재플래닝이 절 정체성을 보존한다.
     if pending["gate"] == ReviewGate.DESIGN_BRIEF.value and "outline" in data.decision:
-        _validate_outline_config(
+        normalized = _validate_outline_config(
             {"outline": data.decision["outline"]},
             await _known_analyst_names(session, current_user.id),
         )
+        data.decision["outline"] = normalized["outline"]
     # 한도 사전 검사 — 재개 구간(색인·작성·추가 검색)도 LLM 비용이 크다.
     from src.clients.llm.quota_gate import check_user_quota
 
@@ -1886,14 +1903,39 @@ def merge_config_update(current: dict[str, Any] | None, incoming: dict[str, Any]
     """옵션 전체 교체 + 내부 키 보존. 내부 키는 서버가 진실이라 클라이언트가
     같은 키를 되돌려 보내도(폼 round-trip) 서버 값이 이긴다.
 
-    단 _section_plan은 목차에서 파생된 스냅샷이라, 목차가 바뀌면 함께 버린다 —
-    남겨 두면 collect가 '이미 plan이 있다'고 보고 옛 목차로 실행한다(사용자가 화면에서
-    고친 것과 다른 보고서가 나오는 조용한 어긋남).
+    목차가 바뀌면 _section_plan을 **절 id 기준으로 병합 재생성**한다(2026-08-21) —
+    같은 id의 절은 정체성(id·브리프 검색 질의)을 지키고 번호·방향·핵심 포인트는
+    새 목차에서 다시 파생한다. 통째로 버리던 종전 방식은 collect가 옛 목차로
+    실행하는 어긋남은 막았지만, 절 하나 고칠 때마다 전 절의 id가 리셋돼 리허설
+    캐시·실행 계획·본문 행 연결이 전부 끊겼다. plan이 아직 없으면(브리프 전) 그대로
+    없음 — 이후 단계가 outline의 안정 id로 만든다.
+
+    _design_plan(절 id 키)은 살아남은 절만 남기고, 리허설 재개방 예산은 새로
+    시작한다(절 구성이 달라지면 수집 공백 판단도 달라진다).
     """
     keep = {k: v for k, v in (current or {}).items() if k in _INTERNAL_CONFIG_KEYS}
     if incoming.get("outline") != (current or {}).get("outline"):
+        old_plan = load_section_plan(keep.get(SECTION_PLAN_KEY))
         keep.pop(SECTION_PLAN_KEY, None)
-        keep.pop("_design_plan", None)
+        if old_plan:
+            from src.services.generation.planner import merge_section_plan
+
+            try:
+                merged = merge_section_plan(old_plan, incoming.get("outline") or {})
+                keep[SECTION_PLAN_KEY] = dump_section_plan(merged)
+            except ValueError:
+                # 빈 목차 등 — 검증이 먼저 막지만, 병합 실패가 저장을 죽이면 안 된다.
+                merged = []
+            alive = {str(p.section_id) for p in merged}
+            design = keep.get("_design_plan")
+            if isinstance(design, dict):
+                pruned = {k: v for k, v in design.items() if k in alive}
+                if pruned:
+                    keep["_design_plan"] = pruned
+                else:
+                    keep.pop("_design_plan", None)
+        else:
+            keep.pop("_design_plan", None)
         # 목차가 바뀌면 절 구성이 달라진다 — 리허설 재개방 예산도 새로 시작.
         keep.pop("_rehearsal_reopens", None)
     return {**incoming, **keep}
@@ -2344,39 +2386,35 @@ async def update_section_content(
 
 
 def _plan_for_row(project: Project, row: Section) -> SectionPlan:
-    """저장된 절 → 작성 계획. 확정 목차(config.outline)에서 방향·핵심논점·에이전트를 되살린다.
+    """저장된 절 → 작성 계획. **절 id로** 계획 정본(_section_plan)에서 되살린다.
 
     제목만 담아 넘기면 재작성이 페르소나도 분량 목표도 없이 쓴다 - 같은 절인데 처음
-    작성한 글과 성격이 달라진다. 번호는 목차 배열 위치에서 파생되므로 위치로 찾는다.
+    작성한 글과 성격이 달라진다. 종전에는 목차 배열 **위치**로 찾아서, 절을 더하거나
+    지우면 그 뒤 절들이 다른 절의 계획으로 재작성됐다(경고 없이) — 안정 id 수술로
+    이 계열이 소거됐다(2026-08-21). 정본이 없으면 outline(안정 id)에서 파생하고,
+    그래도 못 찾으면 행이 가진 값만으로 쓴다(장 맥락은 검색 질의가 쓴다).
     """
-    plan = SectionPlan(
+    for candidate in plan_from_config(project.config):
+        if candidate.section_id == row.id:
+            if not candidate.chapter_title and row.chapter_title:
+                return candidate.model_copy(update={"chapter_title": row.chapter_title})
+            return candidate
+    outline = (project.config or {}).get("outline")
+    if isinstance(outline, dict):
+        from src.services.generation.planner import plan_from_outline
+
+        try:
+            for candidate in plan_from_outline(outline):
+                if candidate.section_id == row.id:
+                    return candidate
+        except ValueError:
+            pass
+    return SectionPlan(
         section_id=row.id,
         chapter_number=row.chapter_number,
         section_number=row.section_number,
         title=row.title,
-        # 절 행에 이미 있는 값 — 목차를 못 찾아도 장 맥락은 살린다(검색 질의가 쓴다).
         chapter_title=row.chapter_title or "",
-    )
-    outline = (project.config or {}).get("outline")
-    if not isinstance(outline, dict):
-        return plan
-    chapters = outline.get("chapters")
-    if not isinstance(chapters, list) or not 1 <= row.chapter_number <= len(chapters):
-        return plan
-    chapter = chapters[row.chapter_number - 1] or {}
-    sections = chapter.get("sections")
-    if not isinstance(sections, list) or not 1 <= row.section_number <= len(sections):
-        return plan
-    spec = sections[row.section_number - 1]
-    if not isinstance(spec, dict):
-        return plan
-    return plan.model_copy(
-        update={
-            "chapter_title": str(chapter.get("title") or row.chapter_title or ""),
-            "direction": str(spec.get("direction") or ""),
-            "key_points": [str(p) for p in (spec.get("key_points") or []) if str(p).strip()],
-            "analysts": [str(a) for a in (spec.get("analysts") or []) if str(a).strip()],
-        }
     )
 
 
