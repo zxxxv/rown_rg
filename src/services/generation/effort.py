@@ -17,13 +17,20 @@ from src.clients.llm.models import thinking_default_on
 from src.core import app_settings
 
 
-def write_effort(model: str) -> str | None:
+def write_effort(model: str, *, synthesis: bool = False) -> str | None:
     """작성 콜에 적용할 effort. thinking 기본-on 모델이 아니면 None(파라미터 생략).
 
     Sonnet 4.6처럼 thinking이 원래 꺼진 채 도는 모델에 effort를 보내면 절감은
     없이 생성 동작만 바뀔 수 있어(기본 high → low) 건드리지 않는다 — 표준 모드의
     실측 품질 기준선을 흔들지 않기 위한 가드다.
+
+    synthesis=True는 종합 절(builds_on 보유 — 앞 절들의 값·요약을 받아 결론을 내는
+    임무)로, 별도 설정(write_effort_synthesis, 기본 medium)을 쓴다. 8/14 low A/B는
+    일반 절 기준이라 종합 절의 통찰 깊이는 미검증(2026-08-20 사용자 가설) — 정독의
+    "뻔한 단계론" 일반론이 종합 절에 몰린 것과 정합해 절 범위 한정으로 상향한다.
     """
     if not thinking_default_on(model):
         return None
+    if synthesis:
+        return app_settings.get_str("write_effort_synthesis") or None
     return app_settings.get_str("write_effort") or None

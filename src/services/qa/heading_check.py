@@ -67,6 +67,56 @@ def strip_title_reprint(content: str, title: str) -> str:
     return content
 
 
+_MARKER_SPACE_RE = re.compile(r"\s+\(\s*(출처|근거)\s*")
+_MARKER_INNER_RE = re.compile(r"\(\s*(출처|근거)\s*")
+
+
+def normalize_marker_spacing(content: str) -> str:
+    """(출처 n) 표기 정규화 — 앞 공백 제거·내부 한 칸(정독 지적: 행마다 들쭉날쭉)."""
+    if not content:
+        return content
+    content = _MARKER_SPACE_RE.sub(r"(\g<1> ", content)
+    return _MARKER_INNER_RE.sub(r"(\g<1> ", content)
+
+
+def fix_heading_numbers(content: str, chapter: int, section: int) -> str:
+    """하위 헤딩 번호 결정적 수리 — 결번은 1..n 연속으로 재부여, 고아는 번호 제거.
+
+    본문 참조(X.Y.old)도 같은 매핑으로 함께 고쳐 유령 참조를 만들지 않는다.
+    매핑 밖 유령 참조(애초에 헤딩이 없던 번호)는 손대지 않고 경고가 백스톱.
+    """
+    if not content:
+        return content
+    own_order: list[int] = []
+    for m in _HEADING_RE.finditer(content):
+        if int(m.group(1)) == chapter and int(m.group(2)) == section:
+            n = int(m.group(3))
+            if n not in own_order:
+                own_order.append(n)
+    if not own_order:
+        return content
+    if len(own_order) == 1:
+        # 고아 — 번호만 떼고 제목은 남긴다("## 4.4.1 국내 동향" → "## 국내 동향").
+        only = own_order[0]
+        return re.sub(
+            rf"^(\s{{0,3}}#{{2,4}})\s*{chapter}\.{section}\.{only}(?!\d)\s*",
+            r"\g<1> ",
+            content,
+            flags=re.MULTILINE,
+        )
+    mapping = {old: i for i, old in enumerate(own_order, start=1)}
+    if all(old == new for old, new in mapping.items()):
+        return content
+
+    def _sub(m: re.Match) -> str:
+        a, b, c = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if a == chapter and b == section and c in mapping:
+            return m.group(0).replace(f"{a}.{b}.{c}", f"{a}.{b}.{mapping[c]}", 1)
+        return m.group(0)
+
+    return _REF_RE.sub(_sub, content)
+
+
 def heading_findings(sections: list[tuple[SectionPlan, str]]) -> list[dict[str, Any]]:
     """(절 계획, 본문) 목록 → 헤딩 번호 경고 행들(pm_verify 행 모양)."""
     rows: list[dict[str, Any]] = []

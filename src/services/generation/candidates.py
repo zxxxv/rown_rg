@@ -130,7 +130,7 @@ async def _one_candidate(
         system=system,
         temperature=temperature,
         max_tokens=max_tokens,
-        effort=write_effort(model),
+        effort=write_effort(model, synthesis=bool(section.builds_on)),
     )
     response = await client.complete(request)
     return SectionDraft(

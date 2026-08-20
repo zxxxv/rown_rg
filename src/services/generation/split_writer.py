@@ -213,6 +213,11 @@ def _part_tail(
         lines.append("절 제목 헤딩과 2~3문장 도입은 이 파트에만 포함하라.")
     else:
         lines.append("절 제목 헤딩·도입·전환 문단 없이 곧바로 '□' 대주제 블록으로 시작하라.")
+        lines.append(
+            "도입에서 이 절의 범위를 예고한다면 실제 파트 구성("
+            + ", ".join(f"'{t}'" for t in all_titles)
+            + ")과 일치시켜라 — 예고에 없는 범위를 본문이 다루거나 그 반대가 되면 안 된다."
+        )
     if idx < n_parts:
         lines.append("종합·마무리·결론 문단을 쓰지 마라(마지막 파트의 몫이다).")
     else:
@@ -410,7 +415,7 @@ async def generate_section_split(
                 temperature=base_temperature,
                 max_tokens=PART_MAX_TOKENS,
                 cache_prefix_messages=1,  # 프리픽스 공유 — 파트 2+부터 캐시 읽기
-                effort=write_effort(model),
+                effort=write_effort(model, synthesis=bool(section.builds_on)),
             )
             response = await client.complete(request)
             # 파트 미완결(max_tokens 컷·refusal 등)은 결합본 중간에 문장 토막을 심는다

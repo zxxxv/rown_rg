@@ -48,7 +48,9 @@ class RemoteDoclingConverter:
         max_bytes: int | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        self._base_url = (base_url or settings.parser_remote_url).rstrip("/")
+        # None=설정 폴백, ""=명시적 미구성. `or` 폴백은 둘을 구분 못 해 .env가 설정된
+        # 환경에서 "미구성 컨버터"를 만들 수 없었다(2026-08-20, 테스트가 드러냄).
+        self._base_url = (settings.parser_remote_url if base_url is None else base_url).rstrip("/")
         self._token = token if token is not None else settings.parser_remote_token
         self._timeout_s = timeout_s or settings.parser_remote_timeout_s
         self._connect_timeout_s = connect_timeout_s or settings.parser_remote_connect_timeout_s
@@ -76,11 +78,7 @@ class RemoteDoclingConverter:
         여기 포함하는 것이 중요하다: 죽은 GPU 박스를 상대로 pymupdf 캐시를 계속
         무시하고 재파싱을 반복하는 폭풍을 막는다.
         """
-        return (
-            bool(self._base_url)
-            and not self._in_cooldown()
-            and size_bytes < self._max_bytes
-        )
+        return bool(self._base_url) and not self._in_cooldown() and size_bytes < self._max_bytes
 
     async def convert(self, path: Path) -> tuple[str, int | None, int]:
         """PDF 1건을 (markdown, page_count, image_count)로. 실패는 예외로 올린다."""

@@ -257,6 +257,16 @@ async def run_pm_verify(state: ProjectState, *, model: str | None = None) -> int
         rows.extend(heading_findings(pairs))
     except Exception:
         logger.warning("pm_verify.heading_failed", project_id=str(state.project_id), exc_info=True)
+    try:
+        # 키포인트 미반영(결정적, 웹 전용) — 자료 보강/재작성 신호(사용자 결정 8/20).
+        from src.services.qa.keypoints import keypoint_findings
+
+        triples = [(plan, content, list(plan.key_points or [])) for plan, content in pairs]
+        rows.extend(keypoint_findings(triples))
+    except Exception:
+        logger.warning(
+            "pm_verify.keypoints_failed", project_id=str(state.project_id), exc_info=True
+        )
     await persist_findings(state.project_id, rows)
     n_critical = sum(1 for r in rows if r["severity"] == "critical")
     logger.info(

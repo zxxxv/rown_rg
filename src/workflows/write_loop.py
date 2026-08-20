@@ -49,7 +49,12 @@ from src.services.qa.gate import (
     check_structure_complete,
     gate_candidates,
 )
-from src.services.qa.heading_check import strip_title_reprint
+from src.services.qa.heading_check import (
+    fix_heading_numbers,
+    normalize_marker_spacing,
+    strip_title_reprint,
+)
+from src.services.qa.keypoints import RETRY_MIN_MISSED, missed_keypoints
 from src.services.retrieval.section import SectionRetriever
 from src.workflows import cancel
 from src.workflows.events import emit_step
@@ -315,12 +320,16 @@ async def run_write_loop(
             return [d.model_copy(update={"split_fallback": fell_back}) for d in drafts]
 
         drafts = await _generate()
-        # 절 제목 재출력 정규화 — 작성기가 첫 헤딩으로 제목을 반복하는 습관(v5c-2 실측
-        # 19/20절). 조립·미리보기가 제목을 따로 다므로 여기서 결정적으로 걷어낸다.
-        drafts = [
-            d.model_copy(update={"content": strip_title_reprint(d.content, section.title)})
-            for d in drafts
-        ]
+
+        # 생성 직후 결정적 정규화 사슬(v5c-2 정독 결함 계급 소거):
+        # 제목 재출력 걷어내기(19/20절 실측) → 하위 헤딩 결번·고아 자동 수리(본문 참조
+        # 동기) → 마커 표기 정규화(앞 공백·내부 한 칸).
+        def _normalize(text: str) -> str:
+            text = strip_title_reprint(text, section.title)
+            text = fix_heading_numbers(text, section.chapter_number, section.section_number)
+            return normalize_marker_spacing(text)
+
+        drafts = [d.model_copy(update={"content": _normalize(d.content)}) for d in drafts]
         if drafts and drafts[0].split_fallback:
             section_meta[section.section_id]["plan_failed"] = True
         min_chars = ctx.min_chars if ctx.min_chars is not None else DEFAULT_MIN_CHARS
@@ -344,6 +353,36 @@ async def run_write_loop(
             )
             if retry_set.survivors:
                 cset = retry_set
+        if cset.survivors and section.key_points:
+            # 키포인트 커버리지 환송(결정적, 1회) — 목차 지시 미반영을 완성 후 PM 경고가
+            # 아니라 생성 직후에 잡는다(v5c-2: 14건이 사후에야 표면화). 오환송 방지:
+            # RETRY_MIN_MISSED(2건) 미만이면 그대로 두고, 재생성본이 덜 빠질 때만 교체.
+            missed = missed_keypoints(cset.survivors[0].draft.content, list(section.key_points))
+            if len(missed) >= RETRY_MIN_MISSED:
+                emit_step(pid, "writing", f"{label} (핵심 포인트 보강)", "started")
+                kp_note = (
+                    "다음 핵심 포인트가 본문에 반영되지 않았다 — 각각을 대응하는 소제목이나"
+                    " 문단으로 반드시 반영하라: " + " / ".join(missed)
+                )
+                ctx = replace(ctx, guidance="\n\n".join(x for x in (ctx.guidance, kp_note) if x))
+                kp_drafts = [
+                    d.model_copy(update={"content": _normalize(d.content)})
+                    for d in await _generate(base_temperature=RETRY_TEMPERATURE)
+                ]
+                kp_set = gate_candidates(
+                    section.section_id, kp_drafts, chunks, min_chars=min_chars, max_chars=max_chars
+                )
+                better = kp_set.survivors and len(
+                    missed_keypoints(kp_set.survivors[0].draft.content, list(section.key_points))
+                ) < len(missed)
+                emit_step(
+                    pid,
+                    "writing",
+                    f"{label} (핵심 포인트 보강)",
+                    "completed" if better else "failed",
+                )
+                if better:
+                    cset = kp_set
         if not cset.survivors:
             # 재시도까지 전멸 — 침묵하면 빈 절이 '완성' 뒤에 숨는다(2026-08-13 실사고:
             # 6.1 빈 절·7.1 토막이 completed로 마감). 실패 사실·사유를 절 meta에 남겨

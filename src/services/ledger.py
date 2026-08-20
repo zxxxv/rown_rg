@@ -355,7 +355,9 @@ def format_injection(entries: list[dict[str, Any]], local_no_by_chunk: dict[str,
         return ""
     lines = [
         "앞 절에서 확정된 값 — 아래 값을 그대로 사용하라. 다른 자료에서 같은 지표를"
-        " 다시 찾거나 재계산하지 마라. 값을 쓸 때는 표기된 근거 번호를 인용하라:"
+        " 다시 찾거나 재계산하지 마라. 값을 쓸 때는 표기된 근거 번호를 인용하라."
+        " 단, **이 절의 주제와 무관한 값은 쓰지 마라** — 목록에 있다고 전부 실을"
+        " 필요 없다(v5c-2 실측: 시사점 절에 무관한 타 제도 세수가 유입됨):"
     ]
     for e in entries:
         unit = e.get("unit") or ""
