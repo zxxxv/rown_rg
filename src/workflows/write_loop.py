@@ -19,6 +19,7 @@ import structlog
 from src.clients.llm.base import LLMClient
 from src.clients.llm.exceptions import LLMClientError
 from src.core.builds_on import batches as builds_on_batches
+from src.core.builds_on import parse_ref
 from src.core.config import settings
 from src.core.section_plan import dump_section_plan, load_section_plan
 from src.core.state import ProjectState
@@ -35,6 +36,7 @@ from src.services.generation.candidates import (
     DEFAULT_MODEL,
     generate_section_candidates,
 )
+from src.services.generation.narrative_chain import format_chain_injection, summarize_section
 from src.services.generation.split_writer import (
     generate_section_split,
     plan_part_count,
@@ -150,6 +152,37 @@ async def run_write_loop(
             if ref:
                 ledger_by_label.setdefault(str(ref), []).append(e)
 
+    # 서사 사슬(실험 C) — 장 번호 → 완료된 절들의 수치 금지 요약. 증분 재개 시
+    # 완성 절의 몫은 meta["chain_summary"]에서 복원된다(사실 대장과 같은 패턴).
+    chain_mode = str(settings.write_narrative_chain or "off")
+    chain_by_chapter: dict[int, list[dict]] = {}
+    if chain_mode != "off":
+        for kept in (state.section_meta or {}).values():
+            cs = kept.get("chain_summary")
+            if isinstance(cs, dict) and cs.get("section"):
+                try:
+                    ch = int(str(cs["section"]).split(".")[0])
+                except ValueError:
+                    continue
+                chain_by_chapter.setdefault(ch, []).append(cs)
+
+    def _chain_prior(section: SectionPlan) -> list[dict]:
+        """이 절보다 앞선 요약들 — chapter 모드는 같은 장만, full 모드는 전부."""
+        if chain_mode == "full":
+            pool = [e for entries in chain_by_chapter.values() for e in entries]
+        else:
+            pool = list(chain_by_chapter.get(section.chapter_number, []))
+
+        def key(e: dict) -> tuple[int, int]:
+            parts = str(e.get("section", "0.0")).split(".")
+            try:
+                return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+            except ValueError:
+                return (0, 0)
+
+        me = (section.chapter_number, section.section_number)
+        return sorted((e for e in pool if key(e) < me), key=key)
+
     async def _ledger_injection(
         section: SectionPlan, chunks: list[RetrievedChunk]
     ) -> tuple[list[RetrievedChunk], str]:
@@ -207,6 +240,12 @@ async def run_write_loop(
             # 설계 검토에서 승인된 실행 계획 — 게이트가 보여준 계획대로 쓰게 하는 계약.
             # 이 주입이 없으면 계획은 화면 장식이고 작성기는 계획을 본 적 없는 채로 쓴다.
             ctx = replace(ctx, guidance="\n\n".join(x for x in (ctx.guidance, note) if x))
+        if chain_mode != "off":
+            # 서사 사슬 주입 — 스케줄러의 사슬 의존 때문에 이 시점엔 앞 절 요약이
+            # 전부 적립돼 있다(요약 실패 절만 빠지고, 그 절은 없는 채로 진행).
+            chain_note = format_chain_injection(_chain_prior(section))
+            if chain_note:
+                ctx = replace(ctx, guidance="\n\n".join(x for x in (ctx.guidance, chain_note) if x))
         chunks = await retrieve(section)
         if section.builds_on:
             # 사실 대장 주입 — 앞 배치가 적립한 확정값을 구조화된 형태로 싣는다.
@@ -333,6 +372,19 @@ async def run_write_loop(
             section_meta[section.section_id]["ledger_entries"] = entries
             if entries:
                 ledger_by_label[label_ref] = entries
+            if chain_mode != "off":
+                # 서사 사슬 적립 — 다음 절이 이 요약을 받는다. 실패는 None(사슬에서
+                # 이 절만 빠진 채 진행 — 요약이 작성을 막으면 안 된다).
+                chain_entry = await summarize_section(
+                    label=label_ref,
+                    title=section.title,
+                    content=cset.survivors[0].draft.content,
+                    user_id=state.user_id,
+                    project_id=state.project_id,
+                )
+                if chain_entry is not None:
+                    section_meta[section.section_id]["chain_summary"] = chain_entry
+                    chain_by_chapter.setdefault(section.chapter_number, []).append(chain_entry)
         if draft_store is not None:
             # 절 완성 즉시 초안 영속화 — 편집기 미리보기가 진행 중에도 완성분을 보여준다
             survivor = cset.survivors[0].draft if cset.survivors else None
@@ -405,23 +457,88 @@ async def run_write_loop(
     # builds_on 위상 정렬 — 레벨 0 배치가 전부 끝나야 레벨 1이 시작한다(의존 절이
     # 앞 절의 사실 대장을 받으려면 그 절이 완료·적립돼 있어야 한다). 의존이 하나도
     # 없으면 배치 1개 = 종전 평면 병렬 그대로다(코드 분기 없음, 조사분석 실측 0/0/0).
-    exec_batches, order_warnings = builds_on_batches(state.section_plan)
-    for w in order_warnings:
-        logger.warning("write_loop.builds_on_order", project_id=str(pid), detail=w)
     results_by_id: dict[UUID, SectionCandidateSet] = {}
-    for batch in exec_batches:
-        tasks = [asyncio.ensure_future(_bounded(s)) for s in batch]
+    if chain_mode != "off":
+        # 서사 사슬 스케줄러 — 절마다 의존(사슬 선행 절 + builds_on 대상)이 끝나기를
+        # 기다렸다가 세마포어에 들어간다(대기 중엔 슬롯을 안 잡는다). 의존 간선은 전부
+        # 문서 순서상 뒤→앞이라 순환이 구조적으로 불가능하다(앞을 가리키는 참조만 대기,
+        # 뒤를 가리키는 builds_on은 종전처럼 빈 주입+경고로 진행).
+        # - chapter: 같은 장의 직전 절만 사슬 의존 → 장 간 병렬(장 4개·세마포어 4면
+        #   벽시계가 평면 병렬과 같다)
+        # - full: 문서 순서 직전 절에 의존 → 전면 순차(누적 전달)
+        order = list(state.section_plan)
+        idx_by_id = {s.section_id: i for i, s in enumerate(order)}
+        by_label = {(s.chapter_number, s.section_number): s.section_id for s in order}
+        done_events = {s.section_id: asyncio.Event() for s in order}
+
+        def _deps_of(s: SectionPlan) -> list[UUID]:
+            deps: set[UUID] = set()
+            i = idx_by_id[s.section_id]
+            if chain_mode == "full":
+                if i > 0:
+                    deps.add(order[i - 1].section_id)
+            else:
+                prev = next(
+                    (
+                        t.section_id
+                        for t in reversed(order[:i])
+                        if t.chapter_number == s.chapter_number
+                    ),
+                    None,
+                )
+                if prev is not None:
+                    deps.add(prev)
+            # builds_on 대상 — 문서 순서상 앞인 것만 대기(뒤 참조는 대기하면 교착).
+            for raw in s.builds_on:
+                ref = parse_ref(raw)
+                if ref is None:
+                    continue
+                targets = (
+                    [t for t in order if t.chapter_number == ref.chapter]
+                    if ref.section is None
+                    else [
+                        t for t in order if by_label.get((ref.chapter, ref.section)) == t.section_id
+                    ]
+                )
+                deps.update(t.section_id for t in targets if idx_by_id[t.section_id] < i)
+            return sorted(deps, key=lambda d: idx_by_id[d])
+
+        async def _chained(s: SectionPlan) -> SectionCandidateSet:
+            try:
+                for d in _deps_of(s):
+                    await done_events[d].wait()
+                return await _bounded(s)
+            finally:
+                done_events[s.section_id].set()
+
+        tasks = [asyncio.ensure_future(_chained(s)) for s in order]
         try:
-            batch_results = list(await asyncio.gather(*tasks))
+            all_results = list(await asyncio.gather(*tasks))
         except BaseException:
-            # 취소(RunCancelled·CancelledError)든 한 절의 실제 예외든, 진행 중인 나머지
-            # 절을 정리하고 전파한다 — 고아 태스크가 취소 후에도 LLM을 계속 부르지 않게.
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
-        for sec, res in zip(batch, batch_results, strict=True):
+        for sec, res in zip(order, all_results, strict=True):
             results_by_id[sec.section_id] = res
+    else:
+        exec_batches, order_warnings = builds_on_batches(state.section_plan)
+        for w in order_warnings:
+            logger.warning("write_loop.builds_on_order", project_id=str(pid), detail=w)
+        for batch in exec_batches:
+            tasks = [asyncio.ensure_future(_bounded(s)) for s in batch]
+            try:
+                batch_results = list(await asyncio.gather(*tasks))
+            except BaseException:
+                # 취소(RunCancelled·CancelledError)든 한 절의 실제 예외든, 진행 중인
+                # 나머지 절을 정리하고 전파한다 — 고아 태스크가 취소 후에도 LLM을
+                # 계속 부르지 않게.
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+            for sec, res in zip(batch, batch_results, strict=True):
+                results_by_id[sec.section_id] = res
     # candidate_sets 순서 = section_plan 순서(배치가 섞어도 산출 순서는 직렬과 동일).
     candidate_sets = [results_by_id[s.section_id] for s in state.section_plan]
     # 완료 순서로 쌓인 meta를 절 순서로 재배열 — 직렬 버전과 동일한 산출을 보장한다.

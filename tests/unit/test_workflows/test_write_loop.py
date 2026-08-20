@@ -585,3 +585,107 @@ class TestOverlayWorkingCopy:
         drafts, result = check_assembled(state)
         assert result.passed is True
         assert [d.content for d in drafts] == ["직접 채운 본문"]
+
+
+# ---------- 서사 사슬 (실험 C: 장 내 순차 + 요약 전달) ----------
+
+
+class TestNarrativeChain:
+    def _chunk(self) -> RetrievedChunk:
+        return RetrievedChunk(
+            chunk_id=uuid4(), source_id=uuid4(), content="근거 본문 " * 60, score=0.9
+        )
+
+    def _plan(self) -> list[SectionPlan]:
+        return [
+            SectionPlan(chapter_number=1, section_number=1, title="현황"),
+            SectionPlan(chapter_number=1, section_number=2, title="과제"),
+            SectionPlan(chapter_number=2, section_number=1, title="제도개요"),
+        ]
+
+    @staticmethod
+    async def _fake_summarize(*, label, title, content, **_kw):
+        return {"section": label, "title": title, "summary": f"{label} 요약문", "topics": [label]}
+
+    async def test_chapter_mode_passes_same_chapter_summaries_only(self, monkeypatch):
+        """1.2는 1.1 요약을 받고, 2.1(다른 장)은 1장 요약을 받지 않는다(장 간 병렬)."""
+        monkeypatch.setattr(settings, "write_narrative_chain", "chapter")
+        monkeypatch.setattr("src.workflows.write_loop.summarize_section", self._fake_summarize)
+        plan = self._plan()
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=plan)
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        stub = _StubClient("본문 서술이 길게 이어집니다. " * 30)
+        result = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+
+        with_chain = [str(c.messages) for c in stub.calls if "1.1 요약문" in str(c.messages)]
+        assert len(with_chain) == 1, "1.1 요약은 1.2 프롬프트에만 실려야 한다"
+        assert "과제" in with_chain[0]  # 받은 쪽이 1.2인지 확인
+        assert all(
+            "요약문" not in str(c.messages) or "1.1 요약문" in str(c.messages) for c in stub.calls
+        )
+        # 완료 절마다 사슬 엔트리가 meta에 적립된다(재개 복원용)
+        for s in plan:
+            assert result.section_meta[s.section_id].get("chain_summary", {}).get("section")
+
+    async def test_full_mode_crosses_chapters(self, monkeypatch):
+        """full 모드에선 2.1이 1장 요약(1.1·1.2)을 받는다 - 누적 전달."""
+        monkeypatch.setattr(settings, "write_narrative_chain", "full")
+        monkeypatch.setattr("src.workflows.write_loop.summarize_section", self._fake_summarize)
+        plan = self._plan()
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=plan)
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        stub = _StubClient("본문 서술이 길게 이어집니다. " * 30)
+        await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        crossing = [
+            str(c.messages)
+            for c in stub.calls
+            if "1.1 요약문" in str(c.messages) and "1.2 요약문" in str(c.messages)
+        ]
+        assert len(crossing) == 1, "1.1+1.2 요약을 함께 받는 건 2.1뿐이어야 한다"
+        assert "제도개요" in crossing[0]
+
+    async def test_off_mode_never_summarizes(self, monkeypatch):
+        """기본(off)에선 요약 호출도 주입도 없다 - A/B 기준선 보존."""
+        monkeypatch.setattr(settings, "write_narrative_chain", "off")
+        called = []
+
+        async def spy(**kw):
+            called.append(kw)
+            return None
+
+        monkeypatch.setattr("src.workflows.write_loop.summarize_section", spy)
+        plan = self._plan()
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=plan)
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        stub = _StubClient("본문 서술이 길게 이어집니다. " * 30)
+        result = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        assert called == []
+        assert all("chain_summary" not in result.section_meta[s.section_id] for s in plan)
+
+    async def test_summarize_failure_does_not_block(self, monkeypatch):
+        """요약이 전부 실패해도 작성은 완주한다 - 사슬은 보조 정보다."""
+        monkeypatch.setattr(settings, "write_narrative_chain", "chapter")
+
+        async def broken(**kw):
+            return None
+
+        monkeypatch.setattr("src.workflows.write_loop.summarize_section", broken)
+        plan = self._plan()
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=plan)
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        stub = _StubClient("본문 서술이 길게 이어집니다. " * 30)
+        result = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        assert len(result.section_candidates) == 3
+        assert all(cs.survivors for cs in result.section_candidates)

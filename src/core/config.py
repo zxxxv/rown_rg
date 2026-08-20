@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     # 상한은 LLM 레이트리밋 보호다 — 429가 잦으면 낮춘다(.env WRITE_SECTION_CONCURRENCY).
     # 절 내부의 분할 파트는 문맥 연결 때문에 여전히 직렬이다.
     write_section_concurrency: int = 4
+    # 서사 사슬(실험 C, 2026-08-20 설계): 앞 절의 수치 금지 요약을 다음 절에 넘긴다.
+    # - "off": 현행 평면/배치 병렬(기본)
+    # - "chapter": 장 안만 순차, 장 간 병렬 — 세마포어 4·장 4개면 벽시계가 평면
+    #   병렬과 같다(20절/4=5라운드). 채택 후보 형태.
+    # - "full": 전면 순차(누적 전달) — 장 간 서사까지 잇는 대신 벽시계 4배. chapter가
+    #   장 안을 잡고도 장 간 잔여가 클 때 꺼내는 검증 카드.
+    write_narrative_chain: str = "off"
     # 분할 생성 — 단일 LLM 호출은 재료·캡과 무관하게 4~8천자에서 멈춘다(2026-08-07
     # top_k 곡선 실측). volume_target min이 그 한계를 넘는 절은 소주제 파트로 나눠
     # 순차 생성 후 결합한다(프로토타입: 분량 7배·무근거 밀도 flat 이하, exp_split2).
