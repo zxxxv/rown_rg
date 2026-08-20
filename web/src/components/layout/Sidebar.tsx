@@ -36,7 +36,7 @@ const MAIN_NAV: NavItem[] = [
 
 const ADMIN_NAV: NavItem[] = [
   { to: "/admin/dashboard", label: "대시보드", icon: ShieldCheck, minRole: "admin" },
-  { to: "/admin/gpu", label: "GPU 모니터", icon: Cpu, minRole: "admin" },
+  { to: "/admin/gpu", label: "GPU 모니터", icon: Cpu, minRole: "super_admin" },
   { to: "/admin/users", label: "사용자", icon: Users, minRole: "admin" },
   { to: "/admin/tokens", label: "조직 한도", icon: Activity, minRole: "admin" },
   { to: "/admin/ip", label: "IP 관리", icon: Globe, minRole: "super_admin" },

@@ -172,7 +172,7 @@ const routes = [
   {
     path: "/admin/gpu",
     element: (
-      <RequireAuth minRole="admin">
+      <RequireAuth minRole="super_admin">
         <AdminGpuPage />
       </RequireAuth>
     ),

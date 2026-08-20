@@ -14,10 +14,11 @@ from typing import Annotated, Any
 import httpx
 from fastapi import APIRouter, Depends
 
-from src.api.dependencies.permissions import ADMINS, require_role
+from src.api.dependencies.permissions import require_role
 from src.clients.embedding_factory import peek_embedding_client
 from src.clients.reranker_factory import peek_reranker_client
 from src.core.config import settings
+from src.core.types import Role
 from src.db.models.user import User
 
 router = APIRouter(prefix="/admin/gpu", tags=["admin"])
@@ -39,7 +40,9 @@ def _client_stats(client: Any) -> dict[str, Any]:
 
 @router.get("")
 async def gpu_monitor(
-    _: Annotated[User, Depends(require_role(*ADMINS))],
+    # 최고관리자 전용 - 인프라(집 GPU 박스) 상태는 일반 관리자의 관심사가 아니고,
+    # 폴백 에러 문자열에 내부 주소가 섞일 수 있다.
+    _: Annotated[User, Depends(require_role(Role.SUPER_ADMIN))],
 ) -> dict[str, Any]:
     base_url = (settings.reranker_remote_url or settings.embedding_remote_url).rstrip("/")
 
