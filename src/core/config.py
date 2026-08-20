@@ -213,6 +213,39 @@ class Settings(BaseSettings):
     reranker_max_length: int = 512
     reranker_enabled: bool = True
 
+    # 원격 GPU 리랭커 — url이 비면 로컬 CPU 모델(기본). 채우면 그 주소로 재채점을 보낸다.
+    # 점수는 순위 결정에만 쓰이고 저장되지 않아 벡터 공간 일관성 문제가 없다 → 원격화 1순위.
+    reranker_remote_url: str = ""
+    reranker_remote_token: str = ""
+    # 후보 96개 재채점이 3060 Ti에서 2~4초 예상. 60초면 CPU 폴백보다 훨씬 빨리 포기한다.
+    reranker_remote_timeout_s: float = 60.0
+    reranker_remote_connect_timeout_s: float = 5.0
+    # 원격이 죽었을 때 매 절마다 타임아웃을 다시 기다리지 않도록 잠시 끈다
+    # (20절 × 60초 = 20분을 죽은 서비스에 버리는 사고 방지).
+    reranker_remote_cooldown_s: float = 60.0
+    # local = 서버 CPU 모델 재채점(품질 동일·서버 메모리 필요)
+    # passthrough = 재채점 생략, 검색 순위 통과(품질 소폭 하락·서버에서 모델 제거 가능)
+    reranker_remote_fallback: str = "local"
+
+    # 원격 GPU 임베딩 — url이 비면 로컬 CPU 모델(기본). 리랭커와 성격이 다르다:
+    # 벡터가 **색인에 저장되므로** 원격/로컬의 dtype이 다르면 질의 벡터가 색인과
+    # 다른 공간에 놓여 검색이 조용히 나빠진다. 전량 재색인으로 공간을 통일한 뒤에만
+    # 켤 것(2026-08-20 결정: 초기 단계라 재색인 허용).
+    embedding_remote_url: str = ""
+    embedding_remote_token: str = ""
+    # 색인은 요청이 수천 건이라 개별 요청은 짧아야 한다. 512건 배치가 GPU에서 수 초다.
+    embedding_remote_timeout_s: float = 60.0
+    embedding_remote_connect_timeout_s: float = 5.0
+    # 리랭커보다 중요하다 - 색인 한 번에 수천 번 호출하므로 쿨다운이 없으면 죽은
+    # 서비스를 상대로 타임아웃을 수천 번 기다린다.
+    embedding_remote_cooldown_s: float = 60.0
+    # 한 요청에 보낼 텍스트 수. GPU 서비스의 GPU_MAX_PASSAGES(기본 512) 이하여야 한다.
+    embedding_remote_chunk: int = 256
+    # passthrough는 없다 - 벡터 생성은 건너뛸 수 없다. local(서버 CPU 모델) 아니면
+    # error(요청 실패로 드러냄)뿐이다. dtype 불일치를 조용히 만들지 않으려면 error가
+    # 안전하지만, 사용자 결정은 "GPU 우선·CPU 폴백 유지"라 기본은 local이다.
+    embedding_remote_fallback: str = "local"
+
     # 자료 라이브러리 — 업로드 파일 저장 위치
     library_dir: str = "./data/library"
 
