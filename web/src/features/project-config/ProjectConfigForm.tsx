@@ -396,9 +396,11 @@ function BasicInfo({ readOnly }: { readOnly?: boolean }) {
         />
         {!readOnly ? (
           <p className="text-xs text-fg-tertiary">
-            AI가 자료를 검색할 때 쓰는 지시문입니다. 무엇을(대상), 어떤 관점으로(범위·목적) 적을수록
-            자료 조사가 정확해집니다. 본문 작성은 이 문장이 아니라 아래 목차의 절별 작성 방향을
-            따릅니다 - 절마다 쓸 내용은 목차에 적어 주세요.
+            자료 수집의 틀입니다. 장마다 도는 웹 수집이 "이 문장 - 장 제목"을 검색 주제로 쓰고,
+            설계 검토의 절별 검색 질의 생성과 근거 재채점(주제 이탈 방지)에도 참고됩니다.
+            무엇을(대상), 어떤 관점으로(범위·목적) 적을수록 수집이 정확해집니다. 본문 작성은 이
+            문장을 보지 않습니다 - 절마다 쓸 내용은 아래 목차의 작성 방향·핵심 포인트에 적어
+            주세요.
           </p>
         ) : null}
         {errors.topic ? <p className="text-xs text-fg-danger">{errors.topic.message}</p> : null}
