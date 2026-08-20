@@ -69,7 +69,10 @@ export const OutlineSectionSchema = z.object({
   direction: z.string(),
   key_points: z.array(z.string()),
   // 분석 에이전트 name 참조 - 배정된 관점을 모두 반영한다(분량 목표는 최댓값)
-  analysts: z.array(z.string()),
+  // catch([]): 프리셋 와이어(agents)를 변환 없이 주입한 config가 실존했다(2026-08-21
+  // v6 하네스 사고) - required면 파싱 실패가 config.catch(DEFAULT)로 번져 모델
+  // 라벨까지 통째로 둔갑한다. builds_on catch와 같은 규약.
+  analysts: z.array(z.string()).catch([]),
   // 의존 계약 - 저작·표시는 번호("4.1"|"4.1(지표)"|"4.*"), 서버 저장은 id 토큰
   // ("s:<uuid>"|"c:<uuid>"). 편집기 로드 시 토큰을 현재 번호로 표시 변환한다.
   // catch([]): 이 필드 이전에 만든 프로젝트의 config.outline에는 이 키가 없다 -
@@ -102,7 +105,9 @@ export const ProjectConfigSchema = z.object({
   // (2026-08-20 실사고: premium 런이 "표준"으로 표시). builds_on catch와 같은 규약.
   preset: z.string().nullable().catch(null),
   // 생성 화면에서 직접 확정한 목차 - 백엔드 필수(OUTLINE_REQUIRED), 편집 중엔 미완성일 수 있어 optional.
-  outline: OutlineSchema.optional(),
+  // catch(undefined): 목차 파싱 실패는 "목차 미구성" 표시로 국소화한다 - required
+  // 실패 하나가 config.catch(DEFAULT)로 번지면 모델·깊이까지 전부 둔갑한다(2026-08-21).
+  outline: OutlineSchema.optional().catch(undefined),
   // 품질 모드 - 역할별로 모델이 갈린다(백엔드 stages._models_for):
   //   economy  = 수집·검증 Haiku 4.5 + 본문 GPT-5.4-mini
   //   standard = 전역 설정 모델(기본 Sonnet 4.6)
