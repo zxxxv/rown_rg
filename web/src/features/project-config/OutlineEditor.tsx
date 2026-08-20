@@ -172,7 +172,7 @@ export function OutlineEditor({
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-accent/40 bg-bg-info p-3">
         <p className="text-xs text-fg-secondary">{headerInfo}</p>
-        <div className="flex gap-1.5">
+        <div className="flex flex-wrap gap-1.5">
           <Button
             type="button"
             variant="ghost"

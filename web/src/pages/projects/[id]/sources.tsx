@@ -241,14 +241,16 @@ export default function SourcesPage() {
             <ArrowLeft className="mr-1 h-4 w-4" />
             프로젝트 개요
           </Button>
-          <div className="flex items-center justify-between gap-4">
+          {/* flex-wrap: 폰 폭에서 통계 배지 묶음이 제목을 짓누르면 한글이 세로로
+              꺾인다(2026-08-20 폰 실측) - 배지 줄을 통째로 아랫줄로 내린다. */}
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
             <div className="flex items-center gap-2">
-              <h1 className="text-3xl font-semibold text-fg">자료 검토</h1>
+              <h1 className="whitespace-nowrap text-3xl font-semibold text-fg">자료 검토</h1>
               <Badge variant="secondary" className="font-mono">
                 검토 지점 #1
               </Badge>
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <Badge variant="outline" className="px-2.5 py-1 font-mono text-sm">
                 총 {items.length}
               </Badge>

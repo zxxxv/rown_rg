@@ -133,9 +133,11 @@ export default function ProjectsPage() {
       onLogout={() => void logout()}
     >
       <div className="flex flex-col gap-6">
-        <header className="flex items-center justify-between gap-4">
+        {/* flex-wrap + nowrap 제목: 좁은 폭에서 제목이 짓눌리면 한글이 한 글자씩
+            세로로 꺾인다(2026-08-20 폰 실측) - 오른쪽 묶음이 아랫줄로 내려가게 한다. */}
+        <header className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-semibold text-fg">
+            <h1 className="whitespace-nowrap text-3xl font-semibold text-fg">
               {scope === "all" ? "전체 프로젝트" : "내 프로젝트"}
             </h1>
             <p className="mt-1 text-sm text-fg-secondary">
@@ -143,7 +145,7 @@ export default function ProjectsPage() {
               {hasActiveFilter ? " (필터 적용 중)" : ""}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {isAdmin ? (
               <Tabs
                 value={scope}
@@ -183,7 +185,7 @@ export default function ProjectsPage() {
             </TabsList>
           </Tabs>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Select
               value={preset || "__all__"}
               onValueChange={(v) =>
@@ -212,7 +214,7 @@ export default function ProjectsPage() {
               </SelectContent>
             </Select>
 
-            <div className="relative">
+            <div className="relative w-full sm:w-auto">
               <Search
                 className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-tertiary"
                 aria-hidden
@@ -223,7 +225,7 @@ export default function ProjectsPage() {
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 aria-label="프로젝트 검색"
-                className={cn("w-64 pl-8", searchInput && "pr-8")}
+                className={cn("w-full pl-8 sm:w-64", searchInput && "pr-8")}
               />
               {searchInput ? (
                 <button
