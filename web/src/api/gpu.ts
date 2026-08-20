@@ -32,6 +32,8 @@ export interface GpuEmbedStatus {
 
 export interface GpuHealth {
   status: string;
+  /** 서비스 기동 시각(epoch 초) — 누적 카운터의 기준점 */
+  started_at?: number;
   ready: boolean;
   on_gpu: boolean;
   providers: string[];

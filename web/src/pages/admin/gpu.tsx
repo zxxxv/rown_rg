@@ -151,10 +151,34 @@ function MonitorBody({ data }: { data: GpuMonitorData }) {
   );
 }
 
+/** 이력에서 최근 1시간 증가분 — 재시작으로 카운터가 줄어든 구간은 0으로 친다. */
+function windowedDelta(totals: number[]): number {
+  let sum = 0;
+  for (let i = 1; i < totals.length; i++) {
+    sum += Math.max(0, totals[i] - totals[i - 1]);
+  }
+  return sum;
+}
+
 function StatTiles({ data }: { data: GpuMonitorData }) {
   const svc = data.gpu_service;
   if (!svc.reachable) return null;
-  const { queue, gpu, embed, on_gpu } = svc.health;
+  const { queue, gpu, embed, on_gpu, started_at } = svc.health;
+  // 누적값은 몇 달 살아 있는 컨테이너에서는 해석이 안 된다("거절 3회"가 오늘
+  // 일인지 지난달 일인지). 타일과 경고색은 최근 1시간 기준, 누적은 힌트로 내린다.
+  const recentCompleted = windowedDelta(svc.history.completed_total);
+  const recentRejected = windowedDelta(svc.history.rejected_total);
+  const since = started_at
+    ? new Date(started_at * 1000).toLocaleString("ko-KR", {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+    : null;
+  const sinceHint = (total: number) =>
+    since ? `누적 ${total.toLocaleString()} (${since} 기동~)` : `누적 ${total.toLocaleString()}`;
 
   const tempTone: StatTone =
     gpu == null ? "default" : gpu.temperature_c >= 83 ? "danger" : gpu.temperature_c >= 75 ? "warning" : "default";
@@ -196,17 +220,17 @@ function StatTiles({ data }: { data: GpuMonitorData }) {
         hint={`상한 ${queue.max_wait_s.toFixed(0)}s · 평균 처리 ${queue.avg_task_s.toFixed(1)}s`}
       />
       <StatCard
-        label="처리 완료"
-        value={queue.completed_total.toLocaleString()}
+        label="처리 (1시간)"
+        value={recentCompleted.toLocaleString()}
         icon={CheckCircle2}
-        hint="기동 이후 누적"
+        hint={sinceHint(queue.completed_total)}
       />
       <StatCard
-        label="429 거절"
-        value={queue.rejected_total.toLocaleString()}
+        label="429 거절 (1시간)"
+        value={recentRejected.toLocaleString()}
         icon={ShieldAlert}
-        tone={queue.rejected_total > 0 ? "warning" : "default"}
-        hint={queue.rejected_total > 0 ? "용량 재검토 신호" : "정상"}
+        tone={recentRejected > 0 ? "warning" : "default"}
+        hint={recentRejected > 0 ? "용량 재검토 신호" : sinceHint(queue.rejected_total)}
       />
     </section>
   );
