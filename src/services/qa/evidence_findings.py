@@ -524,13 +524,15 @@ async def _locate_tokens(
 _YEAR_WINDOW = 80
 
 
-def _year_beside(content: str, norm: str, years: tuple[str, ...]) -> bool:
+def _year_beside(
+    content: str, norm: str, years: tuple[str, ...], window: int = _YEAR_WINDOW
+) -> bool:
     """수치의 모든 등장 지점 ±창 안에 명시 연도 중 하나라도 있는가."""
     text = content.replace(",", "")
     start = 0
     while (i := text.find(norm, start)) != -1:
-        window = text[max(0, i - _YEAR_WINDOW) : i + len(norm) + _YEAR_WINDOW]
-        if any(y in window for y in years):
+        chunk = text[max(0, i - window) : i + len(norm) + window]
+        if any(y in chunk for y in years):
             return True
         start = i + 1
     return False
@@ -571,7 +573,14 @@ async def _injection_suspects(
                     .scalars()
                     .all()
                 )
-                cache[(norm, years)] = any(_year_beside(t, norm, years) for t in texts)
+                hit = any(_year_beside(t, norm, years) for t in texts)
+                cache[(norm, years)] = hit
+                # 창 크기 계측 — ±80자엔 없는데 ×3 창엔 있으면 창이 좁아서 놓친
+                # 후보다(표 머리 연도 등). 다보고서 회귀가 이 로그로 창을 조정한다.
+                if not hit and any(
+                    _year_beside(t, norm, years, window=_YEAR_WINDOW * 3) for t in texts
+                ):
+                    logger.info("injection_guard.year_near_miss", token=norm, years=list(years))
     return {
         norm
         for norm, years in token_years.items()

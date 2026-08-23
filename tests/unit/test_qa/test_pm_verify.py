@@ -162,6 +162,34 @@ class TestToRows:
         assert len(rows) == 1
         assert "91억" in rows[0]["detail"]
 
+    def test_structured_values_beat_vocabulary(self):
+        """일반화의 핵심 - 충돌 판정의 정본은 값 필드 구조다. 단정 어휘(_ASSERT_RE)에
+        없는 표현으로 써도 두 값이 채워졌고 서로 다르면 유지하고(어휘 과적합 소거),
+        두 값이 정규화 후 같으면 재언급 지적이라 버린다."""
+        manifest = {
+            "findings": [
+                {
+                    "severity": "warning",
+                    "category": "수치 일관성",
+                    "value_a": "91억 유로",
+                    "loc_a": "2.1",
+                    "value_b": "90억 달러",
+                    "loc_b": "2.2",
+                    "detail": "2.1절과 2.2절의 세수 추정치가 서로 일치하지 않는다",
+                },
+                {
+                    "severity": "warning",
+                    "category": "수치 일관성",
+                    "value_a": "508TWh",
+                    "value_b": "508 TWh",
+                    "detail": "동일 수치가 두 절에서 반복 인용됨",
+                },
+            ]
+        }
+        rows = _to_rows(2, manifest)
+        assert len(rows) == 1
+        assert rows[0]["_values"] == ["91억 유로", "90억 달러"]
+
 
 class TestVerifyReport:
     async def test_one_call_per_chapter_and_rows_collected(self):
@@ -189,6 +217,31 @@ class TestVerifyReport:
         rows = await verify_report(_state_two_chapters(), client=stub, model="stub-model")
         assert len(stub.calls) == 2
         assert len(rows) == 1  # 두 챕터가 같은 값 쌍을 내도 한 번만
+
+    async def test_ghost_value_findings_dropped(self):
+        """경고가 인용한 값이 본문 어디에도 없으면 경고 자체가 창작 - 값 실증으로 폐기."""
+        finding = (
+            '{"severity": "warning", "category": "수치 일관성", "section": "1.1", '
+            '"value_a": "24.1%", "value_b": "99.9%", '
+            '"detail": "고령화율이 24.1%와 99.9%로 상이"}'
+        )
+        stub = _StubClient([f'```json\n{{"findings": [{finding}]}}\n```'])
+        rows = await verify_report(_state_two_chapters(), client=stub, model="stub-model")
+        assert rows == []
+
+    async def test_grounded_values_kept_and_internal_key_stripped(self):
+        """값 실증의 눈금은 '지금까지의 문서' - 1장 시점엔 2장의 값(1,500억)이 없어
+        창작으로 떨어지고, 2장 시점엔 둘 다 실재라 유지된다. _values는 저장 스키마
+        밖이므로 반환 전에 걷는다."""
+        finding = (
+            '{"severity": "warning", "category": "수치 일관성", "section": "1.1", '
+            '"value_a": "24.1%", "value_b": "1,500억 원", '
+            '"detail": "지표가 24.1%와 1,500억 원으로 표기가 갈림"}'
+        )
+        stub = _StubClient([f'```json\n{{"findings": [{finding}]}}\n```'])
+        rows = await verify_report(_state_two_chapters(), client=stub, model="stub-model")
+        assert [r["chapter_number"] for r in rows] == [2]
+        assert "_values" not in rows[0]
 
     async def test_prev_chapter_digest_flows_to_next_call(self):
         stub = _StubClient(['```json\n{"findings": []}\n```'])

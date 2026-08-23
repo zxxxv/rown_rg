@@ -45,10 +45,17 @@ _MAX_DIGEST_ITEMS = 40
 _SEVERITIES = {"critical", "warning"}
 
 # 역할 프롬프트는 검증 항목만 정의 — 출력 계약은 여기서 고정한다.
+# value_a/value_b를 구조로 강제하는 이유(2026-08-23 일반화 수술): 충돌 여부를
+# 모델의 문장 표현(_ASSERT_RE 어휘)으로 판정하면 모델·언어가 바뀔 때 같이 흔들린다.
+# 두 값이 필드로 오면 "채워졌고 서로 다른가"라는 구조 판정이 되고, 그 값이 실제
+# 본문에 있는지까지 코드가 실증할 수 있다(창작 경고 소거).
 _FORMAT = (
     "마지막 메시지에 아래 형식의 JSON만 출력한다(설명 문장 없이):\n"
     '```json\n{"findings": [{"severity": "critical|warning", "category": "수치 일관성", '
-    '"section": "2.1", "detail": "..."}]}\n```\n'
+    '"section": "2.1", "value_a": "91억 유로", "loc_a": "2.1", '
+    '"value_b": "90억 달러", "loc_b": "2.2", "detail": "..."}]}\n```\n'
+    "value_a/value_b에는 충돌하는 두 값(또는 두 표기)을 본문 표기 그대로 적는다. "
+    "loc_a/loc_b는 그 값이 나온 절 번호(선행 챕터 인용 수치 목록의 값이면 '선행').\n"
     "문제가 없으면 빈 배열을 출력한다."
 )
 
@@ -62,10 +69,28 @@ _NUM_RE = re.compile(r"\d[\d,.]*\s?(?:%|억\s?원|조\s?원|만\s?원|억|조|�
 # 보는 축이라 저장하지 않는다(2026-08-23 v6 전수 검토: 27건 중 17건이 그 노이즈).
 _KEPT_AXES = ("수치", "법령", "용어")
 
-# 충돌 단정 어휘 — 두 값(표기)이 실제로 어긋난다는 주장. 이것 없이 '확인 필요'만
-# 말하는 행은 경고가 아니라 할 일 목록이라 저장하지 않는다(프롬프트로 금지해도
-# 모델이 내는 경우의 최종 관문).
+# 충돌 단정 어휘 — 두 값(표기)이 실제로 어긋난다는 주장. value 필드가 없는(구조
+# 계약을 어긴) 행에만 쓰는 폴백이다 — 어휘 목록은 모델·표현이 바뀌면 같이 흔들리는
+# 과적합 표면이라, 정본 판정은 값 필드의 구조("채워졌고 서로 다른가")로 한다.
 _ASSERT_RE = re.compile(r"불일치|상이|상충|충돌|혼용|모순|어긋|다르게|달리")
+
+
+def _norm_value(s: str) -> str:
+    """값 대조용 정규화 — 공백·콤마 제거, 라틴 소문자화. 표기 흔들림에 둔감하게."""
+    return re.sub(r"\s+", "", s.replace(",", "")).lower()
+
+
+def _value_in_text(value: str, doc_norm: str) -> bool:
+    """경고가 인용한 값이 실제 본문(정규화)에 있는가 — 없는 값을 문제 삼으면 창작 경고다.
+
+    수치가 든 값은 숫자 눈금(significant_numbers)으로 재고 — '약 570TWh'처럼 수식어가
+    붙어도 570이 있으면 실재다 — 수치 없는 값(시행 중·영문 명칭)은 문자열로 잰다.
+    """
+    nums = significant_numbers(value)
+    if nums:
+        return all(normalize_number(n) in doc_norm for n in nums)
+    v = _norm_value(value)
+    return bool(v) and v in doc_norm
 
 
 def numeric_digest(texts: list[str], cap: int = _MAX_DIGEST_ITEMS) -> list[str]:
@@ -113,13 +138,19 @@ def _to_rows(
     manifest: dict[str, Any],
     sid_by_label: dict[str, UUID] | None = None,
 ) -> list[dict[str, Any]]:
-    """모델 JSON → 저장 행. 형식이 어긋난 항목·축 밖 카테고리·단정 없는 지적은 버린다.
+    """모델 JSON → 저장 행. 형식이 어긋난 항목·축 밖 카테고리·충돌 없는 지적은 버린다.
+
+    충돌 판정의 정본은 값 필드 구조다: value_a/value_b가 채워졌고 정규화 후 서로
+    다르면 충돌, 같으면 재언급 지적(비결함)이다. 값 필드가 없는 행만 _ASSERT_RE
+    어휘 폴백으로 판정한다. 값이 있는 행은 "_values"에 실어 보낸다 — 호출부가
+    본문 실증·dedup에 쓰고 저장 전에 걷는다(verify_findings 스키마 밖).
 
     sid_by_label("2.1" → 절 id)이 있으면 section_ref를 절 안정 id로도 해석해 싣는다 —
     화면의 절 매칭·이동은 id가 정본이고, ref 문자열은 사람이 읽는 표시값이다.
     """
     rows: list[dict[str, Any]] = []
-    n_axis, n_assertless = 0, 0
+    n_axis, n_assertless, n_same = 0, 0, 0
+    samples: list[str] = []
     for item in manifest.get("findings", []) or []:
         if not isinstance(item, dict):
             continue
@@ -132,35 +163,48 @@ def _to_rows(
         category_str = category.strip() if isinstance(category, str) else "기타"
         if not any(axis in category_str for axis in _KEPT_AXES):
             n_axis += 1
+            samples.append(f"축밖:{detail.strip()[:60]}")
             continue  # 축 밖 — 결정적 검출기·근거 동봉 판정의 영역
-        if not _ASSERT_RE.search(detail):
+        value_a = str(item.get("value_a") or "").strip()
+        value_b = str(item.get("value_b") or "").strip()
+        if value_a and value_b:
+            if _norm_value(value_a) == _norm_value(value_b):
+                n_same += 1
+                samples.append(f"동일값:{detail.strip()[:60]}")
+                continue  # 두 값이 같으면 충돌이 아니라 재언급이다
+        elif not _ASSERT_RE.search(detail):
             n_assertless += 1
-            continue  # 충돌 단정이 없는 '확인 필요'류·재언급 지적은 경고가 아니다
+            samples.append(f"단정없음:{detail.strip()[:60]}")
+            continue  # 값 필드도 충돌 단정도 없는 '확인 필요'류는 경고가 아니다
         section_ref = section.strip()[:20] if isinstance(section, str) and section.strip() else None
         section_id = None
         if section_ref and sid_by_label:
             # LLM이 "2.1 표 2-1"처럼 덧붙이기도 한다 — 앞의 번호만 해석한다.
             section_id = sid_by_label.get(section_ref.split()[0])
-        rows.append(
-            {
-                "chapter_number": chapter_number,
-                "severity": severity if severity in _SEVERITIES else "warning",
-                "category": category_str[:40],
-                "section_ref": section_ref,
-                "section_id": section_id,
-                "detail": detail.strip(),
-            }
-        )
+        row: dict[str, Any] = {
+            "chapter_number": chapter_number,
+            "severity": severity if severity in _SEVERITIES else "warning",
+            "category": category_str[:40],
+            "section_ref": section_ref,
+            "section_id": section_id,
+            "detail": detail.strip(),
+        }
+        if value_a and value_b:
+            row["_values"] = [value_a, value_b]
+        rows.append(row)
         if len(rows) >= MAX_FINDINGS_PER_CHAPTER:
             break
-    if n_axis or n_assertless:
-        # 걸러낸 것을 조용히 버리지 않는다 — 필터가 진짜 신호를 먹는지 셀 수 있게.
+    if n_axis or n_assertless or n_same:
+        # 걸러낸 것을 조용히 버리지 않는다 — 필터가 진짜 신호를 먹는지 셀 수 있게
+        # 표본까지 남긴다(다보고서 회귀 때 이 로그가 미탐 감사 자료다).
         logger.info(
             "pm_verify.rows_filtered",
             chapter=chapter_number,
             dropped_axis=n_axis,
             dropped_assertless=n_assertless,
+            dropped_same_value=n_same,
             kept=len(rows),
+            samples=samples[:4],
         )
     return rows
 
@@ -179,7 +223,7 @@ async def verify_report(
     rows: list[dict[str, Any]] = []
     seen_texts: list[str] = []  # 선행 챕터 본문 누적 — 값 충돌 대조 다이제스트 원천
     seen_pairs: set[frozenset[str]] = set()  # 이미 경고한 값 조합 — 교차 챕터 dedup
-    n_dup = 0
+    n_dup, n_ghost = 0, 0
     for chapter_number, sections in _group_by_chapter(state):
         request = CompletionRequest(
             messages=[
@@ -201,19 +245,44 @@ async def verify_report(
             f"{plan.chapter_number}.{plan.section_number}": plan.section_id
             for plan, _content in sections
         }
+        # 지금까지의 문서 전체(선행 챕터+현재 챕터, 정규화) — 값 실증의 눈금.
+        # 모델은 현재 챕터+선행 다이제스트만 보므로 이 범위 밖의 값은 인용할 수 없다.
+        doc_norm = _norm_value(
+            "\n".join(seen_texts) + "\n" + "\n".join(content for _, content in sections)
+        )
         for row in _to_rows(chapter_number, _parse_manifest(response.content), sid_by_label):
+            values = row.pop("_values", [])
+            # 값 실증 — 경고가 인용한 값이 본문 어디에도 없으면 그 경고 자체가 창작이다.
+            if values and not all(_value_in_text(v, doc_norm) for v in values):
+                n_ghost += 1
+                logger.info(
+                    "pm_verify.ghost_value_dropped",
+                    chapter=chapter_number,
+                    detail=row["detail"][:80],
+                )
+                continue
             # 같은 값 조합의 충돌을 챕터마다 다시 내면(선행 다이제스트가 원인) 화면에
-            # 세 번 실린다 — 값 2개 이상이 겹치는 경고는 처음 것만 남긴다.
-            nums = frozenset(normalize_number(t) for t in significant_numbers(row["detail"]))
-            if len(nums) >= 2 and nums in seen_pairs:
+            # 세 번 실린다 — 값 조합이 겹치는 경고는 처음 것만 남긴다. 값 필드가 있으면
+            # 그것이 키(용어 혼용도 dedup), 없으면 detail의 수치 조합 폴백.
+            key = (
+                frozenset(_norm_value(v) for v in values)
+                if len(values) >= 2
+                else frozenset(normalize_number(t) for t in significant_numbers(row["detail"]))
+            )
+            if len(key) >= 2 and key in seen_pairs:
                 n_dup += 1
                 continue
-            if len(nums) >= 2:
-                seen_pairs.add(nums)
+            if len(key) >= 2:
+                seen_pairs.add(key)
             rows.append(row)
         seen_texts.extend(content for _, content in sections)
-    if n_dup:
-        logger.info("pm_verify.rows_deduped", project_id=str(state.project_id), n=n_dup)
+    if n_dup or n_ghost:
+        logger.info(
+            "pm_verify.rows_deduped",
+            project_id=str(state.project_id),
+            n_dup=n_dup,
+            n_ghost=n_ghost,
+        )
     return rows
 
 
