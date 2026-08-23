@@ -35,6 +35,7 @@ from src.services.qa.design_coverage import findings_for_section as coverage_fin
 from src.services.qa.gate import (
     arithmetic_suspects,
     claim_coverage,
+    claim_years,
     leftover_artifacts,
     misattributed_numbers,
     normalize_number,
@@ -104,16 +105,19 @@ def ungrounded_token_buckets(
     comparable: bool,
     supported: set[int] | None = None,
     refuted: set[int] | None = None,
-) -> tuple[list[str], list[str]]:
-    """(판정이 '근거 없음' 확인한 수치, 어휘 대조만 실패한 수치).
+) -> tuple[list[str], list[str], dict[str, tuple[str, ...]]]:
+    """(판정이 '근거 없음' 확인한 수치, 어휘 대조만 실패한 수치, 정규화 수치→명시 연도).
 
     findings_from_claims와 코퍼스 재검색(_locate_tokens 호출부)이 같은 선별을 써야
     한다 — 자가 어긋나면 재검색 안 한 수치가 critical로 남아 2단 판정이 헛돈다.
+    연도 지도는 판정 확인 수치에 대해서만 만든다 — 주입 가드가 '그 연도 곁에
+    실재하는가'를 물을 대상이 그들뿐이라서다.
     """
     supported = supported or set()
     refuted = refuted or set()
     confirmed: list[str] = []
     lexical: list[str] = []
+    years: dict[str, tuple[str, ...]] = {}
     for i, claim in enumerate(claims) if comparable else []:
         if i in supported:
             continue  # 근거로 뒷받침된다고 판정된 문장의 수치는 창작이 아니다
@@ -123,7 +127,12 @@ def ungrounded_token_buckets(
         for token in claim.ungrounded:
             if token not in confirmed and token not in lexical:
                 bucket.append(token)
-    return confirmed, lexical
+            if i in refuted:
+                norm = normalize_number(token)
+                stated = claim_years(claim.claim)
+                if norm and stated:
+                    years[norm] = tuple(dict.fromkeys(years.get(norm, ()) + stated))
+    return confirmed, lexical, years
 
 
 def findings_from_claims(
@@ -134,6 +143,7 @@ def findings_from_claims(
     supported: set[int] | None = None,
     refuted: set[int] | None = None,
     located: dict[str, str] | None = None,
+    injected: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """주장별 대조 결과 → 절 단위 경고 행 (순수 함수 — 테스트 대상).
 
@@ -145,6 +155,11 @@ def findings_from_claims(
     판정이 '근거 없음'이라 해도 수치가 코퍼스 어딘가에 실재하면 창작이 아니라 출처를
     잘못 단 것이다(2026-08-21 v6 실측: critical 18건 표본 32/33이 '수치 실재·출처
     틀림'). None이면 재검색을 안 한 것이므로 종전대로 전부 critical로 본다.
+
+    injected는 3단(주입 가드) — located에서 발견됐지만 본문이 명시한 연도 곁에서는
+    코퍼스 어디에도 없는 정규화 수치. 부분문자열 우연 일치가 '실재'로 보일 수 있어
+    (v6 실측: 주입 수치 428이 CBAM 문서의 무관한 428과 일치), 연도 대조가 오귀속과
+    주입을 가른다. 해당 수치는 오귀속이 아니라 '사전지식 주입 의심'으로 뜬다.
     """
     ref = f"{row.chapter_number}.{row.section_number}"
     if not claims:
@@ -198,14 +213,18 @@ def findings_from_claims(
     # 실패한 수치는 warning이다 — 부분문자열 매칭은 단위 환산(72억 vs $7.2 billion)·표기
     # 차이(1.8조 vs 1조 8,000억)를 원리적으로 못 재고, 교차언어 근거는 아예 잴 수 없다
     # (2026-08-14 실측: 탄소규제 런 critical 26건 중 표본 22건 오탐 → 전량 강등 원인).
-    confirmed, lexical = ungrounded_token_buckets(
+    confirmed, lexical, stated_years = ungrounded_token_buckets(
         claims, comparable=comparable, supported=supported, refuted=refuted
     )
     relocated: list[tuple[str, str]] = []
+    suspected: list[tuple[str, str]] = []
     fabricated: list[str] = []
     for token in confirmed:
-        where = (located or {}).get(normalize_number(token))
-        if where:
+        norm = normalize_number(token)
+        where = (located or {}).get(norm)
+        if where and injected and norm in injected:
+            suspected.append((token, "·".join(stated_years.get(norm, ()))))
+        elif where:
             relocated.append((token, where))
         else:
             fabricated.append(token)
@@ -232,6 +251,19 @@ def findings_from_claims(
                 "출처 오귀속",
                 f"인용한 출처가 아닌 다른 자료에 실재하는 수치 {len(relocated)}건"
                 f"(출처 정정 필요): {samples}" + (" …" if len(relocated) > 3 else ""),
+            )
+        )
+    if suspected:
+        samples = ", ".join(f"{t}({y}년 곁에는 없음)" for t, y in suspected[:3])
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "사전지식 주입 의심",
+                f"명시한 연도 곁에서는 코퍼스 어디에도 없는 수치 {len(suspected)}건"
+                f"(모델 사전지식 의심, 실자료 확인 필요): {samples}"
+                + (" …" if len(suspected) > 3 else ""),
             )
         )
     if lexical:
@@ -487,6 +519,66 @@ async def _locate_tokens(
     return {n: v for n, v in cache.items() if v is not None}
 
 
+# 주입 가드 근접 창 — 수치 발견 지점 양옆에서 연도를 찾는 반경(문자).
+# 청크 전체 동시출현은 연도가 흔해 헐겁고, 같은 문장이라기엔 표 행이 길다.
+_YEAR_WINDOW = 80
+
+
+def _year_beside(content: str, norm: str, years: tuple[str, ...]) -> bool:
+    """수치의 모든 등장 지점 ±창 안에 명시 연도 중 하나라도 있는가."""
+    text = content.replace(",", "")
+    start = 0
+    while (i := text.find(norm, start)) != -1:
+        window = text[max(0, i - _YEAR_WINDOW) : i + len(norm) + _YEAR_WINDOW]
+        if any(y in window for y in years):
+            return True
+        start = i + 1
+    return False
+
+
+async def _injection_suspects(
+    project_id: UUID,
+    token_years: dict[str, tuple[str, ...]],
+    located: dict[str, str],
+    cache: dict[tuple[str, tuple[str, ...]], bool],
+) -> set[str]:
+    """located 수치 중 본문이 명시한 연도 곁에서는 코퍼스 어디에도 없는 것 — 주입 서명.
+
+    '실재'가 부분문자열 우연일 수 있다(v6 실측: 주입 수치 428이 CBAM 문서의 무관한
+    428과 일치해 오귀속으로 보였다). 그래서 수치가 등장하는 청크를 다시 읽어 연도가
+    수치 곁에 있는 발견만 진짜 실재로 친다. 명시 연도가 없는 수치는 판정하지 않고,
+    수치 등장 청크는 50개까지만 읽는다(그 밖에서만 연도가 붙는 경우는 오탐을 감수).
+    """
+    todo = [
+        (norm, years)
+        for norm, years in token_years.items()
+        if norm in located and years and (norm, years) not in cache
+    ]
+    if todo:
+        async with async_session_maker() as session:
+            for norm, years in todo:
+                texts = (
+                    (
+                        await session.execute(
+                            select(Chunk.content)
+                            .where(
+                                Chunk.project_id == project_id,
+                                func.replace(Chunk.content, ",", "").like(f"%{norm}%"),
+                            )
+                            .limit(50)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                cache[(norm, years)] = any(_year_beside(t, norm, years) for t in texts)
+    return {
+        norm
+        for norm, years in token_years.items()
+        if norm in located and years and not cache.get((norm, years), True)
+    }
+
+
 async def evidence_findings(
     project_id: UUID,
     *,
@@ -547,7 +639,9 @@ async def evidence_findings(
     out: list[dict[str, Any]] = []
     n_verified = 0
     n_relocated = 0
+    n_injected = 0
     locate_cache: dict[str, str | None] = {}
+    year_cache: dict[tuple[str, tuple[str, ...]], bool] = {}
     # 문장 커버리지 — 검출 지표의 분모. claim_units가 못 집은 문장은 모든 검사에서
     # 증발하고 그 손실은 어떤 지표에도 안 나타난다('남' 꼬리 실사고, 2026-08-14).
     # 미포착 수치 문장은 구조 규칙상 0이어야 한다 — 0이 아니면 회귀다.
@@ -579,15 +673,20 @@ async def evidence_findings(
                 elif verdict.verdict == "not_supported":
                     refuted.add(target)
         # 2단 판정 — 판정이 '근거 없음' 확인한 수치만 코퍼스 전체를 재검색한다.
-        # 발견되면 critical(창작)이 아니라 warning(출처 오귀속)으로 갈린다.
+        # 발견되면 critical(창작)이 아니라 warning(출처 오귀속)으로 갈리고,
+        # 발견됐어도 명시 연도 곁에 없으면(3단) '사전지식 주입 의심'으로 갈린다.
         located: dict[str, str] | None = None
+        injected: set[str] = set()
         if refuted:
-            confirmed_toks, _ = ungrounded_token_buckets(
+            confirmed_toks, _, tok_years = ungrounded_token_buckets(
                 claims, comparable=comparable, supported=supported, refuted=refuted
             )
             if confirmed_toks:
                 located = await _locate_tokens(project_id, confirmed_toks, locate_cache)
-                n_relocated += sum(1 for t in confirmed_toks if normalize_number(t) in located)
+                injected = await _injection_suspects(project_id, tok_years, located, year_cache)
+                norms = {normalize_number(t) for t in confirmed_toks}
+                n_injected += len(norms & injected)
+                n_relocated += len({n for n in norms if n in located} - injected)
         out.extend(
             findings_from_claims(
                 row,
@@ -596,6 +695,7 @@ async def evidence_findings(
                 supported=supported,
                 refuted=refuted,
                 located=located,
+                injected=injected,
             )
         )
         out.extend(content_findings(row, n_sources=n_sources, renumbered=renumbered))
@@ -624,6 +724,7 @@ async def evidence_findings(
         n=len(out),
         verified=n_verified,
         relocated=n_relocated,
+        injected=n_injected,
         claim_coverage=round(cov_picked / cov_total, 3) if cov_total else None,
         n_claim_candidates=cov_total,
         missed_numeric=len(cov_missed),

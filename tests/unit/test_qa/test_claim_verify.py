@@ -161,6 +161,32 @@ class TestFindingsWithVerdicts:
         cats = {r["category"] for r in rows}
         assert {"무근거 수치", "출처 오귀속"} <= cats
 
+    def test_injected_number_flagged_over_misattribution(self):
+        # 3단(주입 가드) - 코퍼스에서 발견됐어도 본문이 명시한 연도 곁에 없으면
+        # 오귀속이 아니라 주입 의심(v6 실측: 주입 428이 무관한 CBAM 문서와 우연 일치).
+        cid = uuid4()
+        span = EvidenceSpan(chunk_id=cid, number=1, start=0, end=10, text="근거", score=0.9)
+        claims = [
+            ClaimAlignment(
+                claim="2024년 기준 RE100 가입 기업은 428개사로 확대됨 [1]",
+                numbers=[1],
+                span=span,
+                ungrounded=["428"],
+            )
+        ]
+        rows = findings_from_claims(
+            self._row(),
+            claims,
+            comparable=True,
+            refuted={0},
+            located={"428": "CBAM 문서"},
+            injected={"428"},
+        )
+        cats = {r["category"]: r for r in rows}
+        assert "출처 오귀속" not in cats and "무근거 수치" not in cats
+        assert cats["사전지식 주입 의심"]["severity"] == "warning"
+        assert "2024" in cats["사전지식 주입 의심"]["detail"]
+
     def test_english_only_evidence_without_span_is_crosslingual(self):
         # 영문 근거 직역은 어휘 겹침이 0이라 대목(span)조차 못 잡는다 - unmatched로
         # 새면 '근거 불일치'가 부푼다(2026-08-15 실측: 대표 예문 오탐 15건의 주범).

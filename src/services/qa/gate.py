@@ -119,6 +119,28 @@ def _is_year(token: str) -> bool:
     return len(digits) == 4 and digits.isdigit() and 1900 <= int(digits) <= 2099
 
 
+_YEAR_TOKEN_RE = re.compile(r"(?:19|20)\d{2}")
+
+
+def claim_years(text: str) -> tuple[str, ...]:
+    """주장 단위 속 명시 연도(1900~2099, 등장 순서·중복 제거).
+
+    수치 검사에서 빠지는 연도를 여기서만 되집는다 — 사전지식 주입 가드의 짝.
+    '2024년 기준 428개사'의 2024를 집어, 428이 코퍼스에서 그 연도 곁에 실재하는지
+    볼 수 있게 한다(연도 없는 수치 창작은 다른 검출기 몫).
+    """
+    out: list[str] = []
+    for m in _YEAR_TOKEN_RE.finditer(text):
+        prev = text[m.start() - 1] if m.start() > 0 else ""
+        nxt = text[m.end()] if m.end() < len(text) else ""
+        # 더 긴 수의 조각(52024)이나 소수 꼬리(3.2024)는 연도가 아니다.
+        if prev.isdigit() or prev == "." or nxt.isdigit():
+            continue
+        if m.group() not in out:
+            out.append(m.group())
+    return tuple(out)
+
+
 # 연.월 표기 — "2019.12"·"2021.6". 소수 꼴이라 연도 제외를 비켜가 '무근거 수치'
 # 오탐의 최다 원천이었다(2026-08-14 실측: 탄소규제 런 critical 26건 중 표본 22건이
 # 오탐, 다수가 연월·아포스트로피 축약 연도).

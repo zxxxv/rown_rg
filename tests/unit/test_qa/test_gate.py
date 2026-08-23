@@ -26,6 +26,7 @@ from src.services.qa.gate import (
     check_uncited_claims,
     claim_coverage,
     claim_units,
+    claim_years,
     gate_candidates,
     leftover_artifacts,
     misattributed_numbers,
@@ -560,6 +561,13 @@ class TestClaimCoverage:
         # 라틴 접두가 아닌 진짜 수치는 그대로 잡는다("60TWh"는 숫자가 앞).
         body2 = "국내 기업이 공시한 연간 전력사용량 합계는 60TWh 규모로 집계됐음 (출처 3)"
         assert ungrounded_numbers(body2, "관련 없음") == ["60"]
+
+    def test_claim_years_extracts_explicit_years_only(self):
+        # 수치 검사가 버리는 연도를 주입 가드가 되집는다 - RE100의 100은 연도가 아니고,
+        # 더 긴 수의 조각(52024)이나 소수 꼬리(3.2024)도 아니다.
+        assert claim_years("2024년 기준 428개사이며 2019.12부터 시행됨 [1]") == ("2024", "2019")
+        assert claim_years("RE100 목표는 성장률 3.2024나 계약액 52024와 무관함") == ()
+        assert claim_years("연도 없는 수치 428개사 서술") == ()
 
 
 class TestMisattributedNumbers:
