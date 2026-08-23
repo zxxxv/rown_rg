@@ -85,56 +85,82 @@ class TestToRows:
                     "severity": "critical",
                     "category": "법령 시점",
                     "section": "2.1",
-                    "detail": "상충",
+                    "detail": "시행 중·추진 중 상충",
                 },
-                {"severity": "이상한값", "category": None, "detail": "카테고리 없음"},
+                {
+                    "severity": "이상한값",
+                    "category": "수치 일관성",
+                    "detail": "1.2절 45.2% vs 3.1절 45.9%로 불일치",
+                },
+                {"severity": "warning", "category": None, "detail": "카테고리 없음 불일치"},
                 {"detail": "   "},  # 빈 detail → 버림
                 "문자열",  # dict 아님 → 버림
             ]
         }
         rows = _to_rows(2, manifest)
-        assert len(rows) == 2
+        assert len(rows) == 2  # 카테고리 없음("기타")은 축 밖 → 버림
         assert rows[0]["severity"] == "critical"
         assert rows[0]["section_ref"] == "2.1"
         assert rows[1]["severity"] == "warning"  # 미지 severity는 warning으로
-        assert rows[1]["category"] == "기타"
 
     def test_cap_per_chapter(self):
         manifest = {
             "findings": [
-                {"severity": "warning", "category": "c", "detail": f"d{i}"}
+                {"severity": "warning", "category": "수치 일관성", "detail": f"d{i} 불일치"}
                 for i in range(MAX_FINDINGS_PER_CHAPTER + 10)
             ]
         }
         assert len(_to_rows(1, manifest)) == MAX_FINDINGS_PER_CHAPTER
 
-    def test_year_only_duplicate_findings_dropped(self):
-        """인용 값이 연도뿐인 '중복 인용' 경고는 후처리에서 버린다(노이즈 차단)."""
+    def test_off_axis_categories_dropped(self):
+        """중복 인용·환각 검출·형식·출처 매칭은 결정적 검출기·근거 동봉 판정의 축이다
+        (2026-08-23 v6 전수 검토: LLM 27건 중 17건이 이 축들의 노이즈)."""
         manifest = {
             "findings": [
                 {
-                    "severity": "critical",
-                    "category": "중복 인용",
-                    "detail": "선행 챕터에서 이미 인용된 수치 '2008년'이 재인용됨.",
-                },
-                {
                     "severity": "warning",
                     "category": "중복 인용",
-                    "detail": "'46.2%' (IT/ITES 점유율)가 선행 챕터에서 이미 인용됨.",
+                    "detail": "46.2%가 재인용되어 상이",
                 },
+                {"severity": "warning", "category": "환각 검출", "detail": "출처와 불일치 의심"},
+                {"severity": "warning", "category": "형식", "detail": "문장이 다르게 종결됨"},
+                {"severity": "warning", "category": "출처 매칭", "detail": "출처 번호 불일치"},
                 {
                     "severity": "warning",
-                    "category": "시간적 범위 일관성",
-                    "detail": "'2021년' 조사를 '2024년' 기준으로 서술함.",  # 중복 계열 아님 → 유지
+                    "category": "수치 일관성",
+                    "detail": "1.2절 45.2% vs 3.1절 45.9%로 불일치",
                 },
             ]
         }
-        rows = _to_rows(5, manifest)
-        details = [r["detail"] for r in rows]
-        assert len(rows) == 2
-        assert not any("2008년" in d for d in details)
-        assert any("46.2%" in d for d in details)
-        assert any("시간적" in r["category"] for r in rows)
+        rows = _to_rows(3, manifest)
+        assert [r["category"] for r in rows] == ["수치 일관성"]
+
+    def test_assertless_findings_dropped(self):
+        """충돌 단정 없이 '확인 필요'만 말하는 행은 경고가 아니라 할 일 목록이다 -
+        프롬프트로 금지해도 모델이 내므로 코드가 최종 관문(v6 실측: 환각 검출 7건 전부)."""
+        manifest = {
+            "findings": [
+                {
+                    "severity": "warning",
+                    "category": "수치 일관성",
+                    "detail": "출처 24가 440개사·570TWh 수치를 뒷받침하는지 확인 필요",
+                },
+                {
+                    "severity": "warning",
+                    "category": "수치 일관성",
+                    "detail": "467개로 동일하게 인용되어 중복 서술됨. 가독성 저하",
+                },
+                {
+                    "severity": "warning",
+                    "category": "수치 일관성",
+                    "detail": "2.1절 91억 유로 vs 2.2절 90억 달러로 상이함. 정합성 확인 필요",
+                },
+            ]
+        }
+        rows = _to_rows(2, manifest)
+        # 단정(상이)이 있으면 꼬리에 '확인 필요'가 붙어도 유지한다 - 어휘가 아니라 단정 유무.
+        assert len(rows) == 1
+        assert "91억" in rows[0]["detail"]
 
 
 class TestVerifyReport:
@@ -142,14 +168,27 @@ class TestVerifyReport:
         stub = _StubClient(
             [
                 '```json\n{"findings": []}\n```',
-                '```json\n{"findings": [{"severity": "warning", "category": "통계 중복", '
-                '"section": "2.1", "detail": "고령화율 중복 인용"}]}\n```',
+                '```json\n{"findings": [{"severity": "warning", "category": "수치 일관성", '
+                '"section": "2.1", '
+                '"detail": "고령화율이 1.1절 24.1%와 다르게 24.6%로 인용됨"}]}\n```',
             ]
         )
         rows = await verify_report(_state_two_chapters(), client=stub, model="stub-model")
         assert len(stub.calls) == 2  # 챕터당 정확히 1콜 (비용 캡)
         assert [r["chapter_number"] for r in rows] == [2]
-        assert rows[0]["category"] == "통계 중복"
+        assert rows[0]["category"] == "수치 일관성"
+
+    async def test_same_value_pair_reported_once_across_chapters(self):
+        """선행 다이제스트 때문에 같은 값 충돌이 챕터마다 다시 나온다(v6 실측: 90억/91억
+        3회) - 값 2개 이상이 겹치면 처음 것만 남긴다."""
+        finding = (
+            '{"severity": "warning", "category": "수치 일관성", "section": "1.1", '
+            '"detail": "회원사가 508TWh와 570TWh로 상이하게 인용됨"}'
+        )
+        stub = _StubClient([f'```json\n{{"findings": [{finding}]}}\n```'])
+        rows = await verify_report(_state_two_chapters(), client=stub, model="stub-model")
+        assert len(stub.calls) == 2
+        assert len(rows) == 1  # 두 챕터가 같은 값 쌍을 내도 한 번만
 
     async def test_prev_chapter_digest_flows_to_next_call(self):
         stub = _StubClient(['```json\n{"findings": []}\n```'])

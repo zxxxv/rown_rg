@@ -45,7 +45,7 @@ class VerifyCoverageRead(BaseModel):
     missed_numeric: int
     # 근거 동봉 판정(claim_verify) - 꺼져 있으면 '무근거 수치' critical이 뜰 수 없다
     llm_verify_enabled: bool
-    # 챕터 횡단 LLM 검증(pm_verify) - 형식·법령 시점·수치 일관성 축의 존재 여부
+    # 챕터 횡단 LLM 검증(pm_verify) - 수치 일관성·용어 혼용·법령 시점 축의 존재 여부
     pm_verify_enabled: bool
 
 

@@ -1501,8 +1501,8 @@ async def get_verify_report(
 ) -> list[VerifyFindingRead]:
     """PM 검증 경고 리포트 — assemble 직후 챕터당 1콜 pm_verify의 결과.
 
-    차단이 아닌 참고용: 절 간 수치·용어 충돌, 법령 시점 상충(critical),
-    챕터 간 통계 중복 등 문서 횡단 문제를 사람이 편집기에서 판단한다.
+    차단이 아닌 참고용: 절 간 수치 충돌, 용어 표기 혼용, 법령 시점 상충(critical)
+    등 문서 횡단 문제를 사람이 편집기에서 판단한다.
     아직 검증 전이거나 경고가 없으면 빈 배열.
     """
     project = await _get_authorized_project(project_id, session, current_user)

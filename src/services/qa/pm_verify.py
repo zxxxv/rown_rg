@@ -1,8 +1,14 @@
 """PM 검증 — assemble 직후 챕터당 1콜로 문서 횡단 일관성 경고를 수집 (차단 아님).
 
 정적 게이트가 결정적으로 잡는 것(인용 해석·렌더·수치 근거·분량)과 달리, 여기서는
-문서를 가로지르는 문제를 pm_verify_system 역할 프롬프트로 검사한다:
-절 간 수치·용어 충돌, 법령 시점 상충(critical), 선행 챕터와 통계 중복 인용 등.
+LLM이라야 보이는 축만 pm_verify_system 역할 프롬프트로 검사한다:
+절 간 수치 충돌·용어 표기 혼용·법령 시점 상충(critical).
+
+축을 이 셋으로 좁힌 이유(2026-08-23 v6 전수 검토): LLM 경고 27건 중 17건이
+중복 인용(재언급은 정상)·환각 검출("확인 필요" 추정 — 근거 원문을 못 보는데 판정을
+시킨 축)·형식(결정적 절단 검출기 소관)의 노이즈였다. 그 축들은 결정적 검출기와
+근거 동봉 판정(evidence_findings)이 더 정확히 본다. 프롬프트의 예외 규칙은 모델이
+안 지키므로 코드 필터(_KEPT_AXES·_ASSERT_RE)가 최종 관문이다.
 
 원칙(QA 게이트 결정과의 정합):
 - 판정은 사람 몫 — 결과는 경고 리포트(verify_findings)로 저장만 하고,
@@ -27,6 +33,7 @@ from src.core.state import ProjectState
 from src.core.types import SectionDraft, SectionPlan
 from src.prompts import load_workflow_role
 from src.services.generation.planner import _parse_manifest
+from src.services.qa.gate import normalize_number, significant_numbers
 
 logger = structlog.get_logger(__name__)
 
@@ -45,23 +52,20 @@ _FORMAT = (
     "문제가 없으면 빈 배열을 출력한다."
 )
 
-# 숫자+단위 토큰 — 선행 챕터 통계 중복 검사용 다이제스트(결정적, LLM 아님).
-# '년'은 단위에서 제외한다: 연도(2024년)·기간(3년)은 통계가 아니라 시점 표기라
-# 다이제스트에 실으면 모델이 "2024년 재등장"을 중복 인용으로 오판한다
-# (2026-08-03 실측: 경고 25건 중 12건이 이 노이즈).
+# 숫자+단위 토큰 — 선행 챕터 수치를 다음 챕터 콜에 실어 챕터 간 값 충돌을 보게 하는
+# 다이제스트(결정적, LLM 아님). '년'은 단위에서 제외한다: 연도(2024년)·기간(3년)은
+# 통계가 아니라 시점 표기다(2026-08-03 실측: 경고 25건 중 12건이 이 노이즈).
 _NUM_RE = re.compile(r"\d[\d,.]*\s?(?:%|억\s?원|조\s?원|만\s?원|억|조|만|명|건|개소|개|배|%p|p)")
 
-# 후처리 안전망 — 모델이 그래도 연도만 문제 삼은 '중복 인용' 경고를 내면 버린다.
-_QUOTED_RE = re.compile(r"['\"‘’“”]([^'\"‘’“”]{1,24})['\"‘’“”]")
-_YEAR_ONLY_RE = re.compile(r"^\d{4}년?$")
+# 남길 LLM 축 — 프롬프트의 검증 항목과 짝(키워드 포함 판정). 그 밖의 카테고리
+# (중복 인용·환각 검출·형식·출처 매칭)는 결정적 검출기·근거 동봉 판정이 더 정확히
+# 보는 축이라 저장하지 않는다(2026-08-23 v6 전수 검토: 27건 중 17건이 그 노이즈).
+_KEPT_AXES = ("수치", "법령", "용어")
 
-
-def _is_year_only_duplicate(category: str, detail: str) -> bool:
-    """중복 인용 계열 경고인데 인용된 값이 전부 연도(YYYY[년])뿐이면 True."""
-    if "중복" not in category:
-        return False
-    quoted = _QUOTED_RE.findall(detail)
-    return bool(quoted) and all(_YEAR_ONLY_RE.match(q.strip()) for q in quoted)
+# 충돌 단정 어휘 — 두 값(표기)이 실제로 어긋난다는 주장. 이것 없이 '확인 필요'만
+# 말하는 행은 경고가 아니라 할 일 목록이라 저장하지 않는다(프롬프트로 금지해도
+# 모델이 내는 경우의 최종 관문).
+_ASSERT_RE = re.compile(r"불일치|상이|상충|충돌|혼용|모순|어긋|다르게|달리")
 
 
 def numeric_digest(texts: list[str], cap: int = _MAX_DIGEST_ITEMS) -> list[str]:
@@ -95,7 +99,7 @@ def _group_by_chapter(state: ProjectState) -> list[tuple[int, list[tuple[Section
 def _chapter_input(sections: list[tuple[SectionPlan, str]], prev_digest: list[str]) -> str:
     lines: list[str] = []
     if prev_digest:
-        lines.append("선행 챕터에서 이미 인용된 수치(중복 인용 검사용):")
+        lines.append("선행 챕터에서 이미 인용된 수치(챕터 간 값 충돌 대조용):")
         lines.append(", ".join(prev_digest))
         lines.append("")
     lines.append("검증할 챕터 본문:")
@@ -109,12 +113,13 @@ def _to_rows(
     manifest: dict[str, Any],
     sid_by_label: dict[str, UUID] | None = None,
 ) -> list[dict[str, Any]]:
-    """모델 JSON → 저장 행. 형식이 어긋난 항목은 버리고, 상한을 적용한다.
+    """모델 JSON → 저장 행. 형식이 어긋난 항목·축 밖 카테고리·단정 없는 지적은 버린다.
 
     sid_by_label("2.1" → 절 id)이 있으면 section_ref를 절 안정 id로도 해석해 싣는다 —
     화면의 절 매칭·이동은 id가 정본이고, ref 문자열은 사람이 읽는 표시값이다.
     """
     rows: list[dict[str, Any]] = []
+    n_axis, n_assertless = 0, 0
     for item in manifest.get("findings", []) or []:
         if not isinstance(item, dict):
             continue
@@ -125,8 +130,12 @@ def _to_rows(
         category = item.get("category")
         section = item.get("section")
         category_str = category.strip() if isinstance(category, str) else "기타"
-        if _is_year_only_duplicate(category_str, detail):
-            continue  # 연도 재언급은 결함이 아니다 — 노이즈 차단
+        if not any(axis in category_str for axis in _KEPT_AXES):
+            n_axis += 1
+            continue  # 축 밖 — 결정적 검출기·근거 동봉 판정의 영역
+        if not _ASSERT_RE.search(detail):
+            n_assertless += 1
+            continue  # 충돌 단정이 없는 '확인 필요'류·재언급 지적은 경고가 아니다
         section_ref = section.strip()[:20] if isinstance(section, str) and section.strip() else None
         section_id = None
         if section_ref and sid_by_label:
@@ -144,6 +153,15 @@ def _to_rows(
         )
         if len(rows) >= MAX_FINDINGS_PER_CHAPTER:
             break
+    if n_axis or n_assertless:
+        # 걸러낸 것을 조용히 버리지 않는다 — 필터가 진짜 신호를 먹는지 셀 수 있게.
+        logger.info(
+            "pm_verify.rows_filtered",
+            chapter=chapter_number,
+            dropped_axis=n_axis,
+            dropped_assertless=n_assertless,
+            kept=len(rows),
+        )
     return rows
 
 
@@ -159,7 +177,9 @@ async def verify_report(
     system = f"{load_workflow_role('pm_verify_system')}\n\n{_FORMAT}"
 
     rows: list[dict[str, Any]] = []
-    seen_texts: list[str] = []  # 선행 챕터 본문 누적 — 통계 중복 검사 다이제스트 원천
+    seen_texts: list[str] = []  # 선행 챕터 본문 누적 — 값 충돌 대조 다이제스트 원천
+    seen_pairs: set[frozenset[str]] = set()  # 이미 경고한 값 조합 — 교차 챕터 dedup
+    n_dup = 0
     for chapter_number, sections in _group_by_chapter(state):
         request = CompletionRequest(
             messages=[
@@ -181,8 +201,19 @@ async def verify_report(
             f"{plan.chapter_number}.{plan.section_number}": plan.section_id
             for plan, _content in sections
         }
-        rows.extend(_to_rows(chapter_number, _parse_manifest(response.content), sid_by_label))
+        for row in _to_rows(chapter_number, _parse_manifest(response.content), sid_by_label):
+            # 같은 값 조합의 충돌을 챕터마다 다시 내면(선행 다이제스트가 원인) 화면에
+            # 세 번 실린다 — 값 2개 이상이 겹치는 경고는 처음 것만 남긴다.
+            nums = frozenset(normalize_number(t) for t in significant_numbers(row["detail"]))
+            if len(nums) >= 2 and nums in seen_pairs:
+                n_dup += 1
+                continue
+            if len(nums) >= 2:
+                seen_pairs.add(nums)
+            rows.append(row)
         seen_texts.extend(content for _, content in sections)
+    if n_dup:
+        logger.info("pm_verify.rows_deduped", project_id=str(state.project_id), n=n_dup)
     return rows
 
 
