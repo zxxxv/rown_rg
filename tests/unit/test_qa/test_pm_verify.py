@@ -190,6 +190,35 @@ class TestToRows:
         assert len(rows) == 1
         assert rows[0]["_values"] == ["91억 유로", "90억 달러"]
 
+    def test_same_quantity_different_notation_dropped(self):
+        """다보고서 실측(2026-08-23)의 새 노이즈 계급 - 같은 값 다른 표기('482.7억' vs
+        '482억 7,000만 달러')는 충돌이 아니다. 크기가 같아도 통화가 상충하면 남긴다."""
+
+        def finding(a: str, b: str) -> dict:
+            return {
+                "severity": "warning",
+                "category": "수치 일관성",
+                "value_a": a,
+                "value_b": b,
+                "detail": f"{a} vs {b} 표기",
+            }
+
+        manifest = {
+            "findings": [
+                finding("482.7억", "482억 7,000만 달러"),
+                finding("3만 6,000명", "3.6만 명"),
+                finding("200개", "200여 개"),
+                finding("520억", "520억 달러"),
+                finding("90억 달러", "90억 유로"),
+                finding("8,357억 달러", "8,356억 달러"),
+            ]
+        }
+        rows = _to_rows(2, manifest)
+        assert [r["_values"] for r in rows] == [
+            ["90억 달러", "90억 유로"],  # 통화 상충은 실충돌 - 유지
+            ["8,357억 달러", "8,356억 달러"],  # 값 차이 - 유지
+        ]
+
 
 class TestVerifyReport:
     async def test_one_call_per_chapter_and_rows_collected(self):

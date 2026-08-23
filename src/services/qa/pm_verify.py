@@ -80,6 +80,55 @@ def _norm_value(s: str) -> str:
     return re.sub(r"\s+", "", s.replace(",", "")).lower()
 
 
+# 한국어 수 표기의 크기 동치 — '482.7억'과 '482억 7,000만 달러'는 같은 값이다.
+# 다보고서 회귀 실측(2026-08-23, 5유형)에서 PM 경고 45건 중 8건이 이런 '같은 값
+# 다른 표기' 지적이었다 — 문자열 정규화로는 못 가르므로 크기로 잰다.
+_KOR_UNIT = {"조": 1e12, "억": 1e8, "만": 1e4, "천": 1e3}
+_NUM_GROUP_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(조|억|만|천)?")
+_RESIDUE_STRIP = ("조", "억", "만", "천", "여", "약", "이상", "미만", "가량", "수준", "기준")
+
+
+def _magnitude(s: str) -> float | None:
+    """'482억 7,000만' → 4.827e10. 합성 표기는 단위가 내림차순일 때만 한 값으로 본다 —
+    '2025년 591억'처럼 별개 수가 이어진 문자열은 크기가 아니므로 None."""
+    text = s.replace(",", "")
+    total, last_scale = 0.0, None
+    found = False
+    for m in _NUM_GROUP_RE.finditer(text):
+        scale = _KOR_UNIT.get(m.group(2) or "", 1.0)
+        if last_scale is not None and scale >= last_scale:
+            return None
+        total += float(m.group(1)) * scale
+        last_scale = scale
+        found = True
+    return total if found else None
+
+
+def _residue_tokens(s: str) -> set[str]:
+    """수·단위·수식어를 걷어낸 나머지 어휘 — 통화·단위 충돌('달러' vs '유로') 판별용."""
+    text = re.sub(r"[\d.,]+", " ", s)
+    out: set[str] = set()
+    for token in re.findall(r"[가-힣a-zA-Z%]+", text):
+        for word in _RESIDUE_STRIP:
+            token = token.replace(word, "")
+        if token:
+            out.add(token.lower())
+    return out
+
+
+def _same_quantity(value_a: str, value_b: str) -> bool:
+    """두 값이 표기만 다른 같은 양인가 — 크기가 같고 단위 어휘가 상충하지 않을 때.
+
+    '90억 달러' vs '90억 유로'는 크기가 같아도 통화가 상충하므로 충돌로 남긴다.
+    '520억' vs '520억 달러'(다이제스트의 단위 탈락)는 한쪽이 부분집합이라 동치다.
+    """
+    ma, mb = _magnitude(value_a), _magnitude(value_b)
+    if ma is None or mb is None or abs(ma - mb) > max(abs(ma), abs(mb)) * 1e-9:
+        return False
+    ra, rb = _residue_tokens(value_a), _residue_tokens(value_b)
+    return ra <= rb or rb <= ra
+
+
 def _value_in_text(value: str, doc_norm: str) -> bool:
     """경고가 인용한 값이 실제 본문(정규화)에 있는가 — 없는 값을 문제 삼으면 창작 경고다.
 
@@ -168,10 +217,10 @@ def _to_rows(
         value_a = str(item.get("value_a") or "").strip()
         value_b = str(item.get("value_b") or "").strip()
         if value_a and value_b:
-            if _norm_value(value_a) == _norm_value(value_b):
+            if _norm_value(value_a) == _norm_value(value_b) or _same_quantity(value_a, value_b):
                 n_same += 1
                 samples.append(f"동일값:{detail.strip()[:60]}")
-                continue  # 두 값이 같으면 충돌이 아니라 재언급이다
+                continue  # 두 값이 같으면(표기만 달라도) 충돌이 아니라 재언급이다
         elif not _ASSERT_RE.search(detail):
             n_assertless += 1
             samples.append(f"단정없음:{detail.strip()[:60]}")
