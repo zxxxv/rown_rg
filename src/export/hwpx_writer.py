@@ -81,8 +81,6 @@ COVER_ORG_SPACE_AFTER_PT = 24.0
 
 # 표·그림 폭 — A4(210mm) 기준 본문 폭(좌우 여백 제외)에 맞춰 페이지를 넘지 않게 한다.
 PAGE_WIDTH_MM = 210.0
-# 그림 플레이스홀더 캡션 음영(옅은 하늘색 느낌의 회색) — 데이터 표와 구분한다.
-FIGURE_CAPTION_SHADE = "#DDE7F0"
 # 표 제목 — 표 바로 위 한 줄. 본문보다 작고 굵게 써서 표에 딸린 라벨로 읽히게 한다.
 TABLE_CAPTION_SIZE_PT = 10
 # 표 부속 줄(단위·출처) — 캡션보다 한 단계 작게, 굵기 없이.
@@ -206,9 +204,6 @@ class PageBreak:
 
 
 Block = Cover | Heading | Paragraph | Table | Figure | Chart | PageBreak
-
-# 표 머리행 음영(옅은 회색) — 본문 행과 시각적으로 구분한다.
-TABLE_HEADER_SHADE = "#E6E6E6"
 
 # 셀 안 여백(HWPUNIT) — 한컴이 표를 새로 넣을 때 쓰는 기본값 그대로다(실납품 샘플
 # 342개 셀에서 left/right=510, top/bottom=141로 실측). python-hwpx는 이 값을 0으로
@@ -640,12 +635,9 @@ def _add_table(doc: HwpxDocument, table: Table) -> None:
     _reset_table_anchor(doc, tbl)
     _enable_header_repeat(tbl)
     for col, head in enumerate(table.headers):
+        # 음영 없음 — 배경색은 전 요소에서 쓰지 않는다(2026-08-23 사용자 지시).
+        # 머리행 구분은 굵기·괘선이 맡는다.
         tbl.set_cell_text(0, col, head)
-        try:
-            # 머리행 음영 — API 버전에 따라 없을 수 있어 방어적으로 시도한다.
-            tbl.set_cell_shading(0, col, TABLE_HEADER_SHADE)
-        except Exception:  # noqa: BLE001 — 음영은 장식, 실패해도 표는 유효
-            pass
     for row_idx, row in enumerate(table.rows, start=1):
         # 비정형 행 방어 - 모델이 3열 표에 4칸 행을 쓰는 실사례(2026-08-21 v6:
         # IndexError로 렌더 전체가 죽었다). 초과 셀은 버리고 로그로 남긴다.
@@ -697,7 +689,7 @@ def _add_chart(doc: HwpxDocument, chart: Chart) -> None:
 
 
 def _add_figure(doc: HwpxDocument, figure: Figure) -> None:
-    """그림 플레이스홀더 — 캡션(음영) + 추천 시각자료 설명을 담은 1열 박스로 렌더한다."""
+    """그림 플레이스홀더 — 캡션 + 추천 시각자료 설명을 담은 1열 박스로 렌더한다."""
     note = "※ 실제 이미지는 확정 후 삽입되는 자리표시자입니다."
     tbl = doc.add_table(3, 1, width=_page_content_width_hwp())
     _reset_table_anchor(doc, tbl)
@@ -709,9 +701,6 @@ def _add_figure(doc: HwpxDocument, figure: Figure) -> None:
             wrap_bookmark(cell_paras[0], figure.caption_bookmark)
     tbl.set_cell_text(1, 0, f"추천 시각자료: {figure.description}")
     tbl.set_cell_text(2, 0, note)
-    try:
-        tbl.set_cell_shading(0, 0, FIGURE_CAPTION_SHADE)  # 캡션 행만 음영 — 데이터 표와 구분
-    except Exception:  # noqa: BLE001 — 음영은 장식, 실패해도 박스는 유효
-        pass
+    # 캡션 행 음영도 없앴다 — 배경색은 전 요소에서 쓰지 않는다(2026-08-23 사용자 지시).
     # 정렬은 손대지 않는다 — 설명 문장이 길어 가운데로 모으면 줄마다 들쭉날쭉해진다.
     _apply_cell_margins(tbl)
