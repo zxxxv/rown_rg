@@ -37,6 +37,7 @@ from src.services.qa.gate import (
     claim_coverage,
     leftover_artifacts,
     misattributed_numbers,
+    normalize_number,
     truncated_lines,
 )
 from src.services.qa.table_check import table_prose_mismatches, table_ungrounded_numbers
@@ -97,6 +98,34 @@ def suspicious_indices(claims: list[ClaimAlignment]) -> list[int]:
     ]
 
 
+def ungrounded_token_buckets(
+    claims: list[ClaimAlignment],
+    *,
+    comparable: bool,
+    supported: set[int] | None = None,
+    refuted: set[int] | None = None,
+) -> tuple[list[str], list[str]]:
+    """(판정이 '근거 없음' 확인한 수치, 어휘 대조만 실패한 수치).
+
+    findings_from_claims와 코퍼스 재검색(_locate_tokens 호출부)이 같은 선별을 써야
+    한다 — 자가 어긋나면 재검색 안 한 수치가 critical로 남아 2단 판정이 헛돈다.
+    """
+    supported = supported or set()
+    refuted = refuted or set()
+    confirmed: list[str] = []
+    lexical: list[str] = []
+    for i, claim in enumerate(claims) if comparable else []:
+        if i in supported:
+            continue  # 근거로 뒷받침된다고 판정된 문장의 수치는 창작이 아니다
+        if claim.status == "crosslingual" and i not in refuted:
+            continue  # 어휘로 잴 수 없는 축 — 판정 없이 세면 전부 오탐이 된다
+        bucket = confirmed if i in refuted else lexical
+        for token in claim.ungrounded:
+            if token not in confirmed and token not in lexical:
+                bucket.append(token)
+    return confirmed, lexical
+
+
 def findings_from_claims(
     row: Section,
     claims: list[ClaimAlignment],
@@ -104,12 +133,18 @@ def findings_from_claims(
     comparable: bool,
     supported: set[int] | None = None,
     refuted: set[int] | None = None,
+    located: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """주장별 대조 결과 → 절 단위 경고 행 (순수 함수 — 테스트 대상).
 
     supported/refuted는 근거 동봉 판정(claim_verify)의 결과다. 판정을 받은 문장은
     겹침 점수 대신 그 판정을 따른다 — 뒷받침된다고 나오면 경고에서 빼고, 근거에 없다고
     나오면 겹침이 높아도 경고한다.
+
+    located는 2단 판정(코퍼스 전체 재검색)의 결과 — 정규화 수치 → 실재하는 자료 제목.
+    판정이 '근거 없음'이라 해도 수치가 코퍼스 어딘가에 실재하면 창작이 아니라 출처를
+    잘못 단 것이다(2026-08-21 v6 실측: critical 18건 표본 32/33이 '수치 실재·출처
+    틀림'). None이면 재검색을 안 한 것이므로 종전대로 전부 critical로 본다.
     """
     ref = f"{row.chapter_number}.{row.section_number}"
     if not claims:
@@ -163,26 +198,40 @@ def findings_from_claims(
     # 실패한 수치는 warning이다 — 부분문자열 매칭은 단위 환산(72억 vs $7.2 billion)·표기
     # 차이(1.8조 vs 1조 8,000억)를 원리적으로 못 재고, 교차언어 근거는 아예 잴 수 없다
     # (2026-08-14 실측: 탄소규제 런 critical 26건 중 표본 22건 오탐 → 전량 강등 원인).
-    confirmed: list[str] = []
-    lexical: list[str] = []
-    for i, claim in enumerate(claims) if comparable else []:
-        if i in supported:
-            continue  # 근거로 뒷받침된다고 판정된 문장의 수치는 창작이 아니다
-        if claim.status == "crosslingual" and i not in refuted:
-            continue  # 어휘로 잴 수 없는 축 — 판정 없이 세면 전부 오탐이 된다
-        bucket = confirmed if i in refuted else lexical
-        for token in claim.ungrounded:
-            if token not in confirmed and token not in lexical:
-                bucket.append(token)
-    if confirmed:
+    confirmed, lexical = ungrounded_token_buckets(
+        claims, comparable=comparable, supported=supported, refuted=refuted
+    )
+    relocated: list[tuple[str, str]] = []
+    fabricated: list[str] = []
+    for token in confirmed:
+        where = (located or {}).get(normalize_number(token))
+        if where:
+            relocated.append((token, where))
+        else:
+            fabricated.append(token)
+    if fabricated:
         out.append(
             _finding(
                 row.chapter_number,
                 ref,
                 "critical",
                 "무근거 수치",
-                f"인용한 근거에 없는 수치 {len(confirmed)}건(판정 확인): "
-                f"{', '.join(confirmed[:5])}" + (" …" if len(confirmed) > 5 else ""),
+                f"인용한 근거에 없는 수치 {len(fabricated)}건(판정 확인"
+                + ("·코퍼스 재검색 미발견" if located is not None else "")
+                + f"): {', '.join(fabricated[:5])}"
+                + (" …" if len(fabricated) > 5 else ""),
+            )
+        )
+    if relocated:
+        samples = ", ".join(f"{t}(실제: {src})" for t, src in relocated[:3])
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "출처 오귀속",
+                f"인용한 출처가 아닌 다른 자료에 실재하는 수치 {len(relocated)}건"
+                f"(출처 정정 필요): {samples}" + (" …" if len(relocated) > 3 else ""),
             )
         )
     if lexical:
@@ -407,6 +456,37 @@ def findings_for_section(
     return findings_from_claims(row, claims, comparable=comparable)
 
 
+async def _locate_tokens(
+    project_id: UUID, tokens: list[str], cache: dict[str, str | None]
+) -> dict[str, str]:
+    """정규화 수치 → 그 수치가 실재하는 자료 제목. 프로젝트 코퍼스 전체를 재검색한다.
+
+    1단(어휘 대조·근거 동봉 판정)은 '인용한 근거'만 본다. 2단은 절 풀 밖까지 —
+    여기서 발견되면 창작이 아니라 오귀속이다. 매칭은 1단과 같은 자(콤마 제거 후
+    부분문자열)라야 '인용엔 없다'와 '코퍼스엔 있다'가 같은 눈금이 된다. 토큰은
+    숫자·점뿐이라 LIKE 메타문자 걱정이 없고, 같은 수치가 여러 절에 반복되므로
+    프로젝트 단위로 캐시한다(못 찾은 것도 None으로 남겨 재검색을 막는다).
+    """
+    todo = sorted({n for n in (normalize_number(t) for t in tokens) if n and n not in cache})
+    if todo:
+        async with async_session_maker() as session:
+            for norm in todo:
+                found = (
+                    await session.execute(
+                        select(ProjectSource.title, ProjectSource.url)
+                        .select_from(Chunk)
+                        .join(ProjectSource, Chunk.source_id == ProjectSource.id, isouter=True)
+                        .where(
+                            Chunk.project_id == project_id,
+                            func.replace(Chunk.content, ",", "").like(f"%{norm}%"),
+                        )
+                        .limit(1)
+                    )
+                ).first()
+                cache[norm] = (found[0] or found[1] or "제목 없는 자료") if found else None
+    return {n: v for n, v in cache.items() if v is not None}
+
+
 async def evidence_findings(
     project_id: UUID,
     *,
@@ -466,6 +546,8 @@ async def evidence_findings(
     use_llm = settings.claim_verify_enabled if verify is None else verify
     out: list[dict[str, Any]] = []
     n_verified = 0
+    n_relocated = 0
+    locate_cache: dict[str, str | None] = {}
     # 문장 커버리지 — 검출 지표의 분모. claim_units가 못 집은 문장은 모든 검사에서
     # 증발하고 그 손실은 어떤 지표에도 안 나타난다('남' 꼬리 실사고, 2026-08-14).
     # 미포착 수치 문장은 구조 규칙상 0이어야 한다 — 0이 아니면 회귀다.
@@ -496,9 +578,24 @@ async def evidence_findings(
                     supported.add(target)
                 elif verdict.verdict == "not_supported":
                     refuted.add(target)
+        # 2단 판정 — 판정이 '근거 없음' 확인한 수치만 코퍼스 전체를 재검색한다.
+        # 발견되면 critical(창작)이 아니라 warning(출처 오귀속)으로 갈린다.
+        located: dict[str, str] | None = None
+        if refuted:
+            confirmed_toks, _ = ungrounded_token_buckets(
+                claims, comparable=comparable, supported=supported, refuted=refuted
+            )
+            if confirmed_toks:
+                located = await _locate_tokens(project_id, confirmed_toks, locate_cache)
+                n_relocated += sum(1 for t in confirmed_toks if normalize_number(t) in located)
         out.extend(
             findings_from_claims(
-                row, claims, comparable=comparable, supported=supported, refuted=refuted
+                row,
+                claims,
+                comparable=comparable,
+                supported=supported,
+                refuted=refuted,
+                located=located,
             )
         )
         out.extend(content_findings(row, n_sources=n_sources, renumbered=renumbered))
@@ -526,6 +623,7 @@ async def evidence_findings(
         project_id=str(project_id),
         n=len(out),
         verified=n_verified,
+        relocated=n_relocated,
         claim_coverage=round(cov_picked / cov_total, 3) if cov_total else None,
         n_claim_candidates=cov_total,
         missed_numeric=len(cov_missed),

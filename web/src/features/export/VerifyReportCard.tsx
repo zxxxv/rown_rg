@@ -32,7 +32,7 @@ import { cn } from "@/lib/utils";
 const UNCOVERED_AXES = "절 간 지표 값 대조(예정)·자료 시점·코퍼스 밖 사실 검증";
 
 // 활성 검사 축 요약 - 축별 상세는 경고 카테고리가 이미 말해준다.
-const ACTIVE_AXES = "근거 대조(수치)·산술·형식·잔재·마커 오귀속·절 간 중복";
+const ACTIVE_AXES = "근거 대조(수치)·코퍼스 재검색(오귀속/창작 구분)·산술·형식·잔재·마커 오귀속·절 간 중복";
 
 function CoverageLine({ projectId }: { projectId: string }) {
   const query = useVerifyCoverage(projectId);

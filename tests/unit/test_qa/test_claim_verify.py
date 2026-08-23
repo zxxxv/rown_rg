@@ -130,6 +130,37 @@ class TestFindingsWithVerdicts:
         assert [r["severity"] for r in numeric] == ["critical"]
         assert "판정 확인" in numeric[0]["detail"]
 
+    def test_relocated_number_downgrades_to_misattribution(self):
+        # 2단 판정 - 판정이 '근거 없음'이라도 수치가 코퍼스 어딘가에 실재하면 창작이
+        # 아니라 출처를 잘못 단 것(2026-08-21 v6 실측: critical 18건 표본 32/33).
+        cid = uuid4()
+        claims = [_claim("수치 문장", cid, score=0.9, ungrounded=["48.7%"])]
+        rows = findings_from_claims(
+            self._row(), claims, comparable=True, refuted={0}, located={"48.7": "환경부 보고서"}
+        )
+        cats = {r["category"]: r for r in rows}
+        assert "무근거 수치" not in cats
+        assert cats["출처 오귀속"]["severity"] == "warning"
+        assert "환경부 보고서" in cats["출처 오귀속"]["detail"]
+
+    def test_corpus_absent_number_stays_critical(self):
+        # 재검색까지 하고도 없으면 진짜 창작 - detail이 재검색을 거쳤음을 밝힌다.
+        cid = uuid4()
+        claims = [_claim("수치 문장", cid, score=0.9, ungrounded=["48.7%"])]
+        rows = findings_from_claims(self._row(), claims, comparable=True, refuted={0}, located={})
+        numeric = [r for r in rows if r["category"] == "무근거 수치"]
+        assert [r["severity"] for r in numeric] == ["critical"]
+        assert "재검색 미발견" in numeric[0]["detail"]
+
+    def test_mixed_tokens_split_between_buckets(self):
+        cid = uuid4()
+        claims = [_claim("수치 문장", cid, score=0.9, ungrounded=["48.7%", "1,200"])]
+        rows = findings_from_claims(
+            self._row(), claims, comparable=True, refuted={0}, located={"48.7": "실제 자료"}
+        )
+        cats = {r["category"] for r in rows}
+        assert {"무근거 수치", "출처 오귀속"} <= cats
+
     def test_english_only_evidence_without_span_is_crosslingual(self):
         # 영문 근거 직역은 어휘 겹침이 0이라 대목(span)조차 못 잡는다 - unmatched로
         # 새면 '근거 불일치'가 부푼다(2026-08-15 실측: 대표 예문 오탐 15건의 주범).
