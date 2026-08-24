@@ -392,6 +392,9 @@ class TestPdfParserFallback:
             cache=ParseCache(root=tmp_path / "cache"),
             # 합성 PDF는 small bucket(<1MB)이라 small_pdf_timeout_s만 0.001로 강제 → 즉시 timeout
             small_pdf_timeout_s=0.001,
+            # 개발 환경 .env에 원격 파서(GPU 박스)가 살아 있으면 원격이 성공해 폴백
+            # 경로가 아예 안 탄다(2026-08-24 실사고: 박스 복구 직후 이 테스트만 깨짐).
+            remote_enabled=False,
         )
 
     async def test_fallback_emits_timeout_warning(self, tmp_path: Path):
@@ -440,7 +443,12 @@ class TestPdfParserFallback:
 
         pdf = tmp_path / "cache.pdf"
         _make_pdf(pdf, pages=2)
-        parser = PdfParser(cache=ParseCache(root=tmp_path / "cache"), medium_pdf_max_bytes=0)
+        parser = PdfParser(
+            cache=ParseCache(root=tmp_path / "cache"),
+            medium_pdf_max_bytes=0,
+            # 원격 파서가 살아 있으면 large 버킷도 원격이 받아 캐시 시나리오가 깨진다.
+            remote_enabled=False,
+        )
 
         first = await parser.parse(pdf)
         assert first.cached is False
@@ -463,6 +471,8 @@ class TestPdfParserSizeBuckets:
         parser = PdfParser(
             cache=ParseCache(root=tmp_path / "cache"),
             medium_pdf_max_bytes=0,
+            # 원격 파서가 살아 있으면 large 버킷도 원격이 받아 skip 시그널이 안 나온다.
+            remote_enabled=False,
         )
         result = await parser.parse(pdf)
         joined = " | ".join(result.warnings)
@@ -501,6 +511,8 @@ class TestPdfParserDoesNotHangAfterTimeout:
         parser = PdfParser(
             cache=ParseCache(root=tmp_path / "cache"),
             small_pdf_timeout_s=0.2,
+            # 원격 파서가 살아 있으면 monkeypatch한 로컬 docling을 아예 안 탄다.
+            remote_enabled=False,
         )
 
         t0 = _time.perf_counter()
