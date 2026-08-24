@@ -30,7 +30,6 @@ from hwpx import HwpxDocument
 from src.export.hwpx_fields import (
     append_leader_tab,
     append_page_ref,
-    ensure_supscript_char_pr,
     ensure_toc_tab_pr,
     set_tab_pr,
     wrap_bookmark,
@@ -471,8 +470,8 @@ def _add_body(
     align: str = "",
 ):
     char_id = doc.ensure_run_style(font=BODY_FONT, size=BODY_SIZE_PT)
-    text = _pad_marker(text)
-    para = _add_paragraph_with_citations(doc, text, char_id)
+    text = format_citations(_pad_marker(text))
+    para = doc.add_paragraph(text, char_pr_id_ref=char_id, inherit_style=False)
     idx = doc.paragraphs.index(para)
     fmt: dict[str, float | int | str] = {
         "paragraph_index": idx,
@@ -529,37 +528,22 @@ def _hanging_indent_mm(text: str) -> float:
     return OUTLINE_SLOT_HALF * (BODY_SIZE_PT * _MM_PER_PT / 2)
 
 
-# 본문 인용 마커 — "(출처 13, 25)"·"(자료 3)". 렌더에서는 번호만 위첨자로 올린다
-# (2026-08-24 지시). 괄호째 본문에 박히면 문장 흐름이 끊긴다 — 실납품 보고서는
-# 본문 인라인 출처를 아예 쓰지 않는다(알키미스트 실측: 인라인 0건·각주 6건).
+# 본문 인용 마커 — "(출처 13, 25)"·"(자료 3)". 렌더에서는 라벨을 걷고 번호만 남긴다:
+# "…확대됨 (13, 25)" (2026-08-24 지시). 위첨자로 올렸다가 되돌렸다 — 번호 괄호가
+# 참고문헌 목록과 바로 이어져 눈으로 따라가기 쉽다. 마커 앞에는 한 칸을 둔다.
 _CITATION_RE = re.compile(r"[ \t]*\((?:출처|자료)\s*(\d+(?:\s*,\s*\d+)*)\)")
 
 
-def citation_runs(text: str) -> list[tuple[str, bool]]:
-    """문단 글을 (조각, 위첨자 여부) 목록으로 쪼갠다. 마커가 없으면 통째로 한 조각."""
-    out: list[tuple[str, bool]] = []
-    pos = 0
-    for m in _CITATION_RE.finditer(text):
-        if m.start() > pos:
-            out.append((text[pos : m.start()], False))
-        out.append((re.sub(r"\s+", "", m.group(1)), True))
-        pos = m.end()
-    if pos < len(text):
-        out.append((text[pos:], False))
-    return out or [(text, False)]
+_CITATION_SEP_RE = re.compile(r"\s*,\s*")
 
 
-def _add_paragraph_with_citations(doc: HwpxDocument, text: str, char_id: str):
-    """본문 문단 — 인용 마커만 위첨자 런으로 갈라 넣는다(마커가 없으면 한 런)."""
-    runs = citation_runs(text)
-    sup_id = ensure_supscript_char_pr(doc, char_id) if len(runs) > 1 else None
-    if sup_id is None:
-        # 위첨자 정의를 못 만들면 원문 그대로 — 출처가 사라지는 것보다 낫다.
-        return doc.add_paragraph(text, char_pr_id_ref=char_id, inherit_style=False)
-    para = doc.add_paragraph("", char_pr_id_ref=char_id, inherit_style=False, include_run=False)
-    for segment, is_citation in runs:
-        para.add_run(segment, char_pr_id_ref=sup_id if is_citation else char_id)
-    return para
+def format_citations(text: str) -> str:
+    """본문 인용 마커에서 라벨을 걷고 번호만 남긴다 — "(출처 13, 25)" → " (13, 25)"."""
+
+    def _numbers_only(match: re.Match[str]) -> str:
+        return f" ({_CITATION_SEP_RE.sub(', ', match.group(1).strip())})"
+
+    return _CITATION_RE.sub(_numbers_only, text)
 
 
 def _text_width(text: str) -> int:

@@ -14,7 +14,7 @@ from src.export.hwpx_writer import (
     OUTLINE_STEP_PT,
     _hanging_indent_mm,
     _pad_marker,
-    citation_runs,
+    format_citations,
 )
 
 # 반각 한 칸의 폭(mm) — 본문 글자 크기의 절반. 기대값을 손으로 적지 않고 같은 근거로 세운다.
@@ -91,34 +91,32 @@ class TestCompanyStyle:
         assert BODY_SIZE_PT == 12
 
 
-class TestCitationRuns:
-    """본문 인용 마커는 번호만 위첨자로 올린다(2026-08-24 지시).
+class TestFormatCitations:
+    """본문 인용 마커는 라벨을 걷고 번호 괄호만 남긴다(2026-08-24 지시).
 
-    실납품 보고서는 본문에 인라인 출처를 아예 쓰지 않고 각주로 내린다(알키미스트
-    실측: 인라인 0건·각주 6건). 괄호째 본문에 박히면 문장 흐름이 끊긴다.
+    위첨자로 올렸다가 되돌렸다 — 번호 괄호가 참고문헌 목록과 바로 이어져 눈으로
+    따라가기 쉽다. 마커 앞에는 한 칸을 둔다.
     """
 
-    def test_marker_becomes_superscript_number(self):
-        assert citation_runs("국내 생산이 늘었음(출처 13, 25)") == [
-            ("국내 생산이 늘었음", False),
-            ("13,25", True),
-        ]
+    def test_label_stripped_number_kept(self):
+        assert format_citations("국내 생산이 늘었음(출처 13, 25)") == "국내 생산이 늘었음 (13, 25)"
 
-    def test_plain_text_stays_one_run(self):
-        assert citation_runs("마커가 없는 문장임") == [("마커가 없는 문장임", False)]
+    def test_single_number(self):
+        assert format_citations("수출이 늘었음(출처 3)") == "수출이 늘었음 (3)"
+
+    def test_spacing_normalized_to_one_space(self):
+        # 원문 간격이 없든 여럿이든 한 칸으로 맞춘다.
+        assert format_citations("가나다   (출처 7,9)") == "가나다 (7, 9)"
+
+    def test_plain_text_untouched(self):
+        assert format_citations("마커가 없는 문장임") == "마커가 없는 문장임"
 
     def test_marker_in_the_middle_keeps_both_sides(self):
-        assert citation_runs("앞부분 (출처 3) 뒷부분") == [
-            ("앞부분", False),
-            ("3", True),
-            (" 뒷부분", False),
-        ]
+        assert format_citations("앞부분 (출처 3) 뒷부분") == "앞부분 (3) 뒷부분"
 
     def test_non_citation_parens_untouched(self):
         # 괄호 안이 숫자 목록이어도 '출처/자료' 라벨이 없으면 인용이 아니다.
-        assert citation_runs("총 3개 부문(1, 2, 3)을 다룸") == [
-            ("총 3개 부문(1, 2, 3)을 다룸", False)
-        ]
+        assert format_citations("총 3개 부문(1, 2, 3)을 다룸") == "총 3개 부문(1, 2, 3)을 다룸"
 
 
 class TestCellMargins:
