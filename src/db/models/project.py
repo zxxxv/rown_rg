@@ -79,6 +79,9 @@ class Project(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    # 납품 확정 선언(사람이 누른 시각) — completed는 '사이클 완료'일 뿐이고, NULL이면
+    # 아직 "검토 중"이다. 재개로 completed를 떠나면 리스너가 함께 해제한다(0045).
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     @property
     def owner_name(self) -> str | None:
@@ -128,6 +131,8 @@ def _sync_completed_at(mapper: Mapper, connection: Connection, target: Project) 
         target.completed_at = datetime.now(UTC)
     elif previous_status == ProjectStage.COMPLETED.value:
         target.completed_at = None
+        # 다시 열린 보고서는 더 이상 확정본이 아니다 — 선언도 함께 내린다.
+        target.finalized_at = None
 
 
 event.listen(Project, "before_insert", _sync_completed_at)

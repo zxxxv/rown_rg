@@ -314,6 +314,20 @@ class ProjectRead(ProjectBase):
     owner_name: str | None = None
     created_at: datetime
     updated_at: datetime
+    # 납품 확정 선언 시각 — completed여도 NULL이면 "검토 중"이다(0045, 완성 선언 분리).
+    finalized_at: datetime | None = None
     # 저장된 본문의 총 글자 수 — 상세 조회에서만 채운다(목록에선 세지 않는다).
     # 분량이 목표에 닿았는지가 이 화면의 핵심 질문이라 헤더에 함께 보여준다.
     total_chars: int | None = None
+
+
+class ManualVersionRequest(BaseModel):
+    """수동 버전 저장 — note는 버전 목록에서 사람이 알아볼 짧은 꼬리표."""
+
+    note: str | None = Field(default=None, max_length=20)
+
+
+class ManualVersionResponse(BaseModel):
+    # 내용이 마지막 버전과 같으면 그 번호를 그대로 돌려준다(중복 스냅샷 없음).
+    version_no: int
+    created: bool

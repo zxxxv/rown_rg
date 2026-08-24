@@ -194,6 +194,11 @@ class TestSectionsApi:
         assert body["qa_status"] == "passed"
         # 이번 재작성은 분량을 안 줄였으므로(volume_scaled=False) 자료 부족 배지가 내려간다
         assert body["evidence"]["scarce"] is False
+        # 재작성은 이전 본문을 덮어쓰는 경로라 성공 직후가 버전으로 남는다(0045).
+        versions = await test_client.get(
+            f"/api/v1/projects/{project.id}/versions", headers=_auth(super_admin_token)
+        )
+        assert any(v["reason"].startswith("rewrite:") for v in versions.json())
 
     async def test_chart_block_is_not_rewritten_by_ai(
         self,

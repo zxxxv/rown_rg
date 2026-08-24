@@ -166,6 +166,8 @@ export const ProjectSchema = z.object({
   total_chars: z.number().int().nullish(),
   created_at: z.string(),
   updated_at: z.string(),
+  /** 납품 확정 선언 시각 - completed여도 null이면 "검토 중"(완성 선언 분리, 0045) */
+  finalized_at: z.string().nullish(),
   progress: z.number().min(0).max(100).optional(),
 });
 export type Project = z.infer<typeof ProjectSchema>;

@@ -181,3 +181,149 @@ class TestDiffSectionsPure:
         sid = uuid.uuid4()
         [e] = diff_sections([self._s(sid, 1, 1, title="옛")], [self._s(sid, 1, 1, title="새")])
         assert e["status"] == "modified"
+
+
+class TestFinalize:
+    """완성 선언 분리(0045) — completed는 '사이클 완료', 확정은 사람이 누른다."""
+
+    async def test_finalize_sets_flag_and_snapshots(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        pid = await _insert_project(test_session, worker_user.id, "completed")
+        test_session.add(_row(pid, uuid.uuid4(), 1, 1, "가", "확정할 본문"))
+        await test_session.commit()
+
+        resp = await test_client.post(
+            f"/api/v1/projects/{pid}/finalize", headers=_auth(worker_token)
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["finalized_at"] is not None
+        versions = (
+            await test_client.get(f"/api/v1/projects/{pid}/versions", headers=_auth(worker_token))
+        ).json()
+        assert [v["reason"] for v in versions] == ["finalize"]
+
+        # 재호출은 무해 — 새 버전도, 오류도 없다(멱등).
+        again = await test_client.post(
+            f"/api/v1/projects/{pid}/finalize", headers=_auth(worker_token)
+        )
+        assert again.status_code == 200
+        versions2 = (
+            await test_client.get(f"/api/v1/projects/{pid}/versions", headers=_auth(worker_token))
+        ).json()
+        assert len(versions2) == 1
+
+    async def test_finalize_rejects_non_completed(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        pid = await _insert_project(test_session, worker_user.id, "reviewing")
+        resp = await test_client.post(
+            f"/api/v1/projects/{pid}/finalize", headers=_auth(worker_token)
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"]["code"] == "PROJECT_NOT_FINALIZABLE"
+
+    async def test_unfinalize_clears_flag_keeps_versions(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        pid = await _insert_project(test_session, worker_user.id, "completed")
+        test_session.add(_row(pid, uuid.uuid4(), 1, 1, "가", "본문"))
+        await test_session.commit()
+        await test_client.post(f"/api/v1/projects/{pid}/finalize", headers=_auth(worker_token))
+
+        resp = await test_client.delete(
+            f"/api/v1/projects/{pid}/finalize", headers=_auth(worker_token)
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["finalized_at"] is None
+        assert resp.json()["status"] == "completed"
+        versions = (
+            await test_client.get(f"/api/v1/projects/{pid}/versions", headers=_auth(worker_token))
+        ).json()
+        assert len(versions) == 1  # 확정 시점 버전은 남는다
+
+    async def test_reopen_clears_finalized(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        pid = await _insert_project(test_session, worker_user.id, "completed")
+        test_session.add(_row(pid, uuid.uuid4(), 1, 1, "가", "본문"))
+        await test_session.commit()
+        await test_client.post(f"/api/v1/projects/{pid}/finalize", headers=_auth(worker_token))
+
+        resp = await test_client.post(f"/api/v1/projects/{pid}/reopen", headers=_auth(worker_token))
+        assert resp.status_code == 200, resp.text
+        # 다시 열린 보고서는 확정본이 아니다 — 상태 리스너가 선언을 함께 내린다.
+        assert resp.json()["finalized_at"] is None
+
+
+class TestManualVersion:
+    """수동 버전 저장 — 자동 트리거 사이의 수동 편집 구간을 보존하는 체크포인트."""
+
+    async def test_manual_snapshot_and_dedup(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        pid = await _insert_project(test_session, worker_user.id, "completed")
+        sid = uuid.uuid4()
+        test_session.add(_row(pid, sid, 1, 1, "가", "본문 v1"))
+        await test_session.commit()
+
+        resp = await test_client.post(
+            f"/api/v1/projects/{pid}/versions", headers=_auth(worker_token), json={}
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"version_no": 1, "created": True}
+
+        # 같은 내용 재저장 — 새 버전을 만들지 않는다.
+        again = await test_client.post(
+            f"/api/v1/projects/{pid}/versions", headers=_auth(worker_token), json={}
+        )
+        assert again.json() == {"version_no": 1, "created": False}
+
+        # 내용을 고치고 꼬리표를 달아 저장 — reason에 꼬리표가 붙는다.
+        row = await test_session.get(Section, sid)
+        row.content = "본문 v2"
+        await test_session.commit()
+        noted = await test_client.post(
+            f"/api/v1/projects/{pid}/versions",
+            headers=_auth(worker_token),
+            json={"note": "표 손보기 전"},
+        )
+        assert noted.json() == {"version_no": 2, "created": True}
+        versions = (
+            await test_client.get(f"/api/v1/projects/{pid}/versions", headers=_auth(worker_token))
+        ).json()
+        assert versions[0]["reason"] == "manual:표 손보기 전"
+
+    async def test_manual_snapshot_rejects_empty_report(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        pid = await _insert_project(test_session, worker_user.id, "writing")
+        resp = await test_client.post(
+            f"/api/v1/projects/{pid}/versions", headers=_auth(worker_token), json={}
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"]["code"] == "NOTHING_TO_SNAPSHOT"

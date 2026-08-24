@@ -35,8 +35,9 @@ class ReportVersion(Base):
     )
     # 프로젝트 안에서 1부터 증가 — 사람이 부르는 이름("v2")이 곧 이 값.
     version_no: Mapped[int] = mapped_column(Integer, nullable=False)
-    # 스냅샷 사유: assemble(조립 완성) | reopen(재개 직전 보존) | manual(사용자 버튼)
-    reason: Mapped[str] = mapped_column(String(10), nullable=False)
+    # 스냅샷 사유: assemble(조립 완성) | reopen(재개 직전 보존) | finalize(확정 선언)
+    # | rewrite:<장.절>(절 재작성) | block:<장.절>(블록 재작성) | manual[:<꼬리표>](수동 저장)
+    reason: Mapped[str] = mapped_column(String(30), nullable=False)
     # [{"section_id","chapter_number","section_number","chapter_title","title",
     #   "content","source_ids"}] — 절 순서 그대로. 본문 정본은 이 배열이고,
     # HWPX는 요청 시 이 내용으로 재렌더한다(파일 보관 안 함).

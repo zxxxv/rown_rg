@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  BadgeCheck,
   ClipboardList,
   Download,
   FileSearch,
@@ -55,6 +56,7 @@ import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
 import { presetLabel } from "@/features/project-config/presets";
 import type { ProjectFormValues } from "@/features/project-config/schema";
 import { SourceUsageCard } from "@/features/stats/SourceUsageCard";
+import { useFinalizeProject, useUnfinalizeProject } from "@/api/versions";
 import { ReopenDialog } from "@/features/versions/ReopenDialog";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -209,6 +211,8 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
   const tokensUsed = usageQuery.data?.tokens_used ?? 0;
   const costUsed = usageQuery.data?.cost_usd ?? 0;
   const deleteProject = useDeleteProject();
+  const finalize = useFinalizeProject(project.id);
+  const unfinalize = useUnfinalizeProject(project.id);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 삭제는 항상 노출 - 백엔드가 '실행 중인 순간'만 막는다(게이트 대기·실패 잔류 정리 가능).
   const canDelete = true;
@@ -240,6 +244,17 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
                 {presetLabel(project.preset)}
               </Badge>
               <StatusDot kind={STATUS_KIND[project.status]} label={STATUS_LABEL[project.status]} />
+              {/* 완성 선언 분리(0045) - 파이프라인 완주는 '사이클 완료'일 뿐이고,
+                  확정 전까지는 자료를 넣고 고치며 진화하는 "검토 중" 문서다. */}
+              {project.status === "completed" ? (
+                project.finalized_at ? (
+                  <Badge className="border-fg-success/40 bg-bg-success text-fg-success">
+                    최종 확정
+                  </Badge>
+                ) : (
+                  <Badge variant="outline">검토 중</Badge>
+                )
+              ) : null}
             </div>
             <h1 className="max-w-3xl text-3xl font-semibold text-fg">{project.title}</h1>
             <p className="max-w-3xl text-sm text-fg-secondary">{project.topic}</p>
@@ -295,6 +310,43 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               stalled={stalled}
               liveStatus={usageQuery.data?.status}
             />
+            {project.status === "completed" ? (
+              project.finalized_at ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={unfinalize.isPending}
+                  onClick={() => {
+                    unfinalize.mutate(undefined, {
+                      onSuccess: () => toast("확정을 해제했습니다 - 다시 검토 중입니다."),
+                      onError: () => toast.error("확정 해제에 실패했습니다."),
+                    });
+                  }}
+                  title="본문과 버전은 그대로 두고 확정 표식만 내립니다"
+                >
+                  확정 해제
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={finalize.isPending}
+                  onClick={() => {
+                    finalize.mutate(undefined, {
+                      onSuccess: () =>
+                        toast.success("최종 확정됨", {
+                          description: "확정 시점의 본문이 버전으로 보존됩니다.",
+                        }),
+                      onError: () => toast.error("확정에 실패했습니다."),
+                    });
+                  }}
+                  title="이 내용을 납품 확정본으로 선언하고 버전으로 보존합니다"
+                >
+                  <BadgeCheck className="mr-1 h-4 w-4" aria-hidden />
+                  최종 확정
+                </Button>
+              )
+            ) : null}
             {canDelete ? (
               <Button
                 variant="ghost"

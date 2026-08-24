@@ -24,6 +24,8 @@ from src.api.schemas.project import (
     AnalystRead,
     ConfigUpdateRequest,
     LibraryAttachRequest,
+    ManualVersionRequest,
+    ManualVersionResponse,
     OutlineIn,
     PresetChapterRead,
     PresetDetailRead,
@@ -1859,6 +1861,84 @@ async def reopen_project(
     return project
 
 
+@router.post("/{project_id}/finalize", response_model=ProjectRead)
+async def finalize_project(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> Project:
+    """납품 확정 선언 — 파이프라인 완주(completed)는 '사이클 완료'일 뿐이다.
+
+    진화형 작성(2026-08-24)에서 보고서는 확정 전까지 "검토 중"으로 살아 있고,
+    사람이 이 버튼을 눌러야 확정본이 된다. 확정 시점의 본문을 버전으로 얼려
+    "확정된 그 내용"을 언제든 되찾을 수 있게 한다(마지막 버전과 같으면 재사용).
+    재개(reopen)하면 상태 리스너가 선언을 함께 해제한다(models/project.py).
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    if project.status != ProjectStage.COMPLETED.value:
+        raise ValidationError(
+            message="완료된 보고서만 확정할 수 있습니다",
+            code="PROJECT_NOT_FINALIZABLE",
+        )
+    if project.finalized_at is None:
+        from src.services.sections.versions import snapshot_report
+
+        await snapshot_report(session, project.id, reason="finalize", created_by=current_user.id)
+        project.finalized_at = clock_now()
+        await session.flush()
+        logger.info("project.finalized", project_id=str(project.id), user_id=str(current_user.id))
+    await session.refresh(project)
+    return project
+
+
+@router.delete("/{project_id}/finalize", response_model=ProjectRead)
+async def unfinalize_project(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> Project:
+    """확정 해제 — 실수로 누른 선언을 재개(자료 단계 복귀) 없이 되돌린다.
+
+    본문·버전은 건드리지 않는다. 내용을 고치려는 게 아니라 표식만 내리는 경로라
+    completed 상태를 유지한다(고치려면 reopen이 맞는 문이다).
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    if project.finalized_at is not None:
+        project.finalized_at = None
+        await session.flush()
+        logger.info("project.unfinalized", project_id=str(project.id), user_id=str(current_user.id))
+    await session.refresh(project)
+    return project
+
+
+@router.post("/{project_id}/versions", response_model=ManualVersionResponse)
+async def save_manual_version(
+    project_id: UUID,
+    data: ManualVersionRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> ManualVersionResponse:
+    """수동 버전 저장 — "이 상태를 남겨두고 계속 고치겠다"는 체크포인트.
+
+    자동 트리거(조립·재개·재작성·확정) 사이의 수동 편집 구간을 보존하는 유일한
+    수단이다. 내용이 마지막 버전과 같으면 새 버전을 만들지 않고 그 번호를 돌려준다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    from src.services.sections.versions import latest_version_no, snapshot_report
+
+    before = await latest_version_no(session, project.id)
+    reason = f"manual:{data.note}" if data.note else "manual"
+    version_no = await snapshot_report(
+        session, project.id, reason=reason, created_by=current_user.id
+    )
+    if version_no is None:
+        raise ValidationError(
+            message="저장할 본문이 없습니다 - 작성된 절이 있어야 버전을 만들 수 있습니다",
+            code="NOTHING_TO_SNAPSHOT",
+        )
+    return ManualVersionResponse(version_no=version_no, created=version_no > before)
+
+
 def _version_read(row: Any) -> ReportVersionRead:
     sections = row.sections or []
     return ReportVersionRead(
@@ -2789,6 +2869,16 @@ async def rewrite_section(
     row.qa_status = "passed"
     project.updated_at = clock_now()
     await session.flush()
+    # 진화형 작성(2026-08-24): 재작성은 이전 본문을 덮어쓰는 유일한 경로 중 하나라
+    # 성공 직후를 버전으로 얼린다 — "고치기 전"은 직전 버전이 이미 들고 있다.
+    from src.services.sections.versions import snapshot_report
+
+    await snapshot_report(
+        session,
+        project.id,
+        reason=f"rewrite:{row.chapter_number}.{row.section_number}",
+        created_by=current_user.id,
+    )
     await session.refresh(row)
     return _section_content(
         row,
@@ -2852,6 +2942,15 @@ async def rewrite_section_block(
     row.content = row.content.replace(data.block, new_block, 1)
     project.updated_at = clock_now()
     await session.flush()
+    # 블록 재작성도 덮어쓰기다 — 절 재작성과 같은 이유로 성공 직후를 얼린다.
+    from src.services.sections.versions import snapshot_report
+
+    await snapshot_report(
+        session,
+        project.id,
+        reason=f"block:{row.chapter_number}.{row.section_number}",
+        created_by=current_user.id,
+    )
     await session.refresh(row)
     return _section_content(
         row,

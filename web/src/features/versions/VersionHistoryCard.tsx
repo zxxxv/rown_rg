@@ -1,19 +1,24 @@
-import { ChevronDown, ChevronRight, Download, GitCompare, History } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, GitCompare, History, Save } from "lucide-react";
 import { useState } from "react";
-import { type ReportVersion, useReportVersions } from "@/api/versions";
+import { toast } from "sonner";
+import { useReportVersions, useSaveManualVersion } from "@/api/versions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { env } from "@/env";
 import { useDownload } from "@/features/export/useDownload";
 
-// 버전 기록 - 커밋 로그처럼 읽힌다: 언제·왜(완성/재개 보존)·규모.
-// 스냅샷은 서버가 자동으로 쌓는다(조립 완성·재개 직전). 여기서는 보기·비교·다운로드만.
+// 버전 기록 - 커밋 로그처럼 읽힌다: 언제·왜(완성/재개 보존/재작성/확정)·규모.
+// 스냅샷은 서버가 자동으로 쌓고(조립·재개·재작성·확정), 수동 저장 버튼이 그 사이를 메운다.
 
-const REASON_LABEL: Record<ReportVersion["reason"], string> = {
-  assemble: "완성본",
-  reopen: "재개 전 보존",
-  manual: "수동 저장",
-};
+function reasonLabel(reason: string): string {
+  if (reason === "assemble") return "완성본";
+  if (reason === "reopen") return "재개 전 보존";
+  if (reason === "finalize") return "확정 시점";
+  if (reason.startsWith("rewrite:")) return `절 재작성 ${reason.slice("rewrite:".length)}`;
+  if (reason.startsWith("block:")) return `블록 수정 ${reason.slice("block:".length)}`;
+  if (reason.startsWith("manual:")) return `수동 저장 · ${reason.slice("manual:".length)}`;
+  return "수동 저장";
+}
 
 function fmtDate(iso: string): string {
   const d = new Date(iso);
@@ -36,29 +41,60 @@ export function VersionHistoryCard({
   const query = useReportVersions(projectId);
   const [open, setOpen] = useState(false);
   const { download, pending } = useDownload();
+  const saveVersion = useSaveManualVersion(projectId);
   const versions = query.data ?? [];
   if (versions.length === 0) return null;
+
+  const onSaveVersion = async () => {
+    try {
+      const res = await saveVersion.mutateAsync(undefined);
+      if (res.created) {
+        toast.success(`v${res.version_no} 저장됨`, {
+          description: "현재 본문을 버전으로 남겼습니다.",
+        });
+      } else {
+        toast(`변경 없음 - 최신 버전(v${res.version_no})과 같은 내용입니다.`);
+      }
+    } catch {
+      toast.error("버전 저장에 실패했습니다.");
+    }
+  };
 
   const apiBase = env.VITE_API_BASE_URL.replace(/\/$/, "");
   return (
     <section className="rounded border border-border bg-bg">
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        {open ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
-        ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
-        )}
-        <History className="h-4 w-4 shrink-0 text-fg-secondary" aria-hidden />
-        <span className="text-sm font-medium text-fg">버전 기록</span>
-        <span className="text-xs text-fg-tertiary">
-          {versions.length}개 · 최신 v{versions[0].version_no} ({fmtDate(versions[0].created_at)})
-        </span>
-      </button>
+      <div className="flex w-full items-center gap-2 px-3 py-2">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+        >
+          {open ? (
+            <ChevronDown className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
+          ) : (
+            <ChevronRight className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
+          )}
+          <History className="h-4 w-4 shrink-0 text-fg-secondary" aria-hidden />
+          <span className="text-sm font-medium text-fg">버전 기록</span>
+          <span className="text-xs text-fg-tertiary">
+            {versions.length}개 · 최신 v{versions[0].version_no} ({fmtDate(versions[0].created_at)}
+            )
+          </span>
+        </button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 shrink-0 px-2 text-xs"
+          disabled={saveVersion.isPending}
+          onClick={() => void onSaveVersion()}
+          title="현재 본문을 버전으로 남깁니다 - 수동 편집 구간을 보존하는 체크포인트"
+        >
+          <Save className="mr-1 h-3.5 w-3.5" aria-hidden />
+          버전 저장
+        </Button>
+      </div>
       {open ? (
         <ul className="flex flex-col border-t border-border">
           {versions.map((v) => (
@@ -69,7 +105,7 @@ export function VersionHistoryCard({
               <Badge variant="outline" className="shrink-0 font-mono">
                 v{v.version_no}
               </Badge>
-              <span className="shrink-0 text-xs text-fg-secondary">{REASON_LABEL[v.reason]}</span>
+              <span className="shrink-0 text-xs text-fg-secondary">{reasonLabel(v.reason)}</span>
               <span className="shrink-0 text-xs text-fg-tertiary">{fmtDate(v.created_at)}</span>
               <span className="min-w-0 flex-1 truncate text-xs text-fg-tertiary">
                 {v.n_sections}절 · {v.total_chars.toLocaleString()}자

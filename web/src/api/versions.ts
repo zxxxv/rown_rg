@@ -8,7 +8,9 @@ import { projectKeys } from "@/api/projects";
 
 export const ReportVersionSchema = z.object({
   version_no: z.number().int(),
-  reason: z.enum(["assemble", "reopen", "manual"]).catch("manual"),
+  // assemble | reopen | finalize | rewrite:<장.절> | block:<장.절> | manual[:<꼬리표>]
+  // - 좌표·꼬리표가 붙는 열린 형태라 enum이 아니라 문자열로 받는다(0045).
+  reason: z.string().catch("manual"),
   created_at: z.string(),
   n_sections: z.number().int(),
   total_chars: z.number().int(),
@@ -90,6 +92,51 @@ export function useReopenProject() {
     onSuccess: (_data, projectId) => {
       void qc.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
       void qc.invalidateQueries({ queryKey: versionKeys.list(projectId) });
+    },
+  });
+}
+
+const ManualVersionResponseSchema = z.object({
+  version_no: z.number().int(),
+  created: z.boolean(),
+});
+export type ManualVersionResponse = z.infer<typeof ManualVersionResponseSchema>;
+
+/** 수동 버전 저장 - "이 상태를 남겨두고 계속 고치겠다"는 체크포인트. */
+export function useSaveManualVersion(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (note?: string) => {
+      const data = await apiClient.post<unknown>(`projects/${projectId}/versions`, {
+        json: note ? { note } : {},
+      });
+      return ManualVersionResponseSchema.parse(data);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: versionKeys.list(projectId) });
+    },
+  });
+}
+
+/** 납품 확정 선언 - completed는 '사이클 완료'일 뿐, 확정은 사람이 누른다. */
+export function useFinalizeProject(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiClient.post<unknown>(`projects/${projectId}/finalize`, { json: {} }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
+      void qc.invalidateQueries({ queryKey: versionKeys.list(projectId) });
+    },
+  });
+}
+
+/** 확정 해제 - 본문·버전은 그대로 두고 표식만 내린다(고치려면 재개가 맞는 문). */
+export function useUnfinalizeProject(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiClient.delete<unknown>(`projects/${projectId}/finalize`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
     },
   });
 }
