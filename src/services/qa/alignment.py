@@ -237,6 +237,11 @@ class ClaimAlignment:
     claim: str
     numbers: list[int] = field(default_factory=list)
     span: EvidenceSpan | None = None
+    # 이 주장이 인용한 청크 전부(중복 제거·등장 순). 판정(claim_verify)은 이 목록을
+    # 근거로 삼는다 — 대목(span) 하나만 넘기면 한글 청크가 뽑히고, 정작 그 문장을
+    # 받치는 영문 청크가 판정관에게 안 보인다(2026-08-24 COMPA 실측: 근거 불일치
+    # 7건 전부 판정 경로였고 어휘 경로는 0건).
+    cited_chunk_ids: list[UUID] = field(default_factory=list)
     ungrounded: list[str] = field(default_factory=list)
     # 근거에서 발견된 수치의 위치. ungrounded와 합치면 이 문장의 수치 전수가 된다.
     grounded: list[NumberSpan] = field(default_factory=list)
@@ -258,7 +263,12 @@ class ClaimAlignment:
             return "crosslingual"
         if self.span.score >= ALIGNED_THRESHOLD:
             return "aligned"
-        return "weak" if self.span.score >= WEAK_THRESHOLD else "unmatched"
+        if self.span.score >= WEAK_THRESHOLD:
+            return "weak"
+        # 겹침이 바닥이어도, 인용 근거에 외국어 청크가 섞여 있으면 '없다'가 아니라
+        # '못 쟀다'이다 — 한글 청크의 겹침만 보고 단정하면 정작 그 문장을 받치는
+        # 영문 청크가 통째로 무시된다(2026-08-24 COMPA 실측: 근거 불일치 7건 전부).
+        return "unmatched" if self.evidence_comparable else "crosslingual"
 
 
 def align_section(
@@ -314,10 +324,18 @@ def align_section(
                 claim=claim,
                 numbers=numbers,
                 span=best,
+                cited_chunk_ids=[cid for cid, _text in cited_chunks],
                 ungrounded=ungrounded,
                 grounded=_grounded_spans(bare, cited_chunks, ungrounded),
+                # 인용 근거가 **하나라도** 외국어면 겹침으로 '불일치'를 단정할 수 없다.
+                # 종전에는 합친 글에 한글이 있기만 하면 잴 수 있다고 봤는데, 한글 청크와
+                # 영문 청크를 함께 인용한 문장에서 한글 쪽 겹침만 재고 "근거에 없다"고
+                # 단정했다 — 정작 그 문장을 받치는 건 영문 청크였다(2026-08-24 COMPA
+                # 실측: 근거 불일치 7건 전부 이 꼴). 이런 문장은 판정(claim_verify)이
+                # 근거 원문을 읽고 가리는 게 맞다.
                 evidence_comparable=(
-                    not joined_evidence.strip() or bool(_HANGUL_RUN_RE.search(joined_evidence))
+                    not joined_evidence.strip()
+                    or all(_HANGUL_RUN_RE.search(text) for text in cited_text if text.strip())
                 ),
             )
         )

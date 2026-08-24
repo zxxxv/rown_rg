@@ -18,6 +18,33 @@ def _claim(text: str, chunk_id=None, score: float = 0.1, numbers=(1,), ungrounde
     return ClaimAlignment(claim=text, numbers=list(numbers), span=span, ungrounded=list(ungrounded))
 
 
+class TestCitedEvidence:
+    """판정관에게는 **인용한 청크 전부**를 준다(2026-08-24 실측).
+
+    대목(span) 하나만 주던 옛 동작은 판정 대상 문장의 80%가 청크를 2~6개 인용하는
+    상황에서 나머지를 통째로 숨겼다. COMPA A/B: 뒷받침 판정 49% → 70%.
+    """
+
+    def test_all_cited_chunks_in_prompt(self):
+        a, b, c = uuid4(), uuid4(), uuid4()
+        claim = ClaimAlignment(
+            claim="세 근거를 인용한 문장",
+            numbers=[1, 2, 3],
+            span=EvidenceSpan(chunk_id=a, number=1, start=0, end=4, text="가나다", score=0.2),
+            cited_chunk_ids=[a, b, c],
+        )
+        prompt = build_prompt([claim], {a: "가나다 근거", b: "라마바 근거", c: "사아자 근거"})
+        assert "라마바 근거" in prompt and "사아자 근거" in prompt
+        # 문장 줄에는 자기가 인용한 근거 번호가 모두 달린다.
+        assert "(근거 1, 2, 3)" in prompt
+
+    def test_falls_back_to_span_chunk(self):
+        # cited_chunk_ids가 빈 옛 데이터는 대목 청크로 폴백한다.
+        a = uuid4()
+        prompt = build_prompt([_claim("문장", a)], {a: "가나다 근거"})
+        assert "가나다 근거" in prompt
+
+
 class TestBuildPrompt:
     def test_evidence_deduped_and_referenced(self):
         a, b = uuid4(), uuid4()

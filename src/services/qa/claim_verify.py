@@ -61,37 +61,58 @@ class ClaimVerdict:
         return self.verdict == "supported"
 
 
+def _cited_ids(claim: ClaimAlignment) -> list[UUID]:
+    """그 문장이 인용한 청크 전부 — 없으면 대목의 청크로 폴백(옛 호출부 호환)."""
+    if claim.cited_chunk_ids:
+        return list(claim.cited_chunk_ids)
+    return [claim.span.chunk_id] if claim.span else []
+
+
 def _evidence_block(claims: list[ClaimAlignment], chunk_texts: dict[UUID, str]) -> str:
-    """문장들이 인용한 청크를 중복 없이 모아 번호를 붙인다."""
+    """문장들이 인용한 청크를 중복 없이 모아 번호를 붙인다.
+
+    대목(span) 하나가 아니라 **인용한 청크 전부**를 싣는다. 대목은 어휘 겹침으로
+    고른 것이라 한글 청크가 뽑히는데, 한글·영문을 함께 인용한 문장에서는 정작
+    그 문장을 받치는 영문 청크가 판정관에게 안 보였다(2026-08-24 COMPA 실측).
+    """
     seen: list[UUID] = []
     for claim in claims:
-        if claim.span and claim.span.chunk_id not in seen:
-            seen.append(claim.span.chunk_id)
+        for cid in _cited_ids(claim):
+            if cid not in seen:
+                seen.append(cid)
     lines: list[str] = []
     total = 0
+    dropped = 0
     for i, cid in enumerate(seen, start=1):
         text = (chunk_texts.get(cid) or "").strip()[:_MAX_CHUNK_CHARS]
         if not text:
             continue
         block = f"[근거 {i}]\n{text}"
+        if total + len(block) > _MAX_EVIDENCE_CHARS:
+            dropped += 1
+            continue
         total += len(block)
-        if total > _MAX_EVIDENCE_CHARS:
-            break
         lines.append(block)
+    if dropped:
+        # 근거가 잘리면 판정관은 못 본 근거를 '없다'고 답한다 — 그 자체가 오탐 공장이라
+        # 조용히 넘기지 않는다(2026-08-24: 인용 청크 전부를 싣게 하며 위험이 커졌다).
+        logger.warning(
+            "claim_verify.evidence_truncated", n_chunks=len(seen), dropped=dropped, chars=total
+        )
     return "\n\n".join(lines)
 
 
 def _claim_block(claims: list[ClaimAlignment], chunk_texts: dict[UUID, str]) -> str:
-    """문장마다 자기가 인용한 근거 번호를 달아 나열한다."""
+    """문장마다 자기가 인용한 근거 번호를 달아 나열한다(여러 개면 모두)."""
     order: list[UUID] = []
     for claim in claims:
-        if claim.span and claim.span.chunk_id not in order:
-            order.append(claim.span.chunk_id)
+        for cid in _cited_ids(claim):
+            if cid not in order:
+                order.append(cid)
     lines: list[str] = []
     for i, claim in enumerate(claims):
-        ref = ""
-        if claim.span and claim.span.chunk_id in order:
-            ref = f" (근거 {order.index(claim.span.chunk_id) + 1})"
+        refs = [str(order.index(cid) + 1) for cid in _cited_ids(claim) if cid in order]
+        ref = f" (근거 {', '.join(refs)})" if refs else ""
         lines.append(f"{i + 1}.{ref} {claim.claim}")
     return "\n".join(lines)
 
