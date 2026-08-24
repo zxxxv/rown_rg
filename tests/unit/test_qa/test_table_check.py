@@ -9,6 +9,7 @@ from __future__ import annotations
 from src.services.qa.table_check import (
     table_numeric_cells,
     table_prose_mismatches,
+    table_share_sum_mismatches,
     table_ungrounded_numbers,
 )
 
@@ -19,6 +20,84 @@ _TABLE = """주요 플랫폼 비교
 | 유튜브 쇼츠 (YouTube Shorts) | 87.6% | 20억 명 |
 | 인스타그램 릴스 | 59.4% | - |
 """
+
+
+class TestShareSumMismatch:
+    """구성비 합 검산 — 원출처가 틀린 값을 실어도 표 안에서 앞뒤가 안 맞으면 잡는다.
+
+    COMPA 실측(2026-08-24): 권역별 점유율 합 106%를 어떤 검사도 못 봤다. 근거 대조는
+    "근거에 있으니 통과"로 끝나므로 표 자체의 정합은 따로 세야 한다.
+    """
+
+    _SHARE = (
+        "| 권역 | 점유율 |\n|---|---|\n"
+        "| 북미 | 42% |\n| 유럽 | 26.4% |\n| 아태 | 24% |\n| 기타 | 13.6% |\n"
+    )
+
+    def test_sum_over_100_flagged(self):
+        out = table_share_sum_mismatches(self._SHARE)
+        assert len(out) == 1 and "106" in out[0] and "점유율" in out[0]
+
+    def test_sum_100_passes(self):
+        md = (
+            "| 권역 | 점유율 |\n|---|---|\n"
+            "| 북미 | 42% |\n| 유럽 | 24% |\n| 아태 | 24% |\n| 기타 | 10% |\n"
+        )
+        assert table_share_sum_mismatches(md) == []
+
+    def test_rounding_within_tolerance_passes(self):
+        md = (
+            "| 권역 | 비중 |\n|---|---|\n"
+            "| 북미 | 42.4% |\n| 유럽 | 24.3% |\n| 아태 | 23.9% |\n| 기타 | 10.8% |\n"
+        )
+        assert table_share_sum_mismatches(md) == []  # 101.4% — 반올림 누적 범위
+
+    def test_growth_rate_column_not_summed(self):
+        # 성장률을 더하면 뜻이 없다 — 구성비 머리말이 붙은 열만 검산한다.
+        md = (
+            "| 권역 | CAGR |\n|---|---|\n"
+            "| 북미 | 42% |\n| 유럽 | 26% |\n| 아태 | 24% |\n| 기타 | 14% |\n"
+        )
+        assert table_share_sum_mismatches(md) == []
+
+    def test_total_row_excluded(self):
+        md = self._SHARE + "| 합계 | 106% |\n"
+        out = table_share_sum_mismatches(md)
+        assert len(out) == 1 and "106" in out[0]  # 합계 행을 또 더해 212%가 되지 않는다
+
+    def test_too_few_items_skipped(self):
+        md = "| 권역 | 점유율 |\n|---|---|\n| 북미 | 60% |\n| 유럽 | 30% |\n"
+        assert table_share_sum_mismatches(md) == []
+
+    def test_independent_ratios_not_summed(self):
+        """행마다 제 몫을 따로 말하는 열은 더할 대상이 아니다.
+
+        2026-08-24 예타 실측: 이 구분이 없어 7건 전부 오탐이었다 — 세대별 내국인
+        점유율(75·63·67)을 더해 205%라고 경고했다.
+        """
+        md = (
+            "| 세대 | 미국 내국인 점유율 |\n|---|---|\n"
+            "| 1세대 | 75% |\n| 2세대 | 63% |\n| 3세대 | 67% |\n| 4세대 | 70% |\n"
+        )
+        assert table_share_sum_mismatches(md) == []
+
+    def test_partial_list_not_flagged(self):
+        # 여러 나라 중 셋만 실은 목록 — 합이 37%인 건 결함이 아니라 목록의 성격이다.
+        md = (
+            "| 국가 | 반도체 전체 매출 점유율 |\n|---|---|\n"
+            "| 한국 | 22% |\n| 일본 | 6% |\n| 대만 | 9% |\n| 기타 | 5% |\n"
+        )
+        assert table_share_sum_mismatches(md) == []
+
+    def test_subtotal_row_excluded(self):
+        md = (
+            "| 구분 | 점유율 |\n|---|---|\n"
+            "| 미국 | 40% |\n| 한국 | 24% |\n| 미국+한국 합산 | 64% |\n"
+            "| 중국 | 20% |\n| 기타 | 22% |\n"
+        )
+        # 합산 행을 빼면 40+24+20+22=106% → 검출, 안 빼면 170%로 밴드 밖이라 침묵한다.
+        out = table_share_sum_mismatches(md)
+        assert len(out) == 1 and "106" in out[0]
 
 
 class TestTableNumericCells:

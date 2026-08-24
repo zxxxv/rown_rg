@@ -43,7 +43,11 @@ from src.services.qa.gate import (
     number_variants,
     truncated_lines,
 )
-from src.services.qa.table_check import table_prose_mismatches, table_ungrounded_numbers
+from src.services.qa.table_check import (
+    table_prose_mismatches,
+    table_share_sum_mismatches,
+    table_ungrounded_numbers,
+)
 from src.services.sections.evidence import marker_chunk_ids
 
 logger = structlog.get_logger(__name__)
@@ -390,6 +394,19 @@ def _table_findings(
     content = row.content or ""
     ref = f"{row.chapter_number}.{row.section_number}"
     out: list[dict[str, Any]] = []
+
+    share_gaps = table_share_sum_mismatches(content)
+    if share_gaps:
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "표 합계 불일치",
+                f"구성비 합이 100%가 아닌 표 {len(share_gaps)}건: {share_gaps[0]}"
+                + (f" 외 {len(share_gaps) - 1}건" if len(share_gaps) > 1 else ""),
+            )
+        )
 
     mismatches = table_prose_mismatches(content)
     if mismatches:

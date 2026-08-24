@@ -90,6 +90,61 @@ def table_numeric_cells(content: str) -> list[TableCell]:
     return out
 
 
+# 구성비 열임을 알리는 머리말 — 이 말이 붙은 열만 합계를 잰다. 성장률·증감률 열을
+# 더하면 뜻이 없으므로 머리말로 좁힌다(정밀도 우선).
+_SHARE_HEADER_RE = re.compile(r"비중|점유율|구성비|구성\s*비율|비율|share|portion|mix", re.I)
+# 합계·소계 행은 검산 대상이 아니라 답이다 — 같이 더하면 두 배가 된다.
+_TOTAL_ROW_RE = re.compile(
+    r"^(?:합\s*계|계|총\s*계|소\s*계|전\s*체|누\s*계|total|sum|subtotal)$|합산", re.I
+)
+# 구성비로 볼 최소 항목 수·허용 오차(%p). 반올림 누적을 감안해 2%p까지는 눈감는다.
+# 항목 4개 이상만 보는 이유(2026-08-24 예타 실측): 세대별·국가별로 **각자 독립된**
+# 비율을 적은 열(1세대 75%·2세대 63%…)이 3개짜리로 흔한데, 그걸 더하면 뜻이 없다.
+_SHARE_MIN_ITEMS = 4
+_SHARE_TOLERANCE = 2.0
+# 구성비로 볼 합계 범위 — 이 밖이면 애초에 전체를 나눈 표가 아니다(205%·37%·28%는
+# 각 행이 제 몫을 따로 말하거나 목록의 일부만 실은 것이라 검산 대상이 아니다).
+_SHARE_SUM_BAND = (90.0, 110.0)
+
+
+def table_share_sum_mismatches(content: str) -> list[str]:
+    """구성비 열의 합이 100%에서 벗어난 표 — 원출처 오류까지 잡아내는 검산.
+
+    COMPA 런 실측(2026-08-24): 권역별 점유율 합이 106%였는데 어떤 검사도 못 봤다.
+    원출처(marketintelo)가 틀린 값을 실었고 본문은 그것을 충실히 인용했다 — 근거
+    대조는 "근거에 있으니 통과"로 끝나므로, 표 안에서 스스로 앞뒤가 맞는지는
+    따로 세야 한다. 성장률 열을 더하면 뜻이 없으니 구성비 머리말이 붙은 열만 본다.
+    """
+    by_column: dict[str, list[tuple[str, float]]] = {}
+    for cell in table_numeric_cells(content):
+        if not cell.is_percent or not _SHARE_HEADER_RE.search(cell.col_header):
+            continue
+        if _TOTAL_ROW_RE.search(cell.row_label.strip()):
+            continue
+        try:
+            value = float(cell.norm)
+        except ValueError:
+            continue
+        by_column.setdefault(cell.col_header, []).append((cell.row_label, value))
+
+    out: list[str] = []
+    for header, items in by_column.items():
+        if len(items) < _SHARE_MIN_ITEMS:
+            continue
+        total = sum(v for _label, v in items)
+        if abs(total - 100.0) <= _SHARE_TOLERANCE:
+            continue
+        if not _SHARE_SUM_BAND[0] <= total <= _SHARE_SUM_BAND[1]:
+            continue  # 전체를 나눈 표가 아니다 — 검산할 '100%'가 애초에 없다
+        shown = ", ".join(f"{label} {value:g}%" for label, value in items[:4])
+        out.append(
+            f"'{header}' 열의 합이 {total:g}% (항목 {len(items)}개: {shown}"
+            + (" …" if len(items) > 4 else "")
+            + ")"
+        )
+    return out
+
+
 def table_ungrounded_numbers(content: str, cited_content: str) -> list[str]:
     """검사 A: 인용 근거 어디에도 없는 표 셀 수치 (등장 순서·중복 제거).
 
