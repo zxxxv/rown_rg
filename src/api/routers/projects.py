@@ -1659,7 +1659,17 @@ def _state_for_export(project: Project, rows: list[Section], author: str = "") -
             title=row.title,
             chapter_title=row.chapter_title or "",
         )
-        draft = SectionDraft(section_id=row.id, content=row.content or "", cited_chunk_ids=[])
+        # 인용 청크를 실어 준다 — 그림 자리표시자가 업로드 자료의 쪽 번호를 붙이려면
+        # 그 절이 어느 청크를 봤는지 알아야 한다(2026-08-25). sections.source_ids가
+        # 곧 인용 청크 id다.
+        draft = SectionDraft(
+            section_id=row.id,
+            content=row.content or "",
+            cited_chunk_ids=list(row.source_ids or []),
+            pool_chunk_ids=[
+                UUID(str(c)) for c in ((row.meta or {}).get("pool_chunk_ids") or []) if c
+            ],
+        )
         candidate = SectionCandidate(draft=draft)
         plans.append(plan)
         sets.append(SectionCandidateSet(section_id=row.id, candidates=[candidate]))
@@ -2115,8 +2125,25 @@ async def download_report_version(
             ]
         }
     )
+    # 업로드 자료는 URL이 없어 그림 자리표시자에 쪽 번호를 붙인다 — 손에 있는 파일에서
+    # 몇 쪽을 펴면 되는지가 링크만큼 쓸모 있다(2026-08-25 지시).
+    chunk_meta = {
+        cid: (source_id, (meta or {}).get("page") if isinstance(meta, dict) else None)
+        for cid, source_id, meta in (
+            await session.execute(
+                select(Chunk.id, Chunk.source_id, Chunk.metadata_).where(
+                    Chunk.project_id == project.id
+                )
+            )
+        ).all()
+        if source_id is not None
+    }
     path = await asyncio.to_thread(
-        export_report, state, output_dir=out_dir, glossary=project.glossary
+        export_report,
+        state,
+        output_dir=out_dir,
+        glossary=project.glossary,
+        chunk_meta=chunk_meta,
     )
     return FileResponse(path, filename=filename, media_type="application/octet-stream")
 

@@ -777,12 +777,18 @@ _PART_LABEL_RE = re.compile(r"^\s*\(\d+(?:-\d+)+\)\s*")
 _FIGURE_HINT_MAX = 2
 
 
-def _figure_source_hints(content: str, sources: Sequence[SourceRef]) -> list[str]:
-    """그 절이 인용한 자료 중 원본 그림을 찾아갈 만한 것 — "제목 (URL)" 꼴.
+def _figure_source_hints(
+    content: str,
+    sources: Sequence[SourceRef],
+    pages: dict[UUID, int] | None = None,
+) -> list[str]:
+    """그 절이 인용한 자료 중 원본 그림을 찾아갈 만한 것.
 
     "그림 넣으라고 표시된 부분은 원본 그림 출처를 링크로 표기해 달라"(2026-08-24 지시).
     따라가 보고 다시 그릴지 따다 쓸지 판단하려면 자리표시자가 출처를 데리고 있어야
-    한다. URL이 있는 자료를 먼저 싣는다 — 눌러서 바로 열 수 있는 쪽이 쓸모 있다.
+    한다. 웹 자료는 URL(눌러서 바로 열린다), 업로드 자료는 **쪽 번호**를 붙인다 —
+    업로드 PDF는 URL이 애초에 없어 파일명만 남았는데(2026-08-25 지적), 손에 있는
+    파일에서 몇 쪽을 펴면 되는지가 링크만큼 쓸모 있다.
     """
     nums = source_numbers(content)
     picked: list[str] = []
@@ -794,12 +800,33 @@ def _figure_source_hints(content: str, sources: Sequence[SourceRef]) -> list[str
             if bool(src.url) is not has_url:
                 continue
             label = (src.title or "").strip() or (src.url or "")
-            entry = f"{label} ({src.url})" if src.url else label
+            if src.url:
+                entry = f"{label} ({src.url})"
+            else:
+                page = (pages or {}).get(src.id)
+                entry = f"{label} (p.{page})" if page else label
             if entry and entry not in picked:
                 picked.append(entry)
             if len(picked) >= _FIGURE_HINT_MAX:
                 return picked
     return picked
+
+
+def _cited_source_pages(
+    chunk_ids: Sequence[UUID], chunk_meta: dict[UUID, tuple[UUID, int | None]]
+) -> dict[UUID, int]:
+    """자료별 대표 쪽 번호 — 그 절이 인용한 청크 중 가장 앞 쪽.
+
+    한 자료에서 여러 대목을 인용했으면 앞쪽부터 넘겨 보는 편이 자연스럽다.
+    """
+    out: dict[UUID, int] = {}
+    for cid in chunk_ids:
+        source_id, page = chunk_meta.get(cid, (None, None))
+        if source_id is None or not page:
+            continue
+        if source_id not in out or page < out[source_id]:
+            out[source_id] = page
+    return out
 
 
 def _figure_placeholder(
@@ -888,7 +915,9 @@ def _source_entry(index: int, src: SourceRef) -> str:
 
 
 def report_blocks(
-    state: ProjectState, glossary: dict[str, dict[str, str]] | None = None
+    state: ProjectState,
+    glossary: dict[str, dict[str, str]] | None = None,
+    chunk_meta: dict[UUID, tuple[UUID, int | None]] | None = None,
 ) -> list[Block]:
     """보고서 전체 블록을 실제 순서(표지 → 요약문 → 목차 → 표·그림 목차 → 본문 →
     참고문헌)로 조립한다.
@@ -970,7 +999,11 @@ def report_blocks(
         _attach_table_sources(section_blocks, source_titles)
         section_blocks = _strip_citation_blocks(section_blocks, source_titles)
         visual_count = sum(1 for b in section_blocks if isinstance(b, Table | Chart))
-        hints = _figure_source_hints(content, state.sources)
+        draft = drafts[plan.section_id]
+        pages = _cited_source_pages(
+            [*draft.cited_chunk_ids, *draft.pool_chunk_ids], chunk_meta or {}
+        )
+        hints = _figure_source_hints(content, state.sources, pages)
         section_blocks = _distribute_figures(
             section_blocks,
             [
@@ -1031,6 +1064,7 @@ def export_report(
     output_dir: str | Path | None = None,
     template_path: str | Path | None = None,
     glossary: dict[str, dict[str, str]] | None = None,
+    chunk_meta: dict[UUID, tuple[UUID, int | None]] | None = None,
 ) -> Path:
     """선택·조립된 보고서를 `<export_dir>/<project_id>.hwpx`로 렌더하고 경로를 반환.
 
@@ -1049,7 +1083,10 @@ def export_report(
 
     path = out_dir / export_filename(state.project_id)
     build_report(
-        report_blocks(state, glossary), path, template_path=template, apply_chrome=template is None
+        report_blocks(state, glossary, chunk_meta),
+        path,
+        template_path=template,
+        apply_chrome=template is None,
     )
     logger.info("export.hwpx_written", project_id=str(state.project_id), path=str(path))
     return path

@@ -177,6 +177,24 @@ class TestFigureSourceHints:
         body = "ㅇ 시장 규모는 확대되는 흐름으로 나타났음(출처 1)"
         assert _figure_source_hints(body, self._sources()) == ["업로드 보고서"]
 
+    def test_upload_source_gets_page_number(self):
+        """업로드 PDF는 URL이 없다 — 손에 있는 파일에서 몇 쪽을 펴면 되는지가
+        링크만큼 쓸모 있다(2026-08-25 지시)."""
+        from src.services.export.report import _figure_source_hints
+
+        sources = self._sources()
+        body = "ㅇ 시장 규모는 확대되는 흐름으로 나타났음(출처 1)"
+        hints = _figure_source_hints(body, sources, {sources[0].id: 12})
+        assert hints == ["업로드 보고서 (p.12)"]
+
+    def test_representative_page_is_the_earliest(self):
+        """한 자료에서 여러 대목을 인용했으면 앞쪽부터 넘겨 보는 편이 자연스럽다."""
+        from src.services.export.report import _cited_source_pages
+
+        sid, c1, c2, c3 = uuid4(), uuid4(), uuid4(), uuid4()
+        meta = {c1: (sid, 30), c2: (sid, 12), c3: (sid, None)}
+        assert _cited_source_pages([c1, c2, c3], meta) == {sid: 12}
+
     def test_placeholder_carries_hints(self):
         plan = SectionPlan(chapter_number=1, section_number=1, title="현황")
         fig = _figure_placeholder(plan, 0, ["웹 통계 자료 (https://ex.com/stat)"])
