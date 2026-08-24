@@ -26,6 +26,7 @@ from src.export.hwpx_writer import (
 )
 from src.services.export.report import (
     REFERENCES_HEADING,
+    _distribute_figures,
     _figure_placeholder,
     _figures_needed,
     export_filename,
@@ -66,6 +67,44 @@ class TestFiguresNeeded:
         assert _figures_needed(content, visual_count=0) == 1
         assert _figures_needed(content, visual_count=1) == 1  # 분량상 부족분이 남아도 캡 1
         assert _figures_needed(content, visual_count=5) == 0  # 시각자료가 충분하면 0
+
+
+class TestDistributeFigures:
+    """자리표시자는 절 끝이 아니라 **그 그림이 말하는 대목** 뒤에 들어간다(2026-08-24)."""
+
+    def _blocks(self) -> list:
+        return [
+            Paragraph(text="ㅇ 시장 규모는 꾸준히 확대되는 흐름임", indent=1),
+            Paragraph(text="ㅇ 경쟁 구도는 상위 3사로 재편되는 중임", indent=1),
+            Paragraph(text="ㅇ 정책 지원은 단계적으로 축소될 전망임", indent=1),
+        ]
+
+    def test_inserted_next_to_matching_topic(self):
+        out = _distribute_figures(self._blocks(), [Figure(caption="경쟁 구도", description="d")])
+        idx = next(i for i, b in enumerate(out) if isinstance(b, Figure))
+        # '경쟁 구도'를 말하는 문단(색인 1) 바로 뒤여야 한다.
+        assert idx == 2
+        assert "경쟁 구도" in out[idx - 1].text
+
+    def test_never_appended_at_the_very_end(self):
+        # 종전 병리 — 절 끝(대개 페이지 하단)에 몰아 붙이던 것.
+        out = _distribute_figures(self._blocks(), [Figure(caption="무관한 주제", description="d")])
+        assert not isinstance(out[-1], Figure)
+
+    def test_not_placed_right_after_heading(self):
+        blocks = [Heading(level=3, text="시장 규모"), *self._blocks()]
+        out = _distribute_figures(blocks, [Figure(caption="시장 규모", description="d")])
+        idx = next(i for i, b in enumerate(out) if isinstance(b, Figure))
+        assert not isinstance(out[idx - 1], Heading)
+
+    def test_spreads_away_from_existing_tables(self):
+        blocks = [
+            Table(headers=["a"], rows=[["1"]]),
+            *[Paragraph(text=f"ㅇ 본문 문단 {i}번임", indent=1) for i in range(6)],
+        ]
+        out = _distribute_figures(blocks, [Figure(caption="무관", description="d")])
+        idx = next(i for i, b in enumerate(out) if isinstance(b, Figure))
+        assert idx >= 4  # 표에서 멀리 — 바로 뒤에 붙지 않는다
 
 
 class TestFigurePlaceholder:
@@ -434,6 +473,29 @@ class TestReportBlocks:
         blocks = report_blocks(_state_with_abbreviations(), glossary)
         table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] == "약어")
         assert table.rows[0][:3] == ["SMR", "Small Modular Reactor", "소형 모듈 원자로"]
+
+    def test_glossary_full_name_prefers_english_from_dict(self):
+        """전체 명칭은 사전의 영문 원어가 정본 — 기계 추출값(괄호 앞 한글)이 아니다.
+
+        본문이 "녹색에너지인증서(GEC)"로 쓰면 추출값은 한글이 잡힌다. 영문 약어의
+        전체 명칭은 영문이어야 하고 한글은 설명 열의 몫이다(2026-08-24 지시).
+        """
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="제도")]
+        body = "ㅇ 중국은 녹색에너지인증서(GEC) 제도를 운영 중임"
+        glossary = {"GEC": {"full": "Green Energy Certificate", "desc": "중국 녹색전력 인증서"}}
+        blocks = report_blocks(_state("제도", plan, [body]), glossary)
+        table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] == "약어")
+        assert table.rows[0][:3] == ["GEC", "Green Energy Certificate", "중국 녹색전력 인증서"]
+
+    def test_glossary_full_name_falls_back_to_extracted(self):
+        """사전이 영문명을 모르면(빈 값) 추출값으로 폴백한다 — 칸이 비지 않게."""
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="제도")]
+        body = "ㅇ 한국개발연구원(KDI)이 분석을 수행함"
+        blocks = report_blocks(
+            _state("제도", plan, [body]), {"KDI": {"full": "", "desc": "국책연구기관"}}
+        )
+        table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] == "약어")
+        assert table.rows[0][:3] == ["KDI", "한국개발연구원", "국책연구기관"]
 
     def test_glossary_sits_at_chapter_end_before_next_chapter(self):
         """1장 약어 정리는 1장 본문 뒤·2장 헤딩 앞, 쪽 나눔 뒤(별도 페이지)에 놓인다."""

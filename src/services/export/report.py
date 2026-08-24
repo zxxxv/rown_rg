@@ -655,18 +655,19 @@ def _block_weight(block: Block) -> int:
 
 
 def _distribute_figures(blocks: list[Block], figures: list[Figure]) -> list[Block]:
-    """그림 자리표시자를 절 본문에 흩어 넣는다 — 절 끝에 몰아넣지 않는다.
+    """그림 자리표시자를 **그 그림이 말하는 대목** 뒤에 넣는다.
 
     종전에는 절 뒤에 붙였다. 그래서 긴 절일수록 자리표시자가 끝(대개 페이지 하단)에
     몰렸다(2026-08-24 지적). 시각자료는 읽는 피로를 덜자고 넣는 것이라 본문 사이에
-    있어야 뜻이 산다. 이미 있는 표·차트에서 글이 가장 멀리 이어지는 자리를 하나씩
-    골라 채운다 — 표가 많은 절은 표 사이 빈 구간에, 표가 없는 절은 한가운데에 놓인다.
+    있어야 뜻이 산다. 자리는 두 가지로 고른다 — 먼저 그림 제목(담당 key_point)의
+    낱말과 겹치는 문단을 찾고, 겹치는 곳이 여럿이면 이미 있는 표·차트에서 가장 먼
+    곳을 고른다. 겹치는 문단이 없으면 간격만 보고 고른다(종전 방식).
 
     헤딩 바로 뒤에는 넣지 않는다(소제목과 본문 사이를 그림이 가르면 읽는 흐름이 끊긴다).
     """
     out = list(blocks)
     for figure in figures:
-        pos = _best_figure_slot(out)
+        pos = _best_figure_slot(out, figure)
         if pos is None:
             out.append(figure)
             continue
@@ -674,8 +675,16 @@ def _distribute_figures(blocks: list[Block], figures: list[Figure]) -> list[Bloc
     return out
 
 
-def _best_figure_slot(blocks: list[Block]) -> int | None:
-    """시각자료에서 글이 가장 멀리 떨어진 삽입 자리(블록 색인). 없으면 None."""
+# 내용 매칭용 낱말 — 한글 2자 이상·라틴 3자 이상만 센다(조사·전치사 잡음 제외).
+_TOPIC_WORD_RE = re.compile(r"[가-힣]{2,}|[A-Za-z][A-Za-z0-9]{2,}")
+
+
+def _topic_words(text: str) -> set[str]:
+    return {w.lower() for w in _TOPIC_WORD_RE.findall(text)}
+
+
+def _best_figure_slot(blocks: list[Block], figure: Figure | None = None) -> int | None:
+    """그림을 넣을 자리(블록 색인). 내용이 겹치는 대목 우선, 그다음 간격."""
     if not blocks:
         return None
     cum: list[int] = []  # 각 블록 뒤 경계까지의 누적 몫
@@ -684,23 +693,29 @@ def _best_figure_slot(blocks: list[Block]) -> int | None:
         total += _block_weight(block)
         cum.append(total)
     visuals = [cum[i] for i, b in enumerate(blocks) if isinstance(b, Table | Chart | Figure)]
+    topic = _topic_words(figure.caption) if figure else set()
 
-    best_at, best_gap = None, -1.0
-    for i in range(len(blocks)):
+    scored: list[tuple[int, int, float]] = []  # (겹침, 색인, 시각자료와의 거리)
+    for i, block in enumerate(blocks):
         # 마지막 블록 뒤는 후보에서 뺀다 — 그게 바로 종전의 '절 끝 몰림'이다.
-        if i == len(blocks) - 1:
+        if i == len(blocks) - 1 or isinstance(block, Heading):
             continue
-        if isinstance(blocks[i], Heading):
-            continue  # 소제목과 본문 사이를 가르지 않는다
         here = cum[i]
         gap = (
             min(abs(here - v) for v in visuals)
             if visuals
             else min(here, total - here)  # 시각자료가 없으면 절 한가운데가 가장 멀다
         )
-        if gap > best_gap:
-            best_at, best_gap = i + 1, float(gap)
-    return best_at
+        overlap = (
+            len(topic & _topic_words(block.text)) if topic and isinstance(block, Paragraph) else 0
+        )
+        scored.append((overlap, i + 1, float(gap)))
+    if not scored:
+        return None
+    best_overlap = max(s[0] for s in scored)
+    # 겹침이 있으면 그 대목들 안에서, 없으면 전체에서 — 시각자료에서 가장 먼 자리.
+    pool = [s for s in scored if s[0] == best_overlap] if best_overlap else scored
+    return max(pool, key=lambda s: s[2])[1]
 
 
 # 프리셋 키포인트의 파트 라벨 — "(4-5-1)" 같은 내부 번호가 캡션에 새지 않게 걷는다.
@@ -815,8 +830,15 @@ def report_blocks(
             # 약어 정리는 장 끝 별도 페이지(쪽 나눔 후)에 배치한다(2026-08-05 확정).
             body.append(PageBreak())
             body.append(Heading(level=2, text="약어 정리"))
+            # 전체 명칭은 사전이 만든 **영문 원어**가 정본이다 — 기계 추출값은 괄호 앞
+            # 글자를 긁은 것이라 "녹색에너지인증서(GEC)"처럼 한글이 잡힌다. 영문 약어의
+            # 전체 명칭은 영문이어야 하고 한글은 설명 열의 몫이다(2026-08-24 지시).
             entries = [
-                [abbr, full, (glossary or {}).get(abbr, {}).get("desc", "")]
+                [
+                    abbr,
+                    (glossary or {}).get(abbr, {}).get("full") or full,
+                    (glossary or {}).get(abbr, {}).get("desc", ""),
+                ]
                 for abbr, full in chapter_abbrs.items()
             ]
             body.extend(_glossary_tables(entries))

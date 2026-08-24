@@ -51,6 +51,12 @@ HEADING_SIZE_PT: dict[int, int] = {1: 16, 2: 14, 3: 12}
 # (2026-08-24 사용자 확정). 표 안은 좁아야 읽히므로 따로 130%를 쓴다.
 LINE_SPACING_PERCENT = 160
 CELL_LINE_SPACING_PERCENT = 130
+# 본문 정렬 — 양쪽 정렬(문서 기본값)은 줄 끝을 맞추려고 낱말 사이를 늘린다. 우리
+# 보고서처럼 끊어 쓸 수 없는 영문 고유명사(RE100·Climate Week NYC·CBAM)가 잦으면
+# 한 줄이 70%만 차고 남은 30%가 공백 일곱 개에 배분돼 눈에 띄게 벌어진다
+# (2026-08-24 사용자 지적 화면). 왼쪽 정렬은 오른쪽 끝이 들쭉날쭉해지는 대신
+# 낱말 간격이 늘 일정하다 — 실납품 샘플도 10%는 왼쪽 정렬을 쓴다.
+BODY_ALIGNMENT = "LEFT"
 # 실납품 2종 실측 일치(2026-08-24, 알키미스트 hwpx·비수도권 hwp): 좌우 20·상하 15.
 # 종전 좌30(한글 기본값 잔재)·상하20은 본문을 오른쪽으로 밀어 개조식이 깊어 보였다.
 MARGIN_MM: dict[str, float] = {"top": 15.0, "bottom": 15.0, "left": 20.0, "right": 20.0}
@@ -107,6 +113,10 @@ SOURCE_NOTE_INDENT_MM = OUTLINE_STEP_PT * _MM_PER_PT
 CELL_PARA_SPACING_BEFORE_PT = 1.0
 # 차트 그림 높이(mm) — chart_render의 가로세로비(6.3:3.4)를 본문 폭 170mm에 맞춘 값.
 CHART_HEIGHT_MM = 92.0
+# 그림 자리표시자 박스 높이(mm) — 실제 그림이 들어갈 자리만큼 잡아 둔다(차트와 같은 몫).
+# 마지막 줄(안내 문구)만 낮게 두고 나머지를 설명 칸이 갖는다.
+FIGURE_BOX_HEIGHT_MM = 90.0
+FIGURE_NOTE_ROW_MM = 8.0
 TABLE_CAPTION_SPACE_AFTER_PT = 1.0  # 표와 붙여 한 덩어리로 보이게 여백을 최소로
 # 표 열 폭 배분 시 한 열의 상대 가중치 하한/상한 — 극단적으로 좁거나 넓은 열을 막는다.
 COL_WEIGHT_MIN = 8
@@ -447,8 +457,7 @@ def _add_body(
         # 문단마다 아래 여백을 줘 개조식 항목들이 붙어 보이지 않게 한다(가독성).
         "spacing_after_pt": BODY_SPACING_AFTER_PT,
     }
-    if align:
-        fmt["alignment"] = align
+    fmt["alignment"] = align or BODY_ALIGNMENT
     # 마커 폭만큼 왼쪽 여백을 더 주고 첫 줄만 그만큼 당겨(음수) 내어쓰기를 만든다.
     # 이러면 항목이 두 줄 이상으로 넘어가도 둘째 줄이 마커 아래가 아니라 본문 글머리에
     # 맞춰 정렬돼, 마커 하나가 어디까지를 묶는지 눈으로 따라갈 수 있다(2026-08-11 지적).
@@ -834,7 +843,12 @@ def _add_chart(doc: HwpxDocument, chart: Chart) -> None:
 
 
 def _add_figure(doc: HwpxDocument, figure: Figure) -> None:
-    """그림 플레이스홀더 — 추천 시각자료 설명 박스 + 그 아래 제목."""
+    """그림 플레이스홀더 — 추천 시각자료 설명 박스 + 그 아래 제목.
+
+    박스 높이를 실제 그림만 하게 잡는다(2026-08-24 지시). 글자 높이에 맞춘 납작한
+    박스는 자리를 제대로 잡아 주지 못해, 나중에 진짜 그림을 끼우면 뒷 페이지가
+    통째로 밀린다 — 자리표시자는 '그 자리가 얼마나 필요한지'를 보여야 뜻이 산다.
+    """
     note = "※ 실제 이미지는 확정 후 삽입되는 자리표시자입니다."
     tbl = doc.add_table(2, 1, width=_page_content_width_hwp())
     _reset_table_anchor(doc, tbl)
@@ -843,5 +857,31 @@ def _add_figure(doc: HwpxDocument, figure: Figure) -> None:
     # 배경색은 전 요소에서 쓰지 않는다(2026-08-23 사용자 지시).
     # 셀 정렬은 손대지 않는다 — 설명 문장이 길어 가운데로 모으면 줄마다 들쭉날쭉해진다.
     _apply_cell_margins(tbl)
+    _set_box_height(tbl, FIGURE_BOX_HEIGHT_MM, FIGURE_NOTE_ROW_MM)
     _add_caption_below(doc, figure.caption, figure.caption_bookmark)
     _add_block_gap(doc)
+
+
+def _set_box_height(tbl, total_mm: float, last_row_mm: float) -> None:
+    """표 박스의 세로 크기를 지정한다 — 마지막 행만 낮게, 나머지를 첫 행이 갖는다."""
+    element = getattr(tbl, "element", None)
+    if element is None:
+        return
+    total = _mm_to_hwpunit(total_mm)
+    last = _mm_to_hwpunit(last_row_mm)
+    try:
+        rows = [n for n in element.iter() if n.tag.rsplit("}", 1)[-1] == "tr"]
+        if not rows:
+            return
+        for i, row in enumerate(rows):
+            height = last if i == len(rows) - 1 else (total - last) // max(1, len(rows) - 1)
+            for cell_sz in row.iter():
+                if cell_sz.tag.rsplit("}", 1)[-1] == "cellSz":
+                    cell_sz.set("height", str(height))
+        for node in element.iter():
+            if node.tag.rsplit("}", 1)[-1] == "sz" and node.get("height"):
+                node.set("height", str(total))
+                break
+        tbl.mark_dirty()
+    except Exception:  # noqa: BLE001 — 크기는 표시 품질, 실패해도 박스는 유효
+        pass
