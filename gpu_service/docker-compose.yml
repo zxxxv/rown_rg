@@ -27,9 +27,14 @@ services:
       # 비우면 /v1/parse가 열리지 않는다. VRAM이 빠듯하면 GPU_PARSE_DEVICE: cpu로
       # 내려도 원래 사고(앱 서버 메모리 폭주)는 해결된다.
       GPU_PARSE_ARTIFACTS_DIR: /models/docling-artifacts
+      # 요청 기록(/stats/view, 날짜별 JSONL). 링버퍼(1시간)와 달리 재시작·과거
+      # 조회가 목적이라 반드시 볼륨에 쓴다 - 비우면 기록 자체가 꺼진다.
+      GPU_REQLOG_DIR: /reqlog
     volumes:
       # 모델은 읽기 전용으로 넣는다 - 컨테이너가 가중치를 건드릴 이유가 없다.
       - ../models:/models:ro
+      # 요청 기록만 쓰기 가능 - 하루 한 파일, 90일 보존(GPU_REQLOG_RETENTION_DAYS).
+      - ../data/gpu-reqlog:/reqlog
     deploy:
       resources:
         reservations:

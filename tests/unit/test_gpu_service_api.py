@@ -148,3 +148,65 @@ class TestConfigValidation:
         )
         with pytest.raises(RuntimeError, match="GPU_DEVICE"):
             config.validate()
+
+
+class TestRequestLogging:
+    """미들웨어가 추론 요청을 결과와 함께 남기는지 — 성공만이 아니라 거절도."""
+
+    @pytest.fixture
+    def logged(self, loaded, tmp_path, monkeypatch):
+        from gpu_service.app.request_log import RequestLog
+
+        reqlog = RequestLog(str(tmp_path))
+        monkeypatch.setattr(gpu_main, "_reqlog", reqlog)
+        return loaded, reqlog
+
+    def _events(self, reqlog):
+        from datetime import datetime
+
+        from gpu_service.app.request_log import KST
+
+        return reqlog.read_day(datetime.now(KST).strftime("%Y-%m-%d"))
+
+    def test_success_logged_with_detail(self, logged):
+        client, reqlog = logged
+        client.post("/v1/rerank", json={"query": "q", "passages": ["a", "b"]}, headers=AUTH)
+        events = self._events(reqlog)
+        assert len(events) == 1
+        assert events[0]["endpoint"] == "rerank"
+        assert events[0]["code"] == 200
+        assert events[0]["n"] == 2
+        assert events[0]["device"] == "cuda"
+        assert events[0]["ms"] >= 0
+
+    def test_rejection_logged_too(self, logged):
+        # 401도 남는다 - "그날 무슨 일이 있었나"에는 거절당한 시도도 포함이다.
+        client, reqlog = logged
+        client.post("/v1/rerank", json={"query": "q", "passages": ["a"]})
+        events = self._events(reqlog)
+        assert len(events) == 1
+        assert events[0]["code"] == 401
+
+    def test_health_polling_not_logged(self, logged):
+        client, reqlog = logged
+        client.get("/health")
+        client.get("/stats/history")
+        assert self._events(reqlog) == []
+
+    def test_stats_endpoints_serve_the_log(self, logged):
+        client, reqlog = logged
+        client.post("/v1/rerank", json={"query": "q", "passages": ["a"]}, headers=AUTH)
+
+        days = client.get("/stats/days").json()
+        assert days["enabled"] is True
+        assert days["days"][0]["total"] == 1
+
+        daily = client.get(f"/stats/daily?date={days['days'][0]['date']}").json()
+        assert daily["events"][0]["endpoint"] == "rerank"
+
+        assert client.get("/stats/daily?date=bogus").status_code == 400
+
+    def test_view_page_served(self, loaded):
+        response = loaded.get("/stats/view")
+        assert response.status_code == 200
+        assert "GPU 요청 기록" in response.text

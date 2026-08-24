@@ -65,6 +65,11 @@ class ServiceConfig:
     parse_timeout_s: float = 570.0
     # 파싱 레인의 예상 대기 거절 상한. 파싱은 배경 작업이라 리랭킹(55초)보다 관대하다.
     parse_max_wait_s: float = 300.0
+    # --- 요청 기록(/stats/daily) --------------------------------------------
+    # 비우면 기록하지 않는다(embed/parse 게이트 미러). 볼륨을 마운트해야 재시작에도
+    # 남는다 - 컨테이너 안 경로에 쓰면 이력이 링버퍼처럼 사라져 만든 의미가 없다.
+    reqlog_dir: str = ""
+    reqlog_retention_days: int = 90
 
     @classmethod
     def from_env(cls) -> ServiceConfig:
@@ -95,6 +100,8 @@ class ServiceConfig:
             parse_max_bytes=_int("GPU_PARSE_MAX_BYTES", 60 * 1024 * 1024),
             parse_timeout_s=float(os.environ.get("GPU_PARSE_TIMEOUT_S", "").strip() or 570.0),
             parse_max_wait_s=float(os.environ.get("GPU_PARSE_MAX_WAIT_S", "").strip() or 300.0),
+            reqlog_dir=os.environ.get("GPU_REQLOG_DIR", "").strip(),
+            reqlog_retention_days=_int("GPU_REQLOG_RETENTION_DAYS", 90),
         )
 
     def validate(self) -> None:

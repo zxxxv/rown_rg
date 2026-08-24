@@ -23,13 +23,14 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from gpu_service.app.config import ServiceConfig
 from gpu_service.app.embed_service import EmbedService
 from gpu_service.app.gpu_queue import GpuBusy, GpuQueue
 from gpu_service.app.parse_service import ClientGone, ParseService, ParseTimeout
+from gpu_service.app.request_log import RequestLog
 from gpu_service.app.service import RerankService
 from gpu_service.app.stats_history import SAMPLE_INTERVAL_S, StatsHistory
 
@@ -49,6 +50,7 @@ embed_service = EmbedService(config, queue=_gpu_queue) if config.embed_enabled e
 _parse_lane = GpuQueue(1, config.parse_max_wait_s, initial_task_s=60.0)
 parse_service = ParseService(config, lane=_parse_lane) if config.parse_enabled else None
 _history = StatsHistory()
+_reqlog = RequestLog(config.reqlog_dir, retention_days=config.reqlog_retention_days)
 # 누적 카운터(completed/rejected)의 기준점. "누적 N회"는 이 시각부터라는 것을
 # 대시보드가 보여줄 수 있어야 한 달 뒤에도 숫자가 해석된다.
 _started_at = time.time()
@@ -154,6 +156,33 @@ def gpu_metrics() -> dict[str, object] | None:
 
 app = FastAPI(title="rown GPU reranker", lifespan=lifespan)
 
+# 요청 기록 대상. /health·/stats·/metrics는 폴링이라 하루 수천 줄의 소음만 남긴다.
+_REQLOG_ENDPOINTS = {"/v1/rerank": "rerank", "/v1/embed": "embed", "/v1/parse": "parse"}
+
+
+@app.middleware("http")
+async def _reqlog_middleware(request: Request, call_next):
+    """추론 요청을 결과와 함께 남긴다 — 핸들러가 아니라 여기서 하는 이유:
+    성공만이 아니라 401·413·429 거절과 5xx까지 한 곳에서 빠짐없이 잡힌다.
+    핸들러는 request.state.reqlog에 상세(건수·크기·장치)만 얹는다.
+    """
+    endpoint = _REQLOG_ENDPOINTS.get(request.url.path)
+    if endpoint is None or not _reqlog.enabled:
+        return await call_next(request)
+    t0 = time.perf_counter()
+    code = 500  # call_next가 예외로 뚫고 나가면 응답 코드가 없다 - 500으로 남긴다
+    try:
+        response = await call_next(request)
+        code = response.status_code
+        return response
+    finally:
+        _reqlog.log(
+            endpoint=endpoint,
+            code=code,
+            ms=(time.perf_counter() - t0) * 1000,
+            detail=getattr(request.state, "reqlog", None),
+        )
+
 
 @app.exception_handler(GpuBusy)
 async def _gpu_busy_handler(request: Request, exc: GpuBusy) -> JSONResponse:
@@ -231,6 +260,37 @@ async def stats_history() -> dict[str, object]:
     return _history.series()
 
 
+@app.get("/stats/days")
+async def stats_days() -> dict[str, object]:
+    """요청 기록이 있는 날짜 목록과 집계 — /stats/view의 날짜 내비게이션 원천.
+
+    인증이 없는 이유는 /stats/history와 같다. 이벤트에는 요청 규모·소요시간뿐
+    본문·파일명이 없다(request_log가 그렇게 기록한다).
+    """
+    return {"enabled": _reqlog.enabled, "days": _reqlog.days()}
+
+
+@app.get("/stats/daily")
+async def stats_daily(date: str) -> dict[str, object]:
+    """하루치 요청 이벤트 전부(시간순). date는 KST 기준 YYYY-MM-DD."""
+    events = _reqlog.read_day(date)
+    if events is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="date는 YYYY-MM-DD 형식이어야 합니다"
+        )
+    return {"date": date, "events": events}
+
+
+@app.get("/stats/view", response_class=HTMLResponse)
+async def stats_view() -> HTMLResponse:
+    """요청 기록 열람 화면. 웹 앱(/admin/gpu)이 아니라 여기 두는 이유: AWS 웹 배포
+    없이 GPU 박스 브라우저에서 바로 열 수 있어야 한다. 외부 자원 없는 단일 파일이다
+    (컨테이너는 오프라인이고, 터널 너머에서도 이 응답 하나로 그려져야 한다).
+    """
+    page = Path(__file__).parent / "static" / "reqlog.html"
+    return HTMLResponse(page.read_text(encoding="utf-8"))
+
+
 @app.get("/metrics", response_class=PlainTextResponse)
 async def metrics() -> str:
     """Prometheus 텍스트 — netdata go.d의 prometheus 수집기가 긁는다.
@@ -279,8 +339,11 @@ async def metrics() -> str:
 @app.post("/v1/rerank", response_model=RerankResponse)
 async def rerank(
     request: RerankRequest,
+    http_request: Request,
     _: Annotated[None, Depends(require_token)] = None,
 ) -> RerankResponse:
+    # 거절(413·503)도 규모가 남게 검사보다 먼저 얹는다. device는 성공 시점에 확정.
+    http_request.state.reqlog = {"n": len(request.passages)}
     if len(request.passages) > config.max_passages:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
@@ -294,6 +357,7 @@ async def rerank(
     t0 = time.perf_counter()
     scores = await service.score(request.query, request.passages)
     elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+    http_request.state.reqlog["device"] = "cuda" if service.on_gpu else "cpu"
     logger.info(
         "rerank n=%d elapsed_ms=%s gpu=%s", len(request.passages), elapsed_ms, service.on_gpu
     )
@@ -342,13 +406,18 @@ async def parse(
                 tmp.write(chunk)
         finally:
             tmp.close()
+        request.state.reqlog = {"bytes": received}
         if received == 0:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="빈 파일")
 
         try:
-            return await parse_service.parse(
+            result = await parse_service.parse(
                 tmp_path, page_break_placeholder, request.is_disconnected
             )
+            request.state.reqlog.update(
+                {"pages": result.get("page_count"), "device": result.get("device")}
+            )
+            return result
         except ParseTimeout as exc:
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)
@@ -367,6 +436,7 @@ async def parse(
 @app.post("/v1/embed", response_model=EmbedResponse)
 async def embed(
     request: EmbedRequest,
+    http_request: Request,
     _: Annotated[None, Depends(require_token)] = None,
 ) -> EmbedResponse:
     """텍스트를 dense 벡터로 — 응답 순서는 입력 순서와 1:1이다.
@@ -375,6 +445,10 @@ async def embed(
     보내므로 **호출부가 잘라서 보내야 한다** - 한 요청에 다 담으면 요청 하나가
     타임아웃 전체를 잡아먹고, 실패했을 때 어디까지 됐는지도 알 수 없다.
     """
+    http_request.state.reqlog = {
+        "n": len(request.texts),
+        "chars": sum(len(t) for t in request.texts),
+    }
     if embed_service is None:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -393,6 +467,7 @@ async def embed(
     t0 = time.perf_counter()
     vectors = await embed_service.embed(request.texts)
     elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+    http_request.state.reqlog["device"] = "cuda" if embed_service.on_gpu else "cpu"
     logger.info(
         "embed n=%d elapsed_ms=%s gpu=%s", len(request.texts), elapsed_ms, embed_service.on_gpu
     )
