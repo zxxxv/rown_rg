@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from weakref import WeakKeyDictionary
 
 import structlog
@@ -40,15 +41,17 @@ BODY_FONT = "함초롬바탕"
 BODY_SIZE_PT = 11
 HEADING_FONT = "함초롬돋움"
 HEADING_SIZE_PT: dict[int, int] = {1: 16, 2: 14, 3: 12}
-LINE_SPACING_PERCENT = 160
-MARGIN_MM: dict[str, float] = {"top": 20.0, "bottom": 20.0, "left": 30.0, "right": 20.0}
+# 실납품 샘플 최빈(130%)과 사용자 확정(2026-08-24) — 종전 160%는 관행보다 성겼다.
+LINE_SPACING_PERCENT = 130
+# 실납품 2종 실측 일치(2026-08-24, 알키미스트 hwpx·비수도권 hwp): 좌우 20·상하 15.
+# 종전 좌30(한글 기본값 잔재)·상하20은 본문을 오른쪽으로 밀어 개조식이 깊어 보였다.
+MARGIN_MM: dict[str, float] = {"top": 15.0, "bottom": 15.0, "left": 20.0, "right": 20.0}
 HEADER_TEXT = "주식회사 로운인사이트"
 MAX_HEADING_LEVEL = 3
 _MM_PER_PT = 25.4 / 72
-# 개조식 한 수준당 왼쪽 들여쓰기 — 전각 한 칸(본문 글자 한 글자 폭). Paragraph.indent
-# 0=□, 1=ㅇ, 2=-, 3=* 순으로 누적된다. 고정 5mm였으나 수준이 깊어질수록 본문이 오른쪽으로
-# 밀려 보여 "한 칸"으로 좁혔다(2026-08-20 지적).
-OUTLINE_INDENT_MM = BODY_SIZE_PT * _MM_PER_PT
+# 개조식 계단(pt) — 글머리 첫 줄 시작 = (수준+1)×4pt: □4·ㅇ8·-12·*16 (2026-08-24 지시
+# "이렇게 당겨"). 종전 수준당 전각 한 칸(11pt)은 사다리가 깊었다.
+OUTLINE_STEP_PT = 4.0
 # 개조식 글머리 문자 — 이 문자로 시작하는 문단은 마커 폭만큼 내어쓰기해 줄바꿈된 둘째
 # 줄이 본문 글머리에 정렬되게 한다(_hanging_indent_mm).
 OUTLINE_MARKERS: frozenset[str] = frozenset("□ㅇ○◦-*")
@@ -81,13 +84,17 @@ COVER_ORG_SPACE_AFTER_PT = 24.0
 
 # 표·그림 폭 — A4(210mm) 기준 본문 폭(좌우 여백 제외)에 맞춰 페이지를 넘지 않게 한다.
 PAGE_WIDTH_MM = 210.0
-# 표 제목 — 표 바로 위 한 줄. 본문보다 작고 굵게 써서 표에 딸린 라벨로 읽히게 한다.
-TABLE_CAPTION_SIZE_PT = 10
-# 표 부속 줄(단위·출처) — 캡션보다 한 단계 작게, 굵기 없이.
+# 표·그림 제목 — 굵게 12pt·가운데(2026-08-24 지시. 표는 표 위, 그림은 그림 아래).
+TABLE_CAPTION_SIZE_PT = 12
+# 표 부속 줄(단위·출처) — 캡션보다 작게, 굵기 없이.
 TABLE_NOTE_SIZE_PT = 9
-# 차트 그림 높이(mm) — chart_render의 가로세로비(6.3:3.4)를 본문 폭 160mm에 맞춘 값.
-CHART_HEIGHT_MM = 86.0
-TABLE_CAPTION_SPACE_AFTER_PT = 1.0  # 표와 붙여 한 덩어리로 보이게 아래 여백을 최소로
+# 표 아래 출처 줄 들여쓰기 — 개조식 계단 한 단과 같은 값(2026-08-24 지시).
+SOURCE_NOTE_INDENT_MM = OUTLINE_STEP_PT * _MM_PER_PT
+# 표 안 문단 위 간격(pt) — 9→1 (2026-08-24 지시).
+CELL_PARA_SPACING_BEFORE_PT = 1.0
+# 차트 그림 높이(mm) — chart_render의 가로세로비(6.3:3.4)를 본문 폭 170mm에 맞춘 값.
+CHART_HEIGHT_MM = 92.0
+TABLE_CAPTION_SPACE_AFTER_PT = 1.0  # 표와 붙여 한 덩어리로 보이게 여백을 최소로
 # 표 열 폭 배분 시 한 열의 상대 가중치 하한/상한 — 극단적으로 좁거나 넓은 열을 막는다.
 COL_WEIGHT_MIN = 8
 COL_WEIGHT_MAX = 60
@@ -433,8 +440,10 @@ def _add_body(
     # 맞춰 정렬돼, 마커 하나가 어디까지를 묶는지 눈으로 따라갈 수 있다(2026-08-11 지적).
     hanging = _hanging_indent_mm(text)
     if indent > 0 or hanging:
-        # 개조식 수준만큼 왼쪽 여백을 줘 계층 들여쓰기를 표현한다.
-        fmt["indent_left_mm"] = indent * OUTLINE_INDENT_MM + hanging
+        # 개조식 계단 — 글머리 첫 줄이 (수준+1)×4pt에서 시작(□4·ㅇ8·-12).
+        # 왼쪽 여백 = 첫 줄 위치 + 마커 폭, 첫 줄에서 마커 폭을 빼면(내어쓰기)
+        # 줄바꿈된 둘째 줄이 본문 글머리에 정렬된다.
+        fmt["indent_left_mm"] = (indent + 1) * OUTLINE_STEP_PT * _MM_PER_PT + hanging
     if hanging:
         fmt["first_line_indent_mm"] = -hanging
     if indent == 0 or group_start:
@@ -520,8 +529,16 @@ def _cell_para_id(doc: HwpxDocument) -> str | None:
     para_id: str | None = None
     try:
         probe = doc.add_paragraph("")
+        # 전 항목을 명시한다 — 프로브가 직전 문단 서식을 상속해 본문의 위 간격 9pt·
+        # 들여쓰기가 셀 안까지 새어 들어왔다(2026-08-24 v6 실측: 셀 문단 prev=900).
         result = doc.set_paragraph_format(
-            paragraph_index=doc.paragraphs.index(probe), alignment="CENTER"
+            paragraph_index=doc.paragraphs.index(probe),
+            alignment="CENTER",
+            line_spacing_percent=LINE_SPACING_PERCENT,
+            spacing_before_pt=CELL_PARA_SPACING_BEFORE_PT,
+            spacing_after_pt=0.0,
+            indent_left_mm=0.0,
+            first_line_indent_mm=0.0,
         )
         para_id = str(result["paragraphs"][0]["paraPrIDRef"])
         doc.remove_paragraph(probe)
@@ -572,42 +589,86 @@ def _apply_cell_margins(tbl) -> None:
 
 
 def _add_table_caption(doc: HwpxDocument, caption: str, bookmark: str = "") -> None:
-    """표 제목 한 줄 — 표 바로 위에 붙인다(그림은 캡션이 박스 안, 표는 박스 밖)."""
+    """표 제목 한 줄 — 표 바로 위, 가운데·굵게, 표와 같은 쪽에 묶는다(2026-08-24 지시)."""
     char_id = doc.ensure_run_style(font=HEADING_FONT, size=TABLE_CAPTION_SIZE_PT, bold=True)
     para = doc.add_paragraph(caption, char_pr_id_ref=char_id, inherit_style=False)
-    doc.set_paragraph_format(
+    result = doc.set_paragraph_format(
         paragraph_index=doc.paragraphs.index(para),
+        alignment="CENTER",
         line_spacing_percent=LINE_SPACING_PERCENT,
         spacing_before_pt=GROUP_SPACING_BEFORE_PT,
         spacing_after_pt=TABLE_CAPTION_SPACE_AFTER_PT,
     )
+    _keep_with_next(doc, result)
     if bookmark:
         wrap_bookmark(para, bookmark)  # 표 목차 줄의 쪽번호가 가리킬 표적
 
 
-def _add_table_note(doc: HwpxDocument, text: str, *, align: str, after_pt: float) -> None:
+def _keep_with_next(doc: HwpxDocument, fmt_result: Any) -> None:
+    """문단의 paraPr에 '다음 문단과 함께'를 심는다 — 제목만 앞 쪽에 남지 않게.
+
+    캡션 서식 조합의 paraPr는 캡션끼리만 공유하므로 헤더 정의를 바꿔도 안전하다.
+    """
+    try:
+        pr_id = str(fmt_result["paragraphs"][0]["paraPrIDRef"])
+        root = doc.headers[0].element
+        for pr in root.iter():
+            if pr.tag.rsplit("}", 1)[-1] == "paraPr" and pr.get("id") == pr_id:
+                for node in pr.iter():
+                    if node.tag.rsplit("}", 1)[-1] == "breakSetting":
+                        node.set("keepWithNext", "1")
+                break
+    except Exception:  # noqa: BLE001 — 쪽 묶음은 표시 품질, 실패해도 문서는 유효
+        pass
+
+
+def _add_table_note(
+    doc: HwpxDocument, text: str, *, align: str, after_pt: float, indent_mm: float = 0.0
+) -> None:
     """표 부속 한 줄 — 단위(표 위, 우측 정렬)·출처(표 아래, 좌측 정렬)에 쓴다."""
     char_id = doc.ensure_run_style(font=HEADING_FONT, size=TABLE_NOTE_SIZE_PT)
     para = doc.add_paragraph(text, char_pr_id_ref=char_id, inherit_style=False)
-    doc.set_paragraph_format(
-        paragraph_index=doc.paragraphs.index(para),
-        alignment=align,
-        line_spacing_percent=LINE_SPACING_PERCENT,
-        spacing_after_pt=after_pt,
-    )
+    fmt: dict[str, float | int | str] = {
+        "paragraph_index": doc.paragraphs.index(para),
+        "alignment": align,
+        "line_spacing_percent": LINE_SPACING_PERCENT,
+        "spacing_after_pt": after_pt,
+    }
+    if indent_mm:
+        fmt["indent_left_mm"] = indent_mm
+    doc.set_paragraph_format(**fmt)
 
 
 def _reset_table_anchor(doc: HwpxDocument, tbl) -> None:
-    """표·그림 박스의 앵커 문단 들여쓰기를 0으로 되돌린다.
+    """표·그림 박스의 앵커 문단 들여쓰기를 0으로 되돌리고 가운데 정렬한다.
 
     앵커 문단이 직전 개조식 문단의 서식을 상속해, 박스 전체가 글머리 들여쓰기만큼
     오른쪽으로 밀려 렌더됐다(2026-08-21 지적). 블록은 본문 위계와 독립이다.
+    가운데 정렬은 "표는 좌우에서 항상 가운데"(2026-08-24 지시) — 본문 폭보다 좁게
+    잡힌 표도 항상 페이지 한가운데에 놓인다.
     """
     try:
         idx = doc.paragraphs.index(tbl.paragraph)
-        doc.set_paragraph_format(paragraph_index=idx, indent_left_mm=0.0, first_line_indent_mm=0.0)
+        doc.set_paragraph_format(
+            paragraph_index=idx,
+            indent_left_mm=0.0,
+            first_line_indent_mm=0.0,
+            alignment="CENTER",
+        )
     except Exception:  # noqa: BLE001 — 서식 리셋 실패해도 표는 유효
         pass
+
+
+def _add_block_gap(doc: HwpxDocument) -> None:
+    """표·그림 블록 뒤의 빈 줄 — 다음 문장이 블록에 붙지 않게(2026-08-24 지시)."""
+    char_id = doc.ensure_run_style(font=BODY_FONT, size=BODY_SIZE_PT)
+    para = doc.add_paragraph("", char_pr_id_ref=char_id, inherit_style=False)
+    doc.set_paragraph_format(
+        paragraph_index=doc.paragraphs.index(para),
+        line_spacing_percent=100,
+        indent_left_mm=0.0,
+        first_line_indent_mm=0.0,
+    )
 
 
 def _enable_header_repeat(tbl) -> None:
@@ -655,29 +716,36 @@ def _add_table(doc: HwpxDocument, table: Table) -> None:
     _align_cells_center(doc, tbl, n_rows, n_cols)
     _apply_cell_margins(tbl)
     if table.source:
-        # 출처는 표 바로 아래 좌측 정렬 — 캡션 위·출처 아래가 실측 관례다.
-        _add_table_note(doc, table.source, align="LEFT", after_pt=BODY_SPACING_AFTER_PT)
+        # 출처는 표 바로 아래 — ※ 시작·들여쓰기(2026-08-24 지시, 실납품 "※ 출처 :" 관례).
+        _add_table_note(
+            doc,
+            table.source,
+            align="LEFT",
+            after_pt=BODY_SPACING_AFTER_PT,
+            indent_mm=SOURCE_NOTE_INDENT_MM,
+        )
+    _add_block_gap(doc)
 
 
-def _add_chart(doc: HwpxDocument, chart: Chart) -> None:
-    """차트 — 캡션을 그림 위에 달고, 스펙을 PNG로 그려 가운데 정렬 그림으로 넣는다.
-
-    캡션이 그림 **위**인 것은 실납품 보고서 실측 관례다(2026-08-11, 샘플 6종 중 5종이
-    표·그림 모두 캡션 위 + 출처 아래).
-    """
-    from src.export.chart_render import render_png  # 지연 import — 렌더 시점에만 필요
-
+def _add_caption_below(doc: HwpxDocument, caption: str, bookmark: str = "") -> None:
+    """그림 제목 — 그림 **아래**, 굵게·가운데(2026-08-24 지시: 표는 위, 그림은 아래)."""
     char_id = doc.ensure_run_style(font=HEADING_FONT, size=TABLE_CAPTION_SIZE_PT, bold=True)
-    para = doc.add_paragraph(chart.caption, char_pr_id_ref=char_id, inherit_style=False)
+    para = doc.add_paragraph(caption, char_pr_id_ref=char_id, inherit_style=False)
     doc.set_paragraph_format(
         paragraph_index=doc.paragraphs.index(para),
         alignment="CENTER",
         line_spacing_percent=LINE_SPACING_PERCENT,
-        spacing_before_pt=GROUP_SPACING_BEFORE_PT,
-        spacing_after_pt=TABLE_CAPTION_SPACE_AFTER_PT,
+        spacing_before_pt=TABLE_CAPTION_SPACE_AFTER_PT,
+        spacing_after_pt=BODY_SPACING_AFTER_PT,
     )
-    if chart.caption_bookmark:
-        wrap_bookmark(para, chart.caption_bookmark)  # 그림 목차 줄이 가리킬 표적
+    if bookmark:
+        wrap_bookmark(para, bookmark)  # 그림 목차 줄이 가리킬 표적
+
+
+def _add_chart(doc: HwpxDocument, chart: Chart) -> None:
+    """차트 — 스펙을 PNG로 그려 가운데 넣고, 제목을 그림 아래에 단다."""
+    from src.export.chart_render import render_png  # 지연 import — 렌더 시점에만 필요
+
     png = render_png(chart.spec)
     doc.add_picture(
         png,
@@ -686,21 +754,29 @@ def _add_chart(doc: HwpxDocument, chart: Chart) -> None:
         height_mm=CHART_HEIGHT_MM,
         align="CENTER",
     )
+    try:
+        # 그림 앵커 문단이 직전 개조식 서식을 상속하지 않게 리셋(표 앵커와 같은 이유).
+        doc.set_paragraph_format(
+            paragraph_index=len(doc.paragraphs) - 1,
+            indent_left_mm=0.0,
+            first_line_indent_mm=0.0,
+            alignment="CENTER",
+        )
+    except Exception:  # noqa: BLE001 — 서식 리셋 실패해도 그림은 유효
+        pass
+    _add_caption_below(doc, chart.caption, chart.caption_bookmark)
+    _add_block_gap(doc)
 
 
 def _add_figure(doc: HwpxDocument, figure: Figure) -> None:
-    """그림 플레이스홀더 — 캡션 + 추천 시각자료 설명을 담은 1열 박스로 렌더한다."""
+    """그림 플레이스홀더 — 추천 시각자료 설명 박스 + 그 아래 제목."""
     note = "※ 실제 이미지는 확정 후 삽입되는 자리표시자입니다."
-    tbl = doc.add_table(3, 1, width=_page_content_width_hwp())
+    tbl = doc.add_table(2, 1, width=_page_content_width_hwp())
     _reset_table_anchor(doc, tbl)
-    tbl.set_cell_text(0, 0, figure.caption)
-    if figure.caption_bookmark:
-        # 자리표시자는 캡션이 박스 첫 칸 안에 있다 — 그 칸의 문단을 책갈피로 감싼다.
-        cell_paras = tbl.cell(0, 0).paragraphs
-        if cell_paras:
-            wrap_bookmark(cell_paras[0], figure.caption_bookmark)
-    tbl.set_cell_text(1, 0, f"추천 시각자료: {figure.description}")
-    tbl.set_cell_text(2, 0, note)
-    # 캡션 행 음영도 없앴다 — 배경색은 전 요소에서 쓰지 않는다(2026-08-23 사용자 지시).
-    # 정렬은 손대지 않는다 — 설명 문장이 길어 가운데로 모으면 줄마다 들쭉날쭉해진다.
+    tbl.set_cell_text(0, 0, f"추천 시각자료: {figure.description}")
+    tbl.set_cell_text(1, 0, note)
+    # 배경색은 전 요소에서 쓰지 않는다(2026-08-23 사용자 지시).
+    # 셀 정렬은 손대지 않는다 — 설명 문장이 길어 가운데로 모으면 줄마다 들쭉날쭉해진다.
     _apply_cell_margins(tbl)
+    _add_caption_below(doc, figure.caption, figure.caption_bookmark)
+    _add_block_gap(doc)

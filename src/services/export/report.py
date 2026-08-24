@@ -421,7 +421,7 @@ def _attach_table_sources(blocks: list[Block], titles: dict[int, str]) -> None:
             if match:
                 nums = [int(n) for n in match.group("nums").split(",")]
                 names = [titles.get(n, f"자료 {n}") for n in nums]
-                blocks[i] = replace(block, source="출처: " + "; ".join(names))
+                blocks[i] = replace(block, source="※ 출처: " + "; ".join(names))
                 del blocks[i + 1]
         i += 1
 
@@ -472,7 +472,7 @@ def _strip_citation_blocks(blocks: list[Block], titles: dict[int, str]) -> list[
                             if n.isdigit() and int(n) not in nums:
                                 nums.append(int(n))
                 if nums:
-                    source = "출처: " + "; ".join(titles.get(n, f"자료 {n}") for n in nums)
+                    source = "※ 출처: " + "; ".join(titles.get(n, f"자료 {n}") for n in nums)
             out.append(
                 replace(
                     block,

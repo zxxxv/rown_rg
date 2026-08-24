@@ -588,7 +588,7 @@ class TestReportBlocks:
         body = "표: 국가별 현황\n| 국가 | 값 |\n|---|---|\n| 미국 | 1 |\n\n(출처 1)\n"
         blocks = report_blocks(_state("표 출처", plan, [body], sources))
         table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] != "약어")
-        assert table.source == "출처: 정부 통계"
+        assert table.source == "※ 출처: 정부 통계"
         # 표 밖 본문에는 출처 표기가 남지 않는다(참고문헌 목록 제외).
         body_end = blocks.index(Heading(level=1, text=REFERENCES_HEADING))
         assert not any(isinstance(b, Paragraph) and "출처 1" in b.text for b in blocks[:body_end])
@@ -609,7 +609,7 @@ class TestReportBlocks:
         body = "표: 국가별 현황\n| 국가 | 값 |\n|---|---|\n| 미국 | 1 |\n\n* 출처: (출처 1, 2)\n"
         blocks = report_blocks(_state("표 출처 변형", plan, [body], sources))
         table = next(b for b in blocks if isinstance(b, Table) and b.headers[0] != "약어")
-        assert table.source == "출처: 정부 통계; 실태 조사"
+        assert table.source == "※ 출처: 정부 통계; 실태 조사"
         # 라벨 껍데기("* 출처:")가 본문 문단으로 남지 않는다.
         body_end = blocks.index(Heading(level=1, text=REFERENCES_HEADING))
         assert not any(

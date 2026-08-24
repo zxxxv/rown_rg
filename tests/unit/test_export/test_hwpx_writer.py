@@ -6,7 +6,9 @@ from src.export.hwpx_writer import (
     BODY_SIZE_PT,
     CELL_MARGIN_SIDE_HWP,
     CELL_MARGIN_VERT_HWP,
-    OUTLINE_INDENT_MM,
+    LINE_SPACING_PERCENT,
+    MARGIN_MM,
+    OUTLINE_STEP_PT,
     _hanging_indent_mm,
 )
 
@@ -42,15 +44,26 @@ class TestHangingIndent:
         assert _hanging_indent_mm("") == 0.0
 
 
-class TestOutlineIndent:
-    """개조식 수준당 들여쓰기 — 전각 한 칸(본문 글자 한 글자 폭)."""
+class TestOutlineStep:
+    """개조식 계단 — 글머리 첫 줄이 (수준+1)×4pt: □4·ㅇ8·-12 (2026-08-24 지시)."""
 
-    def test_one_full_width_character_per_level(self):
-        assert OUTLINE_INDENT_MM == 2 * _HALF
+    def test_step_is_four_points(self):
+        assert OUTLINE_STEP_PT == 4.0
 
-    def test_narrower_than_the_marker_hanging_indent(self):
-        # 자식 마커가 부모 본문 글머리보다 살짝 왼쪽에 선다 — "한 칸"을 택한 결과다.
-        assert OUTLINE_INDENT_MM < _hanging_indent_mm("□ 대주제")
+    def test_ladder_is_tighter_than_marker_width(self):
+        # 한 단(4pt)이 마커 폭보다 좁다 — 사다리가 얕게 당겨진 모양의 근거.
+        assert OUTLINE_STEP_PT * (25.4 / 72) < _hanging_indent_mm("□ 대주제")
+
+
+class TestCompanyStyle:
+    """실납품 실측·사용자 확정 서식(2026-08-24) — 회귀하면 납품 모양이 돌아간다."""
+
+    def test_page_margins_match_delivered_samples(self):
+        # 실납품 2종 실측 일치: 좌우 20·상하 15 (종전 좌30·상하20은 한글 기본값 잔재).
+        assert MARGIN_MM == {"top": 15.0, "bottom": 15.0, "left": 20.0, "right": 20.0}
+
+    def test_line_spacing_is_130(self):
+        assert LINE_SPACING_PERCENT == 130
 
 
 class TestCellMargins:
