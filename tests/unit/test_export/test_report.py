@@ -737,6 +737,73 @@ class TestReportBlocks:
         blocks = report_blocks(_state_with_selected_drafts())  # sources 없음
         assert not any(isinstance(b, Heading) and b.text == REFERENCES_HEADING for b in blocks)
 
+    def test_reference_titles_stripped_of_filename_traces(self):
+        """업로드 자료의 제목은 파일명에서 온다 — 확장자·중복 내려받기 꼬리·구분자를 걷는다.
+
+        실측(2026-08-24 v6): "RE100 Annual Report_FY 2024-25_FINAL_17 March
+        2026_SIGNED (1) (1).pdf"·"[24-15-포커스-3]+국제+RE100+동향.pdf"이 그대로 서지에
+        실렸다. URL은 괄호로 감싸 제목과 눈으로 갈리게 한다.
+        """
+        sources = [
+            SourceRef(
+                id=uuid4(),
+                source_type=SourceType.UPLOAD,
+                title="RE100 Annual Report_FY 2024-25_SIGNED (1) (1).pdf",
+                url=None,
+            ),
+            SourceRef(
+                id=uuid4(),
+                source_type=SourceType.UPLOAD,
+                title="[24-15-포커스-3]+국제+RE100+동향과+단기+전망.pdf",
+                url=None,
+            ),
+            SourceRef(
+                id=uuid4(),
+                source_type=SourceType.WEB_SEARCH,
+                title="웹 자료 제목",
+                url="https://ex.com/a",
+            ),
+        ]
+        state = _state_with_selected_drafts().model_copy(update={"sources": sources})
+        blocks = report_blocks(state)
+        src_idx = next(
+            i
+            for i, b in enumerate(blocks)
+            if isinstance(b, Heading) and b.text == REFERENCES_HEADING
+        )
+        entries = [b.text for b in blocks[src_idx + 1 :] if isinstance(b, Paragraph)]
+        assert entries[0] == "[1] RE100 Annual Report FY 2024-25 SIGNED"
+        assert entries[1] == "[2] [24-15-포커스-3] 국제 RE100 동향과 단기 전망"
+        assert entries[2] == "[3] 웹 자료 제목 (https://ex.com/a)"
+
+
+class TestAbbreviationDetection:
+    """약어 판정 — 첫 글자만 대문자인 영어 낱말은 약어가 아니다(2026-08-24 실측).
+
+    "Annex"·"Fortune"·"SteelZero" 같은 오탐 9개가 사전 캡(40) 자리를 차지해 진짜
+    약어(BIPV·METI·JCLP)가 밀려났고, 밀려난 약어는 표에서 설명이 빈칸으로 남았다.
+    """
+
+    def _abbrs(self, body: str) -> dict:
+        from src.services.export.report import _collect_abbreviations
+
+        acc: dict[str, str] = {}
+        _collect_abbreviations(body, acc)
+        return acc
+
+    def test_english_words_are_not_abbreviations(self):
+        got = self._abbrs("ㅇ 부속서(Annex) 및 철강 이니셔티브(SteelZero)를 다룸")
+        assert got == {}
+
+    def test_real_abbreviations_kept(self):
+        got = self._abbrs("ㅇ 건물일체형태양광(BIPV)과 사물인터넷(IoT), K-RE100을 봄")
+        assert set(got) == {"BIPV", "IoT"}
+
+    def test_sentence_fragment_full_name_dropped(self):
+        # 괄호 앞 문맥을 긁어 온 조각은 풀네임이 아니다 — 사전이 영문 원어로 채운다.
+        got = self._abbrs("ㅇ 설비를 보유하는 동시에 잉카(INGKA) 그룹이 참여함")
+        assert got == {"INGKA": ""}
+
 
 class TestExportReport:
     def test_writes_hwpx_file(self, tmp_path: Path):

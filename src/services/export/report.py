@@ -255,13 +255,34 @@ def _outline_level(line: str) -> int | None:
     return None
 
 
+# 약어 안에 허용할 소문자 수 — 둘 이상이면 약어가 아니라 그냥 영어 낱말이다.
+# 실측(2026-08-24 v6): "Annex"·"Fortune"·"SteelZero"·"Market-Based" 등 오탐 9개가
+# 사전 캡(40) 자리를 차지해 진짜 약어(BIPV·METI·JCLP)가 사전에서 밀려났고, 밀려난
+# 약어는 표에서 설명이 빈칸이 되고 전체 명칭도 기계 추출값(한글)으로 남았다.
+# 소문자 하나는 허용한다 — IoT·PhD 같은 정상 약어가 있다.
+_MAX_LOWERCASE_IN_ABBR = 1
+
+# 풀네임으로 삼을 수 없는 문장 조각 — 조사·연결어미가 섞였다면 괄호 앞 문맥을 긁어
+# 온 것이다("…설비를 보유하는 동시에 잉카(Ingka)" → "설비를 보유하는 동시에 잉카").
+_SENTENCE_FRAGMENT_RE = re.compile(
+    r"(?:[을를이가은는와과에의로]|으로|에서|하는|되는|같은|또는|동시에|위한|따른)\s"
+)
+
+
+def _is_abbreviation(token: str) -> bool:
+    """약어다운 토큰인가 — 소문자가 둘 이상이면 영어 낱말로 본다."""
+    return sum(1 for ch in token if ch.islower()) <= _MAX_LOWERCASE_IN_ABBR
+
+
 def _collect_abbreviations(text: str, acc: dict[str, str]) -> None:
     """text의 "풀네임(약어)" 표기를 acc(약어→풀네임)에 첫 등장 순서로 누적한다."""
     for match in _ABBR_RE.finditer(text):
         abbr = match.group("abbr")
-        if abbr in _COMMON_ABBR or abbr in acc:
+        if abbr in _COMMON_ABBR or abbr in acc or not _is_abbreviation(abbr):
             continue
-        acc[abbr] = _clean_inline(match.group("full")).strip()
+        full = _clean_inline(match.group("full")).strip()
+        # 문장 조각이면 풀네임 자리를 비워 둔다 — 사전이 영문 원어로 채운다.
+        acc[abbr] = "" if _SENTENCE_FRAGMENT_RE.search(full) else full
 
 
 # 행 끝 '|(출처 n)' 꼬리 — 마지막 파이프 **뒤**에 붙은 출처 표기만 잡는다. 근거 열이
@@ -774,15 +795,34 @@ def _visual_index_blocks(body: list[Block]) -> list[Block]:
     return blocks
 
 
+# 서지에서 걷어낼 파일명 티 — 확장자, 중복 내려받기 꼬리("(1)"·"(2)"), 파일명 구분자.
+# 업로드 자료의 제목은 파일명에서 오므로 "RE100 Annual Report_FY 2024-25_FINAL_17
+# March 2026_SIGNED (1) (1).pdf"처럼 내려받은 흔적이 그대로 서지에 실렸다
+# (2026-08-24 지적). 표제 추출(07f25a7)이 붙기 전 자료라 파일명이 곧 제목이다.
+_FILE_EXT_RE = re.compile(r"\.(?:pdf|hwpx?|docx?|pptx?|xlsx?|txt|md)$", re.I)
+_DOWNLOAD_DUP_RE = re.compile(r"(?:\s*\(\d+\))+$")
+_FILENAME_SEPARATORS_RE = re.compile(r"[+_]+")
+
+
+def _clean_source_title(title: str) -> str:
+    """파일명 티를 걷어 사람이 읽을 서지 제목으로 만든다."""
+    text = _FILE_EXT_RE.sub("", title.strip())
+    text = _DOWNLOAD_DUP_RE.sub("", text)
+    text = _FILENAME_SEPARATORS_RE.sub(" ", text)
+    return re.sub(r"\s{2,}", " ", text).strip(" -–—")
+
+
 def _source_entry(index: int, src: SourceRef) -> str:
-    """참고문헌 목록 한 줄 — '[n] 제목 URL'.
+    """참고문헌 목록 한 줄 — '[n] 제목 (URL)'.
 
     유형 꼬리("(업로드)"·"(웹)"·"(라이브러리)")는 달지 않는다(2026-08-21 사용자 지시 —
-    내부 수집 경로는 납품물의 서지 정보가 아니다). 웹 자료는 URL이 유형을 말해 준다.
+    내부 수집 경로는 납품물의 서지 정보가 아니다). URL은 괄호로 감싼다 — 제목에 그냥
+    이어 붙이면 어디까지가 제목인지 눈으로 갈리지 않는다(실납품도 "자료: 기관 홈페이지
+    (https://…)" 꼴로 괄호에 넣는다, 2026-08-24 실측).
     """
-    line = f"[{index}] {src.title.strip() or '(제목 없음)'}"
+    line = f"[{index}] {_clean_source_title(src.title) or '(제목 없음)'}"
     if src.url:
-        line += f" {src.url}"
+        line += f" ({src.url})"
     return line
 
 
