@@ -107,8 +107,97 @@ def check_renderable(draft: SectionDraft) -> GateResult:
 
 
 def _normalize_number(token: str) -> str:
-    """콤마 제거 + 후행 % 제거 — 매칭용 정규화."""
-    return token.replace(",", "").rstrip("%")
+    """콤마·공백 제거 + 후행 % 제거 — 매칭용 정규화."""
+    return token.replace(",", "").replace(" ", "").rstrip("%")
+
+
+# ── 한↔영 자릿수 환산 ──────────────────────────────────────────────────────
+# 영문 코퍼스에서 수치 검출기가 통째로 무력해진 원인(2026-08-24 COMPA 실측:
+# 정밀도 14.8%). 본문은 "70.5억 달러"라고 쓰고 근거는 "USD 7.05 billion"이라 적는다.
+# 콤마만 지우는 부분문자열 대조로는 영영 만나지 못해 전부 '무근거'로 떨어졌다.
+_KOR_SCALE: dict[str, int] = {"조": 10**12, "억": 10**8, "만": 10**4, "천": 10**3}
+_KOR_NUM_PART = r"\d[\d,]*(?:\.\d+)?\s*[조억만천]"
+# 자리 단위를 이어 쓴 합성 표기("2억 450만")까지 한 토큰으로 본다 — 쪼개 읽으면
+# 2와 450이 되어 코퍼스의 "204.5 million"과 절대 안 맞고, 450은 주입 의심으로 샌다.
+_KOR_NUMBER_RE = re.compile(rf"{_KOR_NUM_PART}(?:\s*{_KOR_NUM_PART})*")
+# 영문 자릿수 표기 — 값을 이 단위로 환산한 가수(mantissa)를 후보로 만든다.
+_EN_SCALES: tuple[float, ...] = (10**12, 10**9, 10**6, 10**3)
+
+
+def korean_magnitude(token: str) -> float | None:
+    """한국어 큰 수 표기의 값 — "2억 450만" → 204500000.0. 아니면 None."""
+    text = token.replace(",", "")
+    total, last, found = 0.0, None, False
+    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*([조억만천])", text):
+        scale = _KOR_SCALE[m.group(2)]
+        if last is not None and scale >= last:
+            return None  # 자리 단위가 내림차순이 아니면 한 수가 아니다
+        total += float(m.group(1)) * scale
+        last, found = scale, True
+    return total if found else None
+
+
+def _trim(value: float) -> str:
+    """소수 꼬리 0을 걷은 표기 — 7.05·46.1·204.5처럼 근거에 적히는 꼴."""
+    text = f"{value:.4f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def number_variants(token: str) -> list[str]:
+    """이 수치가 근거에 적혔을 만한 표기들(정규화된 문자열).
+
+    한국어 큰 수는 영문 자릿수로 환산한 가수까지 후보에 넣는다: "70.5억"이면
+    7.05(billion)·70500000000, "4,610만"이면 46.1(million)·46100000.
+    """
+    norm = _normalize_number(token)
+    out = [norm]
+    value = korean_magnitude(token)
+    if value is None:
+        return out
+    out.append(_trim(value))  # 자리 단위를 푼 온전한 숫자
+    for scale in _EN_SCALES:
+        mantissa = value / scale
+        if 0.1 <= mantissa < 1000:
+            out.append(_trim(mantissa))
+    # 공백을 넣어 쓴 한국어 표기도 근거에 있을 수 있다("2억 450만").
+    spaced = re.sub(r"([조억만천])(\d)", r"\1 \2", norm)
+    if spaced != norm:
+        out.append(spaced)
+    return list(dict.fromkeys(out))
+
+
+def number_in_text(token: str, haystack_norm: str) -> bool:
+    """수치가 근거(정규화 문자열)에 있는가 — 자릿수 환산 표기까지 본다."""
+    return any(v and v in haystack_norm for v in number_variants(token))
+
+
+def normalize_haystack(text: str) -> str:
+    """근거 대조용 정규화 — 콤마·강조 기호를 걷는다(공백은 남긴다)."""
+    return text.replace(",", "").replace("*", "")
+
+
+def numeric_mentions(text: str) -> list[str]:
+    """근거 대조에 쓸 수치 표기 — 한국어 큰 수는 자리 단위까지 한 덩이로 본다.
+
+    significant_numbers는 맨 숫자만 돌려준다(표 검사·정렬 표시가 그 규약을 쓴다).
+    근거 대조는 자리 단위를 알아야 환산이 되므로 여기서 따로 집는다: "2억 450만"을
+    2와 450으로 쪼개 읽으면 근거의 "204.5 million"과 영영 못 만나고, 남은 450은
+    엉뚱한 자료에 붙어 주입 의심으로 샌다(2026-08-24 COMPA 실측).
+    """
+    out: list[str] = []
+    # 한국어 큰 수를 먼저 집고 그 자리를 공백으로 덮는다 — 남은 글에서 맨 숫자를
+    # 평소 규칙대로 뽑되(앞뒤 문맥 규칙이 그대로 산다) 큰 수의 조각은 빠진다.
+    masked = list(text)
+    for m in _KOR_NUMBER_RE.finditer(text):
+        token = m.group().strip()
+        if token not in out:
+            out.append(token)
+        for i in range(m.start(), m.end()):
+            masked[i] = " "
+    for token in _significant_numbers("".join(masked)):
+        if token not in out:
+            out.append(token)
+    return out
 
 
 def _is_year(token: str) -> bool:
@@ -166,6 +255,11 @@ def _significant_numbers(text: str) -> list[str]:
     for m in _NUMBER_RE.finditer(text):
         token = m.group()
         digits = _normalize_number(token).replace(".", "")
+        # 절·장·항 번호는 수치 주장이 아니라 문서 안 길찾기다("1.1절 참조").
+        tail = text[m.end() : m.end() + 1]
+        if tail in ("절", "장", "항") and not token.endswith("%"):
+            excluded.append((token, "section_ref"))
+            continue
         if _is_year(token):
             excluded.append((token, "year"))
             continue
@@ -210,6 +304,45 @@ def normalize_number(token: str) -> str:
     return _normalize_number(token)
 
 
+def _numeric_value(token: str) -> float | None:
+    """토큰의 수치 값 — 한국어 자리 단위·콤마·%를 푼다."""
+    value = korean_magnitude(token)
+    if value is not None:
+        return value
+    try:
+        return float(_normalize_number(token))
+    except ValueError:
+        return None
+
+
+# 파생치 허용 오차 — 본문은 "약 3.9배"처럼 반올림해 적는다(24.12÷6.16=3.916).
+_DERIVED_TOLERANCE = 0.02
+
+
+def derived_numbers(text: str) -> set[str]:
+    """같은 주장 안의 다른 두 수로 계산되는 수 — 근거에 없어도 창작이 아니다.
+
+    "CAGR 24.12%는 6.16% 대비 약 3.9배"의 3.9가 그렇다. 근거에는 24.12와 6.16만
+    있으므로 3.9는 늘 '무근거'로 떨어졌다(2026-08-24 COMPA 실측). 계산으로 설명되면
+    검사 대상에서 뺀다 — 계산이 맞는지는 산술 검증(arithmetic_suspects)의 몫이다.
+    """
+    tokens = numeric_mentions(text)
+    pairs = [(t, v) for t in tokens if (v := _numeric_value(t)) is not None]
+    out: set[str] = set()
+    for token, value in pairs:
+        if value == 0:
+            continue
+        for i, (ta, a) in enumerate(pairs):
+            for tb, b in pairs[i + 1 :]:
+                if token in (ta, tb) or a == 0 or b == 0:
+                    continue
+                for candidate in (a / b, b / a, a + b, a - b, b - a, a * b):
+                    if abs(candidate - value) <= abs(value) * _DERIVED_TOLERANCE:
+                        out.add(_normalize_number(token))
+                        break
+    return out
+
+
 def ungrounded_numbers(content: str, cited_content: str) -> list[str]:
     """본문에서 인용 근거에 없는 유의미한 숫자 토큰(등장 순서·중복 제거).
 
@@ -217,7 +350,7 @@ def ungrounded_numbers(content: str, cited_content: str) -> list[str]:
     화면에서 "이 절의 근거 미확인 수치"를 그대로 보여주기 위함(2026-08-09).
     퍼지 매칭(콤마 정규화 후 부분문자열)이라 오탐 여지가 있어 경고용이다.
     """
-    haystack = cited_content.replace(",", "")
+    haystack = normalize_haystack(cited_content)
     out: list[str] = []
     seen: set[str] = set()
     # 제목·표 줄은 주장이 아니다 - 소제목 번호("1.1 사업 배경")가 수치로 잡혀 화면에
@@ -226,12 +359,15 @@ def ungrounded_numbers(content: str, cited_content: str) -> list[str]:
     # 않는 수치 1개: 31"이 떴다(2026-08-12 검증 런 화면). 출처 번호는 주장이 아니고,
     # 마커가 많이 붙은 절일수록 경고가 늘어 진짜 신호를 덮는다.
     units = [MARK_RE.sub(" ", u) for u in claim_units(content)]
-    for token in _significant_numbers("\n".join(units)):
+    # 파생치는 주장 단위 안에서만 성립한다 — 절 전체를 섞으면 무관한 두 수의 우연한
+    # 비율이 실수치를 덮는다.
+    derived = {d for unit in units for d in derived_numbers(unit)}
+    for token in numeric_mentions("\n".join(units)):
         norm = _normalize_number(token)
         if norm in seen:
             continue
         seen.add(norm)
-        if norm and norm not in haystack:
+        if norm and norm not in derived and not number_in_text(token, haystack):
             out.append(token)
     return out
 
@@ -253,7 +389,7 @@ def misattributed_numbers(
     """
     out: list[str] = []
     seen: set[str] = set()
-    pool = {cid: (t or "").replace(",", "") for cid, t in chunk_texts.items()}
+    pool = {cid: normalize_haystack(t or "") for cid, t in chunk_texts.items()}
     for unit in claim_units(content):
         marks = numbers_in_order(unit)
         if not marks:
@@ -267,12 +403,17 @@ def misattributed_numbers(
         # $7.2B). 그 축의 원칙 그대로 오귀속 판정도 건너뛴다.
         if cited_text.strip() and not _HANGUL_RE.search(cited_text):
             continue
-        for tok in _significant_numbers(bare):
+        derived = derived_numbers(bare)
+        for tok in numeric_mentions(bare):
             norm = _normalize_number(tok)
-            if not norm or norm in seen or norm in cited_text:
+            if not norm or norm in seen or norm in derived or number_in_text(tok, cited_text):
                 continue
             elsewhere = next(
-                (cid for cid, text in pool.items() if cid not in cited_ids and norm in text),
+                (
+                    cid
+                    for cid, text in pool.items()
+                    if cid not in cited_ids and number_in_text(tok, text)
+                ),
                 None,
             )
             if elsewhere is not None:

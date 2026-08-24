@@ -161,6 +161,24 @@ class TestFindingsWithVerdicts:
         cats = {r["category"] for r in rows}
         assert {"무근거 수치", "출처 오귀속"} <= cats
 
+    def test_own_source_hit_is_not_a_finding(self):
+        """인용한 자료 자신의 다른 대목에 있으면 창작도 오귀속도 아니다.
+
+        청크 단위로 인용하므로 같은 자료의 다른 문단에 수치가 있는 건 정상이다
+        (2026-08-24 COMPA 재채점: 이 구분이 없어 오귀속이 1→5로 불었다).
+        """
+        cid = uuid4()
+        claims = [_claim("수치 문장", cid, score=0.9, ungrounded=["48.7%"])]
+        rows = findings_from_claims(
+            self._row(),
+            claims,
+            comparable=True,
+            refuted={0},
+            located={},
+            own_grounded={"48.7"},
+        )
+        assert [r for r in rows if r["category"] in ("무근거 수치", "출처 오귀속")] == []
+
     def test_injected_number_flagged_over_misattribution(self):
         # 3단(주입 가드) - 코퍼스에서 발견됐어도 본문이 명시한 연도 곁에 없으면
         # 오귀속이 아니라 주입 의심(v6 실측: 주입 428이 무관한 CBAM 문서와 우연 일치).

@@ -25,10 +25,16 @@ from uuid import UUID
 
 from src.services.qa.gate import (
     claim_units,
+    normalize_haystack,
     normalize_number,
+    number_in_text,
+    numeric_mentions,
     significant_numbers,
     ungrounded_numbers,
 )
+
+# 수치 표기의 맨 숫자 — "3,200억"에서 "3,200"만 떼어 표시 토큰과 짝짓는다.
+_LEADING_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 # 토큰 가중치 — 숫자 > 라틴 약어 > 한글 2-gram.
 _W_NUMBER = 3.0
@@ -334,16 +340,25 @@ def _grounded_spans(
     skip = {normalize_number(t) for t in ungrounded}
     out: list[NumberSpan] = []
     seen: set[str] = set()
+    # 표시 토큰은 기존 규약대로 맨 숫자(단위 없음)를 쓰고, 대조만 자리 단위를 붙인
+    # 표기로 한다 — 표 검사·화면이 그 규약을 공유한다.
+    mention_of = {
+        normalize_number(_LEADING_NUMBER_RE.match(m).group(0)): m  # type: ignore[union-attr]
+        for m in numeric_mentions(bare_claim)
+        if _LEADING_NUMBER_RE.match(m)
+    }
     for token in significant_numbers(bare_claim):
         norm = normalize_number(token)
         if not norm or norm in seen or norm in skip:
             continue
         seen.add(norm)
+        mention = mention_of.get(norm, token)
         best: NumberSpan | None = None
         best_score = -1.0
         for cid, chunk in cited_chunks:
             for start, _end, line in _number_lines(chunk):
-                if norm not in line.replace(",", ""):
+                # 자릿수 환산 표기까지 본다("70.5억"↔"USD 7.05 billion").
+                if not number_in_text(mention, normalize_haystack(line)):
                     continue
                 # 웹 원문은 문단이 한 줄이다 - 줄째로 강조하면 문단 전체가 칠해진다
                 # (2026-08-14 화면 검증). 수치가 든 문장까지 좁힌다.

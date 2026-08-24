@@ -14,7 +14,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from src.core.citations import numbers_in_order
 from src.core.config import settings
@@ -38,7 +38,9 @@ from src.services.qa.gate import (
     claim_years,
     leftover_artifacts,
     misattributed_numbers,
+    normalize_haystack,
     normalize_number,
+    number_variants,
     truncated_lines,
 )
 from src.services.qa.table_check import table_prose_mismatches, table_ungrounded_numbers
@@ -144,6 +146,7 @@ def findings_from_claims(
     refuted: set[int] | None = None,
     located: dict[str, str] | None = None,
     injected: set[str] | None = None,
+    own_grounded: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """주장별 대조 결과 → 절 단위 경고 행 (순수 함수 — 테스트 대상).
 
@@ -221,6 +224,8 @@ def findings_from_claims(
     fabricated: list[str] = []
     for token in confirmed:
         norm = normalize_number(token)
+        if own_grounded and norm in own_grounded:
+            continue  # 인용한 자료 자신의 다른 대목에 있다 — 창작도 오귀속도 아니다
         where = (located or {}).get(norm)
         if where and injected and norm in injected:
             suspected.append((token, "·".join(stated_years.get(norm, ()))))
@@ -489,8 +494,11 @@ def findings_for_section(
 
 
 async def _locate_tokens(
-    project_id: UUID, tokens: list[str], cache: dict[str, str | None]
-) -> dict[str, str]:
+    project_id: UUID,
+    tokens: list[str],
+    cache: dict[str, tuple[UUID | None, str] | None],
+    own_sources: set[UUID] | None = None,
+) -> tuple[dict[str, str], set[str]]:
     """정규화 수치 → 그 수치가 실재하는 자료 제목. 프로젝트 코퍼스 전체를 재검색한다.
 
     1단(어휘 대조·근거 동봉 판정)은 '인용한 근거'만 본다. 2단은 절 풀 밖까지 —
@@ -499,24 +507,44 @@ async def _locate_tokens(
     숫자·점뿐이라 LIKE 메타문자 걱정이 없고, 같은 수치가 여러 절에 반복되므로
     프로젝트 단위로 캐시한다(못 찾은 것도 None으로 남겨 재검색을 막는다).
     """
-    todo = sorted({n for n in (normalize_number(t) for t in tokens) if n and n not in cache})
+    by_norm = {normalize_number(t): t for t in tokens if normalize_number(t)}
+    todo = sorted(n for n in by_norm if n not in cache)
     if todo:
         async with async_session_maker() as session:
             for norm in todo:
+                # 자릿수 환산 표기까지 함께 찾는다 — 본문 "70.5억 달러"가 코퍼스에는
+                # "USD 7.05 billion"으로 적힌다(2026-08-24 COMPA 실측: 이 한 겹이
+                # 없어 영문 코퍼스에서 2단 판정이 통째로 뚫렸다).
+                haystack = func.replace(Chunk.content, ",", "")
                 found = (
                     await session.execute(
-                        select(ProjectSource.title, ProjectSource.url)
+                        select(Chunk.source_id, ProjectSource.title, ProjectSource.url)
                         .select_from(Chunk)
                         .join(ProjectSource, Chunk.source_id == ProjectSource.id, isouter=True)
                         .where(
                             Chunk.project_id == project_id,
-                            func.replace(Chunk.content, ",", "").like(f"%{norm}%"),
+                            or_(*[haystack.like(f"%{v}%") for v in number_variants(by_norm[norm])]),
                         )
                         .limit(1)
                     )
                 ).first()
-                cache[norm] = (found[0] or found[1] or "제목 없는 자료") if found else None
-    return {n: v for n, v in cache.items() if v is not None}
+                cache[norm] = (
+                    (found[0], found[1] or found[2] or "제목 없는 자료") if found else None
+                )
+    # 세 갈래로 가른다. 그 절이 인용한 **자료 자신**에서 나왔으면 오귀속이 아니라
+    # 그냥 근거 있음이다 — 청크 단위 인용이라 같은 자료의 다른 대목에 수치가 있는 건
+    # 정상이다(2026-08-24 COMPA 재채점에서 오귀속이 1→5로 는 원인).
+    other: dict[str, str] = {}
+    own: set[str] = set()
+    for norm, value in cache.items():
+        if value is None:
+            continue
+        source_id, title = value
+        if own_sources and source_id in own_sources:
+            own.add(norm)
+        else:
+            other[norm] = title
+    return other, own
 
 
 # 주입 가드 근접 창 — 수치 발견 지점 양옆에서 연도를 찾는 반경(문자).
@@ -527,14 +555,20 @@ _YEAR_WINDOW = 80
 def _year_beside(
     content: str, norm: str, years: tuple[str, ...], window: int = _YEAR_WINDOW
 ) -> bool:
-    """수치의 모든 등장 지점 ±창 안에 명시 연도 중 하나라도 있는가."""
-    text = content.replace(",", "")
-    start = 0
-    while (i := text.find(norm, start)) != -1:
-        chunk = text[max(0, i - window) : i + len(norm) + window]
-        if any(y in chunk for y in years):
-            return True
-        start = i + 1
+    """수치의 모든 등장 지점 ±창 안에 명시 연도 중 하나라도 있는가.
+
+    자릿수 환산 표기도 함께 찾는다 — 본문이 "4,610만 달러"라도 코퍼스에는
+    "US$ 46.1 million"으로 적혀 있다(2026-08-24 COMPA 실측: 이 한 겹이 없어
+    실재하는 수치가 주입 의심으로 샜다).
+    """
+    text = normalize_haystack(content)
+    for variant in number_variants(norm):
+        start = 0
+        while (i := text.find(variant, start)) != -1:
+            chunk = text[max(0, i - window) : i + len(variant) + window]
+            if any(y in chunk for y in years):
+                return True
+            start = i + 1
     return False
 
 
@@ -559,13 +593,14 @@ async def _injection_suspects(
     if todo:
         async with async_session_maker() as session:
             for norm, years in todo:
+                haystack = func.replace(Chunk.content, ",", "")
                 texts = (
                     (
                         await session.execute(
                             select(Chunk.content)
                             .where(
                                 Chunk.project_id == project_id,
-                                func.replace(Chunk.content, ",", "").like(f"%{norm}%"),
+                                or_(*[haystack.like(f"%{v}%") for v in number_variants(norm)]),
                             )
                             .limit(50)
                         )
@@ -634,22 +669,23 @@ async def evidence_findings(
             )
         ).scalar_one()
         chunk_texts: dict[UUID, str] = {}
+        chunk_sources: dict[UUID, UUID] = {}
         if wanted:
-            chunk_texts = {
-                cid: text
-                for cid, text in (
-                    await session.execute(
-                        select(Chunk.id, Chunk.content).where(Chunk.id.in_(wanted))
-                    )
-                ).all()
-            }
+            for cid, text, source_id in (
+                await session.execute(
+                    select(Chunk.id, Chunk.content, Chunk.source_id).where(Chunk.id.in_(wanted))
+                )
+            ).all():
+                chunk_texts[cid] = text
+                if source_id is not None:
+                    chunk_sources[cid] = source_id
 
     use_llm = settings.claim_verify_enabled if verify is None else verify
     out: list[dict[str, Any]] = []
     n_verified = 0
     n_relocated = 0
     n_injected = 0
-    locate_cache: dict[str, str | None] = {}
+    locate_cache: dict[str, tuple[UUID | None, str] | None] = {}
     year_cache: dict[tuple[str, tuple[str, ...]], bool] = {}
     # 문장 커버리지 — 검출 지표의 분모. claim_units가 못 집은 문장은 모든 검사에서
     # 증발하고 그 손실은 어떤 지표에도 안 나타난다('남' 꼬리 실사고, 2026-08-14).
@@ -686,12 +722,18 @@ async def evidence_findings(
         # 발견됐어도 명시 연도 곁에 없으면(3단) '사전지식 주입 의심'으로 갈린다.
         located: dict[str, str] | None = None
         injected: set[str] = set()
+        own_grounded: set[str] = set()
         if refuted:
             confirmed_toks, _, tok_years = ungrounded_token_buckets(
                 claims, comparable=comparable, supported=supported, refuted=refuted
             )
             if confirmed_toks:
-                located = await _locate_tokens(project_id, confirmed_toks, locate_cache)
+                own = {
+                    chunk_sources[cid] for cid in list(row.source_ids or []) if cid in chunk_sources
+                }
+                located, own_grounded = await _locate_tokens(
+                    project_id, confirmed_toks, locate_cache, own
+                )
                 injected = await _injection_suspects(project_id, tok_years, located, year_cache)
                 norms = {normalize_number(t) for t in confirmed_toks}
                 n_injected += len(norms & injected)
@@ -705,6 +747,7 @@ async def evidence_findings(
                 refuted=refuted,
                 located=located,
                 injected=injected,
+                own_grounded=own_grounded,
             )
         )
         out.extend(content_findings(row, n_sources=n_sources, renumbered=renumbered))

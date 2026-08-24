@@ -28,8 +28,11 @@ from src.services.qa.gate import (
     claim_units,
     claim_years,
     gate_candidates,
+    korean_magnitude,
     leftover_artifacts,
     misattributed_numbers,
+    number_variants,
+    numeric_mentions,
     run_section_gate,
     truncated_lines,
     uncited_units,
@@ -568,6 +571,68 @@ class TestClaimCoverage:
         assert claim_years("2024년 기준 428개사이며 2019.12부터 시행됨 [1]") == ("2024", "2019")
         assert claim_years("RE100 목표는 성장률 3.2024나 계약액 52024와 무관함") == ()
         assert claim_years("연도 없는 수치 428개사 서술") == ()
+
+
+class TestCrossLingualNumbers:
+    """한↔영 자릿수 환산 — 영문 코퍼스에서 수치 검출기가 통째로 무력했던 원인.
+
+    2026-08-24 COMPA 실측(정밀도 14.8%): 본문 "70.5억 달러"와 근거 "USD 7.05
+    billion"이 콤마 제거 부분문자열로는 영영 못 만나 전부 '무근거'로 떨어졌다.
+    """
+
+    def test_korean_magnitude_value(self):
+        assert korean_magnitude("70.5억") == 7.05e9
+        assert korean_magnitude("4,610만") == 4.61e7
+        assert korean_magnitude("2억 450만") == 2.045e8
+        assert korean_magnitude("42.7%") is None
+
+    def test_variants_include_english_mantissa(self):
+        assert "7.05" in number_variants("70.5억")  # USD 7.05 billion
+        assert "46.1" in number_variants("4,610만")  # US$ 46.1 million
+        assert "204.5" in number_variants("2억450만")  # US$ 204.5 million
+
+    def test_english_evidence_grounds_korean_claim(self):
+        body = "ㅇ 글로벌 액체생검 시장은 2025년 70.5억 달러 규모로 평가된 것으로 나타났음 (출처 4)"
+        evidence = "The global liquid biopsy market was valued at USD 7.05 billion in 2025."
+        # 무관한 근거에는 잡히고(주장 단위가 실제로 잡힌다는 증거), 환산 근거에는 안 잡힌다.
+        assert ungrounded_numbers(body, "관련 없는 근거 문장") == ["70.5억"]
+        assert ungrounded_numbers(body, evidence) == []
+
+    def test_compound_magnitude_not_split(self):
+        # "2억 450만"을 쪼개 읽으면 450이 홀로 남아 엉뚱한 자료에 붙는다(주입 의심 오탐).
+        body = "ㅇ cfRNA 진단 세부 영역은 2035년 2억 450만 달러 규모로 전망되고 있음 (출처 3)"
+        assert "450" not in numeric_mentions(body)
+        assert ungrounded_numbers(body, "관련 없는 근거 문장") == ["2억 450만"]
+        assert ungrounded_numbers(body, "projected to reach US$ 204.5 million by 2035") == []
+
+    def test_real_gap_still_flagged(self):
+        # 환산으로도 안 맞는 진짜 창작은 그대로 잡힌다.
+        body = "ㅇ 글로벌 액체생검 시장은 2025년 88.8억 달러 규모로 평가된 것으로 나타났음 (출처 4)"
+        evidence = "The global liquid biopsy market was valued at USD 7.05 billion in 2025."
+        assert ungrounded_numbers(body, evidence) == ["88.8억"]
+
+
+class TestSectionRefsAndDerived:
+    """절 번호와 파생치는 근거 대조 대상이 아니다(2026-08-24 COMPA 오탐 2종)."""
+
+    def test_section_reference_is_not_a_number(self):
+        body = "ㅇ 진단 범위 확장에 따른 시장 규모 확대 전망은 1.1절을 참조하기 바람 (출처 14)"
+        # 절 번호는 문서 안 길찾기지 수치 주장이 아니다 — 근거가 무관해도 잡히면 안 된다.
+        assert ungrounded_numbers(body, "관련 없는 근거 문장") == []
+
+    def test_derived_ratio_skipped(self):
+        # 24.12 ÷ 6.16 = 3.916 ≈ 3.9배 — 근거엔 24.12와 6.16만 있다.
+        body = (
+            "ㅇ AI 암 진단의 CAGR 24.12%는 암 진단 전체 시장 성장률 6.16% 대비"
+            " 약 3.9배 수준으로 나타났음 (출처 14)"
+        )
+        evidence = "AI in cancer diagnostics CAGR 24.12% vs overall market 6.16%"
+        assert ungrounded_numbers(body, evidence) == []
+
+    def test_unrelated_number_not_treated_as_derived(self):
+        body = "ㅇ 참여 기업 비중은 24.12%와 6.16%이며 별도 지표는 77.7%로 집계됐음 (출처 1)"
+        evidence = "shares were 24.12% and 6.16% respectively"
+        assert ungrounded_numbers(body, evidence) == ["77.7%"]
 
 
 class TestMisattributedNumbers:
