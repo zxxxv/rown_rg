@@ -70,6 +70,35 @@ type CitationMap = Map<number, SectionCitation>;
 // 인용 번호 -> 그 번호가 실제로 가리킨 근거 원문. 없으면 호버 카드는 출처 이름만 보여준다.
 type EvidenceMap = Map<number, EvidenceChunk>;
 
+/** 근거 표기 없이 쓰인 문장(AI 서술) 강조 - 본문 글자와 대조하기 위한 정규화.
+ *
+ * 백엔드가 문장을 자를 때와 화면 렌더 사이에 공백·마커가 어긋나므로, 공백을 접고
+ * 개조식 글머리를 걷어 비교한다. 부분 일치로 찾되 짧은 문장은 건너뛴다 - 두세 글자가
+ * 우연히 겹쳐 엉뚱한 대목이 칠해지면 강조가 신호를 잃는다. */
+const CLAIM_MIN_CHARS = 12;
+
+function normalizeClaim(text: string): string {
+  return text
+    .replace(/^[□ㅇ○◦\-*\s]+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function highlightClaims(text: string, claims: string[]): ReactNode {
+  if (claims.length === 0) return text;
+  const flat = normalizeClaim(text);
+  const hit = claims.find((c) => c.length >= CLAIM_MIN_CHARS && flat.includes(c));
+  if (!hit) return text;
+  return (
+    <mark
+      className="rounded-sm bg-bg-warning/60 px-0.5 text-fg decoration-fg-warning/60 underline-offset-2"
+      title="근거 표기가 없는 문장 - AI가 자료 없이 쓴 서술일 수 있습니다"
+    >
+      {text}
+    </mark>
+  );
+}
+
 function processString(text: string, citations: CitationMap, evidence: EvidenceMap): ReactNode {
   if (citations.size === 0 || !CITE_PATTERN.test(text)) return text;
   CITE_PATTERN.lastIndex = 0;
@@ -103,14 +132,28 @@ function processChildren(
   children: ReactNode,
   citations: CitationMap,
   evidence: EvidenceMap,
+  claims: string[] = [],
 ): ReactNode {
   return Children.map(children, (child) => {
-    if (typeof child === "string") return processString(child, citations, evidence);
+    if (typeof child === "string") {
+      const marked = highlightClaims(child, claims);
+      return typeof marked === "string"
+        ? processString(child, citations, evidence)
+        : cloneElement(
+            marked as ReactElement,
+            undefined,
+            processString(child, citations, evidence),
+          );
+    }
     if (typeof child === "number" || typeof child === "boolean" || child === null) return child;
     if (isValidElement(child)) {
       const el = child as ReactElement<{ children?: ReactNode }>;
       if (el.props?.children !== undefined) {
-        return cloneElement(el, undefined, processChildren(el.props.children, citations, evidence));
+        return cloneElement(
+          el,
+          undefined,
+          processChildren(el.props.children, citations, evidence, claims),
+        );
       }
       return child;
     }
@@ -273,8 +316,12 @@ function prepareOutline(md: string): string {
   return out.join("\n");
 }
 
-function buildComponents(citations: CitationMap, evidence: EvidenceMap): Components {
-  const walk = (children: ReactNode) => processChildren(children, citations, evidence);
+function buildComponents(
+  citations: CitationMap,
+  evidence: EvidenceMap,
+  claims: string[] = [],
+): Components {
+  const walk = (children: ReactNode) => processChildren(children, citations, evidence, claims);
   return {
     h1: ({ children, ...props }) => (
       <h1 className="mb-4 mt-6 text-2xl font-semibold text-fg" {...props}>
@@ -448,9 +495,12 @@ export interface MarkdownContentProps {
   citations?: SectionCitation[];
   /** 근거 추적 결과 - 있으면 호버 카드에 그 번호가 가리킨 원문 대목이 함께 뜬다. */
   evidence?: EvidenceChunk[];
+  /** 근거 표기 없이 쓰인 문장(AI 서술) - 주면 본문에서 강조한다. 검토자가 어디를
+   *  지우거나 자료로 뒷받침할지 한눈에 고르게 하는 용도(2026-08-24 사용자 결정). */
+  aiClaims?: string[];
 }
 
-export function MarkdownContent({ content, citations, evidence }: MarkdownContentProps) {
+export function MarkdownContent({ content, citations, evidence, aiClaims }: MarkdownContentProps) {
   const citationMap = useMemo<CitationMap>(
     () =>
       new Map(
@@ -468,9 +518,15 @@ export function MarkdownContent({ content, citations, evidence }: MarkdownConten
     }
     return map;
   }, [evidence]);
+  // 문장은 백엔드가 자른 그대로 오지만 렌더 글자와 공백·글머리가 어긋난다 - 같은 자로
+  // 정규화해 두고, 짧은 문장은 우연 일치를 피해 버린다.
+  const claimTexts = useMemo(
+    () => (aiClaims ?? []).map(normalizeClaim).filter((c) => c.length >= CLAIM_MIN_CHARS),
+    [aiClaims],
+  );
   const components = useMemo(
-    () => buildComponents(citationMap, evidenceMap),
-    [citationMap, evidenceMap],
+    () => buildComponents(citationMap, evidenceMap, claimTexts),
+    [citationMap, evidenceMap, claimTexts],
   );
   // 표 하단 (출처 n)을 먼저 실서지 줄로 풀어야 배지·걷어내기에 휩쓸리지 않는다.
   const resolved = useMemo(

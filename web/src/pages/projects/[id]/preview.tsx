@@ -915,6 +915,14 @@ function SectionView({
   // 근거 0건 블록에서도 빈 패널이 떠 불편하다(2026-08-12 사용자 지적). 근거 있는
   // 블록의 '근거 N' 표시를 사용자가 클릭했을 때만 그 블록의 근거를 연다.
   const [evidenceIdx, setEvidenceIdx] = useState<number | null>(null);
+  // 근거 표기 없는 문장(AI 서술) 본문 강조 - 기본은 끔. 늘 칠해 두면 개조식 보고서에서
+  // 표기 없는 문장이 흔해 화면이 노랗게 덮인다. 검토할 때만 켠다(2026-08-24 결정).
+  const [showAiClaims, setShowAiClaims] = useState(false);
+  const aiClaims = useMemo(
+    () =>
+      (evidenceQuery.data?.claims ?? []).filter((c) => c.status === "uncited").map((c) => c.claim),
+    [evidenceQuery.data],
+  );
   const evidenceBlock = evidenceIdx !== null ? (blocks[evidenceIdx] ?? null) : null;
   // 드로어 2면 중 원문 뷰어 - 근거 카드·수치에서 "원문에서 보기"를 눌렀을 때만.
   // 근거 목록으로 돌아가는 뒤로가기가 있으므로 블록이 바뀌면 반드시 비운다.
@@ -1246,7 +1254,22 @@ function SectionView({
                 {claimStats.unmatched > 0 ? (
                   <span className="text-fg-danger">못 찾음 {claimStats.unmatched}</span>
                 ) : null}
-                {claimStats.uncited > 0 ? <span>표기 없음 {claimStats.uncited}</span> : null}
+                {claimStats.uncited > 0 ? (
+                  // 근거 표기 없이 쓰인 문장 = AI가 자료 없이 쓴 서술 후보. 어느 문장인지
+                  // 본문에서 바로 짚어 줘야 지우거나 자료로 받칠 수 있다(2026-08-24 결정).
+                  <button
+                    type="button"
+                    onClick={() => setShowAiClaims((v) => !v)}
+                    aria-pressed={showAiClaims}
+                    className={cn(
+                      "rounded px-1.5 py-0.5 transition-colors hover:bg-bg-secondary",
+                      showAiClaims && "bg-bg-warning text-fg",
+                    )}
+                  >
+                    표기 없음 {claimStats.uncited}
+                    {showAiClaims ? " · 본문 강조 켬" : " · 본문에서 보기"}
+                  </button>
+                ) : null}
                 {evidenceQuery.data?.traceable === false ? (
                   // 근거 기록 도입(8/11) 전에 작성된 절 - 번호와 청크의 대응이 없어
                   // 블록 배지·드로어를 못 연다. 그 사실을 알려야 "왜 배지가 없지"가 안 된다.
@@ -1345,6 +1368,7 @@ function SectionView({
                         content={block}
                         citations={data.citations}
                         evidence={evidenceQuery.data?.items}
+                        aiClaims={showAiClaims ? aiClaims : undefined}
                       />
                       {selectedIdx.has(idx) && selectedIdx.size === 1 ? (
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
