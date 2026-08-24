@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from src.export.hwpx_writer import (
+    BODY_ALIGNMENT,
     BODY_SIZE_PT,
     CELL_LINE_SPACING_PERCENT,
     CELL_MARGIN_SIDE_HWP,
     CELL_MARGIN_VERT_HWP,
     LINE_SPACING_PERCENT,
     MARGIN_MM,
+    MIN_SPACE_RATIO_PERCENT,
     OUTLINE_STEP_PT,
     _hanging_indent_mm,
     _pad_marker,
@@ -76,6 +78,12 @@ class TestCompanyStyle:
         # 본문은 160%(130%로 내렸다가 눈으로 보고 되돌림), 표 안은 좁게 130%.
         assert LINE_SPACING_PERCENT == 160
         assert CELL_LINE_SPACING_PERCENT == 130
+
+    def test_body_alignment_and_min_space_match_samples(self):
+        # 실납품 6종 전부 양쪽 정렬 주력(60~94%)이고, 알키미스트 본문 83%가 최소
+        # 공백 25%다. 벌어짐의 병인은 정렬이 아니라 최소 공백 0%였다(2026-08-24).
+        assert BODY_ALIGNMENT == "JUSTIFY"
+        assert MIN_SPACE_RATIO_PERCENT == 25
 
     def test_body_size_follows_delivered_samples(self):
         # 실납품 본문 13pt(KoPub바탕체) 실측 → 종전 11pt에서 12pt로. 글꼴 체감 차이가

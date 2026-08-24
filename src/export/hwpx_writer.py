@@ -51,12 +51,13 @@ HEADING_SIZE_PT: dict[int, int] = {1: 16, 2: 14, 3: 12}
 # (2026-08-24 사용자 확정). 표 안은 좁아야 읽히므로 따로 130%를 쓴다.
 LINE_SPACING_PERCENT = 160
 CELL_LINE_SPACING_PERCENT = 130
-# 본문 정렬 — 양쪽 정렬(문서 기본값)은 줄 끝을 맞추려고 낱말 사이를 늘린다. 우리
-# 보고서처럼 끊어 쓸 수 없는 영문 고유명사(RE100·Climate Week NYC·CBAM)가 잦으면
-# 한 줄이 70%만 차고 남은 30%가 공백 일곱 개에 배분돼 눈에 띄게 벌어진다
-# (2026-08-24 사용자 지적 화면). 왼쪽 정렬은 오른쪽 끝이 들쭉날쭉해지는 대신
-# 낱말 간격이 늘 일정하다 — 실납품 샘플도 10%는 왼쪽 정렬을 쓴다.
-BODY_ALIGNMENT = "LEFT"
+# 본문 정렬 — 실납품 6종 전부 양쪽 정렬이 주력이다(2026-08-24 실측: 60~94%, 평균
+# 82%). 낱말 벌어짐 때문에 왼쪽 정렬로 한 번 바꿨다가 되돌렸다 — 벌어짐의 원인은
+# 정렬 방식이 아니라 최소 공백 비율이 0이었던 것이다(_apply_min_space_ratio).
+BODY_ALIGNMENT = "JUSTIFY"
+# 최소 공백 비율(%) — 양쪽 정렬에서 공백을 이만큼까지 압축해 어절을 끌어올 수 있다.
+# 실납품 알키미스트 본문 83%가 25%(우리는 0%였다).
+MIN_SPACE_RATIO_PERCENT = 25
 # 실납품 2종 실측 일치(2026-08-24, 알키미스트 hwpx·비수도권 hwp): 좌우 20·상하 15.
 # 종전 좌30(한글 기본값 잔재)·상하20은 본문을 오른쪽으로 밀어 개조식이 깊어 보였다.
 MARGIN_MM: dict[str, float] = {"top": 15.0, "bottom": 15.0, "left": 20.0, "right": 20.0}
@@ -311,9 +312,31 @@ def build_report(
                 element.set("pageBreak", "1")
             pending_page_break = False
 
+    _apply_min_space_ratio(doc)
     out = Path(output_path)
     doc.save_to_path(str(out))
     return out
+
+
+def _apply_min_space_ratio(doc: HwpxDocument) -> None:
+    """모든 문단 모양에 최소 공백 비율을 넣는다 — 양쪽 정렬의 낱말 벌어짐 완화.
+
+    양쪽 정렬은 줄 끝을 맞추려고 낱말 사이를 늘린다. 다음 어절이 조금 모자라 다음
+    줄로 밀리면 그 줄 전체가 벌어지는데, 최소 공백 비율을 주면 한컴이 공백을 그만큼
+    **압축해서** 어절을 그 줄에 끌어올 수 있어 벌어짐이 줄어든다.
+
+    이 값이 실납품과 우리를 가른 진짜 차이였다(2026-08-24 실측): 실납품 알키미스트는
+    본문 83%가 25%인데 우리는 0%였다 — 그래서 같은 양쪽 정렬인데 우리만 심하게
+    벌어졌다(사용자 화면). 정렬 방식이 아니라 이 설정이 병인이다.
+    """
+    try:
+        root = doc.headers[0].element
+        for node in root.iter():
+            if node.tag.rsplit("}", 1)[-1] == "paraPr":
+                node.set("condense", str(MIN_SPACE_RATIO_PERCENT))
+        doc.headers[0].mark_dirty()
+    except Exception:  # noqa: BLE001 — 표시 품질, 실패해도 문서는 유효
+        pass
 
 
 def _apply_company_chrome(doc: HwpxDocument) -> None:
