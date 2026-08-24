@@ -24,6 +24,7 @@ import structlog
 from src.clients.llm.base import CompletionRequest, LLMClient, Message
 from src.clients.llm.factory import get_llm_client
 from src.clients.llm.token_tracker import token_context
+from src.core.citations import strip_source_marks
 from src.core.config import settings
 from src.prompts import load_workflow_role
 from src.services.generation.planner import _parse_manifest
@@ -103,7 +104,13 @@ def _evidence_block(claims: list[ClaimAlignment], chunk_texts: dict[UUID, str]) 
 
 
 def _claim_block(claims: list[ClaimAlignment], chunk_texts: dict[UUID, str]) -> str:
-    """문장마다 자기가 인용한 근거 번호를 달아 나열한다(여러 개면 모두)."""
+    """문장마다 자기가 인용한 근거 번호를 달아 나열한다(여러 개면 모두).
+
+    문장 안의 "(출처 n)"은 걷어낸다. 프롬프트의 근거 번호는 1..N인데 본문 표기는
+    자료 일련번호라 두 체계가 부딪혀, 판정관이 "근거 23이라는 출처는 존재하지
+    않습니다"라며 반박했다(2026-08-24 COMPA 라벨링에서 발견). 어느 근거를 볼지는
+    우리가 (근거 n)으로 이미 알려 주므로 본문 표기는 판정에 필요 없다.
+    """
     order: list[UUID] = []
     for claim in claims:
         for cid in _cited_ids(claim):
@@ -113,7 +120,7 @@ def _claim_block(claims: list[ClaimAlignment], chunk_texts: dict[UUID, str]) -> 
     for i, claim in enumerate(claims):
         refs = [str(order.index(cid) + 1) for cid in _cited_ids(claim) if cid in order]
         ref = f" (근거 {', '.join(refs)})" if refs else ""
-        lines.append(f"{i + 1}.{ref} {claim.claim}")
+        lines.append(f"{i + 1}.{ref} {strip_source_marks(claim.claim).strip()}")
     return "\n".join(lines)
 
 
