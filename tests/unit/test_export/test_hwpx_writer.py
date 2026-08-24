@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from src.export.hwpx_writer import (
     BODY_SIZE_PT,
+    CELL_LINE_SPACING_PERCENT,
     CELL_MARGIN_SIDE_HWP,
     CELL_MARGIN_VERT_HWP,
     LINE_SPACING_PERCENT,
     MARGIN_MM,
     OUTLINE_STEP_PT,
     _hanging_indent_mm,
+    _pad_marker,
+    citation_runs,
 )
 
 # 반각 한 칸의 폭(mm) — 본문 글자 크기의 절반. 기대값을 손으로 적지 않고 같은 근거로 세운다.
@@ -26,10 +29,17 @@ class TestHangingIndent:
     def test_box_marker_same_as_other_wide_markers(self):
         assert _hanging_indent_mm("□ 추진 배경") == 3 * _HALF
 
-    def test_narrow_marker_is_narrower(self):
-        # "- "= 반각 마커(1) + 공백(1) = 반각 2칸. 전각 마커보다 좁게 내어쓴다.
-        assert _hanging_indent_mm("- 세부 항목임") == 2 * _HALF
-        assert _hanging_indent_mm("* 보충 설명임") == 2 * _HALF
+    def test_narrow_marker_uses_the_same_slot(self):
+        # 좁은 마커도 같은 칸을 쓴다 — 칸 폭이 마커마다 다르면 본문 시작점이 계단을
+        # 거슬러 역전된다(2026-08-24 실사고: ㅇ 24.5pt 아래 '-'가 23.0pt에 섰다).
+        assert _hanging_indent_mm("- 세부 항목임") == 3 * _HALF
+        assert _hanging_indent_mm("* 보충 설명임") == 3 * _HALF
+
+    def test_narrow_marker_padded_to_slot(self):
+        # 칸을 공백으로 채워야 첫 줄 본문과 줄바꿈된 줄이 같은 자리에서 시작한다.
+        assert _pad_marker("- 세부 항목임") == "-  세부 항목임"
+        assert _pad_marker("ㅇ 중주제임") == "ㅇ 중주제임"  # 전각 마커는 이미 3칸
+        assert _pad_marker("서술 문단임") == "서술 문단임"
 
     def test_plain_paragraph_has_no_hanging_indent(self):
         # 마커 없는 서술 문단은 첫 줄을 당길 이유가 없다.
@@ -62,8 +72,45 @@ class TestCompanyStyle:
         # 실납품 2종 실측 일치: 좌우 20·상하 15 (종전 좌30·상하20은 한글 기본값 잔재).
         assert MARGIN_MM == {"top": 15.0, "bottom": 15.0, "left": 20.0, "right": 20.0}
 
-    def test_line_spacing_is_130(self):
-        assert LINE_SPACING_PERCENT == 130
+    def test_body_spacing_160_cells_130(self):
+        # 본문은 160%(130%로 내렸다가 눈으로 보고 되돌림), 표 안은 좁게 130%.
+        assert LINE_SPACING_PERCENT == 160
+        assert CELL_LINE_SPACING_PERCENT == 130
+
+    def test_body_size_follows_delivered_samples(self):
+        # 실납품 본문 13pt(KoPub바탕체) 실측 → 종전 11pt에서 12pt로. 글꼴 체감 차이가
+        # 있어 13pt는 샘플 비교 후 결정(2026-08-24).
+        assert BODY_SIZE_PT == 12
+
+
+class TestCitationRuns:
+    """본문 인용 마커는 번호만 위첨자로 올린다(2026-08-24 지시).
+
+    실납품 보고서는 본문에 인라인 출처를 아예 쓰지 않고 각주로 내린다(알키미스트
+    실측: 인라인 0건·각주 6건). 괄호째 본문에 박히면 문장 흐름이 끊긴다.
+    """
+
+    def test_marker_becomes_superscript_number(self):
+        assert citation_runs("국내 생산이 늘었음(출처 13, 25)") == [
+            ("국내 생산이 늘었음", False),
+            ("13,25", True),
+        ]
+
+    def test_plain_text_stays_one_run(self):
+        assert citation_runs("마커가 없는 문장임") == [("마커가 없는 문장임", False)]
+
+    def test_marker_in_the_middle_keeps_both_sides(self):
+        assert citation_runs("앞부분 (출처 3) 뒷부분") == [
+            ("앞부분", False),
+            ("3", True),
+            (" 뒷부분", False),
+        ]
+
+    def test_non_citation_parens_untouched(self):
+        # 괄호 안이 숫자 목록이어도 '출처/자료' 라벨이 없으면 인용이 아니다.
+        assert citation_runs("총 3개 부문(1, 2, 3)을 다룸") == [
+            ("총 3개 부문(1, 2, 3)을 다룸", False)
+        ]
 
 
 class TestCellMargins:

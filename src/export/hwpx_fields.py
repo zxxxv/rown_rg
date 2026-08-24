@@ -20,6 +20,7 @@ XML 형식은 지어내지 않았다. 두 실물에서 그대로 뜯어냈다:
 from __future__ import annotations
 
 import itertools
+from copy import deepcopy
 from typing import Any
 
 _HP = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
@@ -222,6 +223,50 @@ def ensure_toc_tab_pr(doc: Any, *, right_margin_mm: float) -> str:
         {"pos": str(pos * 2), "type": _TAB_TYPE_NAME, "leader": _TAB_LEADER_NAME},
     )
     tab_props.set("itemCnt", str(len(tab_props.findall(f"{_HH}tabPr"))))
+    header.mark_dirty()
+    return new_id
+
+
+def ensure_supscript_char_pr(doc: Any, base_char_pr_id: str | int) -> str | None:
+    """본문 글자 모양을 복제해 위첨자 속성만 더한 charPr id (이미 있으면 재사용).
+
+    python-hwpx의 ``ensure_run_style``에는 위첨자 항목이 없어 헤더를 직접 다룬다.
+    한컴 표기는 charPr 안의 빈 ``<hh:supscript/>`` 하나다 — 실납품 보고서에서
+    그대로 확인했다(알키미스트 charPr 84, 수식 지수에 쓰인 것).
+    """
+    header = doc.headers[0]
+    root = header.element
+    char_props = root.find(f".//{_HH}charProperties")
+    if char_props is None:
+        return None
+    base = None
+    for char_pr in char_props.findall(f"{_HH}charPr"):
+        if char_pr.get("id") == str(base_char_pr_id):
+            base = char_pr
+            break
+    if base is None:
+        return None
+    # 같은 바탕에서 이미 만든 위첨자 정의가 있으면 그것을 쓴다 — 문단마다 새로 만들면
+    # 글자 모양 정의만 불어난다(같은 높이·같은 글꼴을 생김새로 알아본다).
+    for char_pr in char_props.findall(f"{_HH}charPr"):
+        if (
+            char_pr.find(f"{_HH}supscript") is not None
+            and char_pr.get("height") == base.get("height")
+            and char_pr.get("textColor") == base.get("textColor")
+        ):
+            return char_pr.get("id")
+
+    clone = deepcopy(base)
+    used = {int(c.get("id", "0")) for c in char_props.findall(f"{_HH}charPr")}
+    new_id = str(max(used) + 1 if used else 1)
+    clone.set("id", new_id)
+    # 아래첨자가 함께 있으면 한컴이 어느 쪽을 따를지 모른다 — 있으면 걷고 위첨자만 남긴다.
+    for tag in (f"{_HH}supscript", f"{_HH}subscript"):
+        for node in clone.findall(tag):
+            clone.remove(node)
+    _sub(clone, f"{_HH}supscript")
+    char_props.append(clone)
+    char_props.set("itemCnt", str(len(char_props.findall(f"{_HH}charPr"))))
     header.mark_dirty()
     return new_id
 

@@ -47,7 +47,7 @@ class TestFiguresNeeded:
         assert _figures_needed("짧은 절", visual_count=1) == 0
 
     def test_two_pages_need_two_visuals(self):
-        content = "가" * 3000  # 1,500자당 1개 → 2개 필요
+        content = "가" * 2400  # 1,200자당 1개 → 2개 필요
         kp = ["시장 규모", "경쟁 구도"]
         assert _figures_needed(content, visual_count=0, key_points=kp) == 2
         assert _figures_needed(content, visual_count=1, key_points=kp) == 1
@@ -57,7 +57,7 @@ class TestFiguresNeeded:
         assert _figures_needed("짧은 절", visual_count=5) == 0
 
     def test_capped_by_key_points(self):
-        content = "가" * 6000  # 분량상 4개 필요
+        content = "가" * 6000  # 분량상 5개 필요
         assert _figures_needed(content, visual_count=0, key_points=["a", "b"]) == 2
 
     def test_no_key_points_caps_at_one(self):
@@ -65,7 +65,7 @@ class TestFiguresNeeded:
         content = "가" * 6000
         assert _figures_needed(content, visual_count=0) == 1
         assert _figures_needed(content, visual_count=1) == 1  # 분량상 부족분이 남아도 캡 1
-        assert _figures_needed(content, visual_count=4) == 0  # 시각자료가 충분하면 0
+        assert _figures_needed(content, visual_count=5) == 0  # 시각자료가 충분하면 0
 
 
 class TestFigurePlaceholder:

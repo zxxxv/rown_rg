@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from hwpx import HwpxDocument
 from src.export.hwpx_fields import (
     append_leader_tab,
     append_page_ref,
+    ensure_supscript_char_pr,
     ensure_toc_tab_pr,
     set_tab_pr,
     wrap_bookmark,
@@ -38,11 +40,17 @@ logger = structlog.get_logger(__name__)
 
 # --- 회사 표준 양식 상수 (web ExportPage의 COMPANY_STYLE와 일치시킨다) ---
 BODY_FONT = "함초롬바탕"
-BODY_SIZE_PT = 11
+# 본문 크기 — 실납품 알키미스트 본문이 13pt(KoPub바탕체 Light, 17,486자로 압도적
+# 최빈)라 종전 11pt는 관례보다 작았다(2026-08-24 실측). 글꼴이 다르면 같은 pt라도
+# 체감이 달라 12pt로 올린다. 글꼴은 함초롬 유지 — KoPub은 열람 PC에 없으면 대체
+# 글꼴로 깨진다(한컴 기본 탑재인 함초롬이 안전).
+BODY_SIZE_PT = 12
 HEADING_FONT = "함초롬돋움"
 HEADING_SIZE_PT: dict[int, int] = {1: 16, 2: 14, 3: 12}
-# 실납품 샘플 최빈(130%)과 사용자 확정(2026-08-24) — 종전 160%는 관행보다 성겼다.
-LINE_SPACING_PERCENT = 130
+# 본문 줄간격 — 130%를 실납품 최빈값으로 한 번 내렸다가 눈으로 보고 160%로 되돌렸다
+# (2026-08-24 사용자 확정). 표 안은 좁아야 읽히므로 따로 130%를 쓴다.
+LINE_SPACING_PERCENT = 160
+CELL_LINE_SPACING_PERCENT = 130
 # 실납품 2종 실측 일치(2026-08-24, 알키미스트 hwpx·비수도권 hwp): 좌우 20·상하 15.
 # 종전 좌30(한글 기본값 잔재)·상하20은 본문을 오른쪽으로 밀어 개조식이 깊어 보였다.
 MARGIN_MM: dict[str, float] = {"top": 15.0, "bottom": 15.0, "left": 20.0, "right": 20.0}
@@ -52,6 +60,11 @@ _MM_PER_PT = 25.4 / 72
 # 개조식 계단(pt) — 글머리 첫 줄 시작 = (수준+1)×4pt: □4·ㅇ8·-12·*16 (2026-08-24 지시
 # "이렇게 당겨"). 종전 수준당 전각 한 칸(11pt)은 사다리가 깊었다.
 OUTLINE_STEP_PT = 4.0
+# 마커가 차지하는 칸 폭(반각 칸) — 전각 마커+공백("□ "·"ㅇ ")이 3칸이라 그것에 맞춘다.
+# 좁은 마커("- "·"* ", 2칸)도 같은 칸을 쓰도록 공백으로 채운다: 칸 폭이 마커마다
+# 다르면 본문 시작점이 계단을 거슬러 역전된다(2026-08-24 실사고: ㅇ 24.5pt인데
+# 그 아래 '-'가 23.0pt로 더 왼쪽에 섰다).
+OUTLINE_SLOT_HALF = 3
 # 개조식 글머리 문자 — 이 문자로 시작하는 문단은 마커 폭만큼 내어쓰기해 줄바꿈된 둘째
 # 줄이 본문 글머리에 정렬되게 한다(_hanging_indent_mm).
 OUTLINE_MARKERS: frozenset[str] = frozenset("□ㅇ○◦-*")
@@ -425,7 +438,8 @@ def _add_body(
     align: str = "",
 ):
     char_id = doc.ensure_run_style(font=BODY_FONT, size=BODY_SIZE_PT)
-    para = doc.add_paragraph(text, char_pr_id_ref=char_id, inherit_style=False)
+    text = _pad_marker(text)
+    para = _add_paragraph_with_citations(doc, text, char_id)
     idx = doc.paragraphs.index(para)
     fmt: dict[str, float | int | str] = {
         "paragraph_index": idx,
@@ -453,16 +467,67 @@ def _add_body(
     return para
 
 
+def _is_outline_item(text: str) -> bool:
+    """개조식 글머리로 시작하는 줄인가 — 마커 한 글자 + 공백."""
+    return len(text) >= 2 and text[0] in OUTLINE_MARKERS and text[1] == " "
+
+
+def _pad_marker(text: str) -> str:
+    """좁은 마커('- ', '* ')를 전각 마커와 같은 칸 폭으로 채운다.
+
+    칸 폭을 통일해야 계단이 성립한다 — 마커 폭이 제각각이면 본문 시작점이
+    부모보다 왼쪽에 서는 역전이 생긴다(2026-08-24 실사고).
+    """
+    if not _is_outline_item(text):
+        return text
+    short = OUTLINE_SLOT_HALF - _text_width(text[:2])
+    return text[:2] + " " * short + text[2:] if short > 0 else text
+
+
 def _hanging_indent_mm(text: str) -> float:
-    """개조식 마커와 뒤따르는 공백이 차지하는 폭(mm). 마커로 시작하지 않으면 0.
+    """개조식 마커 칸의 폭(mm). 마커로 시작하지 않으면 0.
 
     이 폭이 곧 내어쓰기 양이다 — 왼쪽 여백에 더하고 첫 줄에서 같은 값을 빼면 마커만
-    왼쪽으로 튀어나오고 본문은 한 줄로 이어져 보인다.
+    왼쪽으로 튀어나오고 본문은 한 줄로 이어져 보인다. 마커 종류와 무관하게 같은 칸
+    폭을 쓴다(_pad_marker가 좁은 마커를 그 폭까지 채운다).
     """
-    if len(text) < 2 or text[0] not in OUTLINE_MARKERS or text[1] != " ":
+    if not _is_outline_item(text):
         return 0.0
     # _text_width는 반각을 1, 전각을 2로 세므로 반각 하나가 글자 크기의 절반에 해당한다.
-    return _text_width(text[:2]) * (BODY_SIZE_PT * _MM_PER_PT / 2)
+    return OUTLINE_SLOT_HALF * (BODY_SIZE_PT * _MM_PER_PT / 2)
+
+
+# 본문 인용 마커 — "(출처 13, 25)"·"(자료 3)". 렌더에서는 번호만 위첨자로 올린다
+# (2026-08-24 지시). 괄호째 본문에 박히면 문장 흐름이 끊긴다 — 실납품 보고서는
+# 본문 인라인 출처를 아예 쓰지 않는다(알키미스트 실측: 인라인 0건·각주 6건).
+_CITATION_RE = re.compile(r"[ \t]*\((?:출처|자료)\s*(\d+(?:\s*,\s*\d+)*)\)")
+
+
+def citation_runs(text: str) -> list[tuple[str, bool]]:
+    """문단 글을 (조각, 위첨자 여부) 목록으로 쪼갠다. 마커가 없으면 통째로 한 조각."""
+    out: list[tuple[str, bool]] = []
+    pos = 0
+    for m in _CITATION_RE.finditer(text):
+        if m.start() > pos:
+            out.append((text[pos : m.start()], False))
+        out.append((re.sub(r"\s+", "", m.group(1)), True))
+        pos = m.end()
+    if pos < len(text):
+        out.append((text[pos:], False))
+    return out or [(text, False)]
+
+
+def _add_paragraph_with_citations(doc: HwpxDocument, text: str, char_id: str):
+    """본문 문단 — 인용 마커만 위첨자 런으로 갈라 넣는다(마커가 없으면 한 런)."""
+    runs = citation_runs(text)
+    sup_id = ensure_supscript_char_pr(doc, char_id) if len(runs) > 1 else None
+    if sup_id is None:
+        # 위첨자 정의를 못 만들면 원문 그대로 — 출처가 사라지는 것보다 낫다.
+        return doc.add_paragraph(text, char_pr_id_ref=char_id, inherit_style=False)
+    para = doc.add_paragraph("", char_pr_id_ref=char_id, inherit_style=False, include_run=False)
+    for segment, is_citation in runs:
+        para.add_run(segment, char_pr_id_ref=sup_id if is_citation else char_id)
+    return para
 
 
 def _text_width(text: str) -> int:
@@ -534,7 +599,7 @@ def _cell_para_id(doc: HwpxDocument) -> str | None:
         result = doc.set_paragraph_format(
             paragraph_index=doc.paragraphs.index(probe),
             alignment="CENTER",
-            line_spacing_percent=LINE_SPACING_PERCENT,
+            line_spacing_percent=CELL_LINE_SPACING_PERCENT,
             spacing_before_pt=CELL_PARA_SPACING_BEFORE_PT,
             spacing_after_pt=0.0,
             indent_left_mm=0.0,

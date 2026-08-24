@@ -607,8 +607,9 @@ def _chapter_heading_text(chapter_number: int, ch_titles: dict[int, str]) -> str
     return f"제{chapter_number}장  {ch_title}" if ch_title else f"제{chapter_number}장"
 
 
-# A4 2페이지 ≈ 1,500자 — 이 분량마다 시각자료 1개가 작성 규칙(agent_visual_rules.md)이다.
-_CHARS_PER_VISUAL = 1500
+# 이 분량마다 시각자료 1개 — "쪽마다 표나 그림이 하나씩은 있게"(2026-08-24 지시).
+# 새 판형(A4·좌우 20mm·본문 12pt·줄간격 160%)에서 한 쪽이 대략 1,200자다.
+_CHARS_PER_VISUAL = 1200
 
 
 def _figures_needed(content: str, visual_count: int, key_points: Sequence[str] = ()) -> int:
@@ -628,6 +629,78 @@ def _figures_needed(content: str, visual_count: int, key_points: Sequence[str] =
     required = max(1, len(content) // _CHARS_PER_VISUAL)
     needed = max(0, required - visual_count)
     return min(needed, max(1, len(key_points)))
+
+
+# 블록이 지면에서 차지하는 세로 몫 — 글자 수로 환산한 어림값(분산 배치용 자).
+# 표는 행마다 한 줄, 그림·차트는 본문 폭 그림 한 장이 대략 이만큼의 글을 밀어낸다.
+_TABLE_ROW_WEIGHT = 60
+_FIGURE_WEIGHT = 350
+_CHART_WEIGHT = 800
+_HEADING_WEIGHT = 40
+
+
+def _block_weight(block: Block) -> int:
+    """블록 하나가 지면에서 차지하는 몫(글자 수 환산)."""
+    if isinstance(block, Paragraph):
+        return len(block.text)
+    if isinstance(block, Heading):
+        return _HEADING_WEIGHT
+    if isinstance(block, Table):
+        return _TABLE_ROW_WEIGHT * (len(block.rows) + 1)
+    if isinstance(block, Chart):
+        return _CHART_WEIGHT
+    if isinstance(block, Figure):
+        return _FIGURE_WEIGHT
+    return 0
+
+
+def _distribute_figures(blocks: list[Block], figures: list[Figure]) -> list[Block]:
+    """그림 자리표시자를 절 본문에 흩어 넣는다 — 절 끝에 몰아넣지 않는다.
+
+    종전에는 절 뒤에 붙였다. 그래서 긴 절일수록 자리표시자가 끝(대개 페이지 하단)에
+    몰렸다(2026-08-24 지적). 시각자료는 읽는 피로를 덜자고 넣는 것이라 본문 사이에
+    있어야 뜻이 산다. 이미 있는 표·차트에서 글이 가장 멀리 이어지는 자리를 하나씩
+    골라 채운다 — 표가 많은 절은 표 사이 빈 구간에, 표가 없는 절은 한가운데에 놓인다.
+
+    헤딩 바로 뒤에는 넣지 않는다(소제목과 본문 사이를 그림이 가르면 읽는 흐름이 끊긴다).
+    """
+    out = list(blocks)
+    for figure in figures:
+        pos = _best_figure_slot(out)
+        if pos is None:
+            out.append(figure)
+            continue
+        out.insert(pos, figure)
+    return out
+
+
+def _best_figure_slot(blocks: list[Block]) -> int | None:
+    """시각자료에서 글이 가장 멀리 떨어진 삽입 자리(블록 색인). 없으면 None."""
+    if not blocks:
+        return None
+    cum: list[int] = []  # 각 블록 뒤 경계까지의 누적 몫
+    total = 0
+    for block in blocks:
+        total += _block_weight(block)
+        cum.append(total)
+    visuals = [cum[i] for i, b in enumerate(blocks) if isinstance(b, Table | Chart | Figure)]
+
+    best_at, best_gap = None, -1.0
+    for i in range(len(blocks)):
+        # 마지막 블록 뒤는 후보에서 뺀다 — 그게 바로 종전의 '절 끝 몰림'이다.
+        if i == len(blocks) - 1:
+            continue
+        if isinstance(blocks[i], Heading):
+            continue  # 소제목과 본문 사이를 가르지 않는다
+        here = cum[i]
+        gap = (
+            min(abs(here - v) for v in visuals)
+            if visuals
+            else min(here, total - here)  # 시각자료가 없으면 절 한가운데가 가장 멀다
+        )
+        if gap > best_gap:
+            best_at, best_gap = i + 1, float(gap)
+    return best_at
 
 
 # 프리셋 키포인트의 파트 라벨 — "(4-5-1)" 같은 내부 번호가 캡션에 새지 않게 걷는다.
@@ -774,10 +847,13 @@ def report_blocks(
         _attach_table_sources(section_blocks, source_titles)
         section_blocks = _strip_citation_blocks(section_blocks, source_titles)
         visual_count = sum(1 for b in section_blocks if isinstance(b, Table | Chart))
-        section_blocks += [
-            _figure_placeholder(plan, i)
-            for i in range(_figures_needed(content, visual_count, plan.key_points))
-        ]
+        section_blocks = _distribute_figures(
+            section_blocks,
+            [
+                _figure_placeholder(plan, i)
+                for i in range(_figures_needed(content, visual_count, plan.key_points))
+            ],
+        )
         chapter_table_no, chapter_figure_no = _number_visuals(
             section_blocks, plan.chapter_number, chapter_table_no, chapter_figure_no, plan.title
         )
