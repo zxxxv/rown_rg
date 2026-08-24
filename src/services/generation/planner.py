@@ -106,6 +106,23 @@ def _to_plan(manifest: dict[str, Any]) -> list[SectionPlan]:
     return plan
 
 
+def _volume_field(sec: dict[str, Any], key: str) -> int | None:
+    """목차 절의 분량 지정(자) — 절 바로 아래나 volume_target 안 어느 쪽이든 받는다.
+
+    시사점·제언처럼 짧아야 하는 절을 위해 절 단위로 상한을 건다(2026-08-24 지시).
+    값이 깨졌으면 조용히 무시한다 — 분량은 품질 조절이지 계약이 아니라서, 여기서
+    실행을 멈추면 목차 한 글자 때문에 런이 죽는다.
+    """
+    raw = sec.get(key)
+    if raw is None and isinstance(sec.get("volume_target"), dict):
+        raw = sec["volume_target"].get(key)
+    try:
+        value = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _outline_section_id(sec: dict[str, Any], seen: set[UUID]) -> UUID:
     """outline 항목의 안정 id 채택. 없거나 깨졌거나 중복이면 새로 발급(PK 충돌 방지).
 
@@ -185,6 +202,8 @@ def plan_from_outline(outline: dict[str, Any]) -> list[SectionPlan]:
                     if isinstance(analysts, list)
                     else [],
                     builds_on=builds_on,
+                    min_chars=_volume_field(sec, "min_chars"),
+                    max_chars=_volume_field(sec, "max_chars"),
                 )
             )
     if not plan:

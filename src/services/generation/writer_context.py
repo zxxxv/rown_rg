@@ -48,6 +48,14 @@ _VOLUME_PREFIX = "목표 분량:"
 _CHARS_PER_PAGE = 1500
 
 
+# 절 단위로 분량을 눌러 놓은 자리에 붙이는 지시 — 본론과 같은 두께로 쓰면 앞 내용을
+# 되풀이하게 되므로, 무엇을 덜어낼지 먼저 정하게 한다(2026-08-24 사용자 지시).
+_CONDENSE_HINT = (
+    "이 절은 분량을 눌러 놓은 자리다. 앞 절들의 서술을 다시 늘어놓지 말고 "
+    "판단·함의로 좁혀라 — 중요한 것만 남기고 근거는 핵심 수치 위주로 인용하라."
+)
+
+
 def _volume_line(min_chars: int | None, max_chars: int | None) -> str:
     """목표 분량 지시문 — volume_target에서 생성해 프롬프트에 싣는다.
 
@@ -224,15 +232,23 @@ def build_writer_context(
     if volumes:
         min_chars = max(v.min_chars for v in volumes)
         max_chars = max(v.max_chars for v in volumes)
-        volume = max(volumes, key=lambda v: v.max_chars)
+    # 절 단위 지정이 있으면 그것이 정본이다 — 에이전트는 여러 절이 공유하므로
+    # 시사점처럼 짧아야 하는 절을 위해 그쪽 값을 고치면 남의 절까지 짧아진다.
+    if section.min_chars:
+        min_chars = section.min_chars
+    if section.max_chars:
+        max_chars = section.max_chars
+    if max_chars:
         # 한국어 1문자≈1토큰을 상한 근사로 잡고 설정 캡 적용 — 운영 품질 모드에서만
         # WRITE_MAX_TOKENS를 올려 전체 분량 목표를 실현한다.
-        max_tokens = max(DEFAULT_MAX_TOKENS, min(volume.max_chars, settings.write_max_tokens))
+        max_tokens = max(DEFAULT_MAX_TOKENS, min(max_chars, settings.write_max_tokens))
 
     # 분량 지시는 volume_target에서 만들어 싣는다 — 에이전트 프롬프트 본문의
     # "## 분량 가이드"는 제거했다(필드와 21종 전부 값이 어긋나 있었다).
     volume_line = _volume_line(min_chars, max_chars)
     if volume_line:
+        if section.max_chars:
+            volume_line = f"{volume_line} {_CONDENSE_HINT}"
         guidance_lines.append(volume_line)
 
     return WriterContext(

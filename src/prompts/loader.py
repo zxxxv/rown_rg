@@ -58,6 +58,10 @@ class PresetSection(BaseModel):
     agents: list[str] = []
     # 의존 계약("4.1"|"4.1(지표)"|"4.*") — 의존형 프리셋(예타 등)만 사전 작성한다.
     builds_on: list[str] = []
+    # 이 절만의 분량 목표(자) — 시사점·제언처럼 짧아야 하는 자리에만 채운다.
+    # 비우면 담당 에이전트의 volume_target을 쓴다(2026-08-24 지시).
+    min_chars: int | None = None
+    max_chars: int | None = None
 
 
 class PresetChapter(BaseModel):

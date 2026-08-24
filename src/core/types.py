@@ -163,6 +163,13 @@ class SectionPlan(BaseModel):
     # 절 번호 한정으로 생성. 값 전달은 서술 요약이 아니라 사실 대장 엔트리로 한다
     # (요약 체인은 무근거 +39% 실측 - services/ledger).
     builds_on: list[str] = Field(default_factory=list)
+    # 이 절만의 분량 목표(자) — 없으면 에이전트 spec의 volume_target을 쓴다.
+    # 절마다 요구 분량이 다른 자리가 있다: 시사점·제언은 본론과 같은 두께로 쓰면
+    # 앞 내용을 되풀이하게 되므로 짧게 눌러야 한다(2026-08-24 사용자 지시:
+    # "시사점은 중요 내용 위주로 3~5페이지 이내"). 에이전트는 여러 절이 공유하니
+    # 그쪽 값을 고치면 남의 절까지 바뀐다 — 절 단위 상한이 필요한 이유다.
+    min_chars: int | None = None
+    max_chars: int | None = None
 
     def prompt_label(self) -> str:
         """프롬프트에 싣는 절 표기 — '2.3 국내 기업 대응수준 진단 (2장 EU CBAM)'.

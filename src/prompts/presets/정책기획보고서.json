@@ -102,7 +102,9 @@
           ],
           "agents": [
             "SWOT분석"
-          ]
+          ],
+          "min_chars": 4500,
+          "max_chars": 7500
         }
       ]
     },
@@ -258,7 +260,9 @@
           ],
           "agents": [
             "정책분석"
-          ]
+          ],
+          "min_chars": 4500,
+          "max_chars": 7500
         }
       ]
     }

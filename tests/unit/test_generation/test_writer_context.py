@@ -111,6 +111,22 @@ class TestVolumeInstruction:
         # 본문과 필드가 21종 전부 어긋나 있었다(2026-08-10) — 단일 진실은 필드다.
         assert all("분량 가이드" not in a.prompt for a in list_analysts())
 
+    def test_section_volume_overrides_agent(self):
+        """절 단위 지정이 정본 — 에이전트는 여러 절이 공유하므로 그쪽을 고치면 남의
+        절까지 짧아진다(2026-08-24 지시: 시사점은 3~5쪽으로 눌러야 한다)."""
+        spec = load_analyst(_ANALYST)
+        assert spec.volume_target is not None
+        ctx = build_writer_context(_section(analysts=[_ANALYST], min_chars=4500, max_chars=7500))
+        assert (ctx.min_chars, ctx.max_chars) == (4500, 7500)
+        line = next(x for x in ctx.guidance.split(_SEP) if x.startswith("목표 분량:"))
+        assert "4,500~7,500자" in line and "A4 3~5페이지" in line
+        # 눌러 놓은 절에는 무엇을 덜어낼지 알려 준다 — 본론을 되풀이하지 않게.
+        assert "판단·함의로 좁혀라" in line
+
+    def test_no_condense_hint_without_section_cap(self):
+        ctx = build_writer_context(_section(analysts=[_ANALYST]))
+        assert "판단·함의로 좁혀라" not in ctx.guidance
+
     def test_scaling_rewrites_the_volume_line(self):
         ctx = build_writer_context(_section(analysts=[_ANALYST]))
         scaled = scale_for_evidence(ctx, 4)
