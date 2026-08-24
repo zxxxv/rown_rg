@@ -117,6 +117,8 @@ CHART_HEIGHT_MM = 92.0
 # 마지막 줄(안내 문구)만 낮게 두고 나머지를 설명 칸이 갖는다.
 FIGURE_BOX_HEIGHT_MM = 90.0
 FIGURE_NOTE_ROW_MM = 8.0
+# 자리표시자에 싣는 원본 자료 수 — 더 실으면 안내 줄이 그림 자리를 먹는다.
+_FIGURE_HINT_MAX = 2
 TABLE_CAPTION_SPACE_AFTER_PT = 1.0  # 표와 붙여 한 덩어리로 보이게 여백을 최소로
 # 표 열 폭 배분 시 한 열의 상대 가중치 하한/상한 — 극단적으로 좁거나 넓은 열을 막는다.
 COL_WEIGHT_MIN = 8
@@ -212,6 +214,9 @@ class Figure:
 
     caption: str  # 예: "<그림 1-1> 원격경제 서비스 분류 체계"
     description: str  # 추천 시각자료 설명(무엇을, 어떤 형식으로)
+    # 그 절이 근거로 쓴 자료 — 원본 그림을 찾아갈 자리다. "따라가서 보고 다시 그릴지
+    # 따다 쓸지 판단하게" 하려면 자리표시자가 출처를 데리고 있어야 한다(2026-08-24 지시).
+    source_hints: list[str] = field(default_factory=list, compare=False)
     caption_bookmark: str = field(default="", compare=False)
 
 
@@ -857,6 +862,9 @@ def _add_figure(doc: HwpxDocument, figure: Figure) -> None:
     통째로 밀린다 — 자리표시자는 '그 자리가 얼마나 필요한지'를 보여야 뜻이 산다.
     """
     note = "※ 실제 이미지는 확정 후 삽입되는 자리표시자입니다."
+    if figure.source_hints:
+        # 원본을 찾아갈 자리 — 링크가 있으면 그대로 싣는다(한컴에서 눌러 열 수 있다).
+        note += " 원본 참고: " + " · ".join(figure.source_hints[:_FIGURE_HINT_MAX])
     tbl = doc.add_table(2, 1, width=_page_content_width_hwp())
     _reset_table_anchor(doc, tbl)
     tbl.set_cell_text(0, 0, f"추천 시각자료: {figure.description}")

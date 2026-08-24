@@ -477,6 +477,15 @@ function usageTone(pct: number): "default" | "warning" | "danger" {
   return "default";
 }
 
+function fmtDateTime(iso?: string | null): string {
+  if (!iso) return "-";
+  return new Date(iso).toLocaleString("ko-KR", {
+    timeZone: "Asia/Seoul",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 const ROLE_KIND: Record<string, StatusKind> = {
   admin: "info",
   super_admin: "info",
@@ -579,8 +588,8 @@ function UsageTable({
                       </span>
                     </div>
                   </TableCell>
-                  <TableCell className="font-mono text-xs text-fg-tertiary">
-                    {row.last_active.slice(0, 10)}
+                  <TableCell className="whitespace-nowrap font-mono text-xs text-fg-tertiary">
+                    {fmtDateTime(row.last_active)}
                   </TableCell>
                   <TableCell className="text-right">
                     <Button variant="ghost" size="sm" onClick={() => onSelectUser(row.user_id)}>

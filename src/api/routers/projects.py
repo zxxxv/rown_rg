@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -51,6 +52,7 @@ from src.api.schemas.section import (
     ClaimAlignmentRead,
     EvidenceChunk,
     EvidenceInfo,
+    FigurePlaceholder,
     GroundedNumberRead,
     SectionBlockRewriteRequest,
     SectionCitation,
@@ -2423,10 +2425,44 @@ def _evidence_info(row: Section) -> EvidenceInfo:
     )
 
 
+# 마크다운 표의 구분행("|---|---|") — 표 하나당 정확히 한 줄이라 표 수를 센다.
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|[\s:\-|]+\|\s*$", re.MULTILINE)
+
+
+def _section_figures(row: Section, citations: list[SectionCitation]) -> list[FigurePlaceholder]:
+    """이 절에 들어갈 그림 자리표시자 — 조립과 같은 규칙으로 미리 세어 보여준다.
+
+    자리표시자는 조립 단계 산물이라 본문에는 없다. 그래서 검토자는 한글 파일을 열기
+    전까지 어디에 그림이 들어갈지 몰랐다(2026-08-24 지적). 위치까지 재현하지는
+    않는다 — 화면은 "이 절에 그림 N개, 이런 소재로, 원본은 여기"까지만 알린다.
+    """
+    from src.core.types import SectionPlan
+    from src.services.export.report import _figure_placeholder, _figures_needed
+
+    content = row.content or ""
+    # 표 개수 = 마크다운 구분행(|---|) 수. 조립의 visual_count와 같은 눈금이다.
+    tables = len(_TABLE_SEPARATOR_RE.findall(content))
+    # 링크가 있는 자료를 먼저 — 눌러서 바로 열 수 있는 쪽이 쓸모 있다.
+    ordered = sorted(citations, key=lambda c: (c.url is None, c.number or 0))
+    hints = [f"{c.title} ({c.url})" if c.url else c.title for c in ordered if c.title][:2]
+    plan = SectionPlan(
+        chapter_number=row.chapter_number, section_number=row.section_number, title=row.title
+    )
+    return [
+        FigurePlaceholder(
+            caption=fig.caption, description=fig.description, source_hints=list(fig.source_hints)
+        )
+        for fig in (
+            _figure_placeholder(plan, i, hints) for i in range(_figures_needed(content, tables))
+        )
+    ]
+
+
 def _section_content(
     row: Section,
     citations: list[SectionCitation] | None = None,
 ) -> SectionContentResponse:
+    cites = citations or []
     return SectionContentResponse(
         id=str(row.id),
         title=row.title,
@@ -2434,8 +2470,9 @@ def _section_content(
         source_ids=[str(s) for s in row.source_ids],
         qa_status=row.qa_status,
         level=row.level,
-        citations=citations or [],
+        citations=cites,
         evidence=_evidence_info(row),
+        figures=_section_figures(row, cites),
     )
 
 

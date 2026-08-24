@@ -272,6 +272,15 @@ export const EvidenceInfoSchema = z.object({
   plan_failed: z.boolean().default(false),
 });
 
+/** 이 절에 들어갈 그림 자리표시자 - 조립 단계 산물이라 본문에는 없다 */
+export const FigurePlaceholderSchema = z.object({
+  caption: z.string(),
+  description: z.string(),
+  /** 원본 그림을 찾아갈 자료 - "제목 (URL)" 꼴 */
+  source_hints: z.array(z.string()).default([]),
+});
+export type FigurePlaceholder = z.infer<typeof FigurePlaceholderSchema>;
+
 export const SectionContentResponseSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -282,6 +291,8 @@ export const SectionContentResponseSchema = z.object({
   citations: z.array(SectionCitationSchema).default([]),
   /** 근거 부족으로 분량 목표를 내린 절인지 - 본문에는 쓰지 않고 화면에서만 표시 */
   evidence: EvidenceInfoSchema.default({ count: null, scarce: false, plan_failed: false }),
+  /** 한글 산출물에 들어갈 그림 자리 - 화면에서도 알려 원본을 미리 찾아보게 한다 */
+  figures: z.array(FigurePlaceholderSchema).default([]),
 });
 export type SectionContentResponse = z.infer<typeof SectionContentResponseSchema>;
 

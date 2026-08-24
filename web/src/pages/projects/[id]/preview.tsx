@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Eye,
   FileSearch,
+  Image as ImageIcon,
   Loader2,
   Pencil,
   Save,
@@ -35,7 +36,13 @@ import {
   useSectionContent,
   useSectionEvidence,
 } from "@/api/sections";
-import type { ChapterNode, SectionCitation, SectionNode, SectionStatus } from "@/api/types";
+import type {
+  ChapterNode,
+  FigurePlaceholder,
+  SectionCitation,
+  SectionNode,
+  SectionStatus,
+} from "@/api/types";
 import { useVerifyReport, verifyKeys } from "@/api/verify";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -490,6 +497,54 @@ function PayloadDraftList({ payload }: { payload: QaSelectPayload }) {
 }
 
 /** 절 하단 출처 목록 - 본문 [N]이 가리키는 자료를 번호순으로 나열한다. */
+/** 이 절에 들어갈 그림 자리 - 한글 산출물에만 있어 화면에서는 안 보이던 것.
+ *
+ * 자리표시자는 조립 단계에서 만들어져 본문(content)에 없다. 그래서 검토자는 한글
+ * 파일을 열기 전까지 어디에 그림이 들어갈지 몰랐다(2026-08-24 지적). 위치까지
+ * 재현하지는 않는다 - "몇 개, 무슨 소재로, 원본은 어디"까지가 화면의 몫이다. */
+function FigurePlaceholderList({ figures }: { figures: FigurePlaceholder[] }) {
+  if (figures.length === 0) return null;
+  return (
+    <section className="mt-6 rounded-md border border-dashed border-border bg-bg-secondary p-3">
+      <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium text-fg-secondary">
+        <ImageIcon className="h-3.5 w-3.5 shrink-0" />
+        한글 출력에 들어갈 그림 자리 {figures.length}개
+      </h3>
+      <ol className="flex flex-col gap-2">
+        {figures.map((f) => (
+          <li key={f.caption} className="text-xs">
+            <p className="text-fg">{f.caption}</p>
+            <p className="mt-0.5 text-fg-tertiary">{f.description}</p>
+            {f.source_hints.length > 0 ? (
+              <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-fg-tertiary">
+                <span className="shrink-0">원본 참고:</span>
+                {f.source_hints.map((hint) => {
+                  const url = hint.match(/\((https?:\/\/[^)]+)\)$/)?.[1];
+                  const label = url ? hint.slice(0, hint.lastIndexOf("(")).trim() : hint;
+                  return url ? (
+                    <a
+                      key={hint}
+                      href={url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-fg-info hover:underline"
+                    >
+                      {label}
+                      <ExternalLink className="h-3 w-3 shrink-0" />
+                    </a>
+                  ) : (
+                    <span key={hint}>{label}</span>
+                  );
+                })}
+              </p>
+            ) : null}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 function CitationList({ citations }: { citations: SectionCitation[] }) {
   if (citations.length === 0) return null;
   return (
@@ -741,6 +796,7 @@ function ChapterSectionBlock({
       ) : query.data ? (
         <>
           <MarkdownContent content={query.data.content} citations={query.data.citations} />
+          <FigurePlaceholderList figures={query.data.figures} />
           <CitationList citations={query.data.citations} />
         </>
       ) : null}

@@ -58,6 +58,13 @@ const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
     qa_status: "passed",
     level: 2,
     evidence: { count: 24, scarce: false, plan_failed: false },
+    figures: [
+      {
+        caption: "고령 인구 비중 추이",
+        description: "위 주제의 핵심 수치·구조를 요약한 도표 또는 그래프",
+        source_hints: ["2024 인구주택총조사 표본 집계 결과 (https://kostat.go.kr/)"],
+      },
+    ],
     citations: [
       {
         number: 1,

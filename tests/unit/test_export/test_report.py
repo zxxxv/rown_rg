@@ -145,6 +145,44 @@ class TestFigurePlaceholder:
         assert fig.caption == "국내 대응 과제 : 계층별 구분 제시"
 
 
+class TestFigureSourceHints:
+    """자리표시자는 원본을 찾아갈 출처를 데리고 있어야 한다(2026-08-24 지시).
+
+    "따라가서 그림을 보고 다시 그릴지 따다 쓸지 판단하게" 하려는 것이므로 링크가
+    있는 자료를 먼저 싣는다.
+    """
+
+    def _sources(self) -> list[SourceRef]:
+        return [
+            SourceRef(id=uuid4(), source_type=SourceType.UPLOAD, title="업로드 보고서", url=None),
+            SourceRef(
+                id=uuid4(),
+                source_type=SourceType.WEB_SEARCH,
+                title="웹 통계 자료",
+                url="https://ex.com/stat",
+            ),
+        ]
+
+    def test_url_source_comes_first(self):
+        from src.services.export.report import _figure_source_hints
+
+        body = "ㅇ 시장 규모는 확대되는 흐름으로 나타났음(출처 1, 2)"
+        hints = _figure_source_hints(body, self._sources())
+        assert hints[0] == "웹 통계 자료 (https://ex.com/stat)"
+        assert hints[1] == "업로드 보고서"
+
+    def test_uncited_sources_excluded(self):
+        from src.services.export.report import _figure_source_hints
+
+        body = "ㅇ 시장 규모는 확대되는 흐름으로 나타났음(출처 1)"
+        assert _figure_source_hints(body, self._sources()) == ["업로드 보고서"]
+
+    def test_placeholder_carries_hints(self):
+        plan = SectionPlan(chapter_number=1, section_number=1, title="현황")
+        fig = _figure_placeholder(plan, 0, ["웹 통계 자료 (https://ex.com/stat)"])
+        assert fig.source_hints == ["웹 통계 자료 (https://ex.com/stat)"]
+
+
 class TestGroupStartSpacing:
     """ㅇ 그룹 간격 판정 — 하위 항목 뒤 새 ㅇ만 새 그룹으로 본다."""
 

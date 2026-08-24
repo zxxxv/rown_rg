@@ -773,7 +773,38 @@ def _best_figure_slot(blocks: list[Block], figure: Figure | None = None) -> int 
 _PART_LABEL_RE = re.compile(r"^\s*\(\d+(?:-\d+)+\)\s*")
 
 
-def _figure_placeholder(plan: SectionPlan, index: int = 0) -> Figure:
+# 자리표시자에 실을 원본 자료 수 — 링크가 길어 더 실으면 안내 줄이 그림 자리를 먹는다.
+_FIGURE_HINT_MAX = 2
+
+
+def _figure_source_hints(content: str, sources: Sequence[SourceRef]) -> list[str]:
+    """그 절이 인용한 자료 중 원본 그림을 찾아갈 만한 것 — "제목 (URL)" 꼴.
+
+    "그림 넣으라고 표시된 부분은 원본 그림 출처를 링크로 표기해 달라"(2026-08-24 지시).
+    따라가 보고 다시 그릴지 따다 쓸지 판단하려면 자리표시자가 출처를 데리고 있어야
+    한다. URL이 있는 자료를 먼저 싣는다 — 눌러서 바로 열 수 있는 쪽이 쓸모 있다.
+    """
+    nums = source_numbers(content)
+    picked: list[str] = []
+    for has_url in (True, False):
+        for n in nums:
+            if not 1 <= n <= len(sources):
+                continue
+            src = sources[n - 1]
+            if bool(src.url) is not has_url:
+                continue
+            label = (src.title or "").strip() or (src.url or "")
+            entry = f"{label} ({src.url})" if src.url else label
+            if entry and entry not in picked:
+                picked.append(entry)
+            if len(picked) >= _FIGURE_HINT_MAX:
+                return picked
+    return picked
+
+
+def _figure_placeholder(
+    plan: SectionPlan, index: int = 0, source_hints: Sequence[str] | None = None
+) -> Figure:
     """추천 시각자료(그림) 자리표시자. index는 한 절에서 몇 번째 그림인지.
 
     실제 이미지를 못 구하므로, 절의 초점(key_points→direction→제목)을 근거로 어떤
@@ -790,7 +821,7 @@ def _figure_placeholder(plan: SectionPlan, index: int = 0) -> Figure:
     # 프리셋 키포인트에 붙는 파트 라벨("(4-5-1) …")은 캡션에 새면 내부 표기 누출이다
     # (2026-08-21 지적) — 표시용으로만 걷어낸다(키포인트 원문은 불변).
     caption = _PART_LABEL_RE.sub("", caption_src).split("\n")[0].strip() or plan.title
-    return Figure(caption=caption, description=description)
+    return Figure(caption=caption, description=description, source_hints=list(source_hints or []))
 
 
 _SOURCE_TYPE_LABEL: dict[SourceType, str] = {
@@ -939,10 +970,11 @@ def report_blocks(
         _attach_table_sources(section_blocks, source_titles)
         section_blocks = _strip_citation_blocks(section_blocks, source_titles)
         visual_count = sum(1 for b in section_blocks if isinstance(b, Table | Chart))
+        hints = _figure_source_hints(content, state.sources)
         section_blocks = _distribute_figures(
             section_blocks,
             [
-                _figure_placeholder(plan, i)
+                _figure_placeholder(plan, i, hints)
                 for i in range(_figures_needed(content, visual_count, plan.key_points))
             ],
         )

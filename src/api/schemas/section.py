@@ -59,6 +59,19 @@ class EvidenceInfo(BaseModel):
     plan_failed: bool = False
 
 
+class FigurePlaceholder(BaseModel):
+    """이 절에 들어갈 그림 자리표시자 — 한글 산출물에만 있던 것을 화면에도 알린다.
+
+    자리표시자는 조립 단계에서 만들어져 본문(content)에는 없다. 그래서 검토자는
+    한글 파일을 열기 전까지 어디에 그림이 들어갈지 몰랐다(2026-08-24 지적).
+    """
+
+    caption: str
+    description: str
+    # 원본 그림을 찾아갈 자료 — "제목 (URL)" 꼴. 눌러 보고 다시 그릴지 따다 쓸지 판단.
+    source_hints: list[str] = Field(default_factory=list)
+
+
 class SectionContentResponse(BaseModel):
     id: str
     title: str
@@ -68,6 +81,7 @@ class SectionContentResponse(BaseModel):
     level: int
     citations: list[SectionCitation] = Field(default_factory=list)
     evidence: EvidenceInfo = Field(default_factory=EvidenceInfo)
+    figures: list[FigurePlaceholder] = Field(default_factory=list)
 
 
 class EvidenceChunk(BaseModel):
