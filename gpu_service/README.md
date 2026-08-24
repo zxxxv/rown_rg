@@ -139,6 +139,54 @@ tailscale serve --bg 8009
 cloudflared tunnel --url http://127.0.0.1:8009
 ```
 
+### 역터널 상시화 (2026-08-25)
+
+터널이 조용히 죽으면 앱은 계속 폴백하는데 이쪽은 살아 있는 걸로 보인다. 다음
+세 겹으로 막는다. **keepalive는 양쪽이 짝**이어야 한다 — 한쪽만 켜면 반쪽이다.
+
+| 층 | 설정 | 복구 시간 |
+|---|---|---|
+| 죽은 연결 감지 (박스) | `ServerAliveInterval=15` `ServerAliveCountMax=3` | 45초 |
+| 죽은 세션 회수 (서버) | `ClientAliveInterval 15` `ClientAliveCountMax 3` | 45초 |
+| ssh 프로세스 사망 | `rown-tunnel.ps1`의 재접속 루프(5초 대기) | **실측 5.7초** |
+| 감시 스크립트 사망 | 작업 스케줄러 재시작(999회 × 1분) | 1분 |
+| 태스크 자체 정지 | 15분 간격 반복 트리거 + `IgnoreNew` | 15분 |
+
+**서버 쪽 `ClientAliveInterval`이 0이면 안 된다.** 박스가 갑자기 사라지면
+(정전·NAT 끊김) sshd가 죽은 세션을 붙들어 8009 포트가 계속 묶이고, 박스가
+재접속해도 `ExitOnForwardFailure`로 튕겨 나가 복구가 TCP 타임아웃(최대 ~15분)
+까지 늦어진다. 2026-08-25까지 실제로 0이었다. 설정은
+`/etc/ssh/sshd_config.d/60-gpu-tunnel.conf`, 적용은 `sshd -t`로 검증한 뒤
+`systemctl reload ssh`(reload는 기존 세션을 끊지 않는다).
+
+`ServerAliveInterval`이 15초인 또 다른 이유: 공유기 NAT의 유휴 세션 타임아웃
+(보통 30초~5분)보다 짧아야 조용한 시간대에 매핑이 지워지지 않는다.
+
+**스크립트를 고쳤으면 태스크를 재시작해야 한다.** 실행 중인 PowerShell은 시작
+시점의 스크립트를 메모리에 들고 있어, 파일만 고치고 ssh를 죽이면 **옛 인자로**
+재접속한다(2026-08-25에 밟았다). `Stop-ScheduledTask` → `Start-ScheduledTask`.
+
+### 부팅 후 자동 복구 — Windows의 한계
+
+박스가 Windows라 systemd 유닛이 없다. 대응물은 이렇다:
+
+| systemd | 여기서는 |
+|---|---|
+| `Restart=always` / `RestartSec=5` | `rown-tunnel.ps1`의 `while($true)` + 5초 대기 |
+| 부팅 시 유닛 기동 | Docker Desktop 자동 시작(HKCU Run) + 컨테이너 `restart: unless-stopped` |
+| 터널 유닛 | 작업 스케줄러 `rown-gpu-tunnel`(로그온 트리거 + 15분 감시) |
+
+**한계: Docker Desktop은 사용자 세션 앱이라 로그인 전에는 뜨지 않는다.** 그래서
+"부팅 상시화"의 실제 의미는 *로그인 후 무개입 복구*다. 로그인 없는 진짜 상시화가
+필요하면 자동 로그인을 켜거나(보안 대가), Docker Desktop을 걷어내고 WSL2 +
+Docker CE + systemd로 옮겨야 한다(별도 작업).
+
+**기동 순서(VRAM 8GB 공유):** gpu_service가 먼저다 — 리랭커·임베딩·파서로
+약 5.2GB를 쓴다. 로컬 판정 LLM(2~4B) 실험은 **뒤에 수동으로** 띄우고
+`restart:` 정책을 주지 않는다. 정책을 주면 부팅 때 둘이 경쟁해 gpu_service가
+VRAM 부족으로 죽어도 조용히 CPU로 떨어진다. 실험 전 `/health`의
+`gpu.memory_used_mib`로 여유를 먼저 확인할 것.
+
 ### 폴백 두 가지
 
 | 값 | 동작 | 대가 |
