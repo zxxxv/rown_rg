@@ -37,7 +37,11 @@ from uuid import UUID
 import structlog
 
 from src.core.charts import CHART_FENCE_RE, ChartSpec, ChartSpecError, parse_chart_spec
-from src.core.citations import strip_nonnumeric_source_marks, strip_source_marks
+from src.core.citations import (
+    source_numbers,
+    strip_nonnumeric_source_marks,
+    strip_source_marks,
+)
 from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import SectionPlan, SourceRef, SourceType
@@ -466,6 +470,29 @@ def _clean_cell(value: str) -> str:
     return "-" if text in _EMPTY_CELL_VALUES else text
 
 
+def _drop_inherited_source_marks(
+    text: str, indent: int, parent_sources: dict[int, set[int]]
+) -> str:
+    """상위 항목이 이미 밝힌 출처면 하위 항목에서는 표기를 걷는다(2026-08-24 지시).
+
+    "네모 문장 아래 동그라미·대시가 모두 같은 출처면 네모에만 달면 된다" — 같은
+    출처가 계층마다 되풀이되면 표기가 글보다 많아 보인다. 하위가 상위의 부분집합일
+    때만 걷고, 다른 출처가 하나라도 섞이면 그대로 둔다(근거를 지우는 쪽이 비싸다).
+    """
+    nums = set(source_numbers(text))
+    if not nums:
+        return text
+    inherited: set[int] = set()
+    for level, sources in parent_sources.items():
+        if level < indent:
+            inherited |= sources
+    # 내 자리와 그 아래 기록은 새로 쓴다 — 형제 항목의 출처는 물려받지 않는다.
+    for level in [lv for lv in parent_sources if lv >= indent]:
+        del parent_sources[level]
+    parent_sources[indent] = nums
+    return strip_source_marks(text).strip() if nums <= inherited else text
+
+
 def _strip_citation_blocks(blocks: list[Block], titles: dict[int, str]) -> list[Block]:
     """블록들에서 참고 표기 (출처 n)을 선별 정리한다.
 
@@ -477,11 +504,14 @@ def _strip_citation_blocks(blocks: list[Block], titles: dict[int, str]) -> list[
     먼저 살아남아야 한다.
     """
     out: list[Block] = []
+    # 개조식 수준별로 '그 자리에서 살아 있는 상위 출처' — 계층 생략의 근거.
+    parent_sources: dict[int, set[int]] = {}
     for block in blocks:
         if isinstance(block, Paragraph):
             text = strip_nonnumeric_source_marks(block.text).strip()
             if not text or _BARE_SOURCE_LABEL_RE.match(text):
                 continue
+            text = _drop_inherited_source_marks(text, block.indent, parent_sources)
             out.append(replace(block, text=text))
         elif isinstance(block, Table):
             source = block.source

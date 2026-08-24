@@ -777,6 +777,51 @@ class TestReportBlocks:
         assert entries[2] == "[3] 웹 자료 제목 (https://ex.com/a)"
 
 
+class TestInheritedSourceMarks:
+    """상위 항목이 밝힌 출처는 하위에서 되풀이하지 않는다(2026-08-24 지시).
+
+    "네모 문장 아래 동그라미·대시가 모두 같은 출처면 네모에만 달면 된다" — 같은
+    표기가 계층마다 반복되면 표기가 글보다 많아 보인다.
+    """
+
+    def _texts(self, body: str) -> list[str]:
+        plan = [SectionPlan(chapter_number=1, section_number=1, title="현황")]
+        blocks = report_blocks(_state("주제", plan, [body]))
+        heading = next(
+            i for i, b in enumerate(blocks) if isinstance(b, Heading) and b.text.startswith("1.1")
+        )
+        end = next(
+            (i for i, b in enumerate(blocks[heading:], heading) if isinstance(b, PageBreak)),
+            len(blocks),
+        )
+        return [b.text for b in blocks[heading:end] if isinstance(b, Paragraph)]
+
+    def test_child_with_same_source_loses_mark(self):
+        body = (
+            "□ 시장 규모는 2025년 70억 달러로 집계된 것으로 나타났음(출처 3)\n"
+            "ㅇ 북미 비중이 42%로 가장 컸던 것으로 확인됐음(출처 3)\n"
+        )
+        texts = self._texts(body)
+        assert any("(출처 3)" in t and t.startswith("□") for t in texts)
+        assert not any("(출처" in t for t in texts if t.startswith("ㅇ"))
+
+    def test_child_with_other_source_keeps_mark(self):
+        body = (
+            "□ 시장 규모는 2025년 70억 달러로 집계된 것으로 나타났음(출처 3)\n"
+            "ㅇ 북미 비중이 42%로 가장 컸던 것으로 확인됐음(출처 7)\n"
+        )
+        assert any(t.startswith("ㅇ") and "(출처 7)" in t for t in self._texts(body))
+
+    def test_sibling_does_not_inherit(self):
+        # 형제 항목의 출처는 물려받지 않는다 — 같은 수준끼리는 각자 밝힌다.
+        body = (
+            "ㅇ 북미 비중이 42%로 가장 컸던 것으로 확인됐음(출처 3)\n"
+            "ㅇ 유럽 비중은 26%로 뒤를 이은 것으로 집계됐음(출처 3)\n"
+        )
+        texts = [t for t in self._texts(body) if t.startswith("ㅇ")]
+        assert len(texts) == 2 and all("(출처 3)" in t for t in texts)
+
+
 class TestAbbreviationDetection:
     """약어 판정 — 첫 글자만 대문자인 영어 낱말은 약어가 아니다(2026-08-24 실측).
 
