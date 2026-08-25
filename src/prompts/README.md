@@ -18,7 +18,7 @@
   회사 쪽 seed-settings가 갱신되면 파일을 통째로 덮어써서 재동기화한다.
 - `components/`·`workflow_roles/`의 `.md`는 seed-settings `prompts/*.json`의 `content`를
   추출한 것. 원본에서 "링크" 단어가 위키피디아 URL로 깨져 있던 부분만
-  "확인 가능한 링크(URL)"로 복원했다 (agent_global_system, tier2_system).
+  "확인 가능한 링크(URL)"로 복원했다 (옛 3계층 프롬프트 — 2026-08-26 제거, 핵심은 writer_context.py에 흡수).
 - **이관 제외**: 모델별 `layer3_*` 프롬프트와 `model_mapping.json` — 모델 분기·카탈로그는
   `src/clients/llm`(라우터·models.py)이 단일 진실이므로 중복 반입하지 않는다.
   `layer3_perplexity`의 검색 지침만 `components/search_guidelines.md`로 일반화해서 가져왔다.

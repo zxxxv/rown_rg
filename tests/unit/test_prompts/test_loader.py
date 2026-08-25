@@ -19,11 +19,13 @@ COMPONENTS = [
     "agent_visual_rules",
 ]
 
+# 런타임에 실제로 load_workflow_role()되는 것만 둔다 — 옛 3계층 실험의 잔재
+# (agent_global_system·tier2_system)는 2026-08-26에 지웠다. 카탈로그에 남겨 두면
+# 프롬프트 화면에서 "이게 지금 쓰이나"로 읽힌다.
 WORKFLOW_ROLES = [
-    "agent_global_system",
-    "tier2_system",
     "toc_system",
     "pm_verify_system",
+    "claim_verify_system",
 ]
 
 

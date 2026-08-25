@@ -9,9 +9,10 @@ import {
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { EvidenceChunk, SectionCitation } from "@/api/types";
+import type { ClaimAlignment, EvidenceChunk, SectionCitation } from "@/api/types";
 import { cn } from "@/lib/utils";
 import { ChartBlock } from "./ChartBlock";
+import { ClaimHoverCard } from "./ClaimHoverCard";
 import { CitationHoverCard } from "./SourceHoverCard";
 
 // 직접 인용 마커 - 원문을 그대로 옮긴 문장에만 붙는다(백엔드 src/core/citations.py와 동일 규약).
@@ -87,19 +88,75 @@ function normalizeClaim(text: string): string {
     .trim();
 }
 
-function highlightClaims(text: string, claims: string[]): ReactNode {
-  if (claims.length === 0) return text;
-  const flat = normalizeClaim(text);
-  const hit = claims.find((c) => c.length >= CLAIM_MIN_CHARS && flat.includes(c));
-  if (!hit) return text;
-  return (
-    <mark
-      className="rounded-sm bg-bg-warning/60 px-0.5 text-fg decoration-fg-warning/60 underline-offset-2"
-      title="근거 표기가 없는 문장 - AI가 자료 없이 쓴 서술일 수 있습니다"
-    >
-      {text}
-    </mark>
-  );
+/** 공백만 접은 정규화 + 정규화 인덱스 → 원문 인덱스 표.
+ *
+ * 문장을 원문 어디에 그릴지 알아야 그 문장에만 호버를 붙인다. 백엔드가 자른 문장과
+ * 렌더 글자는 공백·줄바꿈이 어긋나므로(마크다운 줄바꿈이 공백이 된다) 같은 자로 접어
+ * 놓고 위치만 되짚는다. normalizeClaim과 달리 글머리는 떼지 않는다 - 떼면 앞쪽
+ * 인덱스가 통째로 밀려 되짚을 수 없다. */
+function foldSpaces(text: string): { norm: string; at: number[] } {
+  let norm = "";
+  const at: number[] = [];
+  let space = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (/\s/.test(ch)) {
+      space = true;
+      continue;
+    }
+    if (space && norm.length > 0) {
+      norm += " ";
+      at.push(i);
+    }
+    space = false;
+    norm += ch;
+    at.push(i);
+  }
+  return { norm, at };
+}
+
+/** 텍스트 노드를 문장 단위로 쪼개 근거 호버를 입힌다.
+ *
+ * 한 문단에 문장이 여럿이면 각각에 따로 붙는다 - 문단을 통째로 칠하던 종전 방식은
+ * 근거 있는 문장까지 싸잡아 "표기 없음"으로 보이게 했다. 못 찾은 문장은 원문 그대로
+ * 남긴다(억지로 맞추면 엉뚱한 대목이 칠해진다). */
+type MatchableClaim = { key: string; claim: ClaimAlignment };
+
+function withClaimHovers(
+  text: string,
+  claims: MatchableClaim[],
+  chunks: EvidenceChunk[],
+  /** 문장 안팎의 순수 텍스트를 마저 처리한다([n] 인용 배지) */
+  renderText: (piece: string) => ReactNode,
+): ReactNode {
+  if (claims.length === 0) return renderText(text);
+  const { norm, at } = foldSpaces(text);
+  // 겹치지 않게 앞에서부터 자리 잡는다 - 긴 문장을 먼저 놓아 짧은 조각이 끼어들지 않게.
+  const spans: { start: number; end: number; claim: ClaimAlignment }[] = [];
+  for (const { key, claim } of [...claims].sort((a, b) => b.key.length - a.key.length)) {
+    const pos = norm.indexOf(key);
+    if (pos < 0) continue;
+    const start = at[pos];
+    const end = at[pos + key.length - 1] + 1;
+    if (spans.some((s) => start < s.end && end > s.start)) continue;
+    spans.push({ start, end, claim });
+  }
+  if (spans.length === 0) return renderText(text);
+  spans.sort((a, b) => a.start - b.start);
+
+  const out: ReactNode[] = [];
+  let cursor = 0;
+  spans.forEach((sp, i) => {
+    if (sp.start > cursor) out.push(renderText(text.slice(cursor, sp.start)));
+    out.push(
+      <ClaimHoverCard key={`claim-${i}`} claim={sp.claim} chunks={chunks}>
+        {renderText(text.slice(sp.start, sp.end))}
+      </ClaimHoverCard>,
+    );
+    cursor = sp.end;
+  });
+  if (cursor < text.length) out.push(renderText(text.slice(cursor)));
+  return <>{out}</>;
 }
 
 function processString(text: string, citations: CitationMap, evidence: EvidenceMap): ReactNode {
@@ -135,18 +192,14 @@ function processChildren(
   children: ReactNode,
   citations: CitationMap,
   evidence: EvidenceMap,
-  claims: string[] = [],
+  claims: MatchableClaim[] = [],
+  chunks: EvidenceChunk[] = [],
 ): ReactNode {
   return Children.map(children, (child) => {
     if (typeof child === "string") {
-      const marked = highlightClaims(child, claims);
-      return typeof marked === "string"
-        ? processString(child, citations, evidence)
-        : cloneElement(
-            marked as ReactElement,
-            undefined,
-            processString(child, citations, evidence),
-          );
+      return withClaimHovers(child, claims, chunks, (piece) =>
+        processString(piece, citations, evidence),
+      );
     }
     if (typeof child === "number" || typeof child === "boolean" || child === null) return child;
     if (isValidElement(child)) {
@@ -155,7 +208,7 @@ function processChildren(
         return cloneElement(
           el,
           undefined,
-          processChildren(el.props.children, citations, evidence, claims),
+          processChildren(el.props.children, citations, evidence, claims, chunks),
         );
       }
       return child;
