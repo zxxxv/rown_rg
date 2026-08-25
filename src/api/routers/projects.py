@@ -10,7 +10,7 @@ from zipfile import BadZipFile
 import structlog
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,6 +110,7 @@ from src.services.indexing.vector import SourceInput
 from src.services.prompts import resolve_analysts
 from src.services.qa.alignment import align_section
 from src.services.qa.gate import uncited_units
+from src.services.sections.drift import content_fingerprint
 from src.services.sections.evidence import marker_chunk_ids
 from src.services.stats.source_usage import build_source_usage
 from src.services.user_presets import (
@@ -261,6 +262,21 @@ async def _known_analyst_names(session: AsyncSession, owner_id: UUID) -> set[str
     return known
 
 
+def _preset_summary(domain_context: str | None) -> str | None:
+    """프리셋 카드에 실을 한 줄 설명 — domain_context의 첫 문장.
+
+    domain_context는 설계 브리프에 넣는 긴 배경 설명이라 통째로는 카드에 못 싣는다.
+    첫 문장이 "R&D 사업의 예비타당성조사 기획 보고서"처럼 유형을 그대로 말해 준다
+    (8종 전부 확인). 첫 문장이 없거나 너무 길면 카드를 비운다 — 잘린 문장을 보여
+    주느니 개수 골격만 보이는 편이 낫다.
+    """
+    text = (domain_context or "").strip()
+    if not text:
+        return None
+    first = text.split(". ")[0].strip().rstrip(".")
+    return first if 0 < len(first) <= 60 else None
+
+
 def _preset_counts(outline: dict) -> tuple[int, int]:
     chapters = outline.get("chapters") or []
     return len(chapters), sum(len(ch.get("sections") or []) for ch in chapters)
@@ -281,6 +297,7 @@ async def get_presets(
             id=p.id,
             name=p.name,
             desc=p.desc,
+            summary=_preset_summary(p.domain_context),
             n_chapters=len(p.chapters),
             n_sections=sum(len(ch.sections) for ch in p.chapters),
         )
@@ -966,6 +983,173 @@ async def get_drift(
         n_source_excluded=sum(1 for d in items if "source_excluded" in d.reasons),
         n_missing=sum(1 for d in items if "missing" in d.reasons),
     )
+
+
+async def _apply_section_rewrite(
+    session: AsyncSession,
+    project: Project,
+    row: Section,
+    plan,
+    draft,
+    *,
+    created_by: UUID | None,
+) -> None:
+    """재작성 결과를 절 행에 반영한다 — 절 1개 경로와 묶음 경로가 **함께 쓴다**.
+
+    묶음 재작성을 따로 짰다가 여기 있는 것들을 통째로 빠뜨렸었다(2026-08-26 자문):
+    전역 인용 번호 재매핑을 안 하면 그 절만 절-로컬 번호로 남아 문서·출처장과
+    어긋나고, meta를 안 채우면 근거 추적이 반쪽이 되며, 버전을 안 얼리면 되돌릴
+    지점이 없다. 두 경로가 갈라지지 않게 한 곳에 모은다.
+    """
+    content = draft.content
+    # 근거 추적 기록 — 재작성은 작성 루프 밖 경로라 그냥 두면 이 절만 추적이 반쪽이 된다
+    # (실린 근거 수를 모르고, 마커→청크 대응도 복원할 수 없다).
+    meta = {**(row.meta or {}), "pool_chunk_ids": [str(c) for c in draft.pool_chunk_ids]}
+    meta["plan_failed"] = draft.split_fallback
+    # 재작성이 새 근거로 목표를 채웠으면 '자료 부족' 배지를 내린다 — 안 갱신하면
+    # 자료를 추가해 다시 써도 배지가 남는다(재업로드 워크플로우의 마감 신호).
+    meta["volume_scaled"] = draft.volume_scaled
+    if draft.pool_chunk_ids:
+        meta["evidence_count"] = len(draft.pool_chunk_ids)
+    try:
+        # 재작성 결과도 전역 번호로 재매핑 — 문서의 나머지 절·출처장과 번호 체계 유지.
+        from src.services.sections.renumber import (
+            build_chunk_to_global,
+            citation_chunk_map,
+            renumber_content,
+        )
+
+        mapping = await build_chunk_to_global(project.id, set(draft.cited_chunk_ids))
+        cited = list(draft.cited_chunk_ids)
+        # 매핑은 재작성 전(절-로컬 번호) 본문 기준으로만 뜰 수 있다 — 순서 주의.
+        marker_map = citation_chunk_map(draft.content, cited, mapping)
+        if marker_map:
+            meta["citation_chunks"] = {
+                str(g): [str(c) for c in cids] for g, cids in sorted(marker_map.items())
+            }
+        content = renumber_content(draft.content, cited, mapping)
+    except Exception:
+        logger.warning("rewrite.renumber_failed", project_id=str(project.id), exc_info=True)
+    row.content = content
+    row.meta = meta
+    row.source_ids = list(draft.cited_chunk_ids)
+    # 이 본문이 어떤 계약으로 쓰였는지 다시 찍는다 — 안 찍으면 미반영 절을 재작성해도
+    # 배지가 그대로 남아 루프가 닫히지 않는다(0047과 한 세트). 블록 재작성은 계획을
+    # 다시 읽지 않으므로 여기에 해당하지 않는다.
+    row.plan_hash = content_fingerprint(plan)
+    row.status = "completed"
+    row.qa_status = "passed"
+    project.updated_at = clock_now()
+    await session.flush()
+    # 진화형 작성(2026-08-24): 재작성은 이전 본문을 덮어쓰는 유일한 경로 중 하나라
+    # 성공 직후를 버전으로 얼린다 — "고치기 전"은 직전 버전이 이미 들고 있다.
+    from src.services.sections.versions import snapshot_report
+
+    await snapshot_report(
+        session,
+        project.id,
+        reason=f"rewrite:{row.chapter_number}.{row.section_number}",
+        created_by=created_by,
+    )
+
+
+class RewriteBatchRequest(BaseModel):
+    """미반영 절을 골라 다시 쓰기 — 대상은 사람이 고른다(자동 재작성은 안 한다)."""
+
+    section_ids: list[UUID] = Field(min_length=1, max_length=40)
+    instruction: str = Field(default="", max_length=500)
+
+
+REWRITE_JOB = "rewrite_batch"
+
+
+async def _rewrite_batch_body(
+    project_id: UUID,
+    section_ids: list[UUID],
+    instruction: str,
+    job,
+    *,
+    created_by: UUID | None = None,
+):
+    """절을 하나씩 다시 쓴다 — 한 절이 실패해도 나머지는 계속 간다.
+
+    절당 실측 $0.67·수십 초라 요청 안에서 돌리면 프론트가 타임아웃으로 읽는다.
+    병렬로 돌리지 않는 것은 비용이 큰 작업이라 사람이 중간에 멈출 여지를 남기고,
+    같은 프로젝트 인덱스를 동시에 때리지 않기 위해서다.
+    """
+    for sid in section_ids:
+        label = str(sid)[:8]
+        try:
+            async with async_session_maker() as session:
+                project = await session.get(Project, project_id)
+                if project is None:
+                    return
+                row = await _get_section(session, project_id, sid)
+                label = f"{row.chapter_number}.{row.section_number} {row.title}"
+                job.current = label
+                plan = _plan_for_row(project, row)
+                draft = await _section_rewriter(project, plan, instruction)
+                if draft.incomplete_reason or not draft.content.strip():
+                    job.failures[label] = "재작성 결과가 완결되지 않음"
+                    continue
+                await _apply_section_rewrite(
+                    session, project, row, plan, draft, created_by=created_by
+                )
+                await session.commit()
+        except Exception as exc:  # 한 절의 실패가 묶음을 죽이지 않는다
+            job.failures[label] = str(exc)[:200]
+            logger.warning(
+                "rewrite_batch.section_failed",
+                project_id=str(project_id),
+                section_id=str(sid),
+                exc_info=True,
+            )
+        finally:
+            job.done += 1
+
+
+@router.post("/{project_id}/rewrite-batch", status_code=status.HTTP_202_ACCEPTED)
+async def rewrite_batch(
+    project_id: UUID,
+    data: RewriteBatchRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> dict[str, Any]:
+    """고른 절을 백그라운드로 다시 쓴다 — 미반영 목록에서 바로 거는 경로."""
+    from src.clients.llm.quota_gate import check_user_quota
+    from src.services.jobs import start_job
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    await check_user_quota(project.owner_id)
+    ids = list(dict.fromkeys(data.section_ids))
+    job = start_job(
+        project.id,
+        REWRITE_JOB,
+        lambda j: _rewrite_batch_body(
+            project.id, ids, data.instruction, j, created_by=current_user.id
+        ),
+        total=len(ids),
+    )
+    if job is None:
+        return {"started": False, "running": True}
+    logger.info("rewrite_batch.started", project_id=str(project.id), n_sections=len(ids))
+    return {"started": True, "running": True, "total": len(ids)}
+
+
+@router.get("/{project_id}/rewrite-batch")
+async def rewrite_batch_status(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> dict[str, Any]:
+    """묶음 재작성 진행 상황 — 화면이 폴링을 멈출 시점과 부분 실패를 안다."""
+    from src.services.jobs import get_job
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    job = get_job(project.id, REWRITE_JOB)
+    if job is None:
+        return {"running": False, "total": 0, "done": 0, "current": "", "failures": {}}
+    return job.as_dict()
 
 
 class InsightsRead(BaseModel):
@@ -3148,7 +3332,8 @@ async def rewrite_section(
     """
     project = await _get_authorized_project(project_id, session, current_user)
     row = await _get_section(session, project.id, section_id)
-    draft = await _section_rewriter(project, _plan_for_row(project, row), data.instruction)
+    plan = _plan_for_row(project, row)
+    draft = await _section_rewriter(project, plan, data.instruction)
     if draft.incomplete_reason or not draft.content.strip():
         # 작성 루프의 완결 게이트(check_complete)와 같은 기준 — max_tokens 컷·refusal
         # 토막을 저장하면 기존 본문만 잃는다. 실패 절 복구 경로가 여기라 더 엄격해야 한다.
@@ -3156,52 +3341,7 @@ async def rewrite_section(
             message="재작성 결과가 완결되지 않았습니다 - 잠시 후 다시 시도하세요",
             code="REWRITE_INCOMPLETE",
         )
-    content = draft.content
-    # 근거 추적 기록 — 재작성은 작성 루프 밖 경로라 그냥 두면 이 절만 추적이 반쪽이 된다
-    # (실린 근거 수를 모르고, 마커→청크 대응도 복원할 수 없다).
-    meta = {**(row.meta or {}), "pool_chunk_ids": [str(c) for c in draft.pool_chunk_ids]}
-    meta["plan_failed"] = draft.split_fallback
-    # 재작성이 새 근거로 목표를 채웠으면 '자료 부족' 배지를 내린다 — 안 갱신하면
-    # 자료를 추가해 다시 써도 배지가 남는다(재업로드 워크플로우의 마감 신호).
-    meta["volume_scaled"] = draft.volume_scaled
-    if draft.pool_chunk_ids:
-        meta["evidence_count"] = len(draft.pool_chunk_ids)
-    try:
-        # 재작성 결과도 전역 번호로 재매핑 — 문서의 나머지 절·출처장과 번호 체계 유지.
-        from src.services.sections.renumber import (
-            build_chunk_to_global,
-            citation_chunk_map,
-            renumber_content,
-        )
-
-        mapping = await build_chunk_to_global(project.id, set(draft.cited_chunk_ids))
-        cited = list(draft.cited_chunk_ids)
-        # 매핑은 재작성 전(절-로컬 번호) 본문 기준으로만 뜰 수 있다 — 순서 주의.
-        marker_map = citation_chunk_map(draft.content, cited, mapping)
-        if marker_map:
-            meta["citation_chunks"] = {
-                str(g): [str(c) for c in cids] for g, cids in sorted(marker_map.items())
-            }
-        content = renumber_content(draft.content, cited, mapping)
-    except Exception:
-        logger.warning("rewrite.renumber_failed", project_id=str(project.id), exc_info=True)
-    row.content = content
-    row.meta = meta
-    row.source_ids = list(draft.cited_chunk_ids)
-    row.status = "completed"
-    row.qa_status = "passed"
-    project.updated_at = clock_now()
-    await session.flush()
-    # 진화형 작성(2026-08-24): 재작성은 이전 본문을 덮어쓰는 유일한 경로 중 하나라
-    # 성공 직후를 버전으로 얼린다 — "고치기 전"은 직전 버전이 이미 들고 있다.
-    from src.services.sections.versions import snapshot_report
-
-    await snapshot_report(
-        session,
-        project.id,
-        reason=f"rewrite:{row.chapter_number}.{row.section_number}",
-        created_by=current_user.id,
-    )
+    await _apply_section_rewrite(session, project, row, plan, draft, created_by=current_user.id)
     await session.refresh(row)
     return _section_content(
         row,

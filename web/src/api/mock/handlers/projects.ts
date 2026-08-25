@@ -236,6 +236,19 @@ export const projectsHandlers = [
     return HttpResponse.json({ data: { started: true } }, { status: 202 });
   }),
 
+  // GET /projects/{id}/rewrite-batch - 묶음 재작성 진행(데모는 항상 idle)
+  http.get(url("projects/:id/rewrite-batch"), () => {
+    return HttpResponse.json(
+      { data: { running: false, total: 0, done: 0, current: "", failures: {} } },
+      { status: 200 },
+    );
+  }),
+
+  // POST /projects/{id}/rewrite-batch - 고른 절 다시 쓰기 시작(데모는 즉시 수락만)
+  http.post(url("projects/:id/rewrite-batch"), () => {
+    return HttpResponse.json({ data: { started: true, running: true, total: 1 } }, { status: 202 });
+  }),
+
   // GET /projects/{id}/drift - 미반영 절(설계를 고쳤는데 본문이 아직 안 담은 절)
   http.get(url("projects/:id/drift"), () => {
     return HttpResponse.json(
