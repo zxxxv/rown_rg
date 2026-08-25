@@ -61,6 +61,12 @@ export const sectionsHandlers = [
           unused_count: 0,
           uncited_count: 0,
           uncited_samples: [],
+          // 백엔드 계약 거울 - 주장으로 안 잡혀 어떤 검사도 못 본 줄.
+          // 주장 0개 + 대조 안 함 1개는 실제로 나오는 조합이라 그대로 둔다
+          // (이 상태에서 툴바가 사라지면 "왜 표시가 없지"에 답할 자리가 없다).
+          uncovered: [
+            "정책 대응 방향: 세대별 통행 특성을 반영한 노선 운영 계획과 환승 체계 재편 검토",
+          ],
           traceable: false,
         },
       },

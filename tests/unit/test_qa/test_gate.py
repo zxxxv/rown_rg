@@ -36,6 +36,7 @@ from src.services.qa.gate import (
     run_section_gate,
     truncated_lines,
     uncited_units,
+    uncovered_units,
     ungrounded_numbers,
 )
 
@@ -547,6 +548,28 @@ class TestClaimCoverage:
         picked, total, missed = claim_coverage(content)
         assert (picked, total) == (1, 2)
         assert missed == []  # 수치=주장 규칙이 있는 한 미포착 수치는 구조적으로 0
+
+    def test_uncovered_units_is_the_complement_of_claim_units(self):
+        """화면이 짚는 "대조 안 함" 목록은 커버리지 숫자와 같은 판정을 써야 한다.
+
+        둘이 갈리면 "후보 2개 중 1개 픽업"이라 해 놓고 목록에는 엉뚱한 줄이 뜬다 -
+        사람은 어느 쪽이 거짓말인지 알 수가 없다(2026-08-26).
+        """
+        content = (
+            "ㅇ 참여 기업 수는 전년 대비 21개사 증가한 것으로 집계됐음\n"  # 픽업
+            "ㅇ 향후 정책 방향에 대한 종합적 검토와 제도 개선 논의\n"  # 미픽업
+        )
+        picked, total, _ = claim_coverage(content)
+        uncovered = uncovered_units(content)
+        assert len(uncovered) == total - picked == 1
+        assert "제도 개선 논의" in uncovered[0]
+        # 픽업된 줄이 목록에 섞이면 안 된다 - 밑줄이 두 겹으로 그어진다.
+        assert not set(uncovered) & set(claim_units(content))
+
+    def test_captions_are_not_listed_as_uncovered(self):
+        # 후보 자체가 아닌 줄(캡션·단위)은 "대조 안 함"도 아니다 - 안 그러면 표·그림
+        # 제목마다 회색 밑줄이 그어져 목록이 소음이 된다.
+        assert uncovered_units("표: 기업 규모별 이행수단 이용 현황\n(단위: %, ’23년 기준)\n") == []
 
     def test_numeric_caption_is_reported_as_missed(self):
         # 캡션 제외가 새 맹점이 되면 안 된다 - 수치 주장을 캡션 꼴로 쓴 줄은

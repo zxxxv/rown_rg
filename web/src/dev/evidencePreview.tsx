@@ -18,6 +18,8 @@ const BLOCK = [
   "전환기간 동안에는 보고 의무만 부과되며, 인증서 구매는 2026년부터 시작된다 [7].",
   "국내 철강업계의 대EU 수출 물량은 연간 320만 톤으로 추정된다 (출처 3).",
   "이 제도는 향후 다른 품목으로도 확대될 전망이다.",
+  // 종결형이 아니라 주장으로 안 잡히는 줄 - "대조 안 함" 회색 점선 확인용.
+  "적용 품목 확대와 인증서 가격 산정 방식은 이행법령에서 구체화 예정",
 ].join("\n\n");
 
 const EVIDENCE: SectionEvidence = {
@@ -103,6 +105,7 @@ const EVIDENCE: SectionEvidence = {
   unused_count: 22,
   uncited_count: 1,
   uncited_samples: [],
+  uncovered: ["적용 품목 확대와 인증서 가격 산정 방식은 이행법령에서 구체화 예정"],
   traceable: true,
 } as SectionEvidence;
 
@@ -156,7 +159,9 @@ function App() {
                 citations={CITATIONS}
                 evidence={EVIDENCE.items}
                 claims={EVIDENCE.claims}
+                uncovered={EVIDENCE.uncovered}
                 markCited
+                markUncovered
               />
             </div>
           </div>

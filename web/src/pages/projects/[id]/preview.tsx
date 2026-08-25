@@ -922,6 +922,9 @@ function SectionView({
   // 켜 두면 "자료를 보고 쓴 글 / AI 서술"이 한눈에 갈리고, 꺼도 마우스를 올리면 보인다.
   const [markUncited, setMarkUncited] = useState(true);
   const [markCited, setMarkCited] = useState(false);
+  // 셋째 층 - 어떤 검사도 보지 않은 줄(개조식 명사 종결 등). 기본 끔: 늘 켜 두면
+  // 개조식이 많은 절이 온통 밑줄이 된다. "왜 이 줄만 표시가 없지"를 물을 때 켜는 스위치.
+  const [markUncovered, setMarkUncovered] = useState(false);
   const evidenceBlock = evidenceIdx !== null ? (blocks[evidenceIdx] ?? null) : null;
   // 드로어 2면 중 원문 뷰어 - 근거 카드·수치에서 "원문에서 보기"를 눌렀을 때만.
   // 근거 목록으로 돌아가는 뒤로가기가 있으므로 블록이 바뀌면 반드시 비운다.
@@ -958,6 +961,7 @@ function SectionView({
       ungrounded: claims.filter((c) => c.ungrounded.length > 0).length,
     };
   }, [evidenceQuery.data]);
+  const uncoveredCount = evidenceQuery.data?.uncovered?.length ?? 0;
   // 드로어가 뜨는 조건과 정확히 같은 식을 부모에 알린다 - 부모는 이때 절 트리를 접어
   // 본문을 넓힌다. 절을 옮기거나 화면을 떠날 때도 반드시 닫힘으로 되돌린다.
   const drawerOpen = evidenceBlock !== null;
@@ -1244,49 +1248,79 @@ function SectionView({
             ) : null}
             {/* 절 단위 대조 요약 - 블록을 일일이 열지 않아도 이 절의 근거 상태를 한 줄로.
                 자세한 대조는 경고색 블록의 '근거 N' 표시를 눌러 드로어에서 한다. */}
-            {EVIDENCE_UI_ENABLED && claimStats ? (
+            {EVIDENCE_UI_ENABLED && (claimStats || uncoveredCount > 0) ? (
               // 11px은 읽히지 않았다(2026-08-26 지적) - 이 줄은 절을 훑기 전에 어디를
               // 볼지 정하는 자리라 본문과 같은 크기로 읽혀야 한다.
               <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-secondary">
                 <span className="font-medium text-fg">근거 대조</span>
-                <span>
-                  문장 {claimStats.total}개 중 {claimStats.aligned}개는 원문 대목까지 확인됨
-                </span>
-                {claimStats.needsCheck > 0 ? (
-                  <span className="text-fg-warning">직접 확인 필요 {claimStats.needsCheck}</span>
-                ) : null}
+                {claimStats ? (
+                  <>
+                    <span>
+                      문장 {claimStats.total}개 중 {claimStats.aligned}개는 원문 대목까지 확인됨
+                    </span>
+                    {claimStats.needsCheck > 0 ? (
+                      <span className="text-fg-warning">
+                        직접 확인 필요 {claimStats.needsCheck}
+                      </span>
+                    ) : null}
+                  </>
+                ) : (
+                  // 주장이 하나도 안 잡힌 절 - 여기서 줄을 통째로 감추면 "왜 표시가
+                  // 없지"에 답할 자리가 사라진다. 이 기능이 풀려던 문제가 정확히 그것이다.
+                  <span>대조 대상으로 잡힌 문장이 없습니다</span>
+                )}
                 {/* 본문 밑줄 스위치 2개 - 종전 토글은 통계 사이에 끼인 회색 글씨라 있는
                     줄도 몰랐다(2026-08-26 지적). 테두리를 줘 스위치로 보이게 하고, 켜짐은
                     각 층의 색으로 남긴다. 끄더라도 마우스를 올리면 밑줄과 카드가 뜬다. */}
-                <button
-                  type="button"
-                  onClick={() => setMarkUncited((v) => !v)}
-                  aria-pressed={markUncited}
-                  title="근거 표기 없이 쓰인 문장(AI 서술)에 주황 밑줄을 그립니다"
-                  className={cn(
-                    "rounded border px-2 py-0.5 transition-colors",
-                    markUncited
-                      ? "border-fg-warning bg-bg-warning text-fg"
-                      : "border-border text-fg-secondary hover:border-border-strong",
-                  )}
-                >
-                  AI 서술 {claimStats.uncited} {markUncited ? "표시 켬" : "표시 끔"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMarkCited((v) => !v)}
-                  aria-pressed={markCited}
-                  title="자료를 인용해 쓴 문장에 파란 밑줄을 그립니다"
-                  className={cn(
-                    "rounded border px-2 py-0.5 transition-colors",
-                    markCited
-                      ? "border-fg-info bg-bg-info text-fg-info"
-                      : "border-border text-fg-secondary hover:border-border-strong",
-                  )}
-                >
-                  인용 문장 {claimStats.total - claimStats.uncited}{" "}
-                  {markCited ? "표시 켬" : "표시 끔"}
-                </button>
+                {claimStats ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setMarkUncited((v) => !v)}
+                      aria-pressed={markUncited}
+                      title="근거 표기 없이 쓰인 문장(AI 서술)에 주황 밑줄을 그립니다"
+                      className={cn(
+                        "rounded border px-2 py-0.5 transition-colors",
+                        markUncited
+                          ? "border-fg-warning bg-bg-warning text-fg"
+                          : "border-border text-fg-secondary hover:border-border-strong",
+                      )}
+                    >
+                      AI 서술 {claimStats.uncited} {markUncited ? "표시 켬" : "표시 끔"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMarkCited((v) => !v)}
+                      aria-pressed={markCited}
+                      title="자료를 인용해 쓴 문장에 파란 밑줄을 그립니다"
+                      className={cn(
+                        "rounded border px-2 py-0.5 transition-colors",
+                        markCited
+                          ? "border-fg-info bg-bg-info text-fg-info"
+                          : "border-border text-fg-secondary hover:border-border-strong",
+                      )}
+                    >
+                      인용 문장 {claimStats.total - claimStats.uncited}{" "}
+                      {markCited ? "표시 켬" : "표시 끔"}
+                    </button>
+                  </>
+                ) : null}
+                {uncoveredCount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setMarkUncovered((v) => !v)}
+                    aria-pressed={markUncovered}
+                    title="문장 종결형이 아니고 수치도 없어 근거 대조에서 아예 제외된 줄에 회색 점선을 그립니다"
+                    className={cn(
+                      "rounded border px-2 py-0.5 transition-colors",
+                      markUncovered
+                        ? "border-border-strong bg-bg-tertiary text-fg"
+                        : "border-border text-fg-secondary hover:border-border-strong",
+                    )}
+                  >
+                    대조 안 함 {uncoveredCount} {markUncovered ? "표시 켬" : "표시 끔"}
+                  </button>
+                ) : null}
                 {evidenceQuery.data?.traceable === false ? (
                   // 근거 기록 도입(8/11) 전에 작성된 절 - 번호와 청크의 대응이 없어
                   // 블록 배지·드로어를 못 연다. 그 사실을 알려야 "왜 배지가 없지"가 안 된다.
@@ -1294,7 +1328,7 @@ function SectionView({
                     (근거 기록이 없는 옛 작성분 - 블록별 근거 보기는 새로 작성한 절부터 지원됩니다)
                   </span>
                 ) : null}
-                {claimStats.ungrounded > 0 ? (
+                {claimStats && claimStats.ungrounded > 0 ? (
                   <span className="text-fg-danger">근거 없는 수치 {claimStats.ungrounded}</span>
                 ) : null}
               </div>
@@ -1399,8 +1433,10 @@ function SectionView({
                         citations={data.citations}
                         evidence={evidenceQuery.data?.items}
                         claims={evidenceQuery.data?.claims}
+                        uncovered={evidenceQuery.data?.uncovered}
                         markCited={markCited}
                         markUncited={markUncited}
+                        markUncovered={markUncovered}
                       />
                       {selectedIdx.has(idx) && selectedIdx.size === 1 ? (
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">

@@ -154,6 +154,9 @@ class SectionEvidenceResponse(BaseModel):
     unused_count: int = 0
     uncited_count: int = 0  # 근거 표기가 없는 주장 수
     uncited_samples: list[str] = Field(default_factory=list)
+    # 주장 단위로 안 잡혀 어떤 검사도 못 본 줄 - 명사 종결 + 수치 없는 개조식 줄이
+    # 대부분이다. 화면이 "대조 안 함"으로 짚어 준다(안 그러면 밑줄 없는 이유를 알 수 없다).
+    uncovered: list[str] = Field(default_factory=list)
     # 마커를 청크까지 되짚을 수 있는가. 옛 절(기록 없음)은 자료 단위까지만 가능하다.
     traceable: bool = True
 

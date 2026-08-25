@@ -120,14 +120,25 @@ function foldSpaces(text: string): { norm: string; at: number[] } {
  * 한 문단에 문장이 여럿이면 각각에 따로 붙는다 - 문단을 통째로 칠하던 종전 방식은
  * 근거 있는 문장까지 싸잡아 "표기 없음"으로 보이게 했다. 못 찾은 문장은 원문 그대로
  * 남긴다(억지로 맞추면 엉뚱한 대목이 칠해진다). */
-type MatchableClaim = { key: string; claim: ClaimAlignment };
 /** 문장 호버 렌더 옵션 - 층을 지나며 인자가 늘어나지 않게 한 덩이로 묶는다. */
-type ClaimRender = { chunks: EvidenceChunk[]; markCited: boolean; markUncited: boolean };
-const NO_CLAIM_RENDER: ClaimRender = { chunks: [], markCited: false, markUncited: true };
+type ClaimRender = {
+  chunks: EvidenceChunk[];
+  markCited: boolean;
+  markUncited: boolean;
+  markUncovered: boolean;
+};
+const NO_CLAIM_RENDER: ClaimRender = {
+  chunks: [],
+  markCited: false,
+  markUncited: true,
+  markUncovered: false,
+};
+/** 밑줄 대상 - claim이 있으면 호버 카드, 없으면 "대조 안 함" 줄(설명만). */
+type Markable = { key: string; claim: ClaimAlignment | null };
 
 function withClaimHovers(
   text: string,
-  claims: MatchableClaim[],
+  claims: Markable[],
   opts: ClaimRender,
   /** 문장 안팎의 순수 텍스트를 마저 처리한다([n] 인용 배지) */
   renderText: (piece: string) => ReactNode,
@@ -135,8 +146,9 @@ function withClaimHovers(
   if (claims.length === 0) return renderText(text);
   const { norm, at } = foldSpaces(text);
   // 겹치지 않게 앞에서부터 자리 잡는다 - 긴 문장을 먼저 놓아 짧은 조각이 끼어들지 않게.
-  const spans: { start: number; end: number; claim: ClaimAlignment }[] = [];
-  for (const { key, claim } of [...claims].sort((a, b) => b.key.length - a.key.length)) {
+  const spans: { start: number; end: number; claim: ClaimAlignment | null }[] = [];
+  for (const m of [...claims].sort((a, b) => b.key.length - a.key.length)) {
+    const { key, claim } = m;
     const pos = norm.indexOf(key);
     if (pos < 0) continue;
     const start = at[pos];
@@ -151,17 +163,34 @@ function withClaimHovers(
   let cursor = 0;
   for (const sp of spans) {
     if (sp.start > cursor) out.push(renderText(text.slice(cursor, sp.start)));
+    // 키는 노드 안 위치 - 같은 문장이 두 번 나와도 자리가 다르면 갈린다.
     out.push(
-      // 키는 노드 안 위치 - 같은 문장이 두 번 나와도 자리가 다르면 갈린다.
-      <ClaimHoverCard
-        key={`claim-${sp.start}`}
-        claim={sp.claim}
-        chunks={opts.chunks}
-        markCited={opts.markCited}
-        markUncited={opts.markUncited}
-      >
-        {renderText(text.slice(sp.start, sp.end))}
-      </ClaimHoverCard>,
+      sp.claim ? (
+        <ClaimHoverCard
+          key={`claim-${sp.start}`}
+          claim={sp.claim}
+          chunks={opts.chunks}
+          markCited={opts.markCited}
+          markUncited={opts.markUncited}
+        >
+          {renderText(text.slice(sp.start, sp.end))}
+        </ClaimHoverCard>
+      ) : (
+        // 대조 대상이 아닌 줄 - 호버 카드에 띄울 근거가 없어 설명 한 줄만 단다.
+        <span
+          key={`uncovered-${sp.start}`}
+          data-walked="1"
+          title="근거 대조 대상이 아닙니다 - 문장 종결형이 아니고 수치도 없어 검사에서 제외된 줄입니다"
+          className={cn(
+            "underline decoration-dotted decoration-2 underline-offset-4",
+            opts.markUncovered
+              ? "decoration-fg-tertiary"
+              : "decoration-transparent hover:decoration-fg-tertiary/70",
+          )}
+        >
+          {renderText(text.slice(sp.start, sp.end))}
+        </span>
+      ),
     );
     cursor = sp.end;
   }
@@ -202,7 +231,7 @@ function processChildren(
   children: ReactNode,
   citations: CitationMap,
   evidence: EvidenceMap,
-  claims: MatchableClaim[] = [],
+  claims: Markable[] = [],
   opts: ClaimRender = NO_CLAIM_RENDER,
 ): ReactNode {
   return Children.map(children, (child) => {
@@ -213,7 +242,11 @@ function processChildren(
     }
     if (typeof child === "number" || typeof child === "boolean" || child === null) return child;
     if (isValidElement(child)) {
-      const el = child as ReactElement<{ children?: ReactNode }>;
+      const el = child as ReactElement<{ children?: ReactNode; "data-walked"?: string }>;
+      // 우리가 방금 감싼 노드에는 다시 들어가지 않는다. ul/ol이 훑고 그 안의 li가
+      // 또 훑기 때문에, 막지 않으면 목록 항목마다 밑줄·호버 카드가 두 겹으로 쌓인다
+      // (실측 2026-08-26: 개조식 한 줄에 span 2개, 툴팁도 두 번).
+      if (el.type === ClaimHoverCard || el.props?.["data-walked"] === "1") return child;
       if (el.props?.children !== undefined) {
         return cloneElement(
           el,
@@ -421,7 +454,7 @@ function prepareOutline(md: string): string {
 function buildComponents(
   citations: CitationMap,
   evidence: EvidenceMap,
-  claims: MatchableClaim[] = [],
+  claims: Markable[] = [],
   opts: ClaimRender = NO_CLAIM_RENDER,
 ): Components {
   const walk = (children: ReactNode) =>
@@ -611,6 +644,9 @@ export interface MarkdownContentProps {
   markCited?: boolean;
   /** 표기 없는 문장(AI 서술)에 주황 밑줄(기본 켜짐) */
   markUncited?: boolean;
+  /** 근거 대조 대상이 아닌 줄 - 주면 회색 밑줄 대상이 된다 */
+  uncovered?: string[];
+  markUncovered?: boolean;
 }
 
 export function MarkdownContent({
@@ -620,6 +656,8 @@ export function MarkdownContent({
   claims,
   markCited = false,
   markUncited = true,
+  uncovered,
+  markUncovered = false,
 }: MarkdownContentProps) {
   const citationMap = useMemo<CitationMap>(
     () =>
@@ -641,19 +679,23 @@ export function MarkdownContent({
   // 문장은 백엔드가 자른 그대로 오지만 렌더 글자와 공백·마커가 어긋난다 - 같은 자로
   // 접어 두고, 짧은 문장은 우연 일치를 피해 버린다. (출처 n)은 렌더 전에 걷히므로
   // 문장 쪽에서도 떼어 둬야 본문에서 찾을 수 있다.
-  const matchable = useMemo<MatchableClaim[]>(
+  const matchable = useMemo<Markable[]>(
     () =>
-      (claims ?? [])
-        .map((c) => ({
+      [
+        ...(claims ?? []).map((c) => ({
           key: normalizeClaim(c.claim.replace(SOURCE_MARK_RE, "")),
-          claim: c,
-        }))
-        .filter((m) => m.key.length >= CLAIM_MIN_CHARS),
-    [claims],
+          claim: c as ClaimAlignment | null,
+        })),
+        ...(uncovered ?? []).map((u) => ({
+          key: normalizeClaim(u.replace(SOURCE_MARK_RE, "")),
+          claim: null,
+        })),
+      ].filter((m) => m.key.length >= CLAIM_MIN_CHARS),
+    [claims, uncovered],
   );
   const claimRender = useMemo<ClaimRender>(
-    () => ({ chunks: evidence ?? [], markCited, markUncited }),
-    [evidence, markCited, markUncited],
+    () => ({ chunks: evidence ?? [], markCited, markUncited, markUncovered }),
+    [evidence, markCited, markUncited, markUncovered],
   );
   const components = useMemo(
     () => buildComponents(citationMap, evidenceMap, matchable, claimRender),

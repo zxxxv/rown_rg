@@ -624,6 +624,19 @@ def claim_units(content: str) -> list[str]:
     return [unit for unit, bare in _candidate_units(content) if _is_claim(bare)]
 
 
+def uncovered_units(content: str) -> list[str]:
+    """주장 후보였지만 종결형 검사에서 떨어진 줄 — 어떤 검사도 보지 않는 본문.
+
+    claim_units가 못 집은 줄은 근거 대조·무근거 수치·산술 검사에서 통째로 증발하는데,
+    화면에는 그 사실이 안 나타났다. 사람은 "왜 이 줄만 표시가 없지"를 알 수가 없다
+    (2026-08-26 지적). 목록으로 내려 화면이 짚어 줄 수 있게 한다.
+
+    claim_coverage가 세는 것과 같은 후보·같은 판정을 쓴다 — 숫자와 목록이 어긋나면
+    둘 중 하나는 거짓말이 된다.
+    """
+    return [unit for unit, bare in _candidate_units(content) if not _is_claim(bare)]
+
+
 def claim_coverage(content: str) -> tuple[int, int, list[str]]:
     """(픽업 주장 수, 후보 문장 수, 미포착 중 수치 포함 문장) — 분모를 드러내는 지표.
 

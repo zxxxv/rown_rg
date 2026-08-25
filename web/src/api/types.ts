@@ -353,6 +353,8 @@ export const SectionEvidenceSchema = z.object({
   unused_count: z.number().int().nonnegative().default(0),
   uncited_count: z.number().int().nonnegative().default(0),
   uncited_samples: z.array(z.string()).default([]),
+  /** 주장 단위로 안 잡혀 어떤 검사도 못 본 줄 - 명사 종결 + 수치 없는 개조식 줄이 대부분 */
+  uncovered: z.array(z.string()).default([]),
   traceable: z.boolean().default(true),
 });
 export type SectionEvidence = z.infer<typeof SectionEvidenceSchema>;
