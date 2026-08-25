@@ -105,7 +105,7 @@ export function SavePresetDialog({
           </div>
           {cleaned.length === 0 ? (
             <p className="text-xs text-fg-danger">
-              저장할 절이 없습니다 - 제목 있는 절을 1개 이상 만들어 주세요.
+              저장할 절이 없습니다. 제목 있는 절을 1개 이상 만들어 주세요.
             </p>
           ) : null}
         </div>

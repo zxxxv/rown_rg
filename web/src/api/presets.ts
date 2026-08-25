@@ -9,6 +9,9 @@ export const PresetReadSchema = z.object({
   id: z.string(),
   name: z.string(),
   desc: z.string(),
+  // 이 유형이 무엇에 쓰는 보고서인지 한 줄(백엔드 domain_context 첫 문장). 개인·공유
+  // 프리셋에는 없다. nullish: 이 필드 도입 전 응답과 목킹 호환.
+  summary: z.string().nullish(),
   n_chapters: z.number().int().nonnegative(),
   n_sections: z.number().int().nonnegative(),
   // shared = 남이 공개한 프리셋. 골라 쓸 수는 있고 고치려면 가져와야 한다.

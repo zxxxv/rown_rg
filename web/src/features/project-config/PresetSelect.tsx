@@ -33,8 +33,16 @@ export function PresetSelect({ onPresetChange, disabled }: PresetSelectProps) {
   const toOption = (p: (typeof rows)[number]): PresetOption => ({
     value: p.id,
     label: p.name,
+    // 무엇에 쓰는 유형인지가 먼저다(summary). desc가 개수 문자열("7챕터 34섹션")인
+    // 시스템 프리셋이 있어 그대로 이으면 같은 말을 두 번 한다(2026-08-25 전수 조사).
     // 공유는 누구 것인지 앞에 박는다 - 같은 이름의 프리셋이 사람마다 있을 수 있다.
-    description: `${p.scope === "shared" && p.owner_name ? `${p.owner_name} 공개 · ` : ""}${p.desc} · ${p.n_chapters}챕터 ${p.n_sections}섹션 골격`,
+    description: [
+      p.scope === "shared" && p.owner_name ? `${p.owner_name} 공개` : "",
+      p.summary?.trim() || (/^\s*\d+\s*챕터/.test(p.desc) ? "" : p.desc),
+      `${p.n_chapters}장 ${p.n_sections}절 골격`,
+    ]
+      .filter(Boolean)
+      .join(" · "),
   });
   // 내가 저장한 목차 구성은 시스템 프리셋과 동급 선택지 - 같은 구성으로 여러
   // 정책을 분석하는 재사용 동선(2026-08-12 QA 2번 확장). 자유 주제는 빈 목차 시작.
@@ -42,11 +50,11 @@ export function PresetSelect({ onPresetChange, disabled }: PresetSelectProps) {
   const groups: { title: string | null; options: PresetOption[] }[] = [
     { title: "시스템 프리셋", options: rows.filter((p) => p.scope === "system").map(toOption) },
     {
-      title: "내 프리셋 - 저장한 목차 구성 불러오기",
+      title: "내 프리셋 (저장한 목차 구성 불러오기)",
       options: rows.filter((p) => p.scope === "personal").map(toOption),
     },
     {
-      title: "동료 공개 - 다른 사용자가 공개한 구성",
+      title: "동료 공개 (다른 사용자가 공개한 구성)",
       options: rows.filter((p) => p.scope === "shared").map(toOption),
     },
     { title: null, options: [FREE_TOPIC_OPTION] },

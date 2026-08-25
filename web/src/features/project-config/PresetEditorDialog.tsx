@@ -108,7 +108,7 @@ export function PresetEditorDialog({
     <Dialog open onOpenChange={(o) => (!o ? onClose() : undefined)}>
       <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{existing ? "편집" : "새로 만들기"} - 내 목차 프리셋</DialogTitle>
+          <DialogTitle>내 목차 프리셋 {existing ? "편집" : "새로 만들기"}</DialogTitle>
           <DialogDescription>
             장·절 구성과 담당 에이전트 배정을 저장해 두고, 프로젝트 생성 화면의 보고서 유형에서
             불러옵니다.
@@ -156,8 +156,8 @@ export function PresetEditorDialog({
               defaultExpanded={existing ? "none" : "all"}
               headerInfo={
                 <>
-                  저장되는 것은 <span className="font-medium text-fg">구성</span>입니다 - 장·절
-                  제목, 작성 방향, 핵심 포인트, 담당 에이전트 배정 · 유효한 절{" "}
+                  저장되는 것은 <span className="font-medium text-fg">구성</span>입니다. 장·절 제목,
+                  작성 방향, 핵심 포인트, 담당 에이전트 배정 · 유효한 절{" "}
                   {cleaned.reduce((n, ch) => n + ch.sections.length, 0)}개
                 </>
               }

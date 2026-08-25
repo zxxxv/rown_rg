@@ -5,6 +5,7 @@ export const DEMO_PRESETS: PresetRead[] = [
   {
     id: "예비타당성조사",
     name: "예비타당성조사",
+    summary: "R&D 사업의 예비타당성조사 기획 보고서",
     desc: "7챕터 35섹션",
     n_chapters: 7,
     n_sections: 35,
@@ -14,6 +15,7 @@ export const DEMO_PRESETS: PresetRead[] = [
   {
     id: "정책기획보고서",
     name: "정책기획보고서",
+    summary: "정부 정책 기획·산업 육성정책 연구 보고서",
     desc: "6챕터 17섹션",
     n_chapters: 6,
     n_sections: 17,
@@ -23,6 +25,7 @@ export const DEMO_PRESETS: PresetRead[] = [
   {
     id: "경영컨설팅보고서",
     name: "경영컨설팅보고서",
+    summary: "경영 전략 컨설팅 보고서",
     desc: "6챕터 18섹션",
     n_chapters: 6,
     n_sections: 18,
@@ -32,6 +35,7 @@ export const DEMO_PRESETS: PresetRead[] = [
   {
     id: "산업동향보고서",
     name: "산업동향보고서",
+    summary: "산업 동향 분석 보고서",
     desc: "6챕터 11섹션",
     n_chapters: 6,
     n_sections: 11,
@@ -41,6 +45,7 @@ export const DEMO_PRESETS: PresetRead[] = [
   {
     id: "조사분석보고서",
     name: "조사분석보고서",
+    summary: "산업·기술 조사분석 보고서",
     desc: "6챕터 14섹션",
     n_chapters: 6,
     n_sections: 14,

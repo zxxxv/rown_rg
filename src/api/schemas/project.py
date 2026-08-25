@@ -34,6 +34,10 @@ class PresetRead(BaseModel):
     id: str
     name: str
     desc: str
+    # 이 유형이 **무엇에 쓰는 보고서인지** 한 줄. 시스템 프리셋의 desc는 개수 문자열
+    # ("7챕터 34섹션")이라 고를 근거가 못 된다(2026-08-25 전수 조사) — 목차 골격에
+    # 딸린 domain_context의 첫 문장을 내려보내 카드에 싣는다. 없으면 None.
+    summary: str | None = None
     n_chapters: int
     n_sections: int
     scope: Literal["system", "personal", "shared"] = "system"
