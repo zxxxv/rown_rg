@@ -165,6 +165,9 @@ export const SourcePoolPayloadSchema = z.object({
   sources: z.array(SourcePoolSourceSchema).default([]),
   coverage: SourcePoolCoverageSchema.nullish(),
   rehearsal: SourcePoolRehearsalSchema.nullish(),
+  /** 완료 보고서를 '다시 열기'로 재개해 열린 게이트 - 수집 직후의 첫 검토와 구분한다.
+   *  이때는 웹 검색이 이미 끝나 있고 추가 검색은 선택이다(2026-08-25). */
+  reopened: z.boolean().default(false),
 });
 export type SourcePoolPayload = z.infer<typeof SourcePoolPayloadSchema>;
 

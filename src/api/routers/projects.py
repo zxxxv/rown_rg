@@ -1846,13 +1846,82 @@ async def decide_gate(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+async def _open_reopen_source_gate(session: AsyncSession, project: Project) -> UUID:
+    """재개 시 자료 검토(SOURCE_POOL) 게이트를 pending으로 연다 — 같은 세션에서 커밋.
+
+    payload는 정상 수집 뒤 게이트와 같은 모양(section_plan·sources·coverage)이라
+    화면이 기존 계약을 그대로 탄다. message만 재개용으로 바꾸고 reopened=true를
+    실어, 화면이 "검색이 덜 끝났다"가 아니라 "무엇을 할지 고르라"로 말하게 한다.
+
+    결정(/decide)은 excluded_source_ids만 반영하므로(runner._apply_source_pool_exclusions)
+    아무것도 제외하지 않고 승인하면 기존 채택은 그대로 남는다.
+    """
+    from src.core.section_plan import plan_from_config
+    from src.workflows.pipeline import _source_pool_gate
+
+    # 상태는 게이트가 실제로 읽는 두 가지(section_plan·sources)만 담아 직접 만든다.
+    # runner._state_from_project를 쓰면 project.created_at 같은 서버 생성 칸을 건드려
+    # 암묵적 지연 로드가 일어난다(MissingGreenlet — 2026-08-25 실측).
+    # 채택 자료도 주입된 세션으로 읽는다 — stages._adopted_source_refs는 자체 세션을
+    # 여는 백그라운드용이라 요청 안에서 부르면 커넥션이 어긋난다.
+    rows = (
+        (
+            await session.execute(
+                select(ProjectSource)
+                .where(
+                    ProjectSource.project_id == project.id,
+                    ProjectSource.is_included.is_(True),
+                )
+                .order_by(ProjectSource.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    sources = [
+        SourceRef(
+            id=r.id,
+            source_type=SourceType(r.source_type),
+            title=r.title or r.url or "(제목 없음)",
+            url=r.url,
+            reliability=r.reliability,
+        )
+        for r in rows
+    ]
+    state = ProjectState(
+        user_id=project.owner_id,
+        topic=project.topic,
+        section_plan=plan_from_config(project.config),
+        sources=sources,
+    )
+    review = _source_pool_gate(state)
+    payload = dict(review.payload)
+    payload["message"] = (
+        "보고서를 다시 열었습니다 - 자료를 보강하거나 그대로 진행하세요. "
+        "추가 검색은 선택이며, 파일 업로드만으로 이어서 써도 됩니다."
+    )
+    payload["reopened"] = True
+    session.add(
+        ReviewPoint(
+            id=review.id,
+            project_id=project.id,
+            gate=review.gate.value,
+            payload=payload,
+            status="pending",
+            created_at=review.created_at,
+        )
+    )
+    await session.flush()
+    return review.id
+
+
 @router.post("/{project_id}/reopen", response_model=ProjectRead)
 async def reopen_project(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(require_writer)],
 ) -> Project:
-    """완료된 보고서를 다시 연다 — 현재 완성본을 버전으로 얼리고 자료 단계로 되돌린다.
+    """완료된 보고서를 다시 연다 — 완성본을 버전으로 얼리고 자료 검토 게이트를 다시 연다.
 
     되돌리는 지점이 RESEARCHING인 이유: 다음 실행이 색인 단계부터 밟아
     ① 새로 올린 자료의 잔여 색인(증분 — 이미 청크 있는 자료는 스킵)과
@@ -1860,6 +1929,14 @@ async def reopen_project(
     거친 뒤 작성으로 간다. 작성은 본문 있는 절을 건너뛰므로(증분 재개) 완성된
     장은 다시 쓰지 않는다. 상태 전이만 하고 실행은 하지 않는다 — 사람이 자료를
     올리고 목차를 고친 뒤 직접 시작한다(재개 즉시 실행하면 보강할 틈이 없다).
+
+    **게이트를 함께 여는 이유**(2026-08-25 사용자 보고): status만 RESEARCHING으로
+    두면 그 값이 '수집 실행 중'의 표시 상태이기도 해서, 자료 화면이 status만 보고
+    "AI가 자료를 검색하고 있습니다"를 스피너와 함께 띄운다 — 실제로는 아무것도
+    안 도니 끝나지도 않는다. 게이트를 열면 화면이 검토 모드가 되어 사람이 할 일
+    (업로드·제외·**선택적** 추가 검색·그대로 진행)이 그대로 나온다. 게이트 종류를
+    새로 만들지 않고 SOURCE_POOL을 다시 여는 것은 리허설 재개방과 같은 판단이다
+    (pipeline._rehearsal_gate).
 
     completed_at 해제는 상태 전이 리스너가 처리한다(db/models/project.py).
     """
@@ -1876,8 +1953,14 @@ async def reopen_project(
     await snapshot_report(session, project.id, reason="reopen", created_by=current_user.id)
     project.status = ProjectStage.RESEARCHING.value
     await session.flush()
+    review_id = await _open_reopen_source_gate(session, project)
     await session.refresh(project)
-    logger.info("project.reopened", project_id=str(project.id), user_id=str(current_user.id))
+    logger.info(
+        "project.reopened",
+        project_id=str(project.id),
+        user_id=str(current_user.id),
+        review_point_id=str(review_id),
+    )
     return project
 
 

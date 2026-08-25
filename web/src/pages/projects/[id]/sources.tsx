@@ -67,6 +67,13 @@ export default function SourcesPage() {
     return parseSourcePoolPayload(snapshot.data?.pending_gate?.payload)?.rehearsal ?? null;
   }, [reviewOpen, snapshot.data]);
 
+  // '다시 열기'로 열린 검토 - 웹 검색은 이미 끝났고 추가 검색은 선택이다.
+  // 이 구분이 없으면 화면이 첫 수집 직후와 똑같이 말해 "검색이 더 돌아야 하나"로 읽힌다.
+  const reopened = useMemo(() => {
+    if (!reviewOpen) return false;
+    return parseSourcePoolPayload(snapshot.data?.pending_gate?.payload)?.reopened ?? false;
+  }, [reviewOpen, snapshot.data]);
+
   const handleCollectMore = () => {
     if (collectMore.isPending || collecting) return;
     const baseline = sourcesQuery.data?.items.length ?? 0;
@@ -278,9 +285,11 @@ export default function SourcesPage() {
               ? "아직 자료 조사를 시작하지 않았습니다 - 준비한 파일을 미리 올려두면 수집 결과와 함께 검토·색인됩니다."
               : gathering
                 ? "AI가 자료를 검색하고 있습니다 - 수집이 끝나면 여기서 검토를 시작할 수 있습니다. 그 전에도 파일을 올려둘 수 있습니다."
-                : reviewOpen
-                  ? "AI가 수집한 자료를 검토하고 채택할 자료를 결정해 주세요. 추가 자료는 아래 드롭존에 끌어다 놓으면 됩니다."
-                  : "검토가 완료된 자료 목록입니다 (읽기 전용) - 채택된 자료만 본문 작성의 검색 근거로 사용됐습니다."}
+                : reopened
+                  ? "보고서를 다시 열었습니다 - 웹 검색은 이미 끝났습니다. 파일을 올리거나 자료를 제외한 뒤 검토를 완료하면 색인부터 이어집니다. 인터넷 추가 검색은 선택입니다."
+                  : reviewOpen
+                    ? "AI가 수집한 자료를 검토하고 채택할 자료를 결정해 주세요. 추가 자료는 아래 드롭존에 끌어다 놓으면 됩니다."
+                    : "검토가 완료된 자료 목록입니다 (읽기 전용) - 채택된 자료만 본문 작성의 검색 근거로 사용됐습니다."}
           </p>
         </header>
 
@@ -335,7 +344,7 @@ export default function SourcesPage() {
         {/* 검색 리허설 경고 - 색인 후 절별 실검색에서 근거 공백이 확인돼 게이트가
             다시 열린 경우. 수집 매칭(coverage)보다 강한 실측 신호라 따로 보여준다. */}
         {rehearsal && rehearsal.empty_sections.length > 0 ? (
-          <div className="flex flex-col gap-1.5 rounded-md border border-border-danger bg-bg-danger-subtle px-4 py-3 text-sm">
+          <div className="flex flex-col gap-1.5 rounded-md border border-fg-danger/40 bg-bg-danger px-4 py-3 text-sm">
             <p className="flex items-center gap-2 text-fg">
               <AlertTriangle className="h-4 w-4 shrink-0 text-fg-danger" aria-hidden />
               검색 리허설에서 근거가 부족한 절이 확인됐습니다 - 자료를 보강하거나 그대로 진행하세요.

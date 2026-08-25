@@ -104,6 +104,36 @@ class TestReopen:
         assert body[0]["version_no"] == 1
         assert body[0]["reason"] == "reopen"
 
+    async def test_reopen_opens_source_review_gate(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        """재개는 자료 검토 게이트를 연다 — status만 되돌리면 화면이 거짓말을 한다.
+
+        RESEARCHING은 '수집 실행 중'의 표시 상태이기도 해서, 게이트가 없으면 자료
+        화면이 status만 보고 "AI가 자료를 검색하고 있습니다"를 띄운다(실제로는 아무
+        것도 안 돌아 끝나지도 않는다 — 2026-08-25 사용자 보고).
+        """
+        pid = await _insert_project(test_session, worker_user.id, "completed")
+        test_session.add(_row(pid, uuid.uuid4(), 1, 1, "가", "완성 본문"))
+        await test_session.commit()
+
+        resp = await test_client.post(f"/api/v1/projects/{pid}/reopen", headers=_auth(worker_token))
+        assert resp.status_code == 200, resp.text
+
+        progress = await test_client.get(
+            f"/api/v1/projects/{pid}/progress", headers=_auth(worker_token)
+        )
+        gate = progress.json()["pending_gate"]
+        assert gate is not None, "재개 후 자료 검토 게이트가 열려 있어야 한다"
+        assert gate["gate"] == "source_pool"
+        # 화면이 '첫 수집 직후'와 구분해 말할 수 있도록 표식을 싣는다.
+        assert gate["payload"]["reopened"] is True
+        assert "다시 열었습니다" in gate["payload"]["message"]
+
     async def test_reopen_rejects_non_completed(
         self,
         test_client: AsyncClient,
