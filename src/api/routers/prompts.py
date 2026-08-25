@@ -43,7 +43,10 @@ router = APIRouter(prefix="/prompts", tags=["prompts"])
 
 
 def _validate_base_ref(kind: str, base_ref: str | None) -> None:
-    """base_ref가 실제 시스템 항목을 가리키는지 확인(댕글링 오버라이드 방지)."""
+    """base_ref가 실제 시스템 항목을 가리키는지 확인(가리키는 곳 없는 참조 방지).
+
+    에이전트는 '복사해 온 원본'(사본이 값을 물려받는 출신), 규칙은 '대체할 슬롯'이다.
+    """
     if base_ref is None:
         return
     if kind == "agent":

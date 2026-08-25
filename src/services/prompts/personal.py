@@ -233,11 +233,54 @@ def _unique_name(name: str, owner_name: str, prompt_id: UUID, taken: set[str]) -
     return f"{name} ({owner_name}·{str(prompt_id)[:4]})"
 
 
+def personal_spec(p: UserPrompt, base: AnalystSpec | None, taken: set[str]) -> AnalystSpec:
+    """내 개인 에이전트 → 카탈로그 항목(언제나 사본, id=`u-<uuid>`).
+
+    base는 base_ref가 가리키는 시스템 원본(출신). 사본이 값을 안 적은 칸만 원본에서
+    물려받는다 — 특히 **분량 목표와 검색 질의**는 폼에 입력 칸이 없어 비워지는데,
+    비운 채로 두면 사본이 원본보다 짧고 검색도 덜 하는 열화판이 된다.
+
+    이름은 겹칠 때만 가린다(_unique_name) — 목차·프리셋이 에이전트를 이름으로
+    참조하므로 같은 이름 둘이면 배정이 어느 쪽인지 갈린다.
+    """
+    queries = [q for q in (p.spec or {}).get("queries", []) if isinstance(q, str)]
+    return AnalystSpec(
+        id=f"u-{p.id}",
+        name=_unique_name(p.name, "내 것", p.id, taken),
+        cat=p.cat or (base.cat if base else "개인"),
+        desc=p.description or (base.desc if base else ""),
+        queries=queries or (list(base.queries) if base else []),
+        prompt=p.content,
+        # 지정이 없으면 원본 승계, 원본도 없으면 '보통' — 목표 분량이 통째로 비면
+        # 절 분량 목표가 사라져(=짧은 절) 개인 에이전트를 배정할수록 손해였다.
+        volume_target=volume_from_spec(p.spec)
+        or (base.volume_target if base else VOLUME_PRESETS["normal"]),
+    )
+
+
+def _shared_name(name: str, owner_name: str, prompt_id: UUID, taken: set[str]) -> str:
+    """공유 항목의 표시 이름 — **언제나** 소유자를 붙인다.
+
+    겹칠 때만 붙이면 '민짜 이름'을 누가 갖는지가 목록 순서(공개 층은 updated_at 내림차순)로
+    정해진다. 같은 이름으로 둘이 공개하면 최근에 고친 사람이 민짜를 가져가고, 그 사람이
+    자기 것을 한 번 더 저장하는 것만으로 **이미 저장된 목차의 참조가 다른 사람의
+    에이전트로 옮겨간다**(2026-08-25 실측: A→B로 뒤바뀜). 목차는 에이전트를 이름으로
+    참조하므로 이건 조용한 오배정이다.
+
+    항상 붙이면 이름이 소유자에 묶여 순서와 무관해지고, 고른 사람도 누구 것을 골랐는지
+    이름만 보고 안다. 동명이인까지 겹치면 id 앞자리로 가른다.
+    """
+    with_owner = f"{name} ({owner_name})"
+    if with_owner not in taken:
+        return with_owner
+    return f"{name} ({owner_name}·{str(prompt_id)[:4]})"
+
+
 def shared_spec(p: UserPrompt, owner_name: str, taken: set[str]) -> AnalystSpec:
     """공개된 남의 에이전트 → 카탈로그 항목. 개인 에이전트와 같은 id 규약(u-<uuid>)."""
     return AnalystSpec(
         id=f"u-{p.id}",
-        name=_unique_name(p.name, owner_name, p.id, taken),
+        name=_shared_name(p.name, owner_name, p.id, taken),
         cat=p.cat or "공유",
         desc=p.description or "",
         queries=[q for q in (p.spec or {}).get("queries", []) if isinstance(q, str)],
@@ -251,12 +294,19 @@ def shared_spec(p: UserPrompt, owner_name: str, taken: set[str]) -> AnalystSpec:
 async def resolve_analysts(session: AsyncSession, owner_id: UUID) -> list[AnalystSpec]:
     """시스템 → 내 개인 → 남의 공개 순으로 병합한 분석 에이전트 목록.
 
-    base_ref가 시스템 에이전트(id/name)를 가리키는 개인 에이전트는 그 프롬프트를 덮어쓰고,
-    base_ref 없는 개인 에이전트는 뒤에 새로 붙는다(id=`u-<uuid>`).
+    **개인 에이전트는 언제나 사본이다(2026-08-25 사용자 결정).** base_ref가 시스템
+    에이전트를 가리켜도 그 항목을 덮어쓰지 않는다 — 원본은 '시스템'에 그대로 남고,
+    내 것은 `u-<uuid>`로 '내 에이전트'에 따로 뜬다.
 
-    남이 공개한 에이전트(is_public)는 **덮어쓰지 않고 뒤에 붙기만 한다** — 남의 오버라이드가
-    내 시스템 에이전트를 조용히 바꾸면 같은 이름으로 다른 글이 나온다. base_ref가 달린
-    공개 에이전트도 그 변형본 자체로 한 항목이 된다.
+    왜 바꿨나: 덮어쓰기는 두 가지를 조용히 먹었다. ① 원본이 목록에서 사라져 되돌릴
+    수 없었고 ② 표시 이름이 **시스템 것으로 고정**돼, 내가 "STEEP분석 (내 버전)"으로
+    저장해도 목록엔 "STEEP분석"으로만 보였다(실사용 지적: 내 에이전트 칸에 안 뜬다).
+
+    base_ref는 이제 **출신**이다 — 사본이 안 적은 값(분량·검색 질의·분류·설명)을 원본에서
+    물려받는 데만 쓴다. 그래야 사본이 원본과 같은 성능으로 시작한다(특허분석의 2만~6만자
+    목표가 사본에서 '보통'으로 깎이던 문제).
+
+    남이 공개한 에이전트(is_public)도 같은 원칙으로 뒤에 붙기만 한다.
     """
     system = list_analysts()
     personals = (
@@ -270,45 +320,20 @@ async def resolve_analysts(session: AsyncSession, owner_id: UUID) -> list[Analys
         .scalars()
         .all()
     )
-    overrides = {p.base_ref: p for p in personals if p.base_ref}
-
-    merged: list[AnalystSpec] = []
+    # 시스템 원본은 그대로 둔다 — 개인 사본이 밀어내지 않는다.
+    by_ref: dict[str, AnalystSpec] = {}
     for spec in system:
-        ov = overrides.get(spec.id) or overrides.get(spec.name)
-        if ov is not None:
-            merged.append(
-                spec.model_copy(
-                    update={
-                        "prompt": ov.content,
-                        "desc": ov.description or spec.desc,
-                        "cat": ov.cat or spec.cat,
-                        # 분량은 고쳐 적었으면 그 값, 아니면 원본 승계 — 폼의
-                        # '원본 유지'가 spec.volume을 비워 보내 이 경로를 탄다.
-                        "volume_target": volume_from_spec(ov.spec) or spec.volume_target,
-                    }
-                )
-            )
-        else:
-            merged.append(spec)
+        by_ref[spec.id] = spec
+        by_ref[spec.name] = spec
+    merged: list[AnalystSpec] = list(system)
 
+    # 내 층 — 전부 사본. 이름이 시스템과 겹치면 가려 준다(목차는 이름으로 참조한다).
+    taken = {spec.name for spec in merged}
     for p in personals:
-        if not p.base_ref:
-            merged.append(
-                AnalystSpec(
-                    id=f"u-{p.id}",
-                    name=p.name,
-                    cat=p.cat or "개인",
-                    desc=p.description or "",
-                    queries=[q for q in (p.spec or {}).get("queries", []) if isinstance(q, str)],
-                    prompt=p.content,
-                    # 목표 분량이 없으면 절 분량 목표가 통째로 사라져(=짧은 절) 개인
-                    # 에이전트를 배정할수록 손해였다. 지정 없으면 '보통'을 기본으로 준다.
-                    volume_target=volume_from_spec(p.spec) or VOLUME_PRESETS["normal"],
-                )
-            )
+        merged.append(personal_spec(p, by_ref.get(p.base_ref or ""), taken))
+        taken.add(merged[-1].name)
 
     # 공개 층 — 내 것/시스템 이름을 밀어내지 않도록 마지막에, 이름 충돌만 가려서 붙인다.
-    taken = {spec.name for spec in merged}
     for p, owner_name in await list_public_agents(session, owner_id):
         spec = shared_spec(p, owner_name, taken)
         taken.add(spec.name)
@@ -319,10 +344,10 @@ async def resolve_analysts(session: AsyncSession, owner_id: UUID) -> list[Analys
 async def import_public_agent(session: AsyncSession, owner_id: UUID, source_id: UUID) -> UserPrompt:
     """공개된 남의 에이전트를 내 것으로 복제한다.
 
-    복사본은 **base_ref=None**으로 만든다 — 남이 시스템 에이전트를 덮어쓴 변형본이라도
-    내 시스템 에이전트까지 조용히 갈아끼우면 안 된다(3층 병합에서 공개분을 덮어쓰기로
-    쓰지 않는 것과 같은 원칙). 공개 여부도 승계하지 않는다 — 남의 것을 가져왔다고
-    내 이름으로 자동 재공개되면 곤란하다.
+    복사본은 **base_ref=None**으로 만든다 — 남이 무엇을 보고 만들었든 그 출신은 내
+    사본의 값을 물려받는 근거가 못 된다(내가 받은 것은 남이 쓴 프롬프트 그 자체다).
+    공개 여부도 승계하지 않는다 — 남의 것을 가져왔다고 내 이름으로 자동 재공개되면
+    곤란하다.
 
     이름이 겹치면 "(사본)"을 붙인다(owner_id+kind+name 유니크).
     """

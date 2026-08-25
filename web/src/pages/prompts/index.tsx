@@ -277,7 +277,7 @@ function KindSection({ kind }: { kind: PromptKind }) {
                   <span className="truncate text-sm font-medium text-fg">{p.name}</span>
                   {p.base_ref ? (
                     <Badge variant="secondary" className="shrink-0 text-[10px]">
-                      {p.base_ref} 덮어씀
+                      {p.base_ref}에서 복사
                     </Badge>
                   ) : (
                     <Badge variant="outline" className="shrink-0 text-[10px]">

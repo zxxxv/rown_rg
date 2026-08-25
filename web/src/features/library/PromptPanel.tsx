@@ -57,7 +57,7 @@ function PromptMeta({ meta }: { meta: LibraryFileMeta }) {
 }
 
 /** '내 것으로 가져오기' - 복제해야 고쳐 쓸 수 있다. 복사본은 비공개로 만들어지고,
- * 에이전트는 base_ref 없이 들어온다(남의 오버라이드가 내 시스템 항목을 갈아끼우면 안 된다). */
+ * 에이전트는 base_ref 없이 들어온다(내가 받은 것은 남이 쓴 프롬프트 자체다). */
 function ImportButton({ prompt }: { prompt: PromptRef }) {
   const importPrompt = useImportSharedPrompt();
   const importPreset = useImportSharedPreset();
@@ -192,7 +192,7 @@ function PersonalPromptView({ prompt }: { prompt: PromptRef }) {
         <Wand2 className="h-3.5 w-3.5" aria-hidden />
         {readOnly ? "" : "내 "}
         {isPreset ? KIND_LABEL.preset : loaded ? KIND_LABEL[loaded.kind] : "프롬프트"}
-        {loaded?.base_ref ? ` · 시스템 "${loaded.base_ref}" 덮어쓰기` : loaded ? " · 신규" : ""}
+        {loaded?.base_ref ? ` · 시스템 "${loaded.base_ref}"에서 복사` : loaded ? " · 신규" : ""}
         {readOnly ? " - 열람 전용(소유자만 편집)" : " - 편집·삭제는 프롬프트 관리 페이지에서."}
       </div>
       {isPreset ? (

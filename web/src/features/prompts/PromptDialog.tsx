@@ -290,10 +290,10 @@ export function PromptDialog({
         <div className="flex flex-col gap-3">
           {!existing ? (
             <div className="flex flex-col gap-1.5">
-              <Label>{kind === "agent" ? "시스템 에이전트 덮어쓰기" : "대체할 자리"}</Label>
+              <Label>{kind === "agent" ? "복사해서 시작하기" : "대체할 자리"}</Label>
               <p className="text-xs text-fg-tertiary">
                 {kind === "agent"
-                  ? "고르면 그 에이전트를 내 버전으로 대체하고 원문이 아래에 채워집니다. 비워두면 새 에이전트로 추가됩니다."
+                  ? "고르면 그 에이전트의 내용을 그대로 가져와 아래에 채웁니다 - 원본은 '시스템'에 그대로 남고, 내 것은 '내 에이전트'에 따로 생깁니다(분량 목표·검색 질의는 원본을 물려받습니다)."
                   : "고른 자리의 회사 표준 규칙을 대체하고 원문이 아래에 채워집니다. 비워두면 기존 규칙 뒤에 추가됩니다."}
               </p>
               <div className="flex flex-wrap gap-1.5">
@@ -310,7 +310,7 @@ export function PromptDialog({
                       : "border-border bg-bg text-fg-secondary hover:border-fg-tertiary",
                   )}
                 >
-                  {kind === "agent" ? "새로 만들기" : "추가 규칙"}
+                  {kind === "agent" ? "빈 것부터 만들기" : "추가 규칙"}
                 </button>
                 {baseOptions.map((opt) => (
                   <button

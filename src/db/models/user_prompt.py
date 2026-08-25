@@ -50,7 +50,9 @@ class UserPrompt(Base):
     kind: Mapped[str] = mapped_column(String(10), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    # 덮어쓸 시스템 항목 참조(에이전트 id/name 또는 조각 이름). None이면 새 개인 항목.
+    # 출신 참조 - kind='agent'는 **복사해 온 시스템 에이전트**(id/name)를 가리킨다(덮어쓰지
+    # 않는다, 2026-08-25). 사본이 안 적은 값(분량·질의·분류)을 원본에서 물려받는 데 쓴다.
+    # kind='rule'은 여전히 **대체할 슬롯** 이름이다(resolve_rules).
     base_ref: Mapped[str | None] = mapped_column(String(100))
     cat: Mapped[str | None] = mapped_column(String(100))
     # 구조화 설정(opaque) — 에이전트: {"volume": "short|normal|long", "queries": [...]}.
