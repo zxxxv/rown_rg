@@ -22,6 +22,11 @@ class RemoteCallStats:
 
     def __init__(self) -> None:
         self.remote_ok_total = 0
+        # 전송층 순단을 즉시 1회 재시도한 횟수. 재시도로 살아난 순단은 폴백
+        # 카운터에 안 잡히므로 여기서만 보인다 — 이 값이 뛰면 터널·GPU 박스
+        # 네트워크가 흔들린다는 조기 신호다(2026-08-24 실사고: 순단 1건이
+        # 쿨다운을 열어 원격 시도 없는 폴백 124건으로 증폭).
+        self.transport_retry_total = 0
         # 폴백 횟수를 사유별로 나눈다. cooldown이 많으면 "원격이 오래 죽어 있었다",
         # error가 많으면 "간헐적으로 계속 실패한다" — 대응이 다르다.
         self.fallback_total: dict[str, int] = {"cooldown": 0, "error": 0}
@@ -34,6 +39,9 @@ class RemoteCallStats:
     def record_ok(self) -> None:
         self.remote_ok_total += 1
 
+    def record_transport_retry(self) -> None:
+        self.transport_retry_total += 1
+
     def record_fallback(self, reason: str, *, items: int, error: str | None = None) -> None:
         self.fallback_total[reason] = self.fallback_total.get(reason, 0) + 1
         self.fallback_items_total += items
@@ -45,6 +53,7 @@ class RemoteCallStats:
         cooldown_left = max(0.0, disabled_until_monotonic - time.monotonic())
         return {
             "remote_ok_total": self.remote_ok_total,
+            "transport_retry_total": self.transport_retry_total,
             "fallback_total": dict(self.fallback_total),
             "fallback_items_total": self.fallback_items_total,
             "last_fallback_at": self.last_fallback_at,

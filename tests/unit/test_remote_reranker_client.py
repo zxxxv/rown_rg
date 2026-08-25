@@ -125,7 +125,8 @@ class TestCooldown:
         asyncio.run(client.score_pairs("q", ["b"]))
         asyncio.run(client.score_pairs("q", ["c"]))
         # 20절 × 타임아웃을 죽은 서비스에 버리지 않는다 — 첫 실패 뒤로는 바로 폴백.
-        assert attempts == 1
+        # 첫 호출은 순단 재시도 벨트로 2회 시도한다(첫 시도 + 즉시 재시도 1회).
+        assert attempts == 2
         assert len(local.calls) == 3
 
     def test_cooldown_expires_and_remote_is_retried(self):
@@ -134,7 +135,9 @@ class TestCooldown:
         def handler(request: httpx.Request) -> httpx.Response:
             nonlocal attempts
             attempts += 1
-            if attempts == 1:
+            # 순단 재시도 벨트가 첫 호출에서 2회 시도하므로, 첫 호출이 폴백까지
+            # 가려면 두 번 연속 실패해야 한다.
+            if attempts <= 2:
                 raise httpx.ConnectError("down")
             return httpx.Response(200, json={"scores": [0.7]})
 
@@ -142,7 +145,7 @@ class TestCooldown:
         client = _client(handler, local=local, cooldown_s=0.0)
         assert asyncio.run(client.score_pairs("q", ["a"])) == [0.42]
         assert asyncio.run(client.score_pairs("q", ["b"])) == [0.7]
-        assert attempts == 2
+        assert attempts == 3
 
 
 class TestPassthroughFallback:
@@ -183,3 +186,78 @@ class TestPassthroughFallback:
             local_factory=boom,
         )
         assert len(asyncio.run(client.score_pairs("q", ["a", "b"]))) == 2
+
+
+class TestTransportRetry:
+    """전송층 순단 1회 재시도 벨트 — 순단 1건이 쿨다운 창 전체의 CPU 재채점으로
+    증폭되지 않아야 한다(2026-08-24 임베딩 경로 실사고와 동일 구조)."""
+
+    def test_protocol_error_then_success_recovers_without_fallback(self):
+        local = _FakeLocal()
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+            return httpx.Response(200, json={"scores": [0.9, 0.1]})
+
+        client = _client(handler, local=local)
+        result = asyncio.run(client.score_pairs("q", ["a", "b"]))
+        assert calls["n"] == 2
+        assert result == [0.9, 0.1]
+        assert local.calls == [], "재시도로 살아났는데 폴백을 불렀다"
+        snap = client.stats_snapshot()
+        assert snap["transport_retry_total"] == 1
+        assert snap["remote_ok_total"] == 1
+        assert snap["in_cooldown"] is False, "재시도 성공인데 쿨다운이 열렸다"
+
+    def test_two_transport_errors_fall_back_with_cooldown(self):
+        """재시도는 정확히 1회 — 그 다음은 기존 쿨다운+폴백 경로 그대로."""
+        local = _FakeLocal()
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+        client = _client(handler, local=local)
+        result = asyncio.run(client.score_pairs("q", ["a"]))
+        assert calls["n"] == 2, "재시도가 1회를 넘었거나 아예 없었다"
+        assert result == [0.42]
+        assert local.calls == [("q", 1)]
+        snap = client.stats_snapshot()
+        assert snap["transport_retry_total"] == 1
+        assert snap["in_cooldown"] is True
+
+    def test_http_status_error_is_not_retried(self):
+        """상태 오류는 순단이 아니다 - 같은 요청을 다시 보내도 같은 답이 온다."""
+        local = _FakeLocal()
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(500, text="boom")
+
+        client = _client(handler, local=local)
+        asyncio.run(client.score_pairs("q", ["a"]))
+        assert calls["n"] == 1
+        assert local.calls == [("q", 1)]
+        assert client.stats_snapshot()["transport_retry_total"] == 0
+
+    def test_timeout_is_not_retried(self):
+        """타임아웃은 이미 수십 초를 쓴 실패다 - 재시도하면 지연이 2배가 된다."""
+        local = _FakeLocal()
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            raise httpx.ReadTimeout("read timed out")
+
+        client = _client(handler, local=local)
+        asyncio.run(client.score_pairs("q", ["a"]))
+        assert calls["n"] == 1
+        assert local.calls == [("q", 1)]
+        snap = client.stats_snapshot()
+        assert snap["transport_retry_total"] == 0
+        assert snap["in_cooldown"] is True

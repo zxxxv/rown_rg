@@ -23,6 +23,17 @@ class TestCounters:
         assert s.fallback_items_total == 96 + 256 + 256
         assert s.last_fallback_at is not None
 
+    def test_transport_retry_accumulates_and_shows_in_snapshot(self):
+        # 재시도로 살아난 순단은 폴백 카운터에 안 잡힌다 - 여기서 새면 터널이
+        # 흔들린다는 조기 신호(2026-08-24 실사고의 전조)를 놓친다.
+        s = RemoteCallStats()
+        s.record_transport_retry()
+        s.record_transport_retry()
+        assert s.transport_retry_total == 2
+        snap = s.snapshot(disabled_until_monotonic=0.0)
+        assert snap["transport_retry_total"] == 2
+        assert snap["fallback_total"] == {"cooldown": 0, "error": 0}
+
     def test_snapshot_reports_cooldown_remaining(self):
         s = RemoteCallStats()
         snap = s.snapshot(disabled_until_monotonic=time.monotonic() + 30.0)

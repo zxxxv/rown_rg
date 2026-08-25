@@ -33,7 +33,9 @@ class _FakeLocal:
         return [EmbeddingResult(embedding=_vec(0.5), text=t, cached=False) for t in texts]
 
 
-def _client(handler, *, fallback: str = "local", local=None, cooldown_s: float = 60.0, chunk: int = 256):
+def _client(
+    handler, *, fallback: str = "local", local=None, cooldown_s: float = 60.0, chunk: int = 256
+):
     transport = httpx.MockTransport(handler)
     return RemoteEmbeddingClient(
         base_url="http://gpu.local:8009",
@@ -134,7 +136,7 @@ class TestValidation:
         def handler(request: httpx.Request) -> httpx.Response:
             # 표준 json 모듈은 NaN을 그대로 내보낸다(엄격한 JSON은 아니지만 파서는 받는다).
             # 실제 서비스가 그런 응답을 낼 수 있으므로 본문을 직접 만들어 재현한다.
-            body = "{\"vectors\": [[NaN" + ", 0.1" * (DIMENSION - 1) + "]]}"
+            body = '{"vectors": [[NaN' + ", 0.1" * (DIMENSION - 1) + "]]}"
             return httpx.Response(200, content=body, headers={"content-type": "application/json"})
 
         out = asyncio.run(_client(handler, local=local).embed_batch(["a"]))
@@ -217,3 +219,84 @@ class TestCooldown:
         asyncio.run(client.embed_batch(["a"]))
         asyncio.run(client.embed_batch(["b"]))
         assert attempts == [1, 1], "쿨다운이 끝났는데 원격을 건너뛰었다"
+
+
+class TestTransportRetry:
+    """전송층 순단 1회 재시도 벨트 — 순단 1건이 쿨다운 창의 폴백 수백 건으로
+    증폭되지 않아야 한다.
+
+    2026-08-24 실사고: RemoteProtocolError 1건(7.4ms 즉시 실패)이 60초 쿨다운을
+    열어 124건이 원격 시도 없이 CPU 폴백됐고, dtype 다른 벡터가 색인에 박혔다
+    (RAPTOR 노드 125개 실피해). 재시도 한 번이면 증폭 자체가 없었다.
+    """
+
+    def test_protocol_error_then_success_recovers_without_fallback(self):
+        local = _FakeLocal()
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+            return httpx.Response(200, json={"vectors": [_vec(0.3)], "dimension": DIMENSION})
+
+        client = _client(handler, local=local)
+        out = asyncio.run(client.embed_batch(["a"]))
+        assert calls["n"] == 2
+        assert out[0].embedding[0] == pytest.approx(0.3)
+        assert local.calls == [], "재시도로 살아났는데 폴백을 불렀다"
+        snap = client.stats_snapshot()
+        assert snap["transport_retry_total"] == 1
+        assert snap["remote_ok_total"] == 1
+        assert snap["fallback_total"] == {"cooldown": 0, "error": 0}
+        assert snap["in_cooldown"] is False, "재시도 성공인데 쿨다운이 열렸다"
+
+    def test_two_transport_errors_fall_back_with_cooldown(self):
+        """재시도는 정확히 1회 — 그 다음은 기존 쿨다운+폴백 경로 그대로."""
+        local = _FakeLocal()
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+        client = _client(handler, local=local)
+        out = asyncio.run(client.embed_batch(["a"]))
+        assert calls["n"] == 2, "재시도가 1회를 넘었거나 아예 없었다"
+        assert local.calls == [1]
+        assert out[0].embedding[0] == pytest.approx(0.5)
+        snap = client.stats_snapshot()
+        assert snap["transport_retry_total"] == 1
+        assert snap["in_cooldown"] is True
+
+    def test_http_status_error_is_not_retried(self):
+        """상태 오류는 순단이 아니다 - 같은 요청을 다시 보내도 같은 답이 온다."""
+        local = _FakeLocal()
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(500)
+
+        client = _client(handler, local=local)
+        asyncio.run(client.embed_batch(["a"]))
+        assert calls["n"] == 1
+        assert local.calls == [1]
+        assert client.stats_snapshot()["transport_retry_total"] == 0
+
+    def test_timeout_is_not_retried(self):
+        """타임아웃은 이미 수십 초를 쓴 실패다 - 재시도하면 지연이 2배가 된다."""
+        local = _FakeLocal()
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            raise httpx.ReadTimeout("read timed out")
+
+        client = _client(handler, local=local)
+        asyncio.run(client.embed_batch(["a"]))
+        assert calls["n"] == 1
+        assert local.calls == [1]
+        snap = client.stats_snapshot()
+        assert snap["transport_retry_total"] == 0
+        assert snap["in_cooldown"] is True

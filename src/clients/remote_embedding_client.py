@@ -38,6 +38,18 @@ logger = structlog.get_logger(__name__)
 FALLBACK_LOCAL = "local"
 FALLBACK_ERROR = "error"
 
+# 전송층 순단으로 즉시 실패하는 4종만 1회 재시도한다 — 3원격 동일 벨트.
+# 타임아웃 계열(httpx.TimeoutException·asyncio.TimeoutError)은 일부러 뺐다:
+# 이미 상한 수십 초를 다 쓴 실패라 재시도가 지연을 2배로 만든다. httpx 계층상
+# TimeoutException은 이 4종의 조상도 자손도 아니라 튜플 매칭만으로 배제된다.
+# HTTPStatusError(429 포함)도 재시도하지 않는다 — 기존 분기가 처리한다.
+_TRANSPORT_RETRYABLE = (
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+)
+
 
 class RemoteEmbeddingClient(EmbeddingClient):
     """HTTP로 GPU 추론 서비스에 임베딩을 위임하고, 실패하면 폴백한다.
@@ -187,21 +199,44 @@ class RemoteEmbeddingClient(EmbeddingClient):
         out: list[list[float]] = []
         for start in range(0, len(texts), self._chunk):
             batch = texts[start : start + self._chunk]
-            # 벨트+서스펜더: httpx 타임아웃이 있어도, 터널이 연결을 끊은 소켓의
-            # 대기가 깨어나지 못한 채 코루틴이 영구 정지한 실사례가 있다
-            # (2026-08-21 v6 색인 25분 정지, Windows Proactor). 코루틴 차원의
-            # 상한을 한 겹 더 - 초과는 실패로 올라가 쿨다운+폴백을 탄다.
-            response = await asyncio.wait_for(
-                client.post(
-                    f"{self._base_url}/v1/embed",
-                    json={"texts": batch},
-                    headers=headers,
-                ),
-                timeout=self._timeout_s + 30,
-            )
+            try:
+                response = await self._post_batch(client, batch, headers)
+            except _TRANSPORT_RETRYABLE as exc:
+                # 전송층 순단 1회 재시도 벨트(3원격 동일): 순단 1건이 쿨다운을
+                # 열면 그 60초 창의 호출 전부가 원격 시도 없이 CPU 폴백된다.
+                # 임베딩은 그 폴백이 dtype 다른 벡터를 색인에 박아 검색 품질을
+                # 영구 오염시키는 자리라 증폭이 가장 치명적이다(2026-08-24
+                # 실사고: RemoteProtocolError 1건, 7.4ms 즉시 실패 → 124건
+                # 폴백, RAPTOR 노드 125개 실피해). 순단은 즉시 실패라 재시도가
+                # 싸고, 재시도도 실패하면 그대로 올려 기존 쿨다운+폴백을 탄다.
+                self.stats.record_transport_retry()
+                logger.warning(
+                    "embedding.remote.transport_retry",
+                    error=type(exc).__name__,
+                    detail=str(exc)[:200],
+                    n_texts=len(batch),
+                )
+                response = await self._post_batch(client, batch, headers)
             response.raise_for_status()
             out.extend(self._validate(response.json(), len(batch)))
         return out
+
+    async def _post_batch(
+        self, client: httpx.AsyncClient, batch: list[str], headers: dict[str, str]
+    ) -> httpx.Response:
+        # 벨트+서스펜더: httpx 타임아웃이 있어도, 터널이 연결을 끊은 소켓의
+        # 대기가 깨어나지 못한 채 코루틴이 영구 정지한 실사례가 있다
+        # (2026-08-21 v6 색인 25분 정지, Windows Proactor). 코루틴 차원의
+        # 상한을 한 겹 더 - 초과는 실패로 올라가 쿨다운+폴백을 탄다.
+        # 이 상한은 순단 재시도와 무관하게 시도마다 각각 적용된다.
+        return await asyncio.wait_for(
+            client.post(
+                f"{self._base_url}/v1/embed",
+                json={"texts": batch},
+                headers=headers,
+            ),
+            timeout=self._timeout_s + 30,
+        )
 
     @staticmethod
     def _validate(payload: Any, expected: int) -> list[list[float]]:

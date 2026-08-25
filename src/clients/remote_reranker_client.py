@@ -40,6 +40,18 @@ _PASSTHROUGH_STEP = 0.001
 # 간격을 유지하면 1000개째에서 0이 되므로 바닥을 둔다(하한 통과 보장).
 _PASSTHROUGH_FLOOR = 0.2
 
+# 전송층 순단으로 즉시 실패하는 4종만 1회 재시도한다 — 3원격 동일 벨트.
+# 타임아웃 계열(httpx.TimeoutException·asyncio.TimeoutError)은 일부러 뺐다:
+# 이미 상한 수십 초를 다 쓴 실패라 재시도가 지연을 2배로 만든다. httpx 계층상
+# TimeoutException은 이 4종의 조상도 자손도 아니라 튜플 매칭만으로 배제된다.
+# HTTPStatusError(429 포함)도 재시도하지 않는다 — 기존 분기가 처리한다.
+_TRANSPORT_RETRYABLE = (
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+)
+
 
 class RemoteRerankerClient(RerankerClient):
     """HTTP로 GPU 추론 서비스에 재채점을 위임하고, 실패하면 폴백한다."""
@@ -123,9 +135,33 @@ class RemoteRerankerClient(RerankerClient):
     async def _request_scores(self, query: str, passages: list[str]) -> list[float]:
         client = self._ensure_client()
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
+        try:
+            response = await self._post_once(client, query, passages, headers)
+        except _TRANSPORT_RETRYABLE as exc:
+            # 전송층 순단 1회 재시도 벨트(3원격 동일): 순단 1건이 쿨다운을 열면
+            # 그 60초 창의 절 전부가 원격 시도 없이 CPU 재채점으로 내려간다
+            # (2026-08-24 임베딩 경로 실사고: RemoteProtocolError 1건, 7.4ms
+            # 즉시 실패 → 폴백 124건 증폭). 순단은 즉시 실패라 재시도가 싸고,
+            # 재시도도 실패하면 그대로 올려 기존 쿨다운+폴백을 탄다.
+            self.stats.record_transport_retry()
+            logger.warning(
+                "reranker.remote.transport_retry",
+                error=type(exc).__name__,
+                detail=str(exc)[:200],
+                n_passages=len(passages),
+            )
+            response = await self._post_once(client, query, passages, headers)
+        response.raise_for_status()
+        payload = response.json()
+        return self._validate(payload, len(passages))
+
+    async def _post_once(
+        self, client: httpx.AsyncClient, query: str, passages: list[str], headers: dict[str, str]
+    ) -> httpx.Response:
         # 코루틴 차원 상한 - 터널이 끊은 소켓의 대기가 깨어나지 못한 채 영구
         # 정지한 실사례(2026-08-21 v6, 임베딩 경로) 대응. 임베딩·파서와 동일 벨트.
-        response = await asyncio.wait_for(
+        # 이 상한은 순단 재시도와 무관하게 시도마다 각각 적용된다.
+        return await asyncio.wait_for(
             client.post(
                 f"{self._base_url}/v1/rerank",
                 json={"query": query, "passages": passages},
@@ -133,9 +169,6 @@ class RemoteRerankerClient(RerankerClient):
             ),
             timeout=self._timeout_s + 30,
         )
-        response.raise_for_status()
-        payload = response.json()
-        return self._validate(payload, len(passages))
 
     @staticmethod
     def _validate(payload: Any, expected: int) -> list[float]:

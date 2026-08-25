@@ -28,6 +28,18 @@ from src.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
+# 전송층 순단으로 즉시 실패하는 4종만 1회 재시도한다 — 3원격 동일 벨트.
+# 타임아웃 계열(httpx.TimeoutException·asyncio.TimeoutError)은 일부러 뺐다:
+# 이미 상한 수십 초를 다 쓴 실패라 재시도가 지연을 2배로 만든다. httpx 계층상
+# TimeoutException은 이 4종의 조상도 자손도 아니라 튜플 매칭만으로 배제된다.
+# HTTPStatusError는 재시도하지 않는다 — 429는 _request의 기존 대기 루프가 처리한다.
+_TRANSPORT_RETRYABLE = (
+    httpx.RemoteProtocolError,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+)
+
 
 class RemoteDoclingConverter:
     """HTTP로 GPU 추론 서비스의 /v1/parse를 부른다. 폴백 없음 — 실패는 올린다."""
@@ -117,21 +129,23 @@ class RemoteDoclingConverter:
 
         attempt = 0
         while True:
-            with path.open("rb") as fh:
-                # 코루틴 차원 상한 - 터널이 끊은 소켓의 대기가 깨어나지 못한 채
-                # 영구 정지한 실사례(2026-08-21 v6, 임베딩 경로) 대응. 3원격 동일 벨트.
-                response = await asyncio.wait_for(
-                    client.post(
-                        f"{self._base_url}/v1/parse",
-                        files={"file": (path.name, fh, "application/pdf")},
-                        # 페이지 마커 계약은 앱 소유다 - 서버는 이 문자열을 그대로
-                        # export_to_markdown에 넣는다. 상수를 서버에 복제하면 언젠가
-                        # 어긋나 페이지 점프가 조용히 깨진다.
-                        data={"page_break_placeholder": PAGE_BREAK_MARKER},
-                        headers=headers,
-                    ),
-                    timeout=self._timeout_s + 60,
+            try:
+                response = await self._post_file(client, path, headers)
+            except _TRANSPORT_RETRYABLE as exc:
+                # 전송층 순단 1회 재시도 벨트(3원격 동일): 순단 1건이 쿨다운을
+                # 열면 그 60초 창의 파일 전부가 원격 시도 없이 사슬 아래(앱 서버
+                # docling)로 내려간다 - 정확히 원래 사고(메모리 폭주) 경로다
+                # (2026-08-24 임베딩 경로 실사고: RemoteProtocolError 1건, 7.4ms
+                # 즉시 실패 → 폴백 124건 증폭). 순단은 즉시 실패라 재시도가 싸고,
+                # 재시도도 실패하면 그대로 올려 기존 쿨다운+사슬 폴백을 탄다.
+                self.stats.record_transport_retry()
+                logger.warning(
+                    "parser.remote.transport_retry",
+                    error=type(exc).__name__,
+                    detail=str(exc)[:200],
+                    path=str(path),
                 )
+                response = await self._post_file(client, path, headers)
             if response.status_code == 429 and attempt < self._BUSY_RETRIES:
                 attempt += 1
                 retry_after = self._retry_after_s(response)
@@ -145,6 +159,29 @@ class RemoteDoclingConverter:
                 continue
             response.raise_for_status()
             return self._validate(response.json())
+
+    async def _post_file(
+        self, client: httpx.AsyncClient, path: Path, headers: dict[str, str]
+    ) -> httpx.Response:
+        # 시도마다 파일을 새로 연다 - 실패한 전송이 핸들 위치를 어디까지 소모했는지
+        # 알 수 없어, 같은 핸들 재전송은 빈/잘린 본문이 된다. seek(0)보다 재오픈이
+        # 확실하고, 429 대기 루프도 원래 매 시도 새로 열던 구조라 결이 같다.
+        with path.open("rb") as fh:
+            # 코루틴 차원 상한 - 터널이 끊은 소켓의 대기가 깨어나지 못한 채
+            # 영구 정지한 실사례(2026-08-21 v6, 임베딩 경로) 대응. 3원격 동일 벨트.
+            # 이 상한은 순단 재시도와 무관하게 시도마다 각각 적용된다.
+            return await asyncio.wait_for(
+                client.post(
+                    f"{self._base_url}/v1/parse",
+                    files={"file": (path.name, fh, "application/pdf")},
+                    # 페이지 마커 계약은 앱 소유다 - 서버는 이 문자열을 그대로
+                    # export_to_markdown에 넣는다. 상수를 서버에 복제하면 언젠가
+                    # 어긋나 페이지 점프가 조용히 깨진다.
+                    data={"page_break_placeholder": PAGE_BREAK_MARKER},
+                    headers=headers,
+                ),
+                timeout=self._timeout_s + 60,
+            )
 
     def _retry_after_s(self, response: httpx.Response) -> float:
         try:

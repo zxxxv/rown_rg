@@ -109,6 +109,79 @@ class TestBusyRetry:
         assert calls["n"] == 2
 
 
+class TestTransportRetry:
+    """전송층 순단 1회 재시도 벨트 — 순단 1건이 쿨다운을 열어 그 창의 파일 전부를
+    앱 서버 docling(원래 사고 경로)으로 내려보내지 않아야 한다(2026-08-24 임베딩
+    경로 실사고와 동일 구조). 파서 특유의 함정: 실패한 전송이 파일 핸들을 소모했을
+    수 있어 재시도는 파일을 다시 열어 보내야 한다."""
+
+    def test_protocol_error_then_success_resends_full_body(self, tmp_path: Path):
+        calls = {"n": 0}
+        bodies: list[bytes] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+            bodies.append(request.read())
+            return httpx.Response(200, json=_ok_payload())
+
+        conv = _converter(handler)
+        result = asyncio.run(conv.convert(_pdf(tmp_path)))
+        assert calls["n"] == 2
+        assert result == ("# Doc", 3, 1)
+        # 소모된 핸들을 그대로 재전송하면 본문이 빈다 - 파일 전체가 다시 실려야 한다.
+        assert b"%PDF-1.4 fake" in bodies[0]
+        snap = conv.stats_snapshot()
+        assert snap["transport_retry_total"] == 1
+        assert snap["remote_ok_total"] == 1
+        assert conv.available(1024) is True, "재시도 성공인데 쿨다운이 열렸다"
+
+    def test_two_transport_errors_raise_with_cooldown(self, tmp_path: Path):
+        """재시도는 정확히 1회 — 그 다음은 예외를 올려 기존 사슬 폴백을 탄다."""
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+        conv = _converter(handler)
+        with pytest.raises(httpx.RemoteProtocolError):
+            asyncio.run(conv.convert(_pdf(tmp_path)))
+        assert calls["n"] == 2, "재시도가 1회를 넘었거나 아예 없었다"
+        assert conv.available(1024) is False
+        assert conv.stats_snapshot()["transport_retry_total"] == 1
+
+    def test_timeout_is_not_retried(self, tmp_path: Path):
+        """타임아웃은 이미 수십 초를 쓴 실패다 - 재시도하면 지연이 2배가 된다."""
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            raise httpx.ReadTimeout("read timed out")
+
+        conv = _converter(handler)
+        with pytest.raises(httpx.ReadTimeout):
+            asyncio.run(conv.convert(_pdf(tmp_path)))
+        assert calls["n"] == 1
+        assert conv.stats_snapshot()["transport_retry_total"] == 0
+        assert conv.available(1024) is False
+
+    def test_http_500_is_not_retried(self, tmp_path: Path):
+        """상태 오류는 순단이 아니다 - 같은 요청을 다시 보내도 같은 답이 온다."""
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(500, json={"detail": "boom"})
+
+        conv = _converter(handler)
+        with pytest.raises(httpx.HTTPStatusError):
+            asyncio.run(conv.convert(_pdf(tmp_path)))
+        assert calls["n"] == 1
+        assert conv.stats_snapshot()["transport_retry_total"] == 0
+
+
 class TestCooldown:
     def test_server_error_sets_cooldown(self, tmp_path: Path):
         calls = {"n": 0}
@@ -145,8 +218,12 @@ class TestAvailability:
 
     def test_unconfigured_url_never_available(self):
         conv = RemoteDoclingConverter(
-            base_url="", token="", timeout_s=5.0, connect_timeout_s=1.0,
-            cooldown_s=60.0, max_bytes=100,
+            base_url="",
+            token="",
+            timeout_s=5.0,
+            connect_timeout_s=1.0,
+            cooldown_s=60.0,
+            max_bytes=100,
         )
         assert conv.available(1) is False
 
