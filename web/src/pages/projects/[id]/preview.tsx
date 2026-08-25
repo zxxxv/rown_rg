@@ -945,14 +945,17 @@ function SectionView({
   const claimStats = useMemo(() => {
     const claims = evidenceQuery.data?.claims;
     if (!claims || claims.length === 0) return null;
+    // 판정 5종(대목 특정·추정·못 찾음·외국어·표기 없음)을 그대로 늘어놓으면 읽는 사람이
+    // 할 일이 안 보인다 - weak·unmatched·crosslingual의 차이는 검출기 사정이라
+    // "대목까지 확인됨 / 직접 확인 필요 / 표기 없음" 셋으로 접는다(2026-08-26 화면 정리).
     const by = (s: string) => claims.filter((c) => c.status === s).length;
+    const uncited = by("uncited");
+    const aligned = by("aligned");
     return {
       total: claims.length,
-      aligned: by("aligned"),
-      weak: by("weak"),
-      unmatched: by("unmatched"),
-      crosslingual: by("crosslingual"),
-      uncited: by("uncited"),
+      aligned,
+      needsCheck: claims.length - aligned - uncited,
+      uncited,
       ungrounded: claims.filter((c) => c.ungrounded.length > 0).length,
     };
   }, [evidenceQuery.data]);
@@ -1245,14 +1248,11 @@ function SectionView({
             {EVIDENCE_UI_ENABLED && claimStats ? (
               <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-fg-tertiary">
                 <span className="font-medium text-fg-secondary">근거 대조</span>
-                <span>문장 {claimStats.total}</span>
-                <span className="text-fg-success">대목 특정 {claimStats.aligned}</span>
-                {claimStats.weak > 0 ? <span>추정 {claimStats.weak}</span> : null}
-                {claimStats.crosslingual > 0 ? (
-                  <span>외국어 근거 {claimStats.crosslingual}</span>
-                ) : null}
-                {claimStats.unmatched > 0 ? (
-                  <span className="text-fg-danger">못 찾음 {claimStats.unmatched}</span>
+                <span>
+                  문장 {claimStats.total}개 중 {claimStats.aligned}개는 원문 대목까지 확인됨
+                </span>
+                {claimStats.needsCheck > 0 ? (
+                  <span className="text-fg-warning">직접 확인 필요 {claimStats.needsCheck}</span>
                 ) : null}
                 {claimStats.uncited > 0 ? (
                   // 근거 표기 없이 쓰인 문장 = AI가 자료 없이 쓴 서술 후보. 어느 문장인지

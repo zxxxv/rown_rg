@@ -191,3 +191,19 @@ export function useAttachLibrarySource(projectId: string) {
     },
   });
 }
+
+// ─── 자료 더 모으기 ───
+// 게이트와 무관하게 언제든 누를 수 있다. 예전엔 이 요청이 게이트 결정 API(/decide)를
+// 통해 나가서, 게이트가 없으면 버튼이 사라지고 누르면 검토 상태가 함께 소비됐다
+// (2026-08-26 행동·게이트 분리).
+
+export function useCollectMore(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...sourceKeys.list(projectId), "collect-more"],
+    mutationFn: () => apiClient.post<unknown>(`projects/${projectId}/collect-more`, { json: {} }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: sourceKeys.list(projectId) });
+    },
+  });
+}

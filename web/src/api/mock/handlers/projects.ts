@@ -236,6 +236,14 @@ export const projectsHandlers = [
     return HttpResponse.json({ data: { started: true } }, { status: 202 });
   }),
 
+  // POST /projects/{id}/collect-more - 자료 더 모으기(게이트 무관, 데모는 수락만)
+  http.post(url("projects/:id/collect-more"), () => {
+    return HttpResponse.json(
+      { data: { started: true, running: true, reopen_gate: false } },
+      { status: 202 },
+    );
+  }),
+
   // GET /projects/{id}/rewrite-batch - 묶음 재작성 진행(데모는 항상 idle)
   http.get(url("projects/:id/rewrite-batch"), () => {
     return HttpResponse.json(

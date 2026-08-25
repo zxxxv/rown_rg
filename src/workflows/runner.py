@@ -775,9 +775,13 @@ def _source_ref_from_row(row: ProjectSource) -> SourceRef:
     )
 
 
-def _spawn_collect_more(project_id: uuid.UUID) -> bool:
+def _spawn_collect_more(project_id: uuid.UUID, *, reopen_gate: bool = True) -> bool:
     """보충 수집 라운드를 중복 가드 + 전역 슬롯 하에 spawn."""
-    return _spawn_limited(project_id, lambda: _collect_more(project_id), clear_cancel_on_exit=False)
+    return _spawn_limited(
+        project_id,
+        lambda: _collect_more(project_id, reopen_gate=reopen_gate),
+        clear_cancel_on_exit=False,
+    )
 
 
 def _spawn_replan(project_id: uuid.UUID) -> bool:
@@ -832,12 +836,16 @@ async def _replan(project_id: uuid.UUID) -> None:
             await _notify_safe(owner_id, project_id, "failed", page="brief")
 
 
-async def _collect_more(project_id: uuid.UUID) -> None:
-    """SOURCE_POOL '추가 조사' — 기존 풀 유지 + research_more_batch건 보충 + 게이트 재개방.
+async def _collect_more(project_id: uuid.UUID, *, reopen_gate: bool = True) -> None:
+    """자료 보충 — 기존 풀 유지 + research_more_batch건 추가(URL 중복 제거).
 
-    write로 전진하지 않는다: 새로 모은 출처를 기존 풀에 합쳐(URL 중복 제거)
-    새 SOURCE_POOL 게이트를 만들고 다시 사람 판단을 기다린다. 사람이 누를
-    때마다 한 라운드씩이라 무한성 캡은 사람 손에 있다.
+    write로 전진하지 않는다. 사람이 누를 때마다 한 라운드씩이라 무한성 캡은 사람
+    손에 있다.
+
+    reopen_gate: 첫 런의 자료 검토 중이면 새 SOURCE_POOL 게이트를 만들어 다시 판단을
+    기다린다(종전 동작). 완주 뒤 사람이 그냥 "자료 더 모으기"를 누른 경우에는 멈춰
+    세울 파이프라인이 없으므로 게이트를 만들지 않는다 — 만들면 완료된 보고서가
+    난데없이 "검토 대기"로 바뀐다(2026-08-26 행동·게이트 분리).
     """
     from src.workflows.pipeline import _source_pool_gate
     from src.workflows.stages import _collect_sources, source_dedup_key
@@ -900,6 +908,10 @@ async def _collect_more(project_id: uuid.UUID) -> None:
             n_total=len(state.sources),
         )
 
+        if not reopen_gate:
+            # 게이트 없이 보충만 — 화면은 자료 목록을 폴링해 새 자료를 이어받는다.
+            logger.info("source_pool.collect_more_done", project_id=str(project_id))
+            return
         review = _source_pool_gate(state)
         async with async_session_maker() as session:
             session.add(

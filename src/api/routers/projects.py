@@ -1143,6 +1143,44 @@ async def _rewrite_batch_body(
             job.done += 1
 
 
+COLLECT_MORE_JOB = "collect_more"
+
+
+@router.post("/{project_id}/collect-more", status_code=status.HTTP_202_ACCEPTED)
+async def collect_more(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> dict[str, Any]:
+    """자료를 더 모은다 — 게이트와 무관하게 **언제든**.
+
+    예전엔 이 요청이 게이트 결정 API(/decide {action: collect_more})를 통해 나갔다.
+    그래서 ①게이트가 없으면 보낼 통로가 없어 버튼이 사라지고 ②누르는 순간 검토
+    상태가 함께 소비됐다 — "자료 10건 더"라는 요청과 "검토를 마쳤다"는 선언이 한 몸
+    이었다. 행동은 행동의 엔드포인트를 갖는다(2026-08-26 행동·게이트 분리).
+
+    첫 런의 자료 검토 중이면 종전대로 게이트를 다시 열어 판단을 기다리고, 그 밖에는
+    보충만 한다 — 완주한 보고서가 난데없이 '검토 대기'로 바뀌지 않게.
+    """
+    from src.clients.llm.quota_gate import check_user_quota
+    from src.services.jobs import start_job
+    from src.workflows.runner import _spawn_collect_more
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    await check_user_quota(project.owner_id)
+    pending = await get_pending_gate(session, project.id)
+    reopen_gate = bool(pending and pending["gate"] == ReviewGate.SOURCE_POOL.value)
+
+    async def _body(_job) -> None:
+        _spawn_collect_more(project.id, reopen_gate=reopen_gate)
+
+    started = start_job(project.id, COLLECT_MORE_JOB, _body)
+    if started is None:
+        return {"started": False, "running": True}
+    logger.info("collect_more.started", project_id=str(project.id), reopen_gate=reopen_gate)
+    return {"started": True, "running": True, "reopen_gate": reopen_gate}
+
+
 @router.post("/{project_id}/rewrite-batch", status_code=status.HTTP_202_ACCEPTED)
 async def rewrite_batch(
     project_id: UUID,

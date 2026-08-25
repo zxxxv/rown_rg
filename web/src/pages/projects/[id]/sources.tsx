@@ -3,10 +3,11 @@ import { AlertTriangle, ArrowLeft, ArrowRight, FileText, Loader2, Trash2 } from 
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { decideSourcePool, parseSourcePoolPayload, useDecideCollectMore } from "@/api/checkpoints";
+import { decideSourcePool, parseSourcePoolPayload } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
 import { progressKeys, useProgressSnapshot } from "@/api/progress";
 import {
+  useCollectMore,
   useDeleteSource,
   usePatchSource,
   useProjectSources,
@@ -52,7 +53,7 @@ export default function SourcesPage() {
 
   // 추가 검색(+10건) - 게이트를 닫지 않는 보충 수집. 시작 시점 자료 수를 기준선으로
   // 잡아 배너에 "+n건 수집됨"을 보여주고, 도는 동안 목록을 폴링으로 따라잡는다.
-  const collectMore = useDecideCollectMore();
+  const collectMore = useCollectMore(projectId);
   const [collectBaseline, setCollectBaseline] = useState<number | null>(null);
   const collecting = collectBaseline !== null;
   const sourcesQuery = useProjectSources(projectId, {
@@ -82,7 +83,7 @@ export default function SourcesPage() {
   const handleCollectMore = () => {
     if (collectMore.isPending || collecting) return;
     const baseline = sourcesQuery.data?.items.length ?? 0;
-    collectMore.mutate(projectId, {
+    collectMore.mutate(undefined, {
       onSuccess: () => {
         setCollectBaseline(baseline);
         toast.success("추가 검색을 시작했습니다 (+10건 목표)", {
@@ -91,12 +92,7 @@ export default function SourcesPage() {
       },
       onError: (err: unknown) => {
         const msg = err instanceof ApiError ? err.message : "추가 검색 요청에 실패했습니다.";
-        toast.error("추가 검색 실패", {
-          description:
-            msg.includes("게이트") || msg.includes("대기")
-              ? "자료 검토 대기 상태가 아닙니다 - 개요의 진행 단계를 확인하세요."
-              : msg,
-        });
+        toast.error("추가 검색 실패", { description: msg });
       },
     });
   };
@@ -491,12 +487,15 @@ export default function SourcesPage() {
         </main>
       </div>
 
-      {reviewOpen ? (
+      {/* 추가 검색은 게이트와 무관하게 늘 눌린다 - 자료를 더 모으는 일에 '검토 대기'가
+          전제일 이유가 없다. '검토 완료'만 게이트가 열렸을 때 뜬다: 멈춰 선 파이프라인이
+          없으면 확정할 대상 자체가 없다(2026-08-26 행동·게이트 분리). */}
+      {canCurate || reviewOpen ? (
         <FinalizeBar
           canFinalize={canFinalize}
           isPending={handleFinalize.isPending}
           onUploadFocus={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          onFinalize={() => handleFinalize.mutate()}
+          onFinalize={reviewOpen ? () => handleFinalize.mutate() : undefined}
           includedCount={counts.included}
           onCollectMore={handleCollectMore}
           collectPending={collectMore.isPending || collecting}
@@ -530,7 +529,8 @@ function FinalizeBar({
   isPending: boolean;
   includedCount: number;
   onUploadFocus: () => void;
-  onFinalize: () => void;
+  /** 게이트가 열렸을 때만 준다 - 없으면 확정 버튼을 안 그린다. */
+  onFinalize?: () => void;
   onCollectMore: () => void;
   collectPending: boolean;
 }) {
@@ -550,21 +550,29 @@ function FinalizeBar({
           >
             {collectPending ? "추가 검색 진행 중…" : "추가 검색 (+10건)"}
           </Button>
-          <TooltipProvider delayDuration={150}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span>
-                  <Button size="lg" disabled={!canFinalize} onClick={onFinalize}>
-                    {isPending ? "처리 중…" : `이 자료로 시작 (${includedCount}개 채택)`}
-                    <ArrowRight className="ml-1 h-4 w-4" />
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              {!canFinalize && includedCount === 0 ? (
-                <TooltipContent>최소 1개 자료를 채택하세요</TooltipContent>
-              ) : null}
-            </Tooltip>
-          </TooltipProvider>
+          {onFinalize ? (
+            <TooltipProvider delayDuration={150}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button size="lg" disabled={!canFinalize} onClick={onFinalize}>
+                      {isPending ? "처리 중…" : `이 자료로 시작 (${includedCount}개 채택)`}
+                      <ArrowRight className="ml-1 h-4 w-4" />
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {!canFinalize && includedCount === 0 ? (
+                  <TooltipContent>최소 1개 자료를 채택하세요</TooltipContent>
+                ) : null}
+              </Tooltip>
+            </TooltipProvider>
+          ) : (
+            // 게이트가 없으면 확정할 대상이 없다 - 고친 내용은 즉시 반영되고, 영향받은
+            // 절은 개요의 미반영 카드가 알린다.
+            <span className="text-xs text-fg-tertiary">
+              변경은 바로 반영됩니다 · 영향받은 절은 개요에서 확인
+            </span>
+          )}
         </div>
       </div>
     </div>

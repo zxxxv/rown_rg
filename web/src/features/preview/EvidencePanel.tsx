@@ -1,276 +1,125 @@
 import { ExternalLink, FileSearch } from "lucide-react";
-import { useState } from "react";
 import { useSectionEvidence } from "@/api/sections";
 import type { ClaimAlignment, EvidenceChunk, SectionEvidence } from "@/api/types";
-import { Badge } from "@/components/ui/badge";
 import type { SourceLocation } from "./SourceViewer";
 import { textFragmentUrl } from "./sourceLink";
 
 // ─── 근거 추적 ───
-// 출처 표기만 있으면 "이 자료 어딘가"까지만 알 수 있어, 사람이 원본을 열어 다시 찾아야
-// 검증이 된다. 여기서는 모델이 프롬프트로 받은 청크 원문을 그대로 보여준다.
-// 함께 보여주는 두 신호가 창작 탐지의 핵심이다:
-//   - 실렸는데 인용되지 않은 근거: 모델이 보고도 안 쓴 자료
-//   - 근거 표기 없는 주장: 어떤 근거와도 연결되지 않은 문장
+// 사람이 이 화면에서 알고 싶은 것은 하나다: **이 문장이 어느 자료의 어느 대목을 보고
+// 쓰였나.** 그 하나에 답하도록 2026-08-26에 화면을 걷어냈다.
+//
+// 전에는 판정 등급 5종(대목 특정·추정·못 찾음·외국어·표기 없음)·겹침 퍼센트·수치별
+// 위치 버튼·청크 원문 카드·'같은 자료의 다른 대목' 접힘까지 한 패널에 얹혀 있었다.
+// 대부분 QA 내부 지표라 읽는 사람에게는 판단할 거리가 아니었고, 청크 카드는 문장이
+// 인용한 대목을 이미 보여준 뒤 같은 글을 한 번 더 싣는 중복이었다.
+//
+// 남긴 것: 문장 → 출처(제목·번호) → 참고한 대목 → 원문에서 보기.
+// 빠진 것을 알리는 한 줄(대목 못 찾음·표기 없음·근거 없는 수치)만 덧붙인다 —
+// "어디를 참고했나"의 답이 "아무 데도"인 경우도 답이기 때문이다.
 
-const CLAIM_STATUS: Record<string, { label: string; cls: string }> = {
-  aligned: { label: "대목 특정", cls: "border-fg-success/40 bg-bg-success" },
-  weak: { label: "추정", cls: "border-fg-warning/40 bg-bg-warning" },
-  unmatched: { label: "못 찾음", cls: "border-fg-danger/40 bg-bg-danger" },
-  uncited: { label: "근거 표기 없음", cls: "border-fg-tertiary/40" },
-  // 겹침으로는 판정 불가(한글 주장 + 외국어 근거) - 틀렸다는 뜻이 아니라 사람이 볼 자리
-  crosslingual: { label: "외국어 근거", cls: "border-fg-info/40 bg-bg-info" },
-};
+/** 문장이 무엇을 못 갖췄는지 한 줄로 — 판정 등급 대신 사람이 할 일로 말한다.
+ *
+ * weak·unmatched·crosslingual의 차이는 검출기 사정이지 읽는 사람의 사정이 아니다.
+ * 셋 다 "대목을 못 집었으니 직접 보라"로 합친다. */
+function missingNote(claim: ClaimAlignment): string | null {
+  if (claim.status === "uncited") return "인용 표기가 없는 문장입니다";
+  if (!claim.span_text) return "참고한 대목을 특정하지 못했습니다 - 원문에서 직접 확인하세요";
+  return null;
+}
 
-/** 문장별 대조표 - 기본은 확인이 필요한 문장만 보여준다(대목이 특정된 문장은 볼 이유가 적다). */
-function ClaimTable({
-  claims,
+function ClaimRow({
+  claim,
   chunks,
   onLocate,
 }: {
-  claims: ClaimAlignment[];
+  claim: ClaimAlignment;
   chunks: EvidenceChunk[];
   onLocate?: (loc: SourceLocation) => void;
 }) {
-  const [showAll, setShowAll] = useState(false);
-  const urlOf = new Map(chunks.map((c) => [c.chunk_id, c.url]));
-  const srcOf = new Map(chunks.map((c) => [c.chunk_id, c.source_id]));
-  // 수치·대목의 "원문에서 보기" - 청크가 속한 자료를 알아야 문서를 연다
-  const locate = (chunkId: string | null, start?: number | null, end?: number | null) => {
-    if (!onLocate || !chunkId) return undefined;
-    const sourceId = srcOf.get(chunkId);
-    if (!sourceId) return undefined;
-    return () => onLocate({ sourceId, chunkId, start, end });
-  };
-  const needsCheck = claims.filter((c) => c.status !== "aligned");
-  const shown = showAll ? claims : needsCheck;
+  const chunk = claim.chunk_id ? chunks.find((c) => c.chunk_id === claim.chunk_id) : undefined;
+  // 대목을 못 집었으면 인용 번호로라도 자료를 찾아 준다 - 자료 이름조차 없으면
+  // 사람이 원본을 열 실마리가 사라진다.
+  const fallback =
+    !chunk && claim.numbers.length > 0
+      ? chunks.find((c) => c.number === claim.numbers[0])
+      : undefined;
+  const source = chunk ?? fallback;
+  const note = missingNote(claim);
+  const locate =
+    onLocate && source?.source_id
+      ? () =>
+          onLocate({
+            sourceId: source.source_id as string,
+            chunkId: source.chunk_id,
+            start: claim.span_start,
+            end: claim.span_end,
+          })
+      : undefined;
+  const webUrl = textFragmentUrl(source?.url ?? null, claim.span_text);
 
   return (
-    <div className="flex flex-col gap-2 rounded border border-border px-2.5 py-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs font-medium text-fg">
-          문장별 대조 {shown.length}/{claims.length}
-        </p>
-        <button
-          type="button"
-          onClick={() => setShowAll((v) => !v)}
-          className="text-[11px] text-fg-info hover:underline"
-        >
-          {showAll ? "확인 필요한 문장만" : "전체 문장 보기"}
-        </button>
-      </div>
-      {shown.length === 0 ? (
-        <p className="text-xs text-fg-tertiary">모든 문장이 원문 대목까지 확인됐습니다.</p>
-      ) : (
-        <ul className="flex max-h-[32rem] flex-col gap-2 overflow-y-auto">
-          {shown.map((c) => {
-            const badge = CLAIM_STATUS[c.status] ?? CLAIM_STATUS.uncited;
-            return (
-              <li key={c.claim} className="rounded border border-border bg-bg px-2.5 py-1.5">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <Badge variant="outline" className={badge.cls}>
-                    {badge.label}
-                  </Badge>
-                  {c.numbers.map((n) => (
-                    <span
-                      key={n}
-                      className="rounded-sm bg-bg-info px-1 font-mono text-[10px] text-fg-info"
-                    >
-                      [{n}]
-                    </span>
-                  ))}
-                  {c.status !== "uncited" ? (
-                    <span className="font-mono text-[10px] text-fg-tertiary">
-                      겹침 {Math.round(c.score * 100)}%
-                    </span>
-                  ) : null}
-                  {c.ungrounded.length > 0 ? (
-                    <span className="text-[10px] text-fg-danger">
-                      근거 없는 수치 {c.ungrounded.join(", ")}
-                    </span>
-                  ) : null}
-                </div>
-                <p className="mt-1 text-xs leading-relaxed text-fg">{c.claim}</p>
-                {c.grounded.length > 0 ? (
-                  // 근거에서 자리가 확인된 수치 - 누르면 원문 뷰어가 그 줄로 점프한다.
-                  // 위치를 가리킬 뿐, 문장 전체가 뒷받침된다는 뜻은 아니다.
-                  <div className="mt-1 flex flex-wrap items-center gap-1">
-                    <span className="text-[10px] text-fg-tertiary">수치 위치</span>
-                    {c.grounded.map((g) => {
-                      const go = locate(g.chunk_id, g.start, g.end);
-                      return go ? (
-                        <button
-                          key={`${g.chunk_id}:${g.start}:${g.token}`}
-                          type="button"
-                          onClick={go}
-                          title="근거 원문에서 이 수치가 있는 줄을 봅니다"
-                          className="rounded-sm bg-bg-success px-1 font-mono text-[10px] text-fg-success hover:underline"
-                        >
-                          {g.token}
-                        </button>
-                      ) : (
-                        <span
-                          key={`${g.chunk_id}:${g.start}:${g.token}`}
-                          className="rounded-sm bg-bg-success px-1 font-mono text-[10px] text-fg-success"
-                        >
-                          {g.token}
-                        </span>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                {c.span_text ? (
-                  <div className="mt-1 border-l-2 border-border-info pl-2">
-                    <p className="text-xs leading-relaxed text-fg-secondary">{c.span_text}</p>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {(() => {
-                        const go = locate(c.chunk_id, c.span_start, c.span_end);
-                        return go ? (
-                          <button
-                            type="button"
-                            onClick={go}
-                            className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-fg-info hover:underline"
-                          >
-                            이 문장 위치 보기 <FileSearch className="h-3 w-3" />
-                          </button>
-                        ) : null;
-                      })()}
-                      {(() => {
-                        // 원문 웹페이지로 바로 뛰는 링크(브라우저 텍스트 프래그먼트).
-                        const jump = textFragmentUrl(
-                          c.chunk_id ? (urlOf.get(c.chunk_id) ?? null) : null,
-                          c.span_text,
-                        );
-                        return jump ? (
-                          <a
-                            href={jump}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-fg-info hover:underline"
-                          >
-                            웹 원본에서 보기 <ExternalLink className="h-3 w-3" />
-                          </a>
-                        ) : null;
-                      })()}
-                    </div>
-                  </div>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
+    <li className="rounded border border-border bg-bg px-3 py-2.5">
+      <p className="text-xs leading-relaxed text-fg">{claim.claim}</p>
 
-function EvidenceCard({
-  item,
-  onLocate,
-  hasCellNumber = false,
-}: {
-  item: EvidenceChunk;
-  onLocate?: (loc: SourceLocation) => void;
-  /** 이 카드 원문에 선택한 표 블록의 셀 수치가 들어 있다 - 정렬 근거의 표시 */
-  hasCellNumber?: boolean;
-}) {
-  return (
-    <li className="rounded border border-border bg-bg px-3 py-2">
-      <div className="flex flex-wrap items-center gap-2">
-        {item.number !== null ? (
-          <span className="rounded-sm bg-bg-info px-1.5 font-mono text-[11px] text-fg-info">
-            [{item.number}]
-          </span>
-        ) : null}
-        {hasCellNumber ? (
-          <span
-            title="이 카드 원문에 표의 수치가 들어 있어 앞으로 정렬했습니다 - 뒷받침 판정은 아닙니다"
-            className="rounded-sm bg-bg-success px-1 text-[10px] text-fg-success"
-          >
-            표 수치 포함
-          </span>
-        ) : null}
-        <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
-          {item.source_title ?? "(제목 없음)"}
-        </span>
-        {/* 외부 '원본' 링크는 뺐다(2026-08-14 사용자 지적: 문장 카드의 링크들과 중복으로
-            읽힘). 원문 뷰어 헤더에 '원본 열기'가 있어 경로 손실이 없다. */}
-        {onLocate && item.source_id ? (
-          <button
-            type="button"
-            onClick={() =>
-              onLocate({
-                sourceId: item.source_id as string,
-                chunkId: item.chunk_id,
-              })
-            }
-            title="이 대목이 원문 문서의 어디인지 앞뒤 문맥과 함께 봅니다"
-            className="inline-flex shrink-0 items-center gap-1 text-[11px] text-fg-info hover:underline"
-          >
-            문서 전체에서 보기 <FileSearch className="h-3 w-3" />
-          </button>
-        ) : null}
-      </div>
-      {item.header_path.length > 0 ? (
-        <p className="mt-0.5 truncate text-[11px] text-fg-tertiary">
-          {item.header_path.join(" > ")}
+      {source ? (
+        <p className="mt-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[11px]">
+          {source.number !== null ? (
+            <span className="rounded-sm bg-bg-info px-1 font-mono text-fg-info">
+              [{source.number}]
+            </span>
+          ) : null}
+          <span className="min-w-0 text-fg-secondary">{source.source_title ?? "(제목 없음)"}</span>
         </p>
       ) : null}
-      <p className="mt-1.5 max-h-72 overflow-y-auto whitespace-pre-wrap rounded bg-bg-secondary px-2 py-2 text-xs leading-relaxed text-fg-secondary">
-        {item.content}
-      </p>
+
+      {claim.span_text ? (
+        <blockquote className="mt-1.5 border-l-2 border-border-info pl-2 text-xs leading-relaxed text-fg-secondary">
+          {claim.span_text}
+        </blockquote>
+      ) : null}
+
+      {note ? <p className="mt-1.5 text-[11px] text-fg-tertiary">{note}</p> : null}
+
+      {claim.ungrounded.length > 0 ? (
+        // 근거에서 못 찾은 수치 - "어디를 참고했나"의 답이 '아무 데도'인 경우라 남긴다.
+        <p className="mt-1 text-[11px] text-fg-danger">
+          원문에서 못 찾은 수치: {claim.ungrounded.join(", ")}
+        </p>
+      ) : null}
+
+      {locate || webUrl ? (
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          {locate ? (
+            <button
+              type="button"
+              onClick={locate}
+              className="inline-flex items-center gap-1 text-[11px] text-fg-info hover:underline"
+            >
+              원문에서 보기 <FileSearch className="h-3 w-3" />
+            </button>
+          ) : null}
+          {webUrl ? (
+            <a
+              href={webUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-[11px] text-fg-info hover:underline"
+            >
+              웹 원본 <ExternalLink className="h-3 w-3" />
+            </a>
+          ) : null}
+        </div>
+      ) : null}
     </li>
   );
 }
 
 // ─── 블록 단위 근거 ───
-// 절 전체 목록은 본문 맨 아래에 있어 읽는 자리에서 멀다. 블록을 고르면 그 블록이 문 근거만
+// 절 전체 목록은 본문 맨 아래에 있어 읽는 자리에서 멀다. 블록을 고르면 그 블록이 쓴 근거만
 // 우측 패널에 띄운다 - 절에 출처가 12건이어도 한 블록이 쓰는 건 보통 1~3건이라, 좁혀 보여야
 // 대조가 실제로 일어난다.
 
 const MARK_RE = /\[(\d+)\]|\(출처\s*([\d,\s]+)\)/g;
-
-// ─── 표 블록 카드 정렬 ───
-// 표 행은 '주장 단위'가 아니라 문장 정렬로 근거를 못 좁힌다 - 번호에 묶인 카드
-// 전부(같은 자료의 다른 대목 포함)가 대등하게 나열돼 검증이 훑기가 된다. 셀 수치가
-// 실제로 든 카드를 앞으로 올려 훑기를 줄인다. **판정이 아니라 순서다** - 수치만
-// 겹친 카드를 "근거"로 선언하면 40%가 거짓 안심이었다(2026-08-12 실측).
-
-const _NUMBER_RE = /\d[\d,]*(?:\.\d+)?%?/g;
-
-/** 표 행(| … |)에서 대조할 만한 수치를 뽑는다 - 백엔드 significant_numbers의 최소
-    거울(콤마·후행 % 정규화, 두 자리 이상 또는 소수·퍼센트, 연도 제외). */
-export function tableCellNumbers(blocks: string[]): string[] {
-  const out = new Set<string>();
-  for (const block of blocks) {
-    for (const line of block.split("\n")) {
-      if (!/^\s*\|/.test(line)) continue;
-      for (const m of line.matchAll(_NUMBER_RE)) {
-        const norm = m[0].replace(/,/g, "").replace(/%$/, "");
-        const digits = norm.replace(".", "");
-        if (digits.length < 2 && !norm.includes(".") && !m[0].endsWith("%")) continue;
-        if (/^\d{4}$/.test(norm) && Number(norm) >= 1900 && Number(norm) <= 2099) continue;
-        out.add(norm);
-      }
-    }
-  }
-  return [...out];
-}
-
-/** 셀 수치가 든 카드를 앞으로(안정 정렬 - 그 외 순서는 유지). 매칭 여부도 돌려줘
-    카드에 '표 수치 포함' 표시를 단다. */
-export function orderByCellNumbers(
-  items: EvidenceChunk[],
-  cellNumbers: string[],
-): { item: EvidenceChunk; hasCellNumber: boolean }[] {
-  const hit = (content: string) => {
-    const hay = content.replace(/,/g, "");
-    return cellNumbers.some((n) => hay.includes(n));
-  };
-  return items
-    .map((item) => ({ item, hasCellNumber: cellNumbers.length > 0 && hit(item.content) }))
-    .sort((a, b) => Number(b.hasCellNumber) - Number(a.hasCellNumber));
-}
 
 /** 본문 텍스트에 등장하는 인용 번호 집합 - 블록별 근거 유무 판정(표시·패널)의 공통 원천. */
 export function markerNumbers(text: string): Set<number> {
@@ -290,7 +139,10 @@ export function markerNumbers(text: string): Set<number> {
 전역 인용 번호는 자료 단위라, 번호로만 거르면 같은 자료의 다른 블록용 대목(예: 미국
 블록에 일본 문단)까지 딸려 온다(2026-08-12 실측: 6.1절 미국 블록 카드 5장 중 실제
 근거는 2장). 문장 정렬(claims)이 청크까지 특정한 것을 primary로, 나머지 같은 번호
-청크는 related로 가른다. 정렬 정보가 없으면(정렬 실패·구버전) 종전대로 전부 primary. */
+청크는 related로 가른다. 정렬 정보가 없으면(정렬 실패·구버전) 종전대로 전부 primary.
+
+패널은 이제 문장 줄만 그리므로 primary/related를 렌더에 쓰지 않는다 - 블록 배지의
+'근거 N' 카운트가 이 분류를 그대로 쓴다(같은 기준 유지). */
 export function partitionBlockEvidence(
   blocks: string[],
   data: SectionEvidence,
@@ -315,17 +167,16 @@ export function BlockEvidence({
   sectionId: string;
   /** 선택된 블록 본문들 - 여기 등장하는 인용 번호만 추린다 */
   blocks: string[];
-  /** 근거 대목·수치를 원문 문서 안에서 보여달라는 요청 - 드로어가 원문 뷰어로 전환한다 */
+  /** 근거 대목을 원문 문서 안에서 보여달라는 요청 - 드로어가 원문 뷰어로 전환한다 */
   onLocate?: (loc: SourceLocation) => void;
 }) {
   const query = useSectionEvidence(projectId, sectionId);
   const data = query.data;
   if (!data) return null;
 
-  const { primary, related, claims } = partitionBlockEvidence(blocks, data);
-  const flagged = claims.filter((c) => c.status !== "aligned");
+  const { claims } = partitionBlockEvidence(blocks, data);
 
-  if (primary.length === 0 && related.length === 0 && claims.length === 0) {
+  if (claims.length === 0) {
     // 근거가 없으면 그 사실만 한 줄로 알린다 - 빈 패널이 본문 폭을 먹으면 손해다.
     return (
       <p className="rounded border border-border bg-bg px-2.5 py-2 text-xs text-fg-secondary">
@@ -336,49 +187,18 @@ export function BlockEvidence({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <p className="text-xs font-medium text-fg">이 블록의 근거 {primary.length}건</p>
-        {flagged.length > 0 ? (
-          <Badge variant="outline" className="border-fg-warning/40 bg-bg-warning">
-            확인 필요 {flagged.length}
-          </Badge>
-        ) : null}
-      </div>
-      {/* 전체 목록을 넘긴다 - 걸러낸 목록을 넘기면 표 안의 '전체 문장 보기' 토글이
-          같은 목록을 두 번 보여주는 빈 스위치가 된다(2026-08-14 사용자 발견). 기본
-          표시는 표 안에서 '확인 필요'만 거른다. */}
-      {claims.length > 0 ? (
-        <ClaimTable claims={claims} chunks={data.items} onLocate={onLocate} />
-      ) : null}
-      {primary.length > 0 ? (
-        <ul className="flex flex-col gap-2">
-          {orderByCellNumbers(primary, tableCellNumbers(blocks)).map(({ item, hasCellNumber }) => (
-            <EvidenceCard
-              key={item.chunk_id}
-              item={item}
-              onLocate={onLocate}
-              hasCellNumber={hasCellNumber}
-            />
-          ))}
-        </ul>
-      ) : null}
-      {related.length > 0 ? (
-        // 같은 출처 번호에 묶여 있지만 이 블록 문장과 정렬되지 않은 대목 - 다른 블록의
-        // 근거이거나 잡청크다. 대등하게 나열하면 "엉뚱한 근거"로 읽히므로 접어 둔다.
-        <details className="rounded border border-border px-2.5 py-2">
-          <summary className="cursor-pointer text-xs font-medium text-fg">
-            같은 자료의 다른 대목 {related.length}건 보기
-          </summary>
-          <p className="mt-1 text-[11px] leading-relaxed text-fg-tertiary">
-            이 블록과 같은 출처 번호로 인용됐지만, 이 절의 다른 문장을 뒷받침하는 대목입니다.
-          </p>
-          <ul className="mt-2 flex flex-col gap-2">
-            {related.map((item) => (
-              <EvidenceCard key={item.chunk_id} item={item} onLocate={onLocate} />
-            ))}
-          </ul>
-        </details>
-      ) : null}
+      <p className="text-xs font-medium text-fg">문장 {claims.length}개가 참고한 대목</p>
+      <ul className="flex flex-col gap-2">
+        {claims.map((c) => (
+          // 내용으로 키를 만든다 - 같은 문장이 두 번 나와도 인용 대목이 다르면 갈린다.
+          <ClaimRow
+            key={`${c.claim}|${c.chunk_id ?? ""}|${c.span_start ?? ""}`}
+            claim={c}
+            chunks={data.items}
+            onLocate={onLocate}
+          />
+        ))}
+      </ul>
     </div>
   );
 }
