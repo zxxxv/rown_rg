@@ -1,5 +1,6 @@
 import {
   Children,
+  type ComponentPropsWithoutRef,
   cloneElement,
   isValidElement,
   type ReactElement,
@@ -58,6 +59,8 @@ const TABLE_SOURCE_RE =
   /^(?:[※*\-–ㅇ○◦]\s*)?(?:(?:출처|자료|참고)\s*[:：]\s*)?[（(]\s*출처\s*(\d{1,3}(?:\s*,\s*\d{1,3})*)\s*[)）]$/;
 // 마커를 걷어낸 뒤 라벨만 남은 껍데기 줄("- 출처:") - 가리키는 것이 없어졌으니 버린다.
 const BARE_SOURCE_LABEL_RE = /^[□ㅇ○◦\-*※\s]*(?:출처|자료|참고)\s*[:：]?\s*$/;
+// 풀어 쓴 출처 줄의 라벨("출처: ") - 내어쓰기 기준점이다(콜론 뒤 서지에 둘째 줄을 맞춘다).
+const SOURCE_LINE_RE = /^출처\s*[:：]\s*/;
 
 // 연도 어깨점 정규화 - ‘24 / `24 / '24 혼용을 오른쪽 홑따옴표(U+2019) 하나로(백엔드와 동일).
 const YEAR_QUOTE_RE = /[‘'`´](?=\d{2}(?:년|[.~∼]))/g;
@@ -174,10 +177,46 @@ function stripInventedMarkers(md: string): string {
 
 // 개조식 pseudo-마커(□ ㅇ ○ ◦)는 마크다운 문법이 아니라 평범한 문단 텍스트로 렌더된다.
 // 문단 선두 글자를 읽어 위계(들여쓰기·간격)를 살린다. '-'/'*'는 실제 마크다운 목록이라 건드리지 않는다.
-// 마커 문단은 내어쓰기(첫 줄만 -1.5em 당기고 그만큼 왼쪽 여백)로 렌더해, 두 줄 이상으로
-// 넘어가도 둘째 줄이 마커 아래가 아니라 본문 글머리에 붙는다(HWPX 출력과 같은 규칙).
-// '-' 목록은 ul에서 마커를 절대배치해 이미 같은 효과가 난다.
+// 마커 문단은 내어쓰기로 렌더해, 두 줄 이상으로 넘어가도 둘째 줄이 마커 아래가 아니라
+// 본문 글머리에 붙는다(HWPX 출력과 같은 규칙). '-' 목록은 ul에서 마커를 절대배치해
+// 이미 같은 효과가 난다.
 const OUTLINE_PARA_RE = /^\s*([□ㅇ○◦])\s/;
+
+/** 선두 글머리를 본문에서 떼어 낸다 - [글머리, 나머지]. 못 떼면 null. */
+function splitLead(children: ReactNode, re: RegExp): [string, ReactNode] | null {
+  const arr = Children.toArray(children);
+  const first = arr[0];
+  if (typeof first !== "string") return null;
+  const m = re.exec(first);
+  if (!m) return null;
+  // 원문 글머리를 그대로 보존한다 - 복사하면 "□ 제목"이 원문대로 붙는다.
+  return [m[0].trimStart(), [first.slice(m[0].length), ...arr.slice(1)]];
+}
+
+/** 내어쓰기 한 줄 - 글머리를 제 폭만큼의 칸에 두고 본문만 흐르게 한다.
+ *
+ * 전에는 `pl-[1.5em] indent-[-1.5em]` 한 쌍으로 흉내 냈는데, 그 1.5em이 실제 글머리
+ * 폭과 어긋나면 둘째 줄이 본문 글머리에 안 맞는다 - □·ㅇ는 전각이라 폰트마다 폭이
+ * 다르고, "출처: "는 아예 훨씬 넓다(2026-08-25 지적: 둘째 줄부터 어긋남).
+ * flex로 두 칸을 나누면 폰트·글머리 길이와 무관하게 정확히 맞는다.
+ */
+function HangingLine({
+  lead,
+  className,
+  children,
+  ...props
+}: {
+  lead: string;
+  className?: string;
+  children: ReactNode;
+} & Omit<ComponentPropsWithoutRef<"p">, "children" | "className">) {
+  return (
+    <p className={cn("flex", className)} {...props}>
+      <span className="shrink-0 whitespace-pre">{lead}</span>
+      <span className="min-w-0 flex-1">{children}</span>
+    </p>
+  );
+}
 
 function outlineMarker(node: unknown): string | null {
   const el = node as { children?: Array<{ type?: string; value?: string }> } | undefined;
@@ -365,33 +404,37 @@ function buildComponents(
           </p>
         );
       }
-      if (single !== null && /^출처\s*[:：]/.test(single)) {
+      if (single !== null && SOURCE_LINE_RE.test(single)) {
         // 표 하단 출처 줄 - 표에 붙여 작은 글자로(캡션 위·출처 아래 관례).
-        return (
+        // 출처가 여럿이면 줄을 넘기는데, 둘째 줄은 라벨 아래가 아니라 콜론 뒤
+        // 서지 글머리에 맞춘다(2026-08-25 지적).
+        const m = SOURCE_LINE_RE.exec(single);
+        return m ? (
+          <HangingLine lead={m[0]} className="-mt-3 mb-4 text-xs text-fg-tertiary" {...props}>
+            {single.slice(m[0].length)}
+          </HangingLine>
+        ) : (
           <p className="-mt-3 mb-4 text-xs text-fg-tertiary" {...props}>
             {single}
           </p>
         );
       }
       const marker = outlineMarker(node);
-      if (marker === "□") {
-        // 대주제 - 굵게 + 위 간격으로 논리 묶음의 머리로 도드라지게.
-        return (
-          <p
-            className="mb-2 mt-6 pl-[1.5em] indent-[-1.5em] font-semibold leading-7 text-fg"
-            {...props}
-          >
-            {walk(children)}
-          </p>
-        );
-      }
       if (marker) {
-        // ㅇ/○/◦ - 상위 개조식 항목: 들여쓰고 위에 간격을 줘 그룹을 분리한다.
-        return (
-          <p
-            className="mb-1 mt-4 pl-[calc(1rem+1.5em)] indent-[-1.5em] leading-7 text-fg"
-            {...props}
-          >
+        const split = splitLead(children, OUTLINE_PARA_RE);
+        // 대주제(□)는 굵게 + 위 간격으로 논리 묶음의 머리로 도드라지게,
+        // ㅇ/○/◦는 한 칸 들여쓴 하위 항목. 내어쓰기는 HangingLine이 맡는다.
+        const style =
+          marker === "□"
+            ? "mb-2 mt-6 font-semibold leading-7 text-fg"
+            : "mb-1 mt-4 pl-4 leading-7 text-fg";
+        // 글머리를 못 떼면(강조·링크가 선두에 섞인 변형) 평범한 문단으로 물러난다.
+        return split ? (
+          <HangingLine lead={split[0]} className={style} {...props}>
+            {walk(split[1])}
+          </HangingLine>
+        ) : (
+          <p className={style} {...props}>
             {walk(children)}
           </p>
         );

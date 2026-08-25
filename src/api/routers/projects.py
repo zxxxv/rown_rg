@@ -982,10 +982,17 @@ async def update_project_config(
             message="완료된 보고서의 설정은 바꿀 수 없습니다",
             code="PROJECT_CONFIG_FROZEN",
         )
+    # 소유자 스코프로 검증한다 — config에 실린 개인 규칙·개인 에이전트는 **프로젝트
+    # 소유자**의 것이지 편집자의 것이 아니다. 편집자 기준으로 보면 관리자가 남의
+    # 프로젝트를 열 수는 있는데(_get_authorized_project) 저장은 "내 작성 규칙이
+    # 아닙니다"로 막히는 비대칭이 생긴다 — 게다가 편집 모드에서 규칙 칸은 이미
+    # 읽기 전용이라, 못 바꾸는 값이 저장을 막았다(2026-08-25 실사고: 관리자가 빈
+    # 절을 고치려고 목차를 저장하려다 422 UNKNOWN_RULE로 전원 차단).
+    # 편집자가 소유자면 값이 같으므로 소유자 자신의 계약은 그대로다.
     normalized_config = _validate_outline_config(
-        data.config, await _known_analyst_names(session, current_user.id)
+        data.config, await _known_analyst_names(session, project.owner_id)
     )
-    await _validate_rules_config(session, current_user.id, normalized_config)
+    await _validate_rules_config(session, project.owner_id, normalized_config)
     outline_changed = normalized_config.get("outline") != (project.config or {}).get("outline")
     # 옵션 교체가 파이프라인이 남긴 내부 키까지 지우면 안 된다 - 취소 복귀 지점과
     # 검증 경고 완료 표시·모델 스냅샷은 사용자가 폼에서 만지는 값이 아니다.
@@ -1812,8 +1819,9 @@ async def decide_gate(
     # 정규화(안정 id·builds_on 토큰)를 거쳐야 재플래닝이 절 정체성을 보존한다.
     if pending["gate"] == ReviewGate.DESIGN_BRIEF.value and "outline" in data.decision:
         normalized = _validate_outline_config(
+            # 소유자 스코프 — update_project_config와 같은 이유(관리자 대리 조작).
             {"outline": data.decision["outline"]},
-            await _known_analyst_names(session, current_user.id),
+            await _known_analyst_names(session, project.owner_id),
         )
         data.decision["outline"] = normalized["outline"]
     # 한도 사전 검사 — 재개 구간(색인·작성·추가 검색)도 LLM 비용이 크다.
