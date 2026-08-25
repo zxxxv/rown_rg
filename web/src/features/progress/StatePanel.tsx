@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDrift } from "@/api/drift";
 import { useInsights } from "@/api/insights";
+import type { ProgressSnapshot } from "@/api/progress";
 import { useProjectSections } from "@/api/sections";
 import { useProjectSources } from "@/api/sources";
 import type { Project } from "@/api/types";
@@ -22,6 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { env } from "@/env";
 import { useDownload } from "@/features/export/useDownload";
+import { ElapsedRow } from "@/features/progress/PipelineStepper";
 
 /** 상태 패널 - 런이 멈춰 있을 때의 우측 기둥.
  *
@@ -36,9 +38,12 @@ import { useDownload } from "@/features/export/useDownload";
  */
 export function StatePanel({
   project,
+  snapshot,
   onOpenConfig,
 }: {
   project: Project;
+  /** 진행 스냅샷 - 생성 시간을 그린다. 스테퍼 안에만 있어서 완주 뒤 사라졌었다. */
+  snapshot: ProgressSnapshot | undefined;
   /** 목차 편집기를 연다 - 편집기는 개요의 '프로젝트 옵션' 아코디언 안에 있어
    *  라우팅이 아니라 부모의 펼침 상태를 건드려야 한다. */
   onOpenConfig: () => void;
@@ -74,10 +79,19 @@ export function StatePanel({
     <section className="flex flex-col rounded-lg border border-border bg-bg">
       <header className="border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold text-fg">상태</h2>
-        <p className="mt-0.5 text-xs text-fg-tertiary">
-          어느 줄이든 눌러 바로 손볼 수 있습니다. 고치면 영향받은 절만 미반영으로 표시됩니다.
-        </p>
       </header>
+
+      <Row
+        icon={<ListTree className="h-4 w-4" aria-hidden />}
+        label="설계"
+        detail={`${leaves.length || countOutlineSections(project)}절 · ${project.updated_at.slice(5, 10)} 수정`}
+        action={
+          <Button variant="outline" size="sm" onClick={onOpenConfig}>
+            목차 편집
+            <ArrowRight className="ml-1 h-3.5 w-3.5" />
+          </Button>
+        }
+      />
 
       <Row
         icon={<FolderOpen className="h-4 w-4" aria-hidden />}
@@ -96,18 +110,6 @@ export function StatePanel({
             onClick={() => navigate(`/projects/${projectId}/sources`)}
           >
             자료 열기
-            <ArrowRight className="ml-1 h-3.5 w-3.5" />
-          </Button>
-        }
-      />
-
-      <Row
-        icon={<ListTree className="h-4 w-4" aria-hidden />}
-        label="설계"
-        detail={`${leaves.length || countOutlineSections(project)}절 · ${project.updated_at.slice(5, 10)} 수정`}
-        action={
-          <Button variant="outline" size="sm" onClick={onOpenConfig}>
-            목차 편집
             <ArrowRight className="ml-1 h-3.5 w-3.5" />
           </Button>
         }
@@ -188,6 +190,15 @@ export function StatePanel({
         }
         last
       />
+
+      {/* 생성 시간 - 스테퍼가 쓰던 것을 그대로 재사용한다. 검토 대기·중단 구간을 빼는
+          규칙에 실사고가 걸려 있어(게이트 9시간이 섞여 22시간으로 보였다) 두 벌로
+          만들지 않는다. */}
+      {snapshot ? (
+        <div className="px-4 pb-3">
+          <ElapsedRow snapshot={snapshot} />
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -1,6 +1,6 @@
-import { ChevronDown, ChevronRight, GitCompare, MoveRight, X } from "lucide-react";
+import { ChevronDown, ChevronRight, GitCompare, MoveRight, Undo2, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useVersionDiff, type VersionDiffEntry } from "@/api/versions";
+import { useRestoreSection, useVersionDiff, type VersionDiffEntry } from "@/api/versions";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -117,7 +117,16 @@ function DiffBlock({ op }: { op: BlockOp }) {
   return <InlineWordDiff before={op.before} after={op.after} />;
 }
 
-function EntryCard({ entry }: { entry: VersionDiffEntry }) {
+function EntryCard({
+  entry,
+  onRestore,
+  restoring,
+}: {
+  entry: VersionDiffEntry;
+  /** 이 절만 비교 대상 버전으로 되돌린다 - 바뀐 절에만 준다. */
+  onRestore?: () => void;
+  restoring?: boolean;
+}) {
   // 동일 절은 접힌 한 줄, 나머지는 펼침으로 시작 - 바뀐 것부터 읽힌다.
   const [open, setOpen] = useState(entry.status !== "unchanged");
   const meta = STATUS_META[entry.status];
@@ -130,6 +139,20 @@ function EntryCard({ entry }: { entry: VersionDiffEntry }) {
         entry.status === "removed" && "border-fg-danger/30",
       )}
     >
+      {onRestore ? (
+        <div className="flex justify-end px-3 pt-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs"
+            disabled={restoring}
+            onClick={onRestore}
+            title="이 절만 그때 내용으로 되돌립니다 - 다른 절은 그대로입니다"
+          >
+            <Undo2 className="mr-1 h-3.5 w-3.5" />이 절 되돌리기
+          </Button>
+        </div>
+      ) : null}
       <button
         type="button"
         className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left"
@@ -199,6 +222,7 @@ export function VersionDiffView({
   onClose: () => void;
 }) {
   const query = useVersionDiff(projectId, base, null);
+  const restore = useRestoreSection(projectId, base);
   const [showUnchanged, setShowUnchanged] = useState(false);
   const diff = query.data;
   const entries = useMemo(
@@ -245,7 +269,17 @@ export function VersionDiffView({
             : "비교할 내용이 없습니다."}
         </p>
       ) : (
-        entries.map((e) => <EntryCard key={e.section_id} entry={e} />)
+        entries.map((e) => (
+          <EntryCard
+            key={e.section_id}
+            entry={e}
+            // 되돌릴 대상이 있는 절만 - 추가된 절은 그 버전에 없어서 되돌릴 게 없다.
+            onRestore={
+              e.base && e.status !== "unchanged" ? () => restore.mutate(e.section_id) : undefined
+            }
+            restoring={restore.isPending}
+          />
+        ))
       )}
     </div>
   );

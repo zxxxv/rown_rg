@@ -144,7 +144,7 @@ function formatDuration(ms: number): string {
 활동 이후 경과를 더해 초 단위로 흐르게 한다. 게이트에서 멈추면 값이 그대로 선다
 (2026-08-09: 게이트 9시간이 경과에 섞여 22시간으로 보였다). 벽시계 총경과는
 부차 정보라 괄호로 함께 보여준다. */
-function ElapsedRow({ snapshot }: { snapshot: ProgressSnapshot }) {
+export function ElapsedRow({ snapshot }: { snapshot: ProgressSnapshot }) {
   const [now, setNow] = useState(() => Date.now());
   const ended = ["completed", "archived", "cancelled"].includes(snapshot.status);
   const waiting = Boolean(snapshot.pending_gate);

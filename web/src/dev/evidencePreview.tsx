@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { sectionKeys } from "@/api/sections";
 import type { SectionEvidence } from "@/api/types";
 import { BlockEvidence } from "@/features/preview/EvidencePanel";
+import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import "@/styles/global.css";
 
 const PROJECT = "p1";
@@ -105,6 +106,23 @@ const EVIDENCE: SectionEvidence = {
   traceable: true,
 } as SectionEvidence;
 
+const CITATIONS = [
+  {
+    number: 3,
+    title: "관세청 「2026년 CBAM 대응 안내서」",
+    url: "https://example.org/cbam-guide",
+    source_id: "src-1",
+    reliability: "high",
+  },
+  {
+    number: 7,
+    title: "European Commission, CBAM Implementing Regulation 2023/1773",
+    url: null,
+    source_id: "src-2",
+    reliability: "medium",
+  },
+] as never;
+
 const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 qc.setQueryData(sectionKeys.evidence(PROJECT, SECTION), EVIDENCE);
 
@@ -116,13 +134,43 @@ function App() {
         <p className="mb-4 text-xs text-fg-tertiary">
           드로어 폭(384px)에서 - 문장 → 출처 → 참고한 대목만 남았는지 본다.
         </p>
-        <div className="w-[384px] rounded border border-border p-4">
-          <BlockEvidence
-            projectId={PROJECT}
-            sectionId={SECTION}
-            blocks={[BLOCK]}
-            onLocate={(loc) => console.log("locate", loc)}
-          />
+        <div className="flex flex-wrap items-start gap-6">
+          <div>
+            <p className="mb-2 text-xs font-medium text-fg-secondary">
+              본문 - 표기 없는 문장에 점선(마우스를 올리면 근거 카드)
+            </p>
+            <div className="w-[560px] rounded border border-border p-4">
+              <MarkdownContent
+                content={BLOCK}
+                citations={CITATIONS}
+                evidence={EVIDENCE.items}
+                claims={EVIDENCE.claims}
+              />
+            </div>
+            <p className="mb-2 mt-4 text-xs font-medium text-fg-secondary">
+              인용 문장도 표시 켬 - 인용=파랑, 표기 없음=주황
+            </p>
+            <div className="w-[560px] rounded border border-border p-4">
+              <MarkdownContent
+                content={BLOCK}
+                citations={CITATIONS}
+                evidence={EVIDENCE.items}
+                claims={EVIDENCE.claims}
+                markCited
+              />
+            </div>
+          </div>
+          <div>
+            <p className="mb-2 text-xs font-medium text-fg-secondary">근거 패널(드로어 384px)</p>
+            <div className="w-[384px] rounded border border-border p-4">
+              <BlockEvidence
+                projectId={PROJECT}
+                sectionId={SECTION}
+                blocks={[BLOCK]}
+                onLocate={(loc) => console.log("locate", loc)}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </QueryClientProvider>
@@ -130,3 +178,13 @@ function App() {
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(<App />);
+
+// ?focus=N 이면 N번째 문장에 포커스를 줘 호버 카드를 띄운다 - 헤드리스에서 카드 자체를
+// 눈으로 확인하려면 필요하다(마우스 이벤트를 못 쏘므로 useFocus 경로를 쓴다).
+const focusIdx = Number(new URLSearchParams(location.search).get("focus") ?? "-1");
+if (focusIdx >= 0) {
+  setTimeout(() => {
+    const spans = document.querySelectorAll<HTMLElement>("span.cursor-help");
+    spans[focusIdx]?.focus();
+  }, 500);
+}

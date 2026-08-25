@@ -121,11 +121,14 @@ function foldSpaces(text: string): { norm: string; at: number[] } {
  * 근거 있는 문장까지 싸잡아 "표기 없음"으로 보이게 했다. 못 찾은 문장은 원문 그대로
  * 남긴다(억지로 맞추면 엉뚱한 대목이 칠해진다). */
 type MatchableClaim = { key: string; claim: ClaimAlignment };
+/** 문장 호버 렌더 옵션 - 층을 지나며 인자가 늘어나지 않게 한 덩이로 묶는다. */
+type ClaimRender = { chunks: EvidenceChunk[]; markCited: boolean; markUncited: boolean };
+const NO_CLAIM_RENDER: ClaimRender = { chunks: [], markCited: false, markUncited: true };
 
 function withClaimHovers(
   text: string,
   claims: MatchableClaim[],
-  chunks: EvidenceChunk[],
+  opts: ClaimRender,
   /** 문장 안팎의 순수 텍스트를 마저 처리한다([n] 인용 배지) */
   renderText: (piece: string) => ReactNode,
 ): ReactNode {
@@ -146,15 +149,22 @@ function withClaimHovers(
 
   const out: ReactNode[] = [];
   let cursor = 0;
-  spans.forEach((sp, i) => {
+  for (const sp of spans) {
     if (sp.start > cursor) out.push(renderText(text.slice(cursor, sp.start)));
     out.push(
-      <ClaimHoverCard key={`claim-${i}`} claim={sp.claim} chunks={chunks}>
+      // 키는 노드 안 위치 - 같은 문장이 두 번 나와도 자리가 다르면 갈린다.
+      <ClaimHoverCard
+        key={`claim-${sp.start}`}
+        claim={sp.claim}
+        chunks={opts.chunks}
+        markCited={opts.markCited}
+        markUncited={opts.markUncited}
+      >
         {renderText(text.slice(sp.start, sp.end))}
       </ClaimHoverCard>,
     );
     cursor = sp.end;
-  });
+  }
   if (cursor < text.length) out.push(renderText(text.slice(cursor)));
   return <>{out}</>;
 }
@@ -193,11 +203,11 @@ function processChildren(
   citations: CitationMap,
   evidence: EvidenceMap,
   claims: MatchableClaim[] = [],
-  chunks: EvidenceChunk[] = [],
+  opts: ClaimRender = NO_CLAIM_RENDER,
 ): ReactNode {
   return Children.map(children, (child) => {
     if (typeof child === "string") {
-      return withClaimHovers(child, claims, chunks, (piece) =>
+      return withClaimHovers(child, claims, opts, (piece) =>
         processString(piece, citations, evidence),
       );
     }
@@ -208,7 +218,7 @@ function processChildren(
         return cloneElement(
           el,
           undefined,
-          processChildren(el.props.children, citations, evidence, claims, chunks),
+          processChildren(el.props.children, citations, evidence, claims, opts),
         );
       }
       return child;
@@ -411,9 +421,11 @@ function prepareOutline(md: string): string {
 function buildComponents(
   citations: CitationMap,
   evidence: EvidenceMap,
-  claims: string[] = [],
+  claims: MatchableClaim[] = [],
+  opts: ClaimRender = NO_CLAIM_RENDER,
 ): Components {
-  const walk = (children: ReactNode) => processChildren(children, citations, evidence, claims);
+  const walk = (children: ReactNode) =>
+    processChildren(children, citations, evidence, claims, opts);
   return {
     h1: ({ children, ...props }) => (
       <h1 className="mb-4 mt-6 text-2xl font-semibold text-fg" {...props}>
@@ -591,12 +603,24 @@ export interface MarkdownContentProps {
   citations?: SectionCitation[];
   /** 근거 추적 결과 - 있으면 호버 카드에 그 번호가 가리킨 원문 대목이 함께 뜬다. */
   evidence?: EvidenceChunk[];
-  /** 근거 표기 없이 쓰인 문장(AI 서술) - 주면 본문에서 강조한다. 검토자가 어디를
-   *  지우거나 자료로 뒷받침할지 한눈에 고르게 하는 용도(2026-08-24 사용자 결정). */
-  aiClaims?: string[];
+  /** 문장별 근거 대조 결과 - 주면 본문 문장에 호버 카드가 붙는다(어느 자료의 어느
+   *  대목을 보고 쓴 문장인가). 근거 표기 없는 문장은 늘 약한 점선으로 표시된다
+   *  (2026-08-26 사용자 결정 - 종전 노란 배경 토글을 대체). */
+  claims?: ClaimAlignment[];
+  /** 인용한 문장에 파란 밑줄(기본 꺼짐) */
+  markCited?: boolean;
+  /** 표기 없는 문장(AI 서술)에 주황 밑줄(기본 켜짐) */
+  markUncited?: boolean;
 }
 
-export function MarkdownContent({ content, citations, evidence, aiClaims }: MarkdownContentProps) {
+export function MarkdownContent({
+  content,
+  citations,
+  evidence,
+  claims,
+  markCited = false,
+  markUncited = true,
+}: MarkdownContentProps) {
   const citationMap = useMemo<CitationMap>(
     () =>
       new Map(
@@ -614,15 +638,26 @@ export function MarkdownContent({ content, citations, evidence, aiClaims }: Mark
     }
     return map;
   }, [evidence]);
-  // 문장은 백엔드가 자른 그대로 오지만 렌더 글자와 공백·글머리가 어긋난다 - 같은 자로
-  // 정규화해 두고, 짧은 문장은 우연 일치를 피해 버린다.
-  const claimTexts = useMemo(
-    () => (aiClaims ?? []).map(normalizeClaim).filter((c) => c.length >= CLAIM_MIN_CHARS),
-    [aiClaims],
+  // 문장은 백엔드가 자른 그대로 오지만 렌더 글자와 공백·마커가 어긋난다 - 같은 자로
+  // 접어 두고, 짧은 문장은 우연 일치를 피해 버린다. (출처 n)은 렌더 전에 걷히므로
+  // 문장 쪽에서도 떼어 둬야 본문에서 찾을 수 있다.
+  const matchable = useMemo<MatchableClaim[]>(
+    () =>
+      (claims ?? [])
+        .map((c) => ({
+          key: normalizeClaim(c.claim.replace(SOURCE_MARK_RE, "")),
+          claim: c,
+        }))
+        .filter((m) => m.key.length >= CLAIM_MIN_CHARS),
+    [claims],
+  );
+  const claimRender = useMemo<ClaimRender>(
+    () => ({ chunks: evidence ?? [], markCited, markUncited }),
+    [evidence, markCited, markUncited],
   );
   const components = useMemo(
-    () => buildComponents(citationMap, evidenceMap, claimTexts),
-    [citationMap, evidenceMap, claimTexts],
+    () => buildComponents(citationMap, evidenceMap, matchable, claimRender),
+    [citationMap, evidenceMap, matchable, claimRender],
   );
   // 표 하단 (출처 n)을 먼저 실서지 줄로 풀어야 배지·걷어내기에 휩쓸리지 않는다.
   const resolved = useMemo(

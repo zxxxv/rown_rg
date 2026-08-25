@@ -10,14 +10,19 @@ import { useDownload } from "@/features/export/useDownload";
 // 버전 기록 - 커밋 로그처럼 읽힌다: 언제·왜(완성/재개 보존/재작성/확정)·규모.
 // 스냅샷은 서버가 자동으로 쌓고(조립·재개·재작성·확정), 수동 저장 버튼이 그 사이를 메운다.
 
+/** 버전 사유를 사람 말로. 목록은 "무엇이 왜 바뀌었나"를 읽는 자리지 기계 라벨을
+ *  보는 자리가 아니다 - rewrite:2.3만 나열되면 이력이 안 읽힌다. */
 function reasonLabel(reason: string): string {
   if (reason === "assemble") return "완성본";
-  if (reason === "reopen") return "재개 전 보존";
-  if (reason === "finalize") return "확정 시점";
-  if (reason.startsWith("rewrite:")) return `절 재작성 ${reason.slice("rewrite:".length)}`;
-  if (reason.startsWith("block:")) return `블록 수정 ${reason.slice("block:".length)}`;
-  if (reason.startsWith("manual:")) return `수동 저장 · ${reason.slice("manual:".length)}`;
-  return "수동 저장";
+  if (reason === "reopen") return "다시 열기 직전";
+  if (reason === "finalize") return "최종 확정";
+  if (reason === "outline") return "목차 수정";
+  if (reason === "sources") return "자료 채택 변경 · 인용 번호 조정";
+  if (reason.startsWith("rewrite:")) return `AI가 다시 씀 · ${reason.slice("rewrite:".length)}절`;
+  if (reason.startsWith("block:")) return `블록만 고침 · ${reason.slice("block:".length)}절`;
+  if (reason.startsWith("edit:")) return `직접 고침 · ${reason.slice("edit:".length)}절`;
+  if (reason.startsWith("manual:")) return `직접 저장 · ${reason.slice("manual:".length)}`;
+  return "직접 저장";
 }
 
 function fmtDate(iso: string): string {
@@ -78,8 +83,7 @@ export function VersionHistoryCard({
           <History className="h-4 w-4 shrink-0 text-fg-secondary" aria-hidden />
           <span className="text-sm font-medium text-fg">버전 기록</span>
           <span className="text-xs text-fg-tertiary">
-            {versions.length}개 · 최신 v{versions[0].version_no} ({fmtDate(versions[0].created_at)}
-            )
+            {versions.length}개 · 최신 v{versions[0].version_no} ({fmtDate(versions[0].created_at)})
           </span>
         </button>
         <Button

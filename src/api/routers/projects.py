@@ -1440,6 +1440,12 @@ async def update_project_config(
         if plan:
             await sync_rows_to_plan(session, project.id, plan)
     await session.flush()
+    if outline_changed:
+        # 목차 수정은 절 행을 재정렬하고(삭제된 절은 사라진다) 미반영을 만든다 —
+        # 되돌릴 지점이 있어야 마음 놓고 고친다.
+        from src.services.sections.versions import snapshot_report
+
+        await snapshot_report(session, project.id, reason="outline", created_by=current_user.id)
     await session.refresh(project)
     return project
 
@@ -1613,7 +1619,11 @@ async def update_project_source(
         # 당겨지는데 본문 마커는 그대로라 문서 전체 인용이 어긋난다(참고문헌만
         # 다시 매겨지고 본문은 안 매겨져서다). 순수 코드라 비용이 없으니 여기서
         # 바로 맞춘다 — 다운로드 시점으로 미루면 화면의 인용도 틀린 채로 남는다.
-        await rebase_global_numbers(session, project.id)
+        if await rebase_global_numbers(session, project.id):
+            # 재번호가 본문을 실제로 고쳤다 — 흔적을 남긴다(번호가 그대로면 조용하다).
+            from src.services.sections.versions import snapshot_report
+
+            await snapshot_report(session, project.id, reason="sources", created_by=current_user.id)
     return _to_source_item(row)
 
 
@@ -2582,6 +2592,43 @@ async def get_report_version(
     )
 
 
+@router.post("/{project_id}/versions/{version_no}/restore/{section_id}")
+async def restore_section_from_version(
+    project_id: UUID,
+    version_no: int,
+    section_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> dict[str, Any]:
+    """한 절을 그 버전의 내용으로 되돌린다.
+
+    **전체 롤백이 아닌 이유**: 보고서는 여러 번에 걸쳐 고쳐진다. 3.2가 마음에 안 들어
+    되돌리려는데 전체를 롤백하면 그 사이 손본 다른 절의 개선까지 함께 사라진다.
+
+    되돌리기도 덮어쓰기라 직후를 버전으로 얼린다 - 되돌린 것을 다시 되돌릴 수 있어야
+    사람이 마음 놓고 누른다.
+    """
+    from src.services.sections.versions import restore_section, snapshot_report
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    snap = await restore_section(session, project.id, version_no, section_id)
+    if snap is None:
+        raise NotFoundError(message="그 버전에 이 절이 없습니다", code="VERSION_SECTION_NOT_FOUND")
+    project.updated_at = clock_now()
+    await session.flush()
+    label = f"{snap.get('chapter_number')}.{snap.get('section_number')}"
+    await snapshot_report(
+        session, project.id, reason=f"restore:{label}", created_by=current_user.id
+    )
+    logger.info(
+        "section.restore_api",
+        project_id=str(project.id),
+        section=label,
+        from_version=version_no,
+    )
+    return {"restored": True, "section": label, "from_version": version_no}
+
+
 @router.get("/{project_id}/versions/{version_no}/download")
 async def download_report_version(
     project_id: UUID,
@@ -3315,6 +3362,17 @@ async def update_section_content(
     # 흔적이 프로젝트 레벨에서 보이게 한다.
     project.updated_at = clock_now()
     await session.flush()
+    # 사람이 고친 것도 버전으로 남긴다 — 종전에는 **AI가 고치면 남고 사람이 고치면
+    # 안 남았다**(재작성·블록 재작성만 스냅샷). 되돌리고 싶은 순간은 오히려 손으로
+    # 고친 쪽이 많다. 내용 지문이 같으면 새 버전을 안 만드므로 무해한 저장은 조용하다.
+    from src.services.sections.versions import snapshot_report
+
+    await snapshot_report(
+        session,
+        project.id,
+        reason=f"edit:{row.chapter_number}.{row.section_number}",
+        created_by=current_user.id,
+    )
     await session.refresh(row)
     return _section_content(
         row,

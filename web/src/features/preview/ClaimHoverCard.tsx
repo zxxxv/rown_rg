@@ -1,7 +1,7 @@
 import {
   autoUpdate,
-  flip,
   FloatingPortal,
+  flip,
   offset,
   shift,
   useDismiss,
@@ -22,14 +22,20 @@ import { textFragmentUrl } from "./sourceLink";
 // 패널을 여는 왕복이 없어야 읽으면서 대조가 일어난다(2026-08-26 사용자 요청).
 //
 // 표시 규약:
-//   - 근거 표기 없는 문장: 늘 약한 점선 밑줄(경고색). 배경색으로 칠하면 개조식 보고서가
-//     통째로 노래져서 신호가 죽는다 - 그래서 종전엔 토글로 숨겨 뒀는데, 약한 신호로
-//     바꾸면 늘 켜 둘 수 있다.
-//   - 근거가 있는 문장: 평소엔 표시 없음, 마우스를 올리면 점선이 드러난다.
+//   - 표기 없는 문장(AI 서술): 주황 점선 밑줄. 배경색으로 칠하면 개조식 보고서가 통째로
+//     노래져 신호가 죽으므로 밑줄만 쓴다.
+//   - 인용한 문장: 파란 점선 밑줄. 색은 본문 [n] 배지와 같은 계열이라 "번호가 붙은
+//     문장"과 눈으로 이어진다.
+//   - 둘 다 화면에서 끄고 켤 수 있다(preview 상단 스위치). 꺼도 마우스를 올리면 점선이
+//     드러나고 카드가 뜬다 - 표시는 훑기용, 호버는 확인용.
+//
+// 밑줄은 border-b가 아니라 text-decoration으로 그린다 - 1px 테두리는 축소된 화면에서
+// 사실상 사라졌다(2026-08-26 실사용 지적). 글자를 따라 흐르고 두께를 줄 수 있다.
 
 /** 호버 카드에 실을 한 줄 요약 - 빠진 것을 사람이 할 일로 말한다(판정 등급이 아니라). */
 function missingNote(claim: ClaimAlignment): string | null {
-  if (claim.status === "uncited") return "인용 표기가 없는 문장입니다 - 자료 없이 쓰였을 수 있습니다";
+  if (claim.status === "uncited")
+    return "인용 표기가 없는 문장입니다 - 자료 없이 쓰였을 수 있습니다";
   if (!claim.span_text) return "참고한 대목을 특정하지 못했습니다 - 원문에서 직접 확인하세요";
   return null;
 }
@@ -37,11 +43,17 @@ function missingNote(claim: ClaimAlignment): string | null {
 export function ClaimHoverCard({
   claim,
   chunks,
+  markCited = false,
+  markUncited = true,
   children,
 }: {
   claim: ClaimAlignment;
   /** 절의 근거 청크 - 인용 번호·chunk_id로 자료 이름을 찾는다(추가 fetch 없음) */
   chunks: EvidenceChunk[];
+  /** 인용한 문장에 파란 밑줄 */
+  markCited?: boolean;
+  /** 표기 없는 문장(AI 서술)에 주황 밑줄 */
+  markUncited?: boolean;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -74,12 +86,17 @@ export function ClaimHoverCard({
       <span
         ref={refs.setReference}
         {...getReferenceProps()}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: 툴팁 트리거라 키보드로도 근거를 열 수 있어야 한다 - 마우스 전용이면 검증 경로가 포인터 사용자에게만 열린다
         tabIndex={0}
         className={cn(
-          "cursor-help border-b border-dashed transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-accent",
+          "cursor-help underline decoration-dotted decoration-2 underline-offset-4 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent",
           uncited
-            ? "border-fg-warning/60 hover:border-fg-warning"
-            : "border-transparent hover:border-border-strong",
+            ? markUncited
+              ? "decoration-fg-warning"
+              : "decoration-transparent hover:decoration-fg-warning/70"
+            : markCited
+              ? "decoration-fg-info"
+              : "decoration-transparent hover:decoration-fg-info/70",
         )}
       >
         {children}

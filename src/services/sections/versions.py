@@ -203,3 +203,54 @@ def diff_sections(base: list[dict[str, Any]], target: list[dict[str, Any]]) -> l
         if s["section_id"] not in emitted:
             out.append(entry(s, None))
     return out
+
+
+async def restore_section(
+    session: AsyncSession, project_id: UUID, version_no: int, section_id: UUID
+) -> dict[str, Any] | None:
+    """한 절만 그 버전의 내용으로 되돌린다 — 없으면 None.
+
+    **전체 롤백이 아니라 절 단위인 이유**: 보고서는 여러 번에 걸쳐 고쳐진다. 3.2가
+    마음에 안 들어 되돌리려는데 전체를 롤백하면 그 사이 손본 다른 절의 개선까지 함께
+    사라진다. 실제로 사람이 원하는 건 "이 절만 그때로"다(2026-08-26).
+
+    되돌린 직후를 다시 스냅샷하지 않는다 — 호출부가 그 책임을 진다(되돌리기도 덮어
+    쓰기라 흔적이 남아야 하지만, 커밋 경계는 opener가 정한다).
+
+    plan_hash는 **건드리지 않는다**: 되돌린 본문이 지금 계획대로인지 아닌지는 지문이
+    아니라 그 시점 계약이 답한다. 옛 본문을 되살리면 미반영으로 뜨는 게 정직하다.
+    """
+    row = (
+        await session.execute(
+            select(ReportVersion).where(
+                ReportVersion.project_id == project_id,
+                ReportVersion.version_no == version_no,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    snap = next(
+        (s for s in (row.sections or []) if str(s.get("section_id")) == str(section_id)), None
+    )
+    if snap is None:
+        return None
+
+    target = (
+        await session.execute(
+            select(Section).where(Section.project_id == project_id, Section.id == section_id)
+        )
+    ).scalar_one_or_none()
+    if target is None:
+        return None
+
+    target.content = str(snap.get("content") or "")
+    target.source_ids = [UUID(str(s)) for s in (snap.get("source_ids") or [])]
+    target.status = "completed" if target.content.strip() else "pending"
+    logger.info(
+        "section.restored",
+        project_id=str(project_id),
+        section_id=str(section_id),
+        from_version=version_no,
+    )
+    return snap

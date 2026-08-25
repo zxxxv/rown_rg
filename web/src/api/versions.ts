@@ -140,3 +140,22 @@ export function useUnfinalizeProject(projectId: string) {
     },
   });
 }
+
+// ─── 절 단위 되돌리기 ───
+// 전체 롤백이 아닌 이유: 보고서는 여러 번에 걸쳐 고쳐진다. 한 절이 마음에 안 들어
+// 되돌리려는데 전체를 롤백하면 그 사이 손본 다른 절의 개선까지 사라진다(2026-08-26).
+
+export function useRestoreSection(projectId: string, versionNo: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...versionKeys.list(projectId), "restore", versionNo],
+    mutationFn: (sectionId: string) =>
+      apiClient.post<unknown>(`projects/${projectId}/versions/${versionNo}/restore/${sectionId}`, {
+        json: {},
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: versionKeys.all });
+      void qc.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
+    },
+  });
+}

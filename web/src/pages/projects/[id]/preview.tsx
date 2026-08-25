@@ -915,14 +915,13 @@ function SectionView({
   // 근거 0건 블록에서도 빈 패널이 떠 불편하다(2026-08-12 사용자 지적). 근거 있는
   // 블록의 '근거 N' 표시를 사용자가 클릭했을 때만 그 블록의 근거를 연다.
   const [evidenceIdx, setEvidenceIdx] = useState<number | null>(null);
-  // 근거 표기 없는 문장(AI 서술) 본문 강조 - 기본은 끔. 늘 칠해 두면 개조식 보고서에서
-  // 표기 없는 문장이 흔해 화면이 노랗게 덮인다. 검토할 때만 켠다(2026-08-24 결정).
-  const [showAiClaims, setShowAiClaims] = useState(false);
-  const aiClaims = useMemo(
-    () =>
-      (evidenceQuery.data?.claims ?? []).filter((c) => c.status === "uncited").map((c) => c.claim),
-    [evidenceQuery.data],
-  );
+  // 근거 표기 없는 문장은 늘 약한 점선으로 표시된다(MarkdownContent) - 노란 배경을
+  // 토글로 켜던 종전 방식을 대체한다(2026-08-26 결정). 약한 신호라 늘 켜 둬도
+  // 화면이 덮이지 않고, 문장에 마우스를 올리면 근거까지 그 자리에서 보인다.
+  // 두 층을 따로 끄고 켠다 - AI 서술(주황)은 기본 켬, 인용 문장(파랑)은 기본 끔.
+  // 켜 두면 "자료를 보고 쓴 글 / AI 서술"이 한눈에 갈리고, 꺼도 마우스를 올리면 보인다.
+  const [markUncited, setMarkUncited] = useState(true);
+  const [markCited, setMarkCited] = useState(false);
   const evidenceBlock = evidenceIdx !== null ? (blocks[evidenceIdx] ?? null) : null;
   // 드로어 2면 중 원문 뷰어 - 근거 카드·수치에서 "원문에서 보기"를 눌렀을 때만.
   // 근거 목록으로 돌아가는 뒤로가기가 있으므로 블록이 바뀌면 반드시 비운다.
@@ -1246,30 +1245,48 @@ function SectionView({
             {/* 절 단위 대조 요약 - 블록을 일일이 열지 않아도 이 절의 근거 상태를 한 줄로.
                 자세한 대조는 경고색 블록의 '근거 N' 표시를 눌러 드로어에서 한다. */}
             {EVIDENCE_UI_ENABLED && claimStats ? (
-              <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-fg-tertiary">
-                <span className="font-medium text-fg-secondary">근거 대조</span>
+              // 11px은 읽히지 않았다(2026-08-26 지적) - 이 줄은 절을 훑기 전에 어디를
+              // 볼지 정하는 자리라 본문과 같은 크기로 읽혀야 한다.
+              <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-secondary">
+                <span className="font-medium text-fg">근거 대조</span>
                 <span>
                   문장 {claimStats.total}개 중 {claimStats.aligned}개는 원문 대목까지 확인됨
                 </span>
                 {claimStats.needsCheck > 0 ? (
                   <span className="text-fg-warning">직접 확인 필요 {claimStats.needsCheck}</span>
                 ) : null}
-                {claimStats.uncited > 0 ? (
-                  // 근거 표기 없이 쓰인 문장 = AI가 자료 없이 쓴 서술 후보. 어느 문장인지
-                  // 본문에서 바로 짚어 줘야 지우거나 자료로 받칠 수 있다(2026-08-24 결정).
-                  <button
-                    type="button"
-                    onClick={() => setShowAiClaims((v) => !v)}
-                    aria-pressed={showAiClaims}
-                    className={cn(
-                      "rounded px-1.5 py-0.5 transition-colors hover:bg-bg-secondary",
-                      showAiClaims && "bg-bg-warning text-fg",
-                    )}
-                  >
-                    표기 없음 {claimStats.uncited}
-                    {showAiClaims ? " · 본문 강조 켬" : " · 본문에서 보기"}
-                  </button>
-                ) : null}
+                {/* 본문 밑줄 스위치 2개 - 종전 토글은 통계 사이에 끼인 회색 글씨라 있는
+                    줄도 몰랐다(2026-08-26 지적). 테두리를 줘 스위치로 보이게 하고, 켜짐은
+                    각 층의 색으로 남긴다. 끄더라도 마우스를 올리면 밑줄과 카드가 뜬다. */}
+                <button
+                  type="button"
+                  onClick={() => setMarkUncited((v) => !v)}
+                  aria-pressed={markUncited}
+                  title="근거 표기 없이 쓰인 문장(AI 서술)에 주황 밑줄을 그립니다"
+                  className={cn(
+                    "rounded border px-2 py-0.5 transition-colors",
+                    markUncited
+                      ? "border-fg-warning bg-bg-warning text-fg"
+                      : "border-border text-fg-secondary hover:border-border-strong",
+                  )}
+                >
+                  AI 서술 {claimStats.uncited} {markUncited ? "표시 켬" : "표시 끔"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMarkCited((v) => !v)}
+                  aria-pressed={markCited}
+                  title="자료를 인용해 쓴 문장에 파란 밑줄을 그립니다"
+                  className={cn(
+                    "rounded border px-2 py-0.5 transition-colors",
+                    markCited
+                      ? "border-fg-info bg-bg-info text-fg-info"
+                      : "border-border text-fg-secondary hover:border-border-strong",
+                  )}
+                >
+                  인용 문장 {claimStats.total - claimStats.uncited}{" "}
+                  {markCited ? "표시 켬" : "표시 끔"}
+                </button>
                 {evidenceQuery.data?.traceable === false ? (
                   // 근거 기록 도입(8/11) 전에 작성된 절 - 번호와 청크의 대응이 없어
                   // 블록 배지·드로어를 못 연다. 그 사실을 알려야 "왜 배지가 없지"가 안 된다.
@@ -1338,6 +1355,19 @@ function SectionView({
                           근거 0건 블록에서 빈 패널이 뜨는 불편을 없앤다(2026-08-12).
                           강한 경고(못 찾음·근거 없는 수치)가 있는 블록은 배지를 경고색으로 -
                           블록을 열지 않고도 어디를 볼지 훑을 수 있게(2026-08-14 지적). */}
+                      {EVIDENCE_UI_ENABLED && (evidenceCounts[idx]?.count ?? 0) === 0 ? (
+                        // 인용이 하나도 없는 블록 - 종전엔 배지를 아예 안 그려서 "근거 없이
+                        // 쓰인 블록"이 **부재**로만 나타났다. 규칙을 아는 사람만 읽을 수 있는
+                        // 신호라 훑을 때 놓친다(2026-08-26 지적). 부재를 존재로 바꾼다.
+                        // 경고색은 쓰지 않는다 - 개조식 보고서엔 표기 없는 블록이 흔하고,
+                        // 다 붉히면 진짜 경고(못 찾음·근거 없는 수치)가 묻힌다.
+                        <span
+                          title="이 블록에는 인용 표기가 없습니다 - 근거 없이 쓰였을 수 있습니다"
+                          className="absolute -top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full border border-dashed border-border bg-bg px-1.5 py-0.5 text-[10px] text-fg-tertiary"
+                        >
+                          근거 없음
+                        </span>
+                      ) : null}
                       {EVIDENCE_UI_ENABLED && (evidenceCounts[idx]?.count ?? 0) > 0 ? (
                         <button
                           type="button"
@@ -1368,7 +1398,9 @@ function SectionView({
                         content={block}
                         citations={data.citations}
                         evidence={evidenceQuery.data?.items}
-                        aiClaims={showAiClaims ? aiClaims : undefined}
+                        claims={evidenceQuery.data?.claims}
+                        markCited={markCited}
+                        markUncited={markUncited}
                       />
                       {selectedIdx.has(idx) && selectedIdx.size === 1 ? (
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">

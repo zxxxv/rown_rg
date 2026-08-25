@@ -55,6 +55,7 @@ import { env } from "@/env";
 import { UnreflectedCard } from "@/features/export/UnreflectedCard";
 import { useDownload } from "@/features/export/useDownload";
 import { PipelineStepper } from "@/features/progress/PipelineStepper";
+import { StageLine } from "@/features/progress/StageLine";
 import { StatePanel } from "@/features/progress/StatePanel";
 import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
 import { presetLabel } from "@/features/project-config/presets";
@@ -263,6 +264,11 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
             </div>
             <h1 className="max-w-3xl text-3xl font-semibold text-fg">{project.title}</h1>
             <p className="max-w-3xl text-sm text-fg-secondary">{project.topic}</p>
+            {/* 지금 어디까지 왔고 다음에 뭘 하면 되나 - 여러 화면을 오가며 고치다 보면
+                상태가 헷갈린다는 지적(2026-08-26). 산출물에서 센 값만 쓴다. */}
+            <div className="max-w-3xl">
+              <StageLine project={project} snapshot={usageQuery.data} />
+            </div>
             <dl className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-fg-tertiary">
               <Meta label="생성일" value={project.created_at.slice(0, 10)} />
               {project.updated_at ? (
@@ -450,6 +456,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
           ) : (
             <StatePanel
               project={project}
+              snapshot={usageQuery.data}
               onOpenConfig={() => {
                 setOpenPanel("config");
                 document.getElementById("project-config")?.scrollIntoView({ behavior: "smooth" });
