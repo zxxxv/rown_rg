@@ -709,6 +709,10 @@ async def get_project(
 async def run_project(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
+    # 역할 먼저, 비용 나중 — 뷰어에게 "한도 초과(429)"라고 답하면 거짓말이다. 실제 사유는
+    # "열람 전용이라 실행할 수 없음(403)"이고, 뷰어 한도가 $0인 덕에 우연히 막히고
+    # 있었을 뿐이다(2026-08-26 실측: 한도를 올리면 뷰어가 런을 시작할 수 있었다).
+    _writer: Annotated[User, Depends(require_writer)],
     # 비용 한도 게이트를 실행 진입점에 배선 — 초과 시 프로젝트 조회 전에 429로 빠르게 막는다.
     # (enforce_cost_limit이 내부에서 get_current_active_user를 호출하고 User를 반환)
     current_user: Annotated[User, Depends(enforce_cost_limit)],
@@ -934,9 +938,15 @@ async def get_drift(
 
     rows = (
         await session.execute(
-            select(Section.id, Section.content, Section.plan_hash, Section.source_ids).where(
-                Section.project_id == project.id
-            )
+            select(
+                Section.id,
+                Section.content,
+                Section.plan_hash,
+                Section.source_ids,
+                # 번호도 함께 — 절 안정 id 이전 보고서의 위치 폴백에 쓴다.
+                Section.chapter_number,
+                Section.section_number,
+            ).where(Section.project_id == project.id)
         )
     ).all()
     # sections.source_ids는 이름과 달리 **청크 id**다 — 자료 채택 여부를 보려면
@@ -954,17 +964,32 @@ async def get_drift(
             )
         ).all()
     }
-    snapshots = {
-        r.id: SectionSnapshot(
-            section_id=r.id,
-            has_content=bool((r.content or "").strip()),
-            plan_hash=r.plan_hash or "",
+
+    def _snap(row, section_id: UUID, plan_hash: str) -> SectionSnapshot:
+        return SectionSnapshot(
+            section_id=section_id,
+            has_content=bool((row.content or "").strip()),
+            plan_hash=plan_hash,
             excluded_source_ids=tuple(
-                dict.fromkeys(dropped[cid][0] for cid in (r.source_ids or []) if cid in dropped)
+                dict.fromkeys(dropped[cid][0] for cid in (row.source_ids or []) if cid in dropped)
             ),
         )
-        for r in rows
-    }
+
+    snapshots = {r.id: _snap(r, r.id, r.plan_hash or "") for r in rows}
+    # 절 안정 id(0043) 이전에 만들어진 보고서는 plan의 section_id와 행 id가 어긋날 수
+    # 있다. 그대로 두면 **본문이 멀쩡한 절이 전부 '본문 없음'으로** 뜨고, 사람이
+    # "전체 다시 쓰기"를 누르면 실측 $13를 태우고 멀쩡한 본문을 덮어쓴다(2026-08-26
+    # 실측: v5c-2 20절 전부 본문 있는데 id 일치 0). 번호로 한 번 더 찾아 준다 —
+    # sync_rows_to_plan이 번호를 목차에 맞춰 두므로 위치는 믿을 수 있다.
+    by_pos = {(r.chapter_number, r.section_number): r for r in rows}
+    for plan in plans:
+        if plan.section_id in snapshots:
+            continue
+        fallback = by_pos.get((plan.chapter_number, plan.section_number))
+        if fallback is not None:
+            # 지문은 빈 값으로 둔다 — id가 어긋난 행의 지문은 이 절의 것이라 단정할 수
+            # 없다. 판정에서 빠지므로 거짓 미반영도, 거짓 안심도 만들지 않는다.
+            snapshots[plan.section_id] = _snap(fallback, plan.section_id, "")
     titles = {sid: title for sid, title in dropped.values()}
     items = detect_drift(plans, snapshots)
     return DriftRead(

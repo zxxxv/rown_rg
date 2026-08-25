@@ -46,9 +46,7 @@ async def gpu_monitor(
     _: Annotated[User, Depends(require_role(Role.SUPER_ADMIN))],
 ) -> dict[str, Any]:
     base_url = (
-        settings.reranker_remote_url
-        or settings.embedding_remote_url
-        or settings.parser_remote_url
+        settings.reranker_remote_url or settings.embedding_remote_url or settings.parser_remote_url
     ).rstrip("/")
 
     service: dict[str, Any]

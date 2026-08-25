@@ -260,9 +260,7 @@ class PdfParser(ParserClient):
             # 저품질본이 영원히 재사용된다(실사고의 두 번째 층). docling 결과와
             # v3 이전(파서 미기록) 캐시본은 그대로 신뢰한다.
             if cached.parser_name == "pymupdf" and self._docling_would_attempt(size_bytes):
-                logger.info(
-                    "pdf.parse.cache_bypass_pymupdf", path=str(path), size_bytes=size_bytes
-                )
+                logger.info("pdf.parse.cache_bypass_pymupdf", path=str(path), size_bytes=size_bytes)
             else:
                 logger.info("pdf.parse.cache_hit", path=str(path))
                 return cached

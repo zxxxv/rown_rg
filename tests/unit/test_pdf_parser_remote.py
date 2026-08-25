@@ -32,8 +32,14 @@ def _make_pdf(path: Path, pages: int = 2) -> None:
 class _FakeRemote:
     """원격 변환기 대역 — 호출 여부와 응답을 시나리오별로 제어한다."""
 
-    def __init__(self, *, markdown: str = "# Remote", fail: Exception | None = None,
-                 max_bytes: int = 25 * 1024 * 1024, in_cooldown: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        markdown: str = "# Remote",
+        fail: Exception | None = None,
+        max_bytes: int = 25 * 1024 * 1024,
+        in_cooldown: bool = False,
+    ) -> None:
         self.markdown = markdown
         self.fail = fail
         self.max_bytes = max_bytes
@@ -142,9 +148,7 @@ class TestChain:
         assert fake.calls == 0
         assert result.parser_name == "pymupdf"
 
-    async def test_fallback_policy_pymupdf_skips_local_docling(
-        self, tmp_path: Path, monkeypatch
-    ):
+    async def test_fallback_policy_pymupdf_skips_local_docling(self, tmp_path: Path, monkeypatch):
         # 원격 미설정 + 정책 pymupdf = 앱 서버에서 docling을 아예 돌리지 않는 배포
         monkeypatch.setattr(settings, "parser_remote_url", "")
         monkeypatch.setattr(settings, "parser_remote_fallback", "pymupdf")
@@ -183,9 +187,7 @@ class TestCacheBypass:
         assert third.parser_name == "docling-remote"
         assert fake.calls == 1
 
-    async def test_pymupdf_cache_hits_while_remote_in_cooldown(
-        self, tmp_path: Path, remote_on
-    ):
+    async def test_pymupdf_cache_hits_while_remote_in_cooldown(self, tmp_path: Path, remote_on):
         pdf = tmp_path / "a.pdf"
         _make_pdf(pdf)
 

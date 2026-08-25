@@ -51,9 +51,7 @@ class _FakeParseService:
 
 @pytest.fixture
 def fake_service(monkeypatch) -> _FakeParseService:
-    monkeypatch.setattr(
-        gpu_main, "config", dataclasses.replace(gpu_main.config, token="testtoken")
-    )
+    monkeypatch.setattr(gpu_main, "config", dataclasses.replace(gpu_main.config, token="testtoken"))
     monkeypatch.setattr(gpu_main.service, "load", lambda: None)
     fake = _FakeParseService()
     monkeypatch.setattr(gpu_main, "parse_service", fake)
@@ -99,9 +97,7 @@ class TestParseEndpoint:
         assert not fake_service.seen_tmp_path.exists()
 
     def test_missing_token_is_401(self, client):
-        response = client.post(
-            "/v1/parse", files={"file": ("doc.pdf", b"%PDF", "application/pdf")}
-        )
+        response = client.post("/v1/parse", files={"file": ("doc.pdf", b"%PDF", "application/pdf")})
         assert response.status_code == 401
 
     def test_disabled_is_501(self, client, monkeypatch):

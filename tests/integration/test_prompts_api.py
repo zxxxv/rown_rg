@@ -65,7 +65,7 @@ class TestPersonalPrompts:
         assert gone.status_code == 404
 
     async def test_owner_isolation(
-        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+        self, test_client: AsyncClient, worker_token: str, viewer_token: str
     ) -> None:
         created = await test_client.post(
             "/api/v1/prompts/personal",
@@ -73,9 +73,10 @@ class TestPersonalPrompts:
             json={"kind": "rule", "name": "내 문체", "content": "간결하게."},
         )
         pid = created.json()["id"]
-        # 다른 사용자는 접근 불가(404)
+        # 비관리자 동료에게는 보이지 않는다(404). 관리자 열람은 대리 조작을 위해
+        # 열려 있으므로 여기서 다른 사용자 대역으로 쓰지 않는다.
         other = await test_client.get(
-            f"/api/v1/prompts/personal/{pid}", headers=_auth(super_admin_token)
+            f"/api/v1/prompts/personal/{pid}", headers=_auth(viewer_token)
         )
         assert other.status_code == 404
 
@@ -233,9 +234,13 @@ class TestSharedAgents:
     ) -> None:
         await self._create_public(test_client, worker_token, "공개 탄소규제 분석가")
         analysts = await test_client.get("/api/v1/analysts", headers=_auth(super_admin_token))
-        hit = next(a for a in analysts.json() if a["name"] == "공개 탄소규제 분석가")
+        # 표시 이름에 소유자가 **언제나** 붙는다 - 겹칠 때만 붙이면 '민짜 이름'의
+        # 주인이 목록 순서로 정해져, 저장된 목차의 참조가 조용히 남의 에이전트로
+        # 옮겨간다(services/prompts/personal._shared_name, 실측 A→B).
+        hit = next(a for a in analysts.json() if a["name"].startswith("공개 탄소규제 분석가"))
         assert hit["shared"] is True
-        assert hit["owner_name"]  # 누구 것인지 보여야 같은 이름 둘을 가릴 수 있다
+        assert hit["owner_name"]
+        assert hit["owner_name"] in hit["name"]
 
     async def test_private_agent_stays_invisible(
         self, test_client: AsyncClient, worker_token: str, super_admin_token: str
@@ -314,6 +319,11 @@ class TestSharedAgents:
     ) -> None:
         """UNKNOWN_ANALYST 422가 나던 자리 - 공개 에이전트는 남의 목차에서도 통과해야 한다."""
         await self._create_public(test_client, worker_token, "목차에 배정할 공개 분석가")
+        # 목차는 에이전트를 **표시 이름**으로 참조한다 - 공유 항목은 소유자가 붙는다.
+        listed = await test_client.get("/api/v1/analysts", headers=_auth(super_admin_token))
+        shared_name = next(
+            a["name"] for a in listed.json() if a["name"].startswith("목차에 배정할 공개 분석가")
+        )
         resp = await test_client.post(
             "/api/v1/projects",
             headers=_auth(super_admin_token),
@@ -328,7 +338,7 @@ class TestSharedAgents:
                                 "sections": [
                                     {
                                         "title": "1.1",
-                                        "analysts": ["목차에 배정할 공개 분석가"],
+                                        "analysts": [shared_name],
                                     }
                                 ],
                             }

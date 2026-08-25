@@ -49,16 +49,15 @@ async def _project(session: AsyncSession, owner_id: uuid.UUID, *, status: str) -
 
 
 class TestConfigFrozen:
-    @pytest.mark.parametrize("status", ["completed", "archived"])
-    async def test_completed_project_rejects_config_change(
+    async def test_archived_project_rejects_config_change(
         self,
         test_client: AsyncClient,
         worker_token: str,
         worker_user: User,
         test_session: AsyncSession,
-        status: str,
     ) -> None:
-        pid = await _project(test_session, worker_user.id, status=status)
+        """보관본만 동결이다 — 되살릴 일이 없는 기록이라 손대지 않는다."""
+        pid = await _project(test_session, worker_user.id, status="archived")
         resp = await test_client.patch(
             f"/api/v1/projects/{pid}/config",
             headers=_auth(worker_token),
@@ -66,6 +65,27 @@ class TestConfigFrozen:
         )
         assert resp.status_code == 422, resp.text
         assert resp.json()["error"]["code"] == "PROJECT_CONFIG_FROZEN"
+
+    async def test_completed_project_accepts_config_change(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ) -> None:
+        """완료는 더 이상 동결이 아니다(2026-08-25 설계 전환).
+
+        보고서는 완주가 끝이 아니라 품질을 보고 계속 손보는 대상이고, 고친 내용이
+        본문에 닿았는지는 '미반영'으로 드러난다(services/sections/drift). 동결의 옛
+        근거가 "저장해도 반영될 자리가 없다"였는데, 이제 저장이 실제로 무언가를 한다.
+        """
+        pid = await _project(test_session, worker_user.id, status="completed")
+        resp = await test_client.patch(
+            f"/api/v1/projects/{pid}/config",
+            headers=_auth(worker_token),
+            json={"config": {"outline": _OUTLINE, "model_mode": "premium"}},
+        )
+        assert resp.status_code == 200, resp.text
 
     @pytest.mark.parametrize("status", ["created", "planning", "researching", "writing"])
     async def test_unfinished_project_still_accepts_config_change(

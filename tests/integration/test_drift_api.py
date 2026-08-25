@@ -243,6 +243,45 @@ class TestDriftApi:
         after = await test_client.get(f"/api/v1/projects/{pid}/drift", headers=_auth(worker_token))
         assert after.json()["sections"] == []
 
+    async def test_legacy_id_mismatch_does_not_fake_missing_sections(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        """절 안정 id 이전 보고서 - 행 id가 어긋나도 본문이 있으면 미반영이 아니다.
+
+        그대로 두면 본문 멀쩡한 절이 전부 '본문 없음'으로 떠서, 사람이 전체 다시 쓰기를
+        누르면 실측 $13를 태우고 멀쩡한 본문을 덮어쓴다(2026-08-26 실측: v5c-2 20절
+        전부 본문 있는데 id 일치 0).
+        """
+        sid = uuid.uuid4()
+        pid = await _completed_project(test_session, worker_user.id, sid, "원래 방향")
+        # 행 id만 옛 값으로 바꿔 놓는다(목차 정본의 section_id와 어긋난 상태 재현).
+        row = await test_session.get(Section, sid)
+        stale = uuid.uuid4()
+        await test_session.delete(row)
+        await test_session.flush()
+        test_session.add(
+            Section(
+                id=stale,
+                project_id=pid,
+                chapter_number=1,
+                section_number=1,
+                chapter_title="1장",
+                title="배경",
+                content="이미 쓰인 본문입니다.",
+                source_ids=[],
+                status="completed",
+            )
+        )
+        await test_session.commit()
+
+        resp = await test_client.get(f"/api/v1/projects/{pid}/drift", headers=_auth(worker_token))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["sections"] == [], "번호로 찾아 본문이 있으면 미반영이 아니다"
+
     async def test_archived_report_stays_frozen(
         self,
         test_client: AsyncClient,
