@@ -216,7 +216,8 @@ export const projectsHandlers = [
             severity: "warning",
             category: "수치 일관성",
             section_ref: "3.1",
-            detail: "고령화율이 1.2절은 24.1%, 3.1절은 24.6%로 상이하게 인용됨 - 출처 기준 연도 확인 필요",
+            detail:
+              "고령화율이 1.2절은 24.1%, 3.1절은 24.6%로 상이하게 인용됨 - 출처 기준 연도 확인 필요",
             created_at: "2026-07-24T02:00:00Z",
           },
         ],

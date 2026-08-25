@@ -60,8 +60,8 @@ export default function InsightsPage() {
             <Badge variant="outline">한글 파일 미포함</Badge>
           </div>
           <p className="text-sm text-fg-secondary">
-            본문의 시사점·제언 절을 2~3쪽으로 압축한 별도 산출물입니다. 원본 보고서는 그대로이며,
-            이 요약은 HWPX 다운로드에 들어가지 않습니다.
+            본문의 시사점·제언 절을 2~3쪽으로 압축한 별도 산출물입니다. 원본 보고서는 그대로이며, 이
+            요약은 HWPX 다운로드에 들어가지 않습니다.
           </p>
         </div>
         <Button

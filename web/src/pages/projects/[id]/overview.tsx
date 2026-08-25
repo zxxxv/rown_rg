@@ -30,6 +30,7 @@ import {
   useUpdateProjectConfig,
 } from "@/api/projects";
 import type { Project, ProjectStatus } from "@/api/types";
+import { useFinalizeProject, useUnfinalizeProject } from "@/api/versions";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageLoading } from "@/components/feedback/PageLoading";
@@ -51,14 +52,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { env } from "@/env";
+import { UnreflectedCard } from "@/features/export/UnreflectedCard";
 import { useDownload } from "@/features/export/useDownload";
 import { PipelineStepper } from "@/features/progress/PipelineStepper";
+import { StatePanel } from "@/features/progress/StatePanel";
 import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
 import { presetLabel } from "@/features/project-config/presets";
 import type { ProjectFormValues } from "@/features/project-config/schema";
 import { SourceUsageCard } from "@/features/stats/SourceUsageCard";
-import { useFinalizeProject, useUnfinalizeProject } from "@/api/versions";
-import { UnreflectedCard } from "@/features/export/UnreflectedCard";
 import { ReopenDialog } from "@/features/versions/ReopenDialog";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -390,9 +391,12 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
                 </span>
               </AccordionTrigger>
               <AccordionContent className="px-4 pb-4">
+                {/* 완료여도 잠그지 않는다 - 보고서는 완주가 끝이 아니고, 고친 내용이
+                    본문에 닿았는지는 '미반영'으로 드러난다(2026-08-25). 백엔드
+                    _CONFIG_FROZEN_STATUSES도 보관본만 막는다. */}
                 <ProjectConfigForm
                   mode="edit"
-                  frozen={project.status === "completed" || project.status === "archived"}
+                  frozen={project.status === "archived"}
                   defaultValues={editDefaults}
                   submitting={isUpdating}
                   onSubmit={onSaveConfig}
@@ -430,8 +434,16 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
 
         {/* 우측 기둥은 '지금 무슨 일이 벌어지는가'만 - 사용량·옵션은 헤더로,
             삭제는 페이지 맨 아래로 옮겨 본문 작업공간에 자리를 내줬다. */}
+        {/* 런이 도는 중이면 '지금 뭐가 돌고 있나'(선형 스테퍼), 멈춰 있으면
+            '무엇이 준비됐고 뭘 할 수 있나'(상태 패널). 완주 뒤로는 스테퍼가 전부
+            체크된 채 굳어 정보를 못 주는데, 정작 그때부터가 손보는 구간이다
+            (2026-08-25). 판정은 status가 아니라 runner_alive로 한다. */}
         <aside className="lg:sticky lg:top-6 lg:self-start">
-          <PipelineStepper projectId={project.id} snapshot={usageQuery.data} stalled={stalled} />
+          {usageQuery.data?.runner_alive || usageQuery.data?.pending_gate ? (
+            <PipelineStepper projectId={project.id} snapshot={usageQuery.data} stalled={stalled} />
+          ) : (
+            <StatePanel project={project} />
+          )}
         </aside>
       </div>
 

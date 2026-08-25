@@ -83,6 +83,13 @@ export interface ProgressSnapshot {
    * 서버 재시작·오류로 실행이 끊긴 상태라, 스피너 대신 재개 안내를 보여줘야 한다.
    */
   stalled: boolean;
+  /**
+   * 백엔드에 살아 있는 실행 태스크가 있는가 - status만으로는 알 수 없다.
+   * status는 '어디까지 했나'와 '지금 뭘 돌리나'를 겸해서, RESEARCHING이 '수집 중'일
+   * 수도 '자료 보강 대기'일 수도 있다(2026-08-25 재개 오표시의 원인). 화면이 스피너를
+   * 띄울지 말지는 status가 아니라 이 값으로 갈라야 한다.
+   */
+  runner_alive: boolean;
 }
 
 const PHASE_ORDER: PhaseName[] = ["research", "indexing", "writing", "qa", "export"];
@@ -128,6 +135,7 @@ export function toProgressSnapshot(res: ProjectProgress): ProgressSnapshot {
     last_activity_at: res.last_activity_at ?? null,
     queue_position: res.queue_position ?? null,
     stalled: ACTIVE_WORK_STATUSES.includes(res.status) && !res.pending_gate && !res.runner_alive,
+    runner_alive: Boolean(res.runner_alive),
   };
 }
 
