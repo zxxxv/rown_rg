@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight, Download, GitCompare, History, Save } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useReportVersions, useSaveManualVersion } from "@/api/versions";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +13,7 @@ import { useDownload } from "@/features/export/useDownload";
 
 /** 버전 사유를 사람 말로. 목록은 "무엇이 왜 바뀌었나"를 읽는 자리지 기계 라벨을
  *  보는 자리가 아니다 - rewrite:2.3만 나열되면 이력이 안 읽힌다. */
-function reasonLabel(reason: string): string {
+export function reasonLabel(reason: string): string {
   if (reason === "assemble") return "완성본";
   if (reason === "reopen") return "다시 열기 직전";
   if (reason === "finalize") return "최종 확정";
@@ -44,7 +45,20 @@ export function VersionHistoryCard({
   onCompare: (baseVersion: number) => void;
 }) {
   const query = useReportVersions(projectId);
-  const [open, setOpen] = useState(false);
+  // 상태 패널의 '기록 열기'가 ?versions=1을 붙인다 - 카드가 본문 열에 있어서
+  // 프롭을 깊게 넘기는 대신 같은 페이지의 URL로 잇는다(compare와 같은 방식).
+  const [params, setParams] = useSearchParams();
+  const [open, setOpen] = useState(params.get("versions") === "1");
+  // 초기값만 읽으면 이미 떠 있는 카드는 URL 변화를 못 본다(개요에서 버튼을 누르는
+  // 순간이 바로 그 경우다). 열고 나서 파라미터를 **지운다** - 안 지우면 접었다가
+  // 다시 눌러도 URL이 그대로라 아무 일도 안 일어난다.
+  useEffect(() => {
+    if (params.get("versions") !== "1") return;
+    setOpen(true);
+    const next = new URLSearchParams(params);
+    next.delete("versions");
+    setParams(next, { replace: true });
+  }, [params, setParams]);
   const { download, pending } = useDownload();
   const saveVersion = useSaveManualVersion(projectId);
   const versions = query.data ?? [];
@@ -67,7 +81,7 @@ export function VersionHistoryCard({
 
   const apiBase = env.VITE_API_BASE_URL.replace(/\/$/, "");
   return (
-    <section className="rounded border border-border bg-bg">
+    <section id="version-history" className="rounded border border-border bg-bg">
       <div className="flex w-full items-center gap-2 px-3 py-2">
         <button
           type="button"

@@ -4,13 +4,14 @@ import {
   Download,
   FileText,
   FolderOpen,
+  History,
   ListTree,
   Loader2,
   RefreshCw,
   ShieldCheck,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useDrift } from "@/api/drift";
 import { useInsights } from "@/api/insights";
 import type { ProgressSnapshot } from "@/api/progress";
@@ -24,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { env } from "@/env";
 import { useDownload } from "@/features/export/useDownload";
 import { ElapsedRow } from "@/features/progress/PipelineStepper";
+import { reasonLabel } from "@/features/versions/VersionHistoryCard";
 
 /** 상태 패널 - 런이 멈춰 있을 때의 우측 기둥.
  *
@@ -50,6 +52,7 @@ export function StatePanel({
 }) {
   const projectId = project.id;
   const navigate = useNavigate();
+  const [, setParams] = useSearchParams();
 
   const sources = useProjectSources(projectId);
   const sections = useProjectSections(projectId);
@@ -73,6 +76,8 @@ export function StatePanel({
   const nCritical = findings.filter((f) => f.severity === "critical").length;
 
   const nVersions = versions.data?.length ?? 0;
+  // 목록은 최신순 - 마지막에 무슨 일이 있었는지가 한눈에 들어와야 한다.
+  const latest = versions.data?.[0];
   const hasInsights = Boolean(insights.data?.content);
 
   return (
@@ -170,7 +175,7 @@ export function StatePanel({
       <Row
         icon={<Download className="h-4 w-4" aria-hidden />}
         label="산출물"
-        detail={`HWPX${hasInsights ? " · 시사점 요약" : ""}${nVersions > 0 ? ` · 버전 ${nVersions}` : ""}`}
+        detail={`HWPX${hasInsights ? " · 시사점 요약" : ""}`}
         action={
           <Button
             variant="outline"
@@ -186,6 +191,39 @@ export function StatePanel({
           >
             <Download className="mr-1 h-3.5 w-3.5" />
             {downloading ? "준비 중" : "다운로드"}
+          </Button>
+        }
+      />
+
+      <Row
+        icon={<History className="h-4 w-4" aria-hidden />}
+        label="버전"
+        detail={
+          latest
+            ? `${nVersions}개 · 최신 v${latest.version_no} (${reasonLabel(latest.reason)})`
+            : "아직 없음"
+        }
+        action={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={nVersions === 0}
+            onClick={() => {
+              // 목록·비교는 넓은 자리가 필요해 본문 열에 둔다 - 패널은 문만 연다
+              // ('목차 편집'이 프로젝트 옵션을 펴는 것과 같은 방식).
+              setParams(
+                (prev) => {
+                  const next = new URLSearchParams(prev);
+                  next.set("versions", "1");
+                  return next;
+                },
+                { replace: true },
+              );
+              document.getElementById("version-history")?.scrollIntoView({ behavior: "smooth" });
+            }}
+          >
+            기록 열기
+            <ArrowRight className="ml-1 h-3.5 w-3.5" />
           </Button>
         }
         last
