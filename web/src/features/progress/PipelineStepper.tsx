@@ -247,7 +247,7 @@ export function PipelineStepper({ projectId, snapshot, stalled = false }: Pipeli
                   {step.label}
                 </span>
                 {step.human ? (
-                  <User className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="내 확인 필요" />
+                  <User className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="사람 검토 지점" />
                 ) : null}
                 {step.loop ? (
                   <RotateCcw

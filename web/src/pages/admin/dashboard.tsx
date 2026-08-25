@@ -200,6 +200,8 @@ function DashboardBody({
 }) {
   const costPct = (data.kpis.total_cost_usd / data.kpis.cost_limit_usd) * 100;
   const costTone = costPct >= 90 ? "danger" : costPct >= 70 ? "warning" : "default";
+  // 개인 한도 합계가 조직 한도를 넘은 상태 - 조직 한도가 공유 실링이라 먼저 막힌다.
+  const overAllocated = data.kpis.allocated_limit_usd > data.kpis.cost_limit_usd;
   const periodLabel = PERIOD_LABEL[data.period.type];
 
   return (
@@ -212,6 +214,17 @@ function DashboardBody({
           icon={DollarSign}
           tone={costTone}
           progress={{ current: data.kpis.total_cost_usd, max: data.kpis.cost_limit_usd }}
+        />
+        <StatCard
+          label="배정 합계"
+          value={`$${data.kpis.allocated_limit_usd.toLocaleString()}`}
+          hint={
+            overAllocated
+              ? `조직 한도 $${data.kpis.cost_limit_usd.toLocaleString()}보다 많습니다 - 배정한 만큼 못 씁니다`
+              : `조직 한도 $${data.kpis.cost_limit_usd.toLocaleString()} 안`
+          }
+          icon={Users}
+          tone={overAllocated ? "warning" : "default"}
         />
         <StatCard
           label="현재 접속중"

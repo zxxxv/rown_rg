@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 
 // 진행 단계 지도(2026-08-20 사용자 요청) - 파이프라인이 어떤 순서로 돌고, 어디서
 // 사람의 검토가 필요한지, 어디로 되돌아올 수 있는지를 설계 화면에서 한눈에 보여준다.
-// 사람 단계는 아이콘·색으로 구분한다 - "여기서 내 확인이 필요하다"가 지도의 목적.
+// 사람 단계는 아이콘·색으로 구분한다 - "여기가 사람 검토 지점이다"가 지도의 목적.
 
 interface Stage {
   key: string;
@@ -63,7 +63,7 @@ export function StageMap({ current }: { current?: string }) {
         </p>
         <p className="flex items-center gap-1">
           <User className="h-3 w-3 text-accent" aria-hidden />
-          표시가 있는 단계에서 내 확인·결정이 필요합니다. 나머지는 자동으로 진행됩니다.
+          표시가 있는 단계가 사람 검토 지점입니다. 나머지는 자동으로 진행됩니다.
         </p>
       </div>
     </div>

@@ -16,6 +16,10 @@ from src.api.schemas.user import UserRole
 class AdminKPI(BaseModel):
     total_cost_usd: float
     cost_limit_usd: float
+    # 활성 사용자에게 배정된 개인 한도의 합(전용 한도 있으면 그 값, 없으면 역할 기본값).
+    # 조직 한도(cost_limit_usd)를 넘으면 초과 배정 — 실제 지출은 조직 한도에서 먼저
+    # 막히므로 "늘려줬다"는 약속이 실효가 없다는 뜻이다. 배분과 실링을 나란히 보여준다.
+    allocated_limit_usd: float
     # 현재 접속중 — last_seen_at이 최근 5분 이내인 사용자 수 (기간 무관)
     online_users: int
     # 기간 활성 — 조회 기간 내 1회 이상 로그인한 사용자 수

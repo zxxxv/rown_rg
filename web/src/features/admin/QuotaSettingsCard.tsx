@@ -22,11 +22,12 @@ function errMsg(err: unknown, fallback: string): string {
 type Meta = (typeof QUOTA_META)[number];
 
 // 조직 상한 + 역할별 기본 한도 편집 카드. 개인별 한도(대시보드)와 다른 '밑값'을 다룬다.
-// 조회는 admin+, 수정은 super_admin 전용(백엔드 require_role과 일치).
+// 조회·수정 모두 admin+ (백엔드 require_role(*ADMINS)와 일치, 2026-08-26 결정).
+// 역할 기본값은 조직 한도를 넘길 수 없다 - 넘기면 서버가 422로 막는다.
 export function QuotaSettingsCard() {
   const query = useQuotaSettings();
   const { user } = useAuth();
-  const canEdit = user?.role === "super_admin";
+  const canEdit = user?.role === "super_admin" || user?.role === "admin";
 
   return (
     <Card>
@@ -39,9 +40,13 @@ export function QuotaSettingsCard() {
       <CardContent className="flex flex-col gap-4">
         {!canEdit ? (
           <p className="text-xs text-fg-tertiary">
-            수정은 최고관리자(super_admin) 전용 - 현재 읽기 전용입니다.
+            수정은 관리자 이상만 할 수 있습니다 - 현재 읽기 전용입니다.
           </p>
-        ) : null}
+        ) : (
+          <p className="text-xs text-fg-tertiary">
+            역할 기본 한도는 조직 한도를 넘길 수 없습니다. 변경 기록은 남습니다.
+          </p>
+        )}
         {query.isLoading ? (
           <p className="text-sm text-fg-tertiary">불러오는 중…</p>
         ) : query.isError || !query.data ? (

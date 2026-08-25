@@ -54,7 +54,7 @@ export function RunFlowGuide() {
             {step.human ? (
               <span className="flex items-center gap-0.5 text-accent">
                 <CircleUser className="h-3 w-3" aria-hidden />
-                <span className="text-[10px]">내 확인</span>
+                <span className="text-[10px]">사람 검토 지점</span>
               </span>
             ) : null}
           </li>

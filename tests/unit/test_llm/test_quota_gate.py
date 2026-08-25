@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from structlog.testing import capture_logs
 
 from src.clients.llm import quota_gate, token_tracker
 from src.clients.llm.adapters.base import BaseLLMAdapter, RetryKind
@@ -201,3 +202,28 @@ class TestUserQuotaFallback:
         with token_tracker.token_context(user_id=user_id, operation="test"):
             await quota_gate.enforce()
         assert seen == [user_id]
+
+
+class TestOrgBudgetWarning:
+    """조직 한도는 모두가 공유하는 실링이라, 닿으면 개인 한도가 남아도 전원이 막힌다.
+
+    닿고 나서야 알면 늦다 — 경고선을 넘는 순간부터 흔적을 남겨 운영이 손 쓸 창을 만든다.
+    """
+
+    @staticmethod
+    def _warns(cost: str, limit: str) -> bool:
+        # structlog은 stdlib logging을 거치지 않고 stdout으로 쓴다 - caplog은 못 잡는다.
+        with capture_logs() as logs:
+            quota_gate._warn_if_org_budget_running_out(Decimal(cost), Decimal(limit))
+        return any(entry["event"] == "quota.org_budget_running_out" for entry in logs)
+
+    def test_quiet_below_the_line(self):
+        assert self._warns("399", "500") is False
+
+    def test_warns_at_and_above_the_line(self):
+        assert self._warns("400", "500") is True  # 정확히 80%
+        assert self._warns("499", "500") is True
+
+    def test_zero_limit_does_not_divide(self):
+        """한도 0은 설정 사고다 - 경고를 시끄럽게 내는 대신 조용히 지나가고 차단은 게이트가."""
+        assert self._warns("10", "0") is False

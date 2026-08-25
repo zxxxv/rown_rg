@@ -123,11 +123,34 @@ async def enforce() -> None:
         return
     user_id, _project_id, _operation = token_tracker.get_context()
     org_cost, org_limit, user_cost, user_limit = await _fetch_usage(user_id)
+    _warn_if_org_budget_running_out(org_cost, org_limit)
     check_limits(
         org_cost=org_cost,
         org_limit=org_limit,
         user_cost=user_cost,
         user_limit=user_limit,
+    )
+
+
+# 조직 예산 소진 경고선 — 이 비율을 넘으면 호출마다 warning을 남긴다.
+ORG_BUDGET_WARN_RATIO = Decimal("0.8")
+
+
+def _warn_if_org_budget_running_out(org_cost: Decimal, org_limit: Decimal) -> None:
+    """조직 예산이 바닥나 가는 것을 닿기 전에 알린다.
+
+    조직 한도는 **모두가 공유하는 단일 실링**이라, 닿는 순간 개인 한도가 얼마나
+    남았든 전원이 동시에 막힌다(선착순). 그런데 지금은 막히고 나서야 알게 된다 —
+    한 사람이 남은 예산을 다 태워도 나머지는 예고 없이 429를 맞는다.
+    로그로 먼저 흔적을 남겨 운영이 손 쓸 창을 만든다.
+    """
+    if org_limit <= 0 or org_cost < org_limit * ORG_BUDGET_WARN_RATIO:
+        return
+    logger.warning(
+        "quota.org_budget_running_out",
+        org_cost=float(org_cost),
+        org_limit=float(org_limit),
+        used_ratio=round(float(org_cost / org_limit), 3),
     )
 
 

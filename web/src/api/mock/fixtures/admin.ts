@@ -3,6 +3,9 @@ import type { UserRoleType } from "@/api/types";
 export interface AdminKPI {
   total_cost_usd: number;
   cost_limit_usd: number;
+  // 활성 사용자에게 배정된 개인 한도의 합 - 조직 한도를 넘으면 초과 배정이다
+  // (실제 지출은 조직 한도에서 먼저 막히므로 늘려 준 몫을 다 못 쓴다).
+  allocated_limit_usd: number;
   // 현재 접속중 - last_seen_at이 최근 5분 이내인 사용자 수 (기간 무관)
   online_users: number;
   // 기간 활성 - 조회 기간 내 1회 이상 로그인한 사용자 수
@@ -305,6 +308,7 @@ export function buildAdminDashboardFixture(
   return {
     period: { type: period, label },
     kpis: {
+      allocated_limit_usd: 9_000,
       total_cost_usd,
       cost_limit_usd: 3_000,
       online_users: 4,
