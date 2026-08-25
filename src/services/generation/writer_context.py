@@ -25,6 +25,10 @@ from src.core.config import settings
 from src.core.types import SectionPlan
 from src.prompts import AnalystSpec, load_analyst, load_component
 
+# 게이트가 쓰는 기본 길이 창을 그대로 가져온다 — 프롬프트·토큰 상한·판정이 같은
+# 상수를 봐야 "쓰라고 한 분량"과 "통과시키는 분량"이 어긋나지 않는다.
+from src.services.qa.gate import DEFAULT_MAX_CHARS, DEFAULT_MIN_CHARS
+
 logger = structlog.get_logger(__name__)
 
 # 기본 작성 규칙 — 정체성 + 무관용 사실 원칙(agent_global_system의 핵심을 흡수).
@@ -97,9 +101,13 @@ class WriterContext:
     system: str
     guidance: str  # 유저 프롬프트에 붙일 방향·핵심포인트 블록 ("" 가능)
     max_tokens: int
-    # 정적 게이트 길이 경계 — None이면 게이트 기본값 사용
+    # 정적 게이트 길이 경계 — 목표가 없으면 게이트 기본 창을 그대로 채워 넣는다
+    # (아래 build_writer_context 참조). None은 이제 '지정 안 됨'이 아니라 예외 경로다.
     min_chars: int | None
     max_chars: int | None
+    # 분량 목표가 없어 기본 창으로 떨어졌는가 — 화면·채점이 "이 절은 목표 없이 쓰였다"를
+    # 구분할 수 있어야 한다(에이전트 미배정의 흔적).
+    volume_defaulted: bool = False
 
 
 @lru_cache(maxsize=1)
@@ -238,6 +246,23 @@ def build_writer_context(
         min_chars = section.min_chars
     if section.max_chars:
         max_chars = section.max_chars
+    # 목표가 어디에도 없으면 게이트 기본 창을 계약으로 삼는다 — 이게 없으면 프롬프트엔
+    # 분량 지시가 아예 안 실리는데(_volume_line은 빈 문자열) 상한만 2048로 남아,
+    # 모델은 절 하나를 다 쓰려 하고 시스템은 중간에서 자른다. 그 절은 온도를 바꿔
+    # 다시 생성해도 같은 벽에 부딪혀 **반드시** 실패하고, 완성 게이트가 런 전체를
+    # 세운다(2026-08-25 실사고: 에이전트 미배정 절 하나가 $12짜리 런을 조립 직전에
+    # 무산시킴). 게이트가 이미 같은 상수로 판정하므로, 여기서 채워야 프롬프트·토큰
+    # 상한·게이트가 같은 계약 하나를 본다.
+    volume_defaulted = min_chars is None and max_chars is None
+    if volume_defaulted:
+        min_chars, max_chars = DEFAULT_MIN_CHARS, DEFAULT_MAX_CHARS
+        logger.info(
+            "writer_context.volume_defaulted",
+            section=f"{section.chapter_number}.{section.section_number}",
+            n_analysts=len(specs),
+            min_chars=min_chars,
+            max_chars=max_chars,
+        )
     if max_chars:
         # 한국어 1문자≈1토큰을 상한 근사로 잡고 설정 캡 적용 — 운영 품질 모드에서만
         # WRITE_MAX_TOKENS를 올려 전체 분량 목표를 실현한다.
@@ -257,4 +282,5 @@ def build_writer_context(
         max_tokens=max_tokens,
         min_chars=min_chars,
         max_chars=max_chars,
+        volume_defaulted=volume_defaulted,
     )

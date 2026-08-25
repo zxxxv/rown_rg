@@ -1104,7 +1104,10 @@ async def _rehearse(state: ProjectState) -> ProjectState:
         emit_step(pid, "indexing", f"검색 리허설 {i}/{n_total} · {label}", "started")
         chunks = await retrieve(section)
         citable = [c for c in chunks if not c.is_summary]
-        needed = needed_evidence(build_writer_context(section, catalog).min_chars)
+        # 분량 목표가 없어 기본 창(200~4,000자)으로 떨어진 절은 '목표 없음'으로 본다 —
+        # 200자를 목표로 읽으면 근거 1건에도 ok 밴드가 나와 근거 공백 감지가 꺼진다.
+        _ctx = build_writer_context(section, catalog)
+        needed = needed_evidence(None if _ctx.volume_defaulted else _ctx.min_chars)
         band = classify(len(citable), needed)
         hyde_used = False
         if band == BAND_HYDE:

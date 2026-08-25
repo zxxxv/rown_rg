@@ -102,6 +102,9 @@ class TestRehearseBands:
         assert len(rehearse_env["stored"]) == 2
         assert all(s["index_version"] == 5 for s in rehearse_env["stored"])
 
+    # 아래 밴드 테스트들은 배정 없는 절을 쓴다 — 그래서 "분량 목표가 없을 때
+    # needed_evidence를 무엇으로 보는가"에 민감하다. 기본 창(200자)을 목표로 읽으면
+    # 근거 1건에도 ok가 나와 공백 감지가 통째로 꺼진다(2026-08-25에 실제로 한 번 껐다).
     async def test_hyde_band_retries_once_and_keeps_better(self, rehearse_env):
         rehearse_env["counts"] = {"부족": 5}
         rehearse_env["hyde_counts"] = {"부족": 13}

@@ -270,6 +270,13 @@ async def run_write_loop(
             "evidence_count": n_evidence,
             "volume_scaled": scaled.min_chars != ctx.min_chars,
             "min_chars": scaled.min_chars,
+            # 분량 목표 없이 기본 창으로 쓰인 절 — 대개 에이전트 미배정이다. 그 절만
+            # 짧고 관점이 없는 이유를 나중에 사람이 되짚을 수 있어야 한다.
+            **(
+                {"volume_defaulted": True, "n_analysts": len(section.analysts)}
+                if ctx.volume_defaulted
+                else {}
+            ),
             # builds_on 주입 흔적 — 화면·채점이 "이 절이 무엇을 받았나"를 본다.
             **(
                 {"ledger_inject_warnings": ledger_warns[section.section_id]}

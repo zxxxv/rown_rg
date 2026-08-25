@@ -16,7 +16,9 @@ from src.services.generation.candidates import generate_section_candidates
 from src.services.generation.writer_context import (
     BASE_SYSTEM,
     CHARS_PER_EVIDENCE,
+    DEFAULT_MAX_CHARS,
     DEFAULT_MAX_TOKENS,
+    DEFAULT_MIN_CHARS,
     MIN_SCALED_CHARS,
     build_writer_context,
     scale_for_evidence,
@@ -38,17 +40,24 @@ def _section(**kwargs) -> SectionPlan:
 
 class TestBuildWriterContext:
     def test_free_topic_defaults(self):
-        """자유 주제(배정 없음): 기본 규칙 + 문체만, 게이트 경계는 기본값 위임."""
+        """자유 주제(배정 없음): 기본 규칙 + 문체 + **게이트 기본 창을 계약으로**.
+
+        전에는 경계를 None으로 두고 상한만 2048로 남겼는데, 그러면 프롬프트에 분량
+        지시가 아예 안 실려 모델은 절 하나를 다 쓰려 하고 시스템이 중간에서 자른다
+        (2026-08-25 실사고). 목표가 없으면 게이트가 판정할 창을 그대로 계약으로 삼는다.
+        """
         ctx = build_writer_context(_section())
         assert ctx.system.startswith(BASE_SYSTEM)
         assert _STYLE in ctx.system
         # 회사 표준 규칙(출처·시각자료)도 writer 시스템에 결합된다(2026-08-05 배선).
         assert load_component("agent_source_rules") in ctx.system
         assert load_component("agent_visual_rules") in ctx.system
-        assert ctx.guidance == ""
-        assert ctx.max_tokens == DEFAULT_MAX_TOKENS
-        assert ctx.min_chars is None
-        assert ctx.max_chars is None
+        assert ctx.min_chars == DEFAULT_MIN_CHARS
+        assert ctx.max_chars == DEFAULT_MAX_CHARS
+        assert ctx.volume_defaulted is True
+        # 상한은 그 창을 담을 만큼 — 기본 상한(2048)에 눌려 잘리면 안 된다.
+        assert ctx.max_tokens >= DEFAULT_MAX_CHARS
+        assert ctx.max_tokens > DEFAULT_MAX_TOKENS
 
     def test_analyst_persona_and_volume_target(self):
         spec = load_analyst(_ANALYST)
@@ -65,7 +74,8 @@ class TestBuildWriterContext:
         """카탈로그에 없는 이름은 경고 후 무시 — 자유 주제와 동일하게 동작."""
         ctx = build_writer_context(_section(analysts=["존재하지않는에이전트"]))
         assert ctx.system.startswith(BASE_SYSTEM)
-        assert ctx.min_chars is None
+        assert (ctx.min_chars, ctx.max_chars) == (DEFAULT_MIN_CHARS, DEFAULT_MAX_CHARS)
+        assert ctx.volume_defaulted is True
 
     def test_unknown_names_dropped_valid_kept(self):
         spec = load_analyst(_ANALYST)
@@ -103,9 +113,13 @@ class TestVolumeInstruction:
         line = next(x for x in ctx.guidance.split(_SEP) if x.startswith("목표 분량:"))
         assert f"{spec.volume_target.min_chars:,}" in line
 
-    def test_no_volume_line_without_target(self):
+    def test_default_window_still_carries_a_volume_line(self):
+        """목표가 없어도 분량 지시는 실린다 — 이게 없으면 상한만 남아 반드시 잘린다.
+
+        회귀 방어: "분량 지시 없음 + 토큰 상한"이 실사고의 정확한 형태였다.
+        """
         ctx = build_writer_context(_section())
-        assert "목표 분량:" not in ctx.guidance
+        assert f"{DEFAULT_MIN_CHARS:,}~{DEFAULT_MAX_CHARS:,}자" in ctx.guidance
 
     def test_catalog_prompts_no_longer_carry_volume_text(self):
         # 본문과 필드가 21종 전부 어긋나 있었다(2026-08-10) — 단일 진실은 필드다.
@@ -182,7 +196,8 @@ class TestScaleForEvidence:
 
     def test_guidance_direction_only(self):
         ctx = build_writer_context(_section(direction="개요 수준"))
-        assert ctx.guidance == "작성 방향: 개요 수준"
+        # 방향 + 기본 창 분량 지시(배정이 없어도 분량은 늘 실린다).
+        assert ctx.guidance.split(_SEP)[0] == "작성 방향: 개요 수준"
 
 
 class TestMaxTokensResolution:
@@ -275,3 +290,36 @@ class TestPayloadRoundTrip:
         assert restored[0].direction == ""
         assert restored[0].key_points == []
         assert restored[0].analysts == []
+
+
+class TestNoAgentSectionIsWritable:
+    """에이전트 미배정 절이 **결정적으로 실패**하던 자리(2026-08-25 실사고).
+
+    사슬은 이랬다: 배정 0명 → volume_target 없음 → 프롬프트에 분량 지시 없음 +
+    상한 2048 → 모델은 절 하나를 다 쓰려 하고 시스템이 자름 → stop_reason=max_tokens →
+    게이트 HARD 탈락 → 재생성도 같은 벽 → 절 실패 → 완성 게이트가 런 전체를 세움.
+    프롬프트·토큰 상한·게이트가 같은 계약 하나를 보게 해서 끊는다.
+    """
+
+    def test_prompt_token_cap_and_gate_window_agree(self):
+        ctx = build_writer_context(_section())
+        # ① 프롬프트가 분량을 말한다
+        assert f"{DEFAULT_MIN_CHARS:,}~{DEFAULT_MAX_CHARS:,}자" in ctx.guidance
+        # ② 그 분량을 담을 토큰 상한이다(약속한 길이를 못 쓰면 반드시 잘린다)
+        assert ctx.max_tokens >= ctx.max_chars
+        # ③ 게이트가 판정할 창과 같다
+        assert (ctx.min_chars, ctx.max_chars) == (DEFAULT_MIN_CHARS, DEFAULT_MAX_CHARS)
+
+    def test_stays_single_call(self):
+        """기본 창은 짧으므로 분할 생성으로 가지 않는다 — 파트 계획 붕괴 위험 회피."""
+        from src.services.generation.split_writer import plan_part_count
+
+        assert plan_part_count(build_writer_context(_section()).min_chars) == 1
+
+    def test_assigned_agent_contract_unchanged(self):
+        """배정이 있으면 예전 그대로 — 기본 창이 정상 절을 깎으면 안 된다."""
+        spec = load_analyst(_ANALYST)
+        assert spec.volume_target is not None
+        ctx = build_writer_context(_section(analysts=[_ANALYST]))
+        assert ctx.min_chars == spec.volume_target.min_chars
+        assert ctx.volume_defaulted is False
