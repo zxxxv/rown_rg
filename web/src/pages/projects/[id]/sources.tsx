@@ -37,6 +37,11 @@ export default function SourcesPage() {
   // 게이트가 열리기 전(초기 수집 중)에는 스냅샷을 폴링해 게이트 도착을 따라잡는다.
   const snapshot = useProgressSnapshot(projectId, true, { refetchInterval: 7_000 });
   const reviewOpen = snapshot.data?.pending_gate?.gate === "source_pool";
+  // 채택/제외를 만질 수 있는가 - 검토 게이트가 열렸을 때뿐 아니라 **실행이 멈춰 있으면
+  // 언제든** 허용한다. 보고서는 완주가 끝이 아니라 계속 손보는 대상이고, 완료 뒤 자료를
+  // 빼려면 재개(reopen)밖에 길이 없던 것이 그 흐름을 막고 있었다(2026-08-26).
+  // 실행 중에는 잠근다 - 작성이 쓰고 있는 자료 집합을 도중에 바꾸면 절마다 근거가 달라진다.
+  const canCurate = reviewOpen || !(snapshot.data?.runner_alive ?? false);
   // 초기 수집 진행 중 - 게이트 전이라 검토는 아직 못 하지만, 상태는 알려야 한다.
   const gathering = snapshot.data?.status === "researching" && !reviewOpen;
   const notStarted = (snapshot.data?.status ?? "created") === "created";
@@ -289,7 +294,9 @@ export default function SourcesPage() {
                   ? "보고서를 다시 열었습니다 - 웹 검색은 이미 끝났습니다. 파일을 올리거나 자료를 제외한 뒤 검토를 완료하면 색인부터 이어집니다. 인터넷 추가 검색은 선택입니다."
                   : reviewOpen
                     ? "AI가 수집한 자료를 검토하고 채택할 자료를 결정해 주세요. 추가 자료는 아래 드롭존에 끌어다 놓으면 됩니다."
-                    : "검토가 완료된 자료 목록입니다 (읽기 전용) - 채택된 자료만 본문 작성의 검색 근거로 사용됐습니다."}
+                    : canCurate
+                      ? "자료를 올리거나 채택에서 빼면, 그 자료를 인용한 절이 개요에서 미반영으로 표시됩니다. 다시 쓸지는 거기서 고르시면 됩니다."
+                      : "실행 중에는 자료를 바꿀 수 없습니다 - 작성이 쓰고 있는 자료 집합이 도중에 바뀌면 절마다 근거가 달라집니다."}
           </p>
         </header>
 
@@ -434,7 +441,7 @@ export default function SourcesPage() {
                     s.is_included === false && "opacity-60",
                   )}
                   actions={
-                    reviewOpen ? (
+                    canCurate ? (
                       <>
                         <Button
                           size="sm"
@@ -502,7 +509,7 @@ export default function SourcesPage() {
         onOpenChange={(o) => {
           if (!o) setActiveSource(null);
         }}
-        readOnly={!reviewOpen}
+        readOnly={!canCurate}
         onInclude={(sid) => setIncluded(sid, true)}
         onExclude={(sid) => setIncluded(sid, false)}
       />

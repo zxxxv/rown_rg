@@ -34,7 +34,15 @@ import { useDownload } from "@/features/export/useDownload";
  * 고치면 영향받은 절만 '미반영'으로 드러난다. 그래서 버튼이 상태와 무관하게 늘
  * 살아 있고, 그 사실 자체가 "어디로든 갈 수 있다"를 알린다.
  */
-export function StatePanel({ project }: { project: Project }) {
+export function StatePanel({
+  project,
+  onOpenConfig,
+}: {
+  project: Project;
+  /** 목차 편집기를 연다 - 편집기는 개요의 '프로젝트 옵션' 아코디언 안에 있어
+   *  라우팅이 아니라 부모의 펼침 상태를 건드려야 한다. */
+  onOpenConfig: () => void;
+}) {
   const projectId = project.id;
   const navigate = useNavigate();
 
@@ -98,12 +106,8 @@ export function StatePanel({ project }: { project: Project }) {
         label="설계"
         detail={`${leaves.length || countOutlineSections(project)}절 · ${project.updated_at.slice(5, 10)} 수정`}
         action={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate(`/projects/${projectId}/brief`)}
-          >
-            설계 열기
+          <Button variant="outline" size="sm" onClick={onOpenConfig}>
+            목차 편집
             <ArrowRight className="ml-1 h-3.5 w-3.5" />
           </Button>
         }

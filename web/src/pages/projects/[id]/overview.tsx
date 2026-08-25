@@ -217,6 +217,8 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
   const finalize = useFinalizeProject(project.id);
   const unfinalize = useUnfinalizeProject(project.id);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 아코디언을 제어형으로 - 상태 패널의 "목차 편집"이 여기를 펴야 한다.
+  const [openPanel, setOpenPanel] = useState<string | undefined>(undefined);
   // 삭제는 항상 노출 - 백엔드가 '실행 중인 순간'만 막는다(게이트 대기·실패 잔류 정리 가능).
   const canDelete = true;
   const onDelete = async () => {
@@ -382,8 +384,12 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
             liveStatus={usageQuery.data?.status}
           />
 
-          <Accordion type="single" collapsible>
-            <AccordionItem value="config" className="rounded-lg border border-border bg-bg">
+          <Accordion type="single" collapsible value={openPanel} onValueChange={setOpenPanel}>
+            <AccordionItem
+              value="config"
+              id="project-config"
+              className="rounded-lg border border-border bg-bg"
+            >
               <AccordionTrigger className="px-4 py-3 hover:no-underline">
                 <span className="flex items-center gap-2 text-sm font-semibold text-fg">
                   <Settings2 className="h-4 w-4 text-fg-secondary" aria-hidden />
@@ -442,7 +448,13 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
           {usageQuery.data?.runner_alive || usageQuery.data?.pending_gate ? (
             <PipelineStepper projectId={project.id} snapshot={usageQuery.data} stalled={stalled} />
           ) : (
-            <StatePanel project={project} />
+            <StatePanel
+              project={project}
+              onOpenConfig={() => {
+                setOpenPanel("config");
+                document.getElementById("project-config")?.scrollIntoView({ behavior: "smooth" });
+              }}
+            />
           )}
         </aside>
       </div>
