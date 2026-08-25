@@ -1543,8 +1543,14 @@ async def update_project_source(
         # 채택 토글은 검색 결과를 바꾼다(검색 SQL이 제외분을 거른다) — 리허설 캐시
         # 무효화. 색인 전 토글에는 캐시가 아직 없지만 +1은 무해하다(값 자체 무의미).
         from src.services.retrieval.rehearsal import bump_index_version
+        from src.services.sections.renumber import rebase_global_numbers
 
         await bump_index_version(project.id)
+        # 전역 인용 번호는 채택 자료의 수집 순서다 — 하나를 빼면 그 뒤가 통째로
+        # 당겨지는데 본문 마커는 그대로라 문서 전체 인용이 어긋난다(참고문헌만
+        # 다시 매겨지고 본문은 안 매겨져서다). 순수 코드라 비용이 없으니 여기서
+        # 바로 맞춘다 — 다운로드 시점으로 미루면 화면의 인용도 틀린 채로 남는다.
+        await rebase_global_numbers(session, project.id)
     return _to_source_item(row)
 
 

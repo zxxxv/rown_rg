@@ -726,6 +726,15 @@ async def resume_run(project_id: uuid.UUID, decision: dict[str, Any]) -> None:
         from src.services.retrieval.rehearsal import bump_index_version
 
         await bump_index_version(project_id)
+        # 재개(reopen)로 열린 게이트에서 제외하면 이미 본문이 있다 — 전역 인용 번호가
+        # 당겨져 문서 전체가 어긋나므로 여기서도 다시 맞춘다. 첫 런에서는 절이 비어
+        # 있어 아무 일도 하지 않는다(비용 0).
+        from src.db.session import open_session
+        from src.services.sections.renumber import rebase_global_numbers
+
+        async with open_session() as s2:
+            if await rebase_global_numbers(s2, project_id):
+                await s2.commit()
     if gate == ReviewGate.DESIGN_BRIEF.value and decision.get("action") == "replan":
         # 고친 목차로 브리프를 다시 계산해 게이트를 다시 연다 — 수집으로 안 간다.
         # '추가 조사'와 같은 라운드 패턴: 사람이 누를 때마다 1회(무한성 캡은 사람 손에).

@@ -176,3 +176,89 @@ async def renumber_state(state: ProjectState) -> ProjectState:
         n_chunks=len(chunk_to_global),
     )
     return state.model_copy(update={"section_candidates": new_sets}).with_section_meta(meta)
+
+
+async def rebase_global_numbers(session, project_id: UUID) -> int:
+    """저장된 본문의 전역 인용 번호를 **현재 채택 순서**에 다시 맞춘다.
+
+    전역 번호는 채택(is_included) 자료의 수집 순서라, 자료를 채택에서 빼면 그 뒤
+    번호가 통째로 당겨진다. 본문 마커는 그대로 남으므로 **문서 전체 인용이 한 칸씩
+    어긋난다** — 참고문헌은 다운로드 시점에 다시 매겨지는데 본문은 안 매겨져서다.
+    완료 보고서에서 자료를 뺄 수 있게 되면서(2026-08-26) 실제로 도달 가능해진 경로다.
+
+    renumber_content(로컬→전역)와 다르다: 저장된 본문은 **이미 전역**이라 그 함수를
+    다시 돌리면 전역 번호를 로컬로 오독해 망가진다. 여기서는 meta["citation_chunks"]
+    (전역 번호 → 그 번호가 가리킨 청크들)를 열쇠로 **전역→전역** 재매핑을 한다.
+    그래서 몇 번을 돌려도 결과가 같다.
+
+    제외된 자료를 가리키던 마커는 매핑이 없어 사라진다(core.citations.renumber 계약)
+    — 뺀 자료를 계속 인용하는 것보다 낫다.
+
+    돌려주는 값은 실제로 본문이 바뀐 절 수.
+    """
+    from sqlalchemy import select
+
+    from src.db.models.chunk import Chunk
+    from src.db.models.project_source import ProjectSource
+    from src.db.models.section import Section
+
+    rows = (
+        (await session.execute(select(Section).where(Section.project_id == project_id)))
+        .scalars()
+        .all()
+    )
+    marked = [(r, (r.meta or {}).get("citation_chunks") or {}) for r in rows]
+    all_chunks = {UUID(c) for _r, m in marked for cids in m.values() for c in cids}
+    if not all_chunks:
+        return 0
+    # 전역 번호는 **주입된 세션으로** 센다 — build_chunk_to_global은 자체 세션을 열어
+    # 같은 트랜잭션의 미커밋 변경(방금 뒤집은 is_included)을 못 본다(2026-08-26 실측:
+    # 제외 직후 호출인데 번호가 그대로였다).
+    order = {
+        sid: i
+        for i, (sid,) in enumerate(
+            (
+                await session.execute(
+                    select(ProjectSource.id)
+                    .where(
+                        ProjectSource.project_id == project_id,
+                        ProjectSource.is_included.is_(True),
+                    )
+                    .order_by(ProjectSource.created_at)
+                )
+            ).all(),
+            start=1,
+        )
+    }
+    chunk_source = dict(
+        (
+            await session.execute(select(Chunk.id, Chunk.source_id).where(Chunk.id.in_(all_chunks)))
+        ).all()
+    )
+    chunk_to_global = {cid: order[sid] for cid, sid in chunk_source.items() if sid in order}
+
+    changed = 0
+    for row, cmap in marked:
+        if not cmap:
+            continue
+        old_to_new: dict[int, int] = {}
+        new_cmap: dict[str, list[str]] = {}
+        for old_g, cids in cmap.items():
+            new_g = next(
+                (chunk_to_global[UUID(c)] for c in cids if UUID(c) in chunk_to_global), None
+            )
+            if new_g is None:  # 그 자료가 채택에서 빠졌다 — 마커를 지운다
+                continue
+            old_to_new[int(old_g)] = new_g
+            new_cmap[str(new_g)] = list(dict.fromkeys(cids + new_cmap.get(str(new_g), [])))
+        if old_to_new == {int(k): int(k) for k in cmap}:
+            continue  # 번호가 그대로다
+        content = renumber_marks(row.content or "", old_to_new)
+        if content == (row.content or ""):
+            continue
+        row.content = content
+        row.meta = {**(row.meta or {}), "citation_chunks": new_cmap}
+        changed += 1
+    if changed:
+        logger.info("citations.rebased", project_id=str(project_id), n_sections=changed)
+    return changed
