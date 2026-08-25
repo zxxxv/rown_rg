@@ -871,6 +871,174 @@ async def get_design_brief(
     )
 
 
+# 시사점 요약 재생성 중인 프로젝트 — 중복 실행 방지(PM 재검증의 _VERIFYING과 같은 역할).
+_SUMMARIZING: set[UUID] = set()
+_SUMMARY_TASKS: set[asyncio.Task] = set()
+
+
+class DriftSectionRead(BaseModel):
+    """설계 변경이 아직 본문에 닿지 않은 절 1개 — 화면 용어는 "미반영"."""
+
+    section_id: str
+    label: str
+    # plan_changed(목차 수정) | source_excluded(자료 제외) | missing(본문 없음)
+    reasons: list[str]
+    excluded_sources: list[dict[str, str]] = []
+
+
+class DriftRead(BaseModel):
+    """미반영 현황. 실행은 하지 않는다 — 무엇이 왜 미반영인지만 알려주고 사람이 고른다.
+
+    자동 재작성을 안 하는 이유는 값이다: 절 하나 재작성이 실측 $0.67, 전체가 $15.5다.
+    목차 한 줄 고쳤다고 자동으로 돌면 사고다.
+    """
+
+    sections: list[DriftSectionRead]
+    n_plan_changed: int
+    n_source_excluded: int
+    n_missing: int
+
+
+@router.get("/{project_id}/drift", response_model=DriftRead)
+async def get_drift(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> DriftRead:
+    """목차 정본과 저장된 본문을 대조해 미반영 절을 돌려준다."""
+    from src.core.section_plan import plan_from_config
+    from src.services.sections.drift import SectionSnapshot, detect_drift
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    plans = plan_from_config(project.config)
+    if not plans:
+        return DriftRead(sections=[], n_plan_changed=0, n_source_excluded=0, n_missing=0)
+
+    rows = (
+        await session.execute(
+            select(Section.id, Section.content, Section.plan_hash, Section.source_ids).where(
+                Section.project_id == project.id
+            )
+        )
+    ).all()
+    # sections.source_ids는 이름과 달리 **청크 id**다 — 자료 채택 여부를 보려면
+    # 청크→자료로 한 번 접어야 한다. 제외된 자료만 실어 오면 되므로 조인 한 번.
+    dropped = {
+        cid: (sid, title)
+        for cid, sid, title in (
+            await session.execute(
+                select(Chunk.id, Chunk.source_id, ProjectSource.title)
+                .join(ProjectSource, ProjectSource.id == Chunk.source_id)
+                .where(
+                    Chunk.project_id == project.id,
+                    ProjectSource.is_included.is_(False),
+                )
+            )
+        ).all()
+    }
+    snapshots = {
+        r.id: SectionSnapshot(
+            section_id=r.id,
+            has_content=bool((r.content or "").strip()),
+            plan_hash=r.plan_hash or "",
+            excluded_source_ids=tuple(
+                dict.fromkeys(dropped[cid][0] for cid in (r.source_ids or []) if cid in dropped)
+            ),
+        )
+        for r in rows
+    }
+    titles = {sid: title for sid, title in dropped.values()}
+    items = detect_drift(plans, snapshots)
+    return DriftRead(
+        sections=[
+            DriftSectionRead(
+                section_id=str(d.section_id),
+                label=d.label,
+                reasons=list(d.reasons),
+                excluded_sources=[
+                    {"id": str(sid), "title": titles.get(sid) or "(제목 없음)"}
+                    for sid in d.excluded_source_ids
+                ],
+            )
+            for d in items
+        ],
+        n_plan_changed=sum(1 for d in items if "plan_changed" in d.reasons),
+        n_source_excluded=sum(1 for d in items if "source_excluded" in d.reasons),
+        n_missing=sum(1 for d in items if "missing" in d.reasons),
+    )
+
+
+class InsightsRead(BaseModel):
+    """시사점 2~3쪽 요약 — 웹 전용 산출물(HWPX에는 안 실린다).
+
+    content=None은 오류가 아니라 "아직 없음"이다(조립 전이거나 생성 실패). 화면은
+    빈 상태와 다시 만들기 버튼을 보여주면 되므로 404로 만들지 않는다.
+    """
+
+    content: str | None
+    source_sections: list[str]
+    model: str | None
+    running: bool
+
+
+@router.get("/{project_id}/insights", response_model=InsightsRead)
+async def get_insights(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> InsightsRead:
+    """조립 시 만든 시사점 요약 — 원본 보고서와 별개 산출물이라 한글 파일엔 없다."""
+    project = await _get_authorized_project(project_id, session, current_user)
+    data = project.insights or {}
+    return InsightsRead(
+        content=data.get("content"),
+        source_sections=list(data.get("source_sections") or []),
+        model=data.get("model"),
+        running=project.id in _SUMMARIZING,
+    )
+
+
+async def _resummarize_in_background(project_id: UUID) -> None:
+    """저장된 본문으로 시사점 요약을 다시 만든다(요청 밖).
+
+    입력이 최대 6만 자라 요청 안에서 처리하면 프론트가 타임아웃으로 읽는다
+    — PM 재검증과 같은 이유로 백그라운드 태스크로 뺀다.
+    """
+    from src.services.export.insights import build_insights, persist_insights
+
+    try:
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                return
+            rows = await _load_sections(session, project_id)
+        if not rows:
+            return
+        state = _state_for_export(project, rows)
+        await persist_insights(project_id, await build_insights(state))
+    except Exception:
+        logger.warning("insights.rerun_failed", project_id=str(project_id), exc_info=True)
+    finally:
+        _SUMMARIZING.discard(project_id)
+
+
+@router.post("/{project_id}/insights", status_code=status.HTTP_202_ACCEPTED)
+async def rebuild_insights(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> dict[str, bool]:
+    """시사점 요약 다시 만들기 — 본문을 고친 뒤 요약이 옛것으로 남는 걸 막는다."""
+    project = await _get_authorized_project(project_id, session, current_user)
+    if project.id in _SUMMARIZING:
+        return {"started": False, "running": True}
+    _SUMMARIZING.add(project.id)
+    task = asyncio.create_task(_resummarize_in_background(project.id))
+    _SUMMARY_TASKS.add(task)
+    task.add_done_callback(_SUMMARY_TASKS.discard)
+    return {"started": True, "running": True}
+
+
 @router.get("/{project_id}/progress", response_model=ProgressResponse)
 async def get_progress(
     project_id: UUID,
@@ -948,12 +1116,12 @@ def _active_step_labels(status: str, project_id: UUID) -> list[str] | None:
     return labels or None
 
 
-# 설정을 얼리는 상태 — 완료·보관은 '다음 단계'가 없어 저장이 반영될 자리가 없다.
-# 취소·실패는 재개 대상이라 얼리지 않는다(사람이 옵션을 고쳐 다시 돌린다).
-_CONFIG_FROZEN_STATUSES = (
-    ProjectStage.COMPLETED.value,
-    ProjectStage.ARCHIVED.value,
-)
+# 설정을 못 고치는 상태 — 보관본만이다. 취소·실패는 재개 대상이라 얼리지 않는다.
+# 완료(COMPLETED)는 2026-08-25에 풀었다: 보고서는 완성 순간이 끝이 아니라 품질을 보고
+# 계속 손보는 대상이고, 이제 고친 내용이 본문에 닿았는지를 "미반영"으로 표시할 수 있다
+# (services/sections/drift). 예전엔 그 표시가 없어 "저장해도 아무 일 없는 시늉"이라
+# 막아 두었고, 그래서 재개(reopen)가 유일한 문이 되어 있었다.
+_CONFIG_FROZEN_STATUSES = (ProjectStage.ARCHIVED.value,)
 
 
 @router.patch("/{project_id}/config", response_model=ProjectRead)
@@ -979,7 +1147,7 @@ async def update_project_config(
     project = await _get_authorized_project(project_id, session, current_user)
     if project.status in _CONFIG_FROZEN_STATUSES:
         raise ValidationError(
-            message="완료된 보고서의 설정은 바꿀 수 없습니다",
+            message="보관된 보고서의 설정은 바꿀 수 없습니다",
             code="PROJECT_CONFIG_FROZEN",
         )
     # 소유자 스코프로 검증한다 — config에 실린 개인 규칙·개인 에이전트는 **프로젝트

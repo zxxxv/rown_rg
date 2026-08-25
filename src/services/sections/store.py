@@ -16,6 +16,7 @@ from src.core.types import SectionCandidateSet, SectionPlan
 from src.db.models.section import Section
 from src.db.session import async_session_maker
 from src.prompts import load_preset
+from src.services.sections.drift import content_fingerprint
 
 logger = structlog.get_logger(__name__)
 
@@ -92,6 +93,9 @@ def _rows(state: ProjectState) -> list[Section]:
                 level=2,
                 content=draft.content if draft is not None else "",
                 source_ids=list(draft.cited_chunk_ids) if draft is not None else [],
+                # 이 본문이 어떤 계약으로 쓰였는지 — 나중에 목차를 고치면 이 지문이
+                # 달라져 "미반영"으로 드러난다(0047). 본문 없는 절은 비워 둔다.
+                plan_hash=content_fingerprint(plan) if draft is not None else "",
                 meta=meta,
                 qa_status=_qa_status(
                     plan.section_id, state.section_selections, state.section_candidates
@@ -174,6 +178,7 @@ async def persist_draft_section(state: ProjectState, plan, draft) -> None:
                     level=2,
                     content=draft.content if draft is not None else "",
                     source_ids=list(draft.cited_chunk_ids) if draft is not None else [],
+                    plan_hash=content_fingerprint(plan) if draft is not None else "",
                     meta=dict(state.section_meta.get(plan.section_id) or {}),
                     qa_status="pending",
                     status="writing" if draft is not None else "failed",
@@ -225,6 +230,7 @@ async def sync_rows_to_plan(session: AsyncSession, project_id, plan: list[Sectio
                 Section.id,
                 Section.content,
                 Section.source_ids,
+                Section.plan_hash,
                 Section.meta,
                 Section.qa_status,
                 Section.status,
@@ -269,6 +275,9 @@ async def sync_rows_to_plan(session: AsyncSession, project_id, plan: list[Sectio
                 level=2,
                 content=prev.content,
                 source_ids=list(prev.source_ids or []),
+                # 지문은 **그대로 옮긴다** — 여기서 새 계획으로 다시 계산하면 방금
+                # 사람이 고친 목차가 곧바로 '반영됨'으로 위장돼 미반영 판정이 죽는다.
+                plan_hash=prev.plan_hash,
                 meta=_relabel_meta(dict(prev.meta or {}), label),
                 qa_status=prev.qa_status,
                 status=prev.status,

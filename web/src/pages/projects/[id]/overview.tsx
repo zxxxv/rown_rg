@@ -6,6 +6,7 @@ import {
   Download,
   FileSearch,
   FolderSync,
+  Lightbulb,
   PieChart,
   PlayCircle,
   Settings2,
@@ -57,6 +58,7 @@ import { presetLabel } from "@/features/project-config/presets";
 import type { ProjectFormValues } from "@/features/project-config/schema";
 import { SourceUsageCard } from "@/features/stats/SourceUsageCard";
 import { useFinalizeProject, useUnfinalizeProject } from "@/api/versions";
+import { UnreflectedCard } from "@/features/export/UnreflectedCard";
 import { ReopenDialog } from "@/features/versions/ReopenDialog";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
@@ -417,6 +419,10 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
             ) : null}
           </Accordion>
 
+          {/* 미반영 - 설계를 고쳤는데 본문이 아직 안 담은 절. 본문 바로 위에 둔다:
+              내려가기 전에 "지금 보는 본문이 최신 설계가 아니다"를 먼저 알아야 한다. */}
+          {project.status !== "created" ? <UnreflectedCard projectId={project.id} /> : null}
+
           {/* 보고서 본문 - 좌측 흐름 안에 두어야 진행 단계 카드 옆이 비지 않는다
               (2026-08-09: 그리드 밖에 두니 중앙이 붕 떴다는 사용자 지적). */}
           {project.status !== "created" ? <ReportWorkspace projectId={project.id} /> : null}
@@ -563,6 +569,15 @@ function PrimaryAction({
         >
           <Download className="mr-1 h-4 w-4" />
           {downloading ? "준비 중…" : "HWPX 다운로드"}
+        </Button>
+        <Button
+          size="lg"
+          variant="outline"
+          onClick={() => navigate(`/projects/${project.id}/insights`)}
+          title="시사점·제언을 2~3쪽으로 압축한 요약 - 한글 파일에는 들어가지 않습니다"
+        >
+          <Lightbulb className="mr-1 h-4 w-4" />
+          시사점 요약
         </Button>
         <Button
           size="lg"

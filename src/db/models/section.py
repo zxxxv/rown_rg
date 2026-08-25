@@ -56,6 +56,10 @@ class Section(Base):
     # 생성 지표(opaque) — evidence_count(검색된 인용 가능 청크 수),
     # volume_scaled(재료 부족으로 분량 목표를 내렸는지). 본문을 더럽히지 않고
     # 화면에서 '자료 부족' 배지로 알리기 위한 자리다.
+    # 이 본문을 쓸 때의 계획 지문(services/sections/drift.content_fingerprint).
+    # 현재 목차 정본의 지문과 다르면 "목차 수정 미반영"이다. 빈 문자열 = 지문 기록
+    # 이전에 쓰인 옛 절이라 판정에서 제외한다(0047).
+    plan_hash: Mapped[str] = mapped_column(String(40), server_default="", nullable=False)
     meta: Mapped[dict] = mapped_column(JSONB, server_default="{}", nullable=False, default=dict)
     qa_status: Mapped[str] = mapped_column(String(10), server_default="pending", nullable=False)
     status: Mapped[str] = mapped_column(String(10), server_default="pending", nullable=False)

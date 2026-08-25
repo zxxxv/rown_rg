@@ -94,6 +94,7 @@ const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
     source_ids: ["src_moef_preliminary", "src_bok_econ", "src_audit_gtx"],
     qa_status: "passed",
     level: 2,
+    figures: [],
     evidence: { count: 24, scarce: false, plan_failed: false },
     citations: [
       {
@@ -138,5 +139,6 @@ export function buildSectionContent(
     level: sectionId.includes(".") ? 2 : 1,
     evidence: { count: 24, scarce: false, plan_failed: false },
     citations: [],
+    figures: [],
   };
 }

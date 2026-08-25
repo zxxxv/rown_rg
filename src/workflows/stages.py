@@ -1733,7 +1733,19 @@ async def assemble(state: ProjectState) -> ProjectState:
     except Exception:
         # 설명은 장식 — 실패해도 풀네임만으로 렌더를 계속한다.
         logger.warning("assemble.glossary_failed", project_id=str(pid), exc_info=True)
-    # (요약문 생성·렌더는 r6에서 제거 — 최종 산출물에 싣지 않기로 함, 2026-08-13.)
+    # (표지 뒤 요약문 생성·렌더는 r6에서 제거 — 최종 산출물에 싣지 않기로 함, 2026-08-13.)
+    # 시사점 2~3쪽 요약 — 웹 /insights 전용이라 아래 렌더에는 넘기지 않는다.
+    # 원본 보고서는 그대로 두고 별도 산출물만 만든다(2026-08-25 결정).
+    if settings.insights_enabled:
+        try:
+            from src.services.export.insights import build_insights, persist_insights
+
+            # 용어집과 같은 코루틴 상한 벨트 — 조립이 LLM 무응답에 물리면 안 된다.
+            insights = await asyncio.wait_for(build_insights(state), timeout=240)
+            await persist_insights(state.project_id, insights)
+        except Exception:
+            # 요약은 보조 산출물 — 실패해도 렌더·완료를 막지 않는다(화면이 빈 상태).
+            logger.warning("assemble.insights_failed", project_id=str(pid), exc_info=True)
     # 표지 작성자 — 소유자 이름. 실패해도 작성자 줄만 빠진다(렌더는 계속).
     if not state.author:
         try:

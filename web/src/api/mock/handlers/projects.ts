@@ -235,6 +235,125 @@ export const projectsHandlers = [
     return HttpResponse.json({ data: { started: true } }, { status: 202 });
   }),
 
+  // GET /projects/{id}/drift - 미반영 절(설계를 고쳤는데 본문이 아직 안 담은 절)
+  http.get(url("projects/:id/drift"), () => {
+    return HttpResponse.json(
+      {
+        data: {
+          sections: [
+            {
+              section_id: "2.3",
+              label: "2.3 인구·고령화 영향",
+              reasons: ["plan_changed"],
+              excluded_sources: [],
+            },
+            {
+              section_id: "3.3",
+              label: "3.3 비용편익비 (B/C)",
+              reasons: ["source_excluded"],
+              excluded_sources: [{ id: "src_audit_gtx", title: "GTX 사업 효과 평가" }],
+            },
+          ],
+          n_plan_changed: 1,
+          n_source_excluded: 1,
+          n_missing: 0,
+        },
+      },
+      { status: 200 },
+    );
+  }),
+
+  // GET /projects/{id}/versions - 보고서 버전 스냅샷(실계약 미러).
+  // 핸들러가 없으면 onUnhandledRequest:"bypass"로 실백엔드까지 새고, 그 401이
+  // 전역 로그아웃 처리기를 때려 완료 프로젝트 개요가 통째로 /login으로 튕긴다
+  // (2026-08-25 CDP 관통에서 발견 - 8/21 버전 기능 추가 때 빠진 구멍).
+  http.get(url("projects/:id/versions"), () => {
+    return HttpResponse.json(
+      {
+        data: [
+          {
+            version_no: 2,
+            reason: "finalize",
+            created_at: new Date(Date.now() - 3_600_000).toISOString(),
+            n_sections: 20,
+            total_chars: 201_558,
+          },
+          {
+            version_no: 1,
+            reason: "assemble",
+            created_at: new Date(Date.now() - 86_400_000).toISOString(),
+            n_sections: 20,
+            total_chars: 196_204,
+          },
+        ],
+      },
+      { status: 200 },
+    );
+  }),
+
+  // GET /projects/{id}/versions/diff - 절 단위 비교(데모는 변화 없음)
+  http.get(url("projects/:id/versions/diff"), ({ request }) => {
+    const base = Number(new URL(request.url).searchParams.get("base") ?? 1);
+    return HttpResponse.json(
+      {
+        data: {
+          base_version: base,
+          target_version: null,
+          n_added: 0,
+          n_removed: 0,
+          n_modified: 0,
+          n_unchanged: 20,
+          entries: [],
+        },
+      },
+      { status: 200 },
+    );
+  }),
+
+  // GET /projects/{id}/insights - 시사점 2~3쪽 요약(웹 전용, HWPX 미포함)
+  http.get(url("projects/:id/insights"), () => {
+    return HttpResponse.json(
+      {
+        data: {
+          content: [
+            "## 핵심 요약",
+            "",
+            "□ EU CBAM 전환기간이 2026년 종료되면서 국내 수출기업의 실질 부담이 시작된다",
+            "  ㅇ 철강·알루미늄·시멘트 3개 품목이 대EU 수출액의 12.4%를 차지",
+            "  ㅇ 전환기간 중 보고 의무만 졌던 기업들이 2026년부터 인증서 구매 의무를 진다",
+            "",
+            "□ 국내 배출권 가격과 EU ETS 가격 격차가 비용으로 전가된다",
+            "  ㅇ 국내 K-ETS 평균 8,700원 대 EU ETS 약 91유로 - 격차만큼 CBAM 인증서를 사야 한다",
+            "",
+            "## 주요 시사점",
+            "",
+            "□ 배출량 산정 체계가 준비된 기업과 아닌 기업의 격차가 벌어진다",
+            "  ㅇ 실측 기반 산정으로 전환한 기업은 기본값 적용 대비 부담이 30% 이상 낮아진다",
+            "",
+            "□ 중소 협력사의 데이터 부재가 대기업 부담으로 되돌아온다",
+            "  ㅇ 공급망 배출량을 못 대면 EU 기본값이 적용되어 원청이 비용을 떠안는다",
+            "",
+            "## 제언",
+            "",
+            "□ (산업부, 2026년 상반기) 중소 협력사 배출량 산정 지원 사업을 신설한다",
+            "  ㅇ 대상은 CBAM 6개 품목 공급망 내 종업원 300인 미만 사업장",
+            "",
+            "□ (기업, 즉시) 실측 기반 배출량 산정 체계로 전환한다",
+          ].join("\n"),
+          source_sections: ["2.5 환경분석 종합 및 시사점", "6.2 핵심 시사점 및 제언"],
+          model: "claude-sonnet-4-6",
+          running: false,
+        },
+      },
+      { status: 200 },
+    );
+  }),
+
+  // POST /projects/{id}/insights - 요약 다시 만들기(데모는 즉시 수락만)
+  http.post(url("projects/:id/insights"), () => {
+    return HttpResponse.json({ data: { started: true, running: true } }, { status: 202 });
+  }),
+
   // GET /projects/{id}/verify-coverage - 검사 커버리지(실계약 미러)
   http.get(url("projects/:id/verify-coverage"), () => {
     return HttpResponse.json(
