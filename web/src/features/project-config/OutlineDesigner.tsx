@@ -4,23 +4,38 @@ import { useFormContext, useWatch } from "react-hook-form";
 import { usePresetDetail } from "@/api/presets";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   type DraftChapter,
   emptyChapter,
   fromOutline,
   fromPreset,
   OutlineEditor,
+  type OutlineFocusTarget,
   toOutline,
 } from "./OutlineEditor";
 import { SavePresetDialog } from "./SavePresetDialog";
 import type { ProjectFormValues } from "./schema";
+import { type FormIssue, LIMITS } from "./validation";
 
 // ─── 목차 설계 - 프리셋 골격을 펼쳐 장·절·에이전트를 직접 확정하는 폼 래퍼 ───
 // 목차는 사람이 무조건 만든다(2026-08-03 확정): AI 목차 설계 없음. 확정된
 // config.outline이 그대로 실행되고, 그 목차 순서로 자료 조사가 진행된다.
 // 편집기 본체는 OutlineEditor(순수) - 내 프리셋 관리 화면과 공유한다.
 
-export function OutlineDesigner() {
+export interface OutlineDesignerProps {
+  /** 체크리스트의 "이동" - 그 장을 펼치고 해당 칸으로 데려간다 */
+  focusTarget?: OutlineFocusTarget | null;
+  onFocusHandled?: () => void;
+  /** 목차에서 찾은 문제를 폼(생성 준비 체크리스트)에 올린다 */
+  onIssuesChange?: (issues: FormIssue[]) => void;
+}
+
+export function OutlineDesigner({
+  focusTarget = null,
+  onFocusHandled,
+  onIssuesChange,
+}: OutlineDesignerProps) {
   const { setValue, getValues } = useFormContext<ProjectFormValues>();
   const preset = useWatch<ProjectFormValues, "config.preset">({ name: "config.preset" });
   const rules = useWatch<ProjectFormValues, "config.rules">({ name: "config.rules" }) ?? [];
@@ -91,6 +106,10 @@ export function OutlineDesigner() {
     (n, ch) => n + ch.sections.filter((s) => s.title.trim()).length,
     0,
   );
+  const untitledCount = chapters.reduce(
+    (n, ch) => n + ch.sections.filter((s) => !s.title.trim()).length,
+    0,
+  );
   const [savingPreset, setSavingPreset] = useState(false);
 
   if (preset && detailQuery.isLoading && chapters.length === 0) {
@@ -105,10 +124,30 @@ export function OutlineDesigner() {
         onChange={sync}
         previewRules={rules}
         defaultExpanded={initialExpand}
+        focusTarget={focusTarget}
+        onFocusHandled={onFocusHandled}
+        onIssuesChange={onIssuesChange}
         headerInfo={
           <>
-            목차는 <span className="font-medium text-fg">직접 확정</span>합니다 (AI가 목차를 만들지
-            않음) · 확정된 목차 순서로 자료를 조사합니다 · 유효한 절 {totalSections}개
+            <span
+              className={cn(
+                "font-medium",
+                totalSections === 0 || totalSections > LIMITS.sections
+                  ? "text-fg-danger"
+                  : "text-fg",
+              )}
+            >
+              절 {totalSections}개
+            </span>{" "}
+            (최대 {LIMITS.sections}개)
+            {untitledCount > 0 && totalSections > 0 ? (
+              // 제목 없는 줄은 저장할 때 사라진다 - 그런 줄이 실제로 있고, 이미 만든 절이
+              // 있을 때만 말한다(막 시작한 빈 목차에는 "절 0개"가 이미 같은 말을 한다).
+              <span className="text-fg-warning">
+                {" "}
+                · 제목 없는 줄 {untitledCount}개는 저장되지 않습니다
+              </span>
+            ) : null}
           </>
         }
         headerActions={

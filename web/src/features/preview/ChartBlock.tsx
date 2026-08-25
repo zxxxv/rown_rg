@@ -312,7 +312,7 @@ export function ChartBlock({ source }: { source: string }) {
 
   if (spec === null) {
     return (
-      <div className="my-4 rounded border border-border-warning bg-bg-warning/40 px-3 py-2 text-xs text-fg-secondary">
+      <div className="my-4 rounded border border-fg-warning/40 bg-bg-warning px-3 py-2 text-xs text-fg-secondary">
         그래프를 그릴 수 없어 원본 표로 표시합니다 - {parsed.error}
       </div>
     );

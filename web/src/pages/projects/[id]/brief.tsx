@@ -229,7 +229,7 @@ function DuplicateWarning({ brief }: { brief: DesignBriefPayload }) {
     (brief.ai_plan?.query_splits ?? []).map((q) => [q.section, q.query] as const),
   );
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border-danger bg-bg-danger-subtle p-4">
+    <div className="flex flex-col gap-3 rounded-lg border border-fg-danger/40 bg-bg-danger p-4">
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-fg-danger" />
         <div className="flex flex-col gap-1">
@@ -274,7 +274,7 @@ function OutlineOverlaps({ brief }: { brief: DesignBriefPayload }) {
   const overlaps = brief.ai_plan?.outline_overlaps ?? [];
   if (overlaps.length === 0) return null;
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border-danger bg-bg-danger-subtle p-4">
+    <div className="flex flex-col gap-2 rounded-lg border border-fg-danger/40 bg-bg-danger p-4">
       <p className="text-sm font-medium text-fg-danger">목차 소재 겹침</p>
       <p className="text-xs text-fg-secondary">
         아래 절 쌍은 목차 자체가 같은 소재를 요구합니다 - 역할을 가르지 않으면 같은 내용이
@@ -1029,7 +1029,7 @@ export default function BriefPage() {
                         ({group.sections.length}절)
                       </span>
                       {warnCount > 0 ? (
-                        <span className="flex items-center gap-0.5 rounded-sm border border-fg-danger/30 bg-bg-danger-subtle px-1 py-0.5 text-[10px] font-medium text-fg-danger">
+                        <span className="flex items-center gap-0.5 rounded-sm border border-fg-danger/30 bg-bg-danger px-1 py-0.5 text-[10px] font-medium text-fg-danger">
                           <AlertTriangle className="h-2.5 w-2.5" aria-hidden />
                           {warnCount}
                         </span>

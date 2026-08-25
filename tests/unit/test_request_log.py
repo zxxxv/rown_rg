@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-import pytest
-
 from gpu_service.app.request_log import KST, RequestLog
 
 
@@ -57,7 +55,8 @@ class TestWriteAndRead:
         # 전원 차단으로 마지막 줄이 잘려도 그날 전체를 잃으면 안 된다.
         path = tmp_path / f"{_today()}.jsonl"
         path.write_text(
-            json.dumps({"t": 1, "endpoint": "rerank", "code": 200, "ms": 1.0}) + "\n"
+            json.dumps({"t": 1, "endpoint": "rerank", "code": 200, "ms": 1.0})
+            + "\n"
             + '{"t": 2, "endpoint": "em',
             encoding="utf-8",
         )
@@ -69,8 +68,10 @@ class TestWriteAndRead:
 class TestDays:
     def test_newest_first_with_counts(self, tmp_path):
         (tmp_path / "2026-08-23.jsonl").write_text(
-            json.dumps({"t": 1, "endpoint": "rerank", "code": 200, "ms": 1.0}) + "\n"
-            + json.dumps({"t": 2, "endpoint": "parse", "code": 504, "ms": 2.0}) + "\n",
+            json.dumps({"t": 1, "endpoint": "rerank", "code": 200, "ms": 1.0})
+            + "\n"
+            + json.dumps({"t": 2, "endpoint": "parse", "code": 504, "ms": 2.0})
+            + "\n",
             encoding="utf-8",
         )
         (tmp_path / "2026-08-24.jsonl").write_text(
