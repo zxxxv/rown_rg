@@ -112,16 +112,39 @@ class TestPersonalPresetCrud:
         assert resp.status_code == 422
 
     async def test_owner_isolation(
+        self, test_client: AsyncClient, worker_token: str, viewer_token: str
+    ) -> None:
+        """비관리자 동료에게는 목록에도, 상세에도 없다.
+
+        예전엔 super_admin_token을 '다른 사용자' 대역으로 썼는데, 2de4ad3에서 관리자에게
+        남의 비공개 프리셋 **열람**을 의도적으로 열면서 그 대역이 더는 성립하지 않는다
+        (관리자 계약은 아래 별도 테스트가 맡는다).
+        """
+        created = await _create(test_client, worker_token)
+        listed = await test_client.get("/api/v1/presets", headers=_auth(viewer_token))
+        assert all(p["id"] != created["key"] for p in listed.json())
+        detail = await test_client.get(
+            f"/api/v1/presets/{created['key']}", headers=_auth(viewer_token)
+        )
+        assert detail.status_code == 404
+
+    async def test_admin_can_read_but_not_list_others_preset(
         self, test_client: AsyncClient, worker_token: str, super_admin_token: str
     ) -> None:
+        """관리자는 남의 비공개 프리셋을 **열람**할 수 있다(2de4ad3 대리 조작).
+
+        다만 목록 격리는 관리자에게도 그대로다 — 열람을 연 것이 소유자 격리 전체를
+        무너뜨린 것은 아니라는 게 이 계약의 핵심이다.
+        """
         created = await _create(test_client, worker_token)
-        # 다른 사용자에게는 목록에도, 상세에도 없다
         listed = await test_client.get("/api/v1/presets", headers=_auth(super_admin_token))
-        assert all(p["id"] != created["key"] for p in listed.json())
+        assert all(p["id"] != created["key"] for p in listed.json()), (
+            "남의 비공개 프리셋이 관리자 목록에 뜨면 안 된다"
+        )
         detail = await test_client.get(
             f"/api/v1/presets/{created['key']}", headers=_auth(super_admin_token)
         )
-        assert detail.status_code == 404
+        assert detail.status_code == 200, detail.text
 
 
 class TestProjectCreateWithPersonalPreset:

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from httpx import AsyncClient
@@ -178,15 +179,16 @@ class TestDriftApi:
         worker_token: str,
         worker_user: User,
         test_session: AsyncSession,
+        monkeypatch,
     ):
         """묶음 재작성도 절 1개 경로와 같은 반영 로직을 쓴다.
 
         따로 짰다가 전역 인용 재매핑·근거 추적 meta·버전 스냅샷을 통째로 빠뜨렸었다
         (2026-08-26). 두 경로가 갈라지면 묶음으로 고친 절만 문서와 어긋난다.
         """
-        from src.api.routers.projects import _apply_section_rewrite, _plan_for_row
+        from src.api.routers import projects as projects_router
         from src.core.types import SectionDraft
-        from src.db.models.project import Project as ProjectModel
+        from src.services.jobs import clear_job, get_job
 
         sid = uuid.uuid4()
         pid = await _completed_project(test_session, worker_user.id, sid, "원래 방향")
@@ -197,27 +199,34 @@ class TestDriftApi:
         )
 
         pool = [uuid.uuid4(), uuid.uuid4()]
-        project = await test_session.get(ProjectModel, pid)
+
+        async def _fake_rewriter(_proj, _plan, _instruction) -> SectionDraft:
+            return SectionDraft(
+                section_id=sid,
+                content="묶음으로 다시 쓴 본문",
+                cited_chunk_ids=[],
+                pool_chunk_ids=pool,
+            )
+
+        monkeypatch.setattr(projects_router, "_section_rewriter", _fake_rewriter)
+
+        resp = await test_client.post(
+            f"/api/v1/projects/{pid}/rewrite-batch",
+            headers=_auth(worker_token),
+            json={"section_ids": [str(sid)]},
+        )
+        assert resp.status_code == 202, resp.text
+
+        for _ in range(80):
+            job = get_job(pid, projects_router.REWRITE_JOB)
+            if job and not job.running:
+                break
+            await asyncio.sleep(0.1)
+        job = get_job(pid, projects_router.REWRITE_JOB)
+        assert job is not None and job.failures == {}, f"실패: {job and job.failures}"
+        clear_job(pid, projects_router.REWRITE_JOB)
+
         row = await test_session.get(Section, sid)
-        await test_session.refresh(row)
-        draft = SectionDraft(
-            section_id=sid,
-            content="묶음으로 다시 쓴 본문",
-            cited_chunk_ids=[],
-            pool_chunk_ids=pool,
-        )
-
-        # 묶음 경로가 부르는 바로 그 함수. 배경 태스크 배선은 test_jobs가 덮는다.
-        await _apply_section_rewrite(
-            test_session,
-            project,
-            row,
-            _plan_for_row(project, row),
-            draft,
-            created_by=worker_user.id,
-        )
-        await test_session.commit()
-
         await test_session.refresh(row)
         assert row.content == "묶음으로 다시 쓴 본문"
         # 근거 추적 meta가 채워져야 한다 - 절 1개 경로와 같은 계약.

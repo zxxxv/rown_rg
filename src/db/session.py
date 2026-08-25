@@ -19,6 +19,17 @@ async_engine = create_async_engine(settings.database_url, **_engine_kwargs)
 async_session_maker = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
 
+def open_session() -> AsyncSession:
+    """요청 밖 경로(백그라운드 작업)의 세션 opener — 여는 쪽이 커밋한다.
+
+    `from ... import async_session_maker`로 모듈 값을 붙들면 테스트가 세션메이커를
+    갈아끼워도 그 참조는 옛 것을 가리켜, 백그라운드 작업이 **테스트 DB가 아니라
+    개발 DB를 본다**(2026-08-26 실측: 묶음 재작성 통합 테스트가 프로젝트를 못 찾고
+    조용히 빠져나갔다). 여기서 호출 시점에 모듈 전역을 찾으므로 패치가 먹는다.
+    """
+    return async_session_maker()
+
+
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     """요청 스코프 세션 + 트랜잭션 소유권.
 

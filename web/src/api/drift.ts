@@ -61,6 +61,8 @@ export const RewriteBatchStatusSchema = z.object({
   current: z.string().default(""),
   /** 대상별 실패 사유 - 부분 실패를 삼키지 않는다 */
   failures: z.record(z.string(), z.string()).default({}),
+  /** 멈춤 요청이 들어왔는가 - 돌던 절 하나는 마치고 다음으로 넘어가지 않는다 */
+  cancelled: z.boolean().default(false),
 });
 export type RewriteBatchStatus = z.infer<typeof RewriteBatchStatusSchema>;
 
@@ -84,6 +86,18 @@ export function useRewriteBatch(projectId: string) {
       apiClient.post<unknown>(`projects/${projectId}/rewrite-batch`, {
         json: { section_ids: input.sectionIds, instruction: input.instruction ?? "" },
       }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: driftKeys.detail(projectId) });
+    },
+  });
+}
+
+/** 묶음 멈춤 - 돌던 절 하나는 끝까지 마치고 다음으로 넘어가지 않는다(반쪽 저장 방지). */
+export function useCancelRewriteBatch(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...driftKeys.detail(projectId), "rewrite-batch", "cancel"],
+    mutationFn: () => apiClient.delete<unknown>(`projects/${projectId}/rewrite-batch`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: driftKeys.detail(projectId) });
     },

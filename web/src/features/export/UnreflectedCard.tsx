@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, Loader2, Sparkles } from "lucide-react";
+import { AlertTriangle, ArrowRight, Loader2, Sparkles, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -7,6 +7,7 @@ import { ApiError } from "@/api/client";
 import {
   DRIFT_REASON_LABEL,
   invalidateAfterRewrite,
+  useCancelRewriteBatch,
   useDrift,
   useRewriteBatch,
   useRewriteBatchStatus,
@@ -27,6 +28,7 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
   const { data } = useDrift(projectId);
   const status = useRewriteBatchStatus(projectId);
   const rewrite = useRewriteBatch(projectId);
+  const cancel = useCancelRewriteBatch(projectId);
   const [picked, setPicked] = useState<Set<string>>(new Set());
 
   const sections = data?.sections ?? [];
@@ -103,9 +105,25 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
       </div>
 
       {running ? (
-        <p className="text-xs text-fg-secondary">
-          다시 쓰는 중 {done}/{status.data?.total ?? 0}
-          {status.data?.current ? ` · ${status.data.current}` : ""}
+        <p className="flex flex-wrap items-center gap-2 text-xs text-fg-secondary">
+          <span>
+            다시 쓰는 중 {done}/{status.data?.total ?? 0}
+            {status.data?.current ? ` · ${status.data.current}` : ""}
+          </span>
+          {status.data?.cancelled ? (
+            <span className="text-fg-tertiary">멈추는 중 - 지금 절만 마칩니다</span>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              disabled={cancel.isPending}
+              onClick={() => cancel.mutate()}
+            >
+              <XCircle className="mr-1 h-3.5 w-3.5" />
+              멈추기
+            </Button>
+          )}
         </p>
       ) : (
         <p className="text-xs text-fg-secondary">

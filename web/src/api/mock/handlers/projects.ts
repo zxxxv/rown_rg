@@ -239,9 +239,16 @@ export const projectsHandlers = [
   // GET /projects/{id}/rewrite-batch - 묶음 재작성 진행(데모는 항상 idle)
   http.get(url("projects/:id/rewrite-batch"), () => {
     return HttpResponse.json(
-      { data: { running: false, total: 0, done: 0, current: "", failures: {} } },
+      {
+        data: { running: false, total: 0, done: 0, current: "", failures: {}, cancelled: false },
+      },
       { status: 200 },
     );
+  }),
+
+  // DELETE /projects/{id}/rewrite-batch - 묶음 멈춤(데모는 즉시 수락만)
+  http.delete(url("projects/:id/rewrite-batch"), () => {
+    return HttpResponse.json({ data: { cancelled: true } }, { status: 200 });
   }),
 
   // POST /projects/{id}/rewrite-batch - 고른 절 다시 쓰기 시작(데모는 즉시 수락만)

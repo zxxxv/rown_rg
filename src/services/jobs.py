@@ -38,6 +38,9 @@ class JobState:
     running: bool = True
     # 대상별 실패 사유 {라벨: 사유} — 부분 실패를 삼키지 않는다.
     failures: dict[str, str] = field(default_factory=dict)
+    # 사람이 멈추라고 한 순간 True. 태스크를 죽이지 않고 **다음 대상으로 넘어가기 전에**
+    # 본문이 스스로 확인하고 빠져나온다 — 도중에 끊으면 절이 반쪽 상태로 저장된다.
+    cancelled: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -47,6 +50,7 @@ class JobState:
             "done": self.done,
             "current": self.current,
             "failures": self.failures,
+            "cancelled": self.cancelled,
         }
 
 
@@ -94,6 +98,21 @@ def start_job(
     _TASKS.add(task)
     task.add_done_callback(_TASKS.discard)
     return job
+
+
+def cancel_job(project_id: UUID, kind: str) -> bool:
+    """멈춤 요청 — 태스크를 죽이지 않고 깃발만 세운다. 돌고 있지 않으면 False.
+
+    asyncio.Task.cancel()로 끊지 않는 이유: 절 재작성처럼 대상마다 DB 쓰기가 있는
+    작업은 아무 데서나 끊으면 절이 반쪽으로 저장된다. 본문이 대상 경계에서 확인하고
+    스스로 빠져나오게 한다 — 지금 돌던 대상 하나는 끝까지 마친다.
+    """
+    job = _JOBS.get((project_id, kind))
+    if job is None or not job.running:
+        return False
+    job.cancelled = True
+    logger.info("job.cancel_requested", project_id=str(project_id), kind=kind)
+    return True
 
 
 def clear_job(project_id: UUID, kind: str) -> None:

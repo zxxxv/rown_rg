@@ -100,13 +100,14 @@ from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from src.db.models.user_prompt import UserPrompt
 from src.db.models.verify_finding import VerifyFinding
-from src.db.session import async_session_maker
+from src.db.session import open_session
 from src.prompts import list_presets, load_preset
 from src.services.export.report import export_file_pattern, export_filename
 from src.services.generation.planner import MAX_SECTIONS
 from src.services.indexing.exclusion import apply_index_outcome
 from src.services.indexing.published_year import year_from_page_age
 from src.services.indexing.vector import SourceInput
+from src.services.jobs import is_running as job_running
 from src.services.prompts import resolve_analysts
 from src.services.qa.alignment import align_section
 from src.services.qa.gate import uncited_units
@@ -888,9 +889,9 @@ async def get_design_brief(
     )
 
 
-# 시사점 요약 재생성 중인 프로젝트 — 중복 실행 방지(PM 재검증의 _VERIFYING과 같은 역할).
-_SUMMARIZING: set[UUID] = set()
-_SUMMARY_TASKS: set[asyncio.Task] = set()
+# 부분 작업 종류 — services/jobs의 공용 실행대가 (프로젝트, 종류)로 하나만 돌게 한다.
+INSIGHTS_JOB = "insights"
+PM_VERIFY_JOB = "pm_verify"
 
 
 class DriftSectionRead(BaseModel):
@@ -1078,9 +1079,18 @@ async def _rewrite_batch_body(
     같은 프로젝트 인덱스를 동시에 때리지 않기 위해서다.
     """
     for sid in section_ids:
+        # 멈춤은 대상 경계에서만 본다 — 재작성 도중에 끊으면 절이 반쪽으로 저장된다.
+        if job.cancelled:
+            logger.info(
+                "rewrite_batch.cancelled",
+                project_id=str(project_id),
+                done=job.done,
+                total=job.total,
+            )
+            return
         label = str(sid)[:8]
         try:
-            async with async_session_maker() as session:
+            async with open_session() as session:
                 project = await session.get(Project, project_id)
                 if project is None:
                     return
@@ -1136,6 +1146,23 @@ async def rewrite_batch(
     return {"started": True, "running": True, "total": len(ids)}
 
 
+@router.delete("/{project_id}/rewrite-batch")
+async def cancel_rewrite_batch(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> dict[str, bool]:
+    """묶음 재작성 멈춤 — 돌던 절 하나는 끝까지 마치고 다음으로 넘어가지 않는다.
+
+    도중에 끊으면 절이 반쪽으로 저장된다. 비용이 큰 작업이라 '남은 것만 아끼는' 멈춤이
+    맞는 계약이다.
+    """
+    from src.services.jobs import cancel_job
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    return {"cancelled": cancel_job(project.id, REWRITE_JOB)}
+
+
 @router.get("/{project_id}/rewrite-batch")
 async def rewrite_batch_status(
     project_id: UUID,
@@ -1178,7 +1205,7 @@ async def get_insights(
         content=data.get("content"),
         source_sections=list(data.get("source_sections") or []),
         model=data.get("model"),
-        running=project.id in _SUMMARIZING,
+        running=job_running(project.id, INSIGHTS_JOB),
     )
 
 
@@ -1190,20 +1217,15 @@ async def _resummarize_in_background(project_id: UUID) -> None:
     """
     from src.services.export.insights import build_insights, persist_insights
 
-    try:
-        async with async_session_maker() as session:
-            project = await session.get(Project, project_id)
-            if project is None:
-                return
-            rows = await _load_sections(session, project_id)
-        if not rows:
+    async with open_session() as session:
+        project = await session.get(Project, project_id)
+        if project is None:
             return
-        state = _state_for_export(project, rows)
-        await persist_insights(project_id, await build_insights(state))
-    except Exception:
-        logger.warning("insights.rerun_failed", project_id=str(project_id), exc_info=True)
-    finally:
-        _SUMMARIZING.discard(project_id)
+        rows = await _load_sections(session, project_id)
+    if not rows:
+        return
+    state = _state_for_export(project, rows)
+    await persist_insights(project_id, await build_insights(state))
 
 
 @router.post("/{project_id}/insights", status_code=status.HTTP_202_ACCEPTED)
@@ -1213,14 +1235,13 @@ async def rebuild_insights(
     current_user: Annotated[User, Depends(require_writer)],
 ) -> dict[str, bool]:
     """시사점 요약 다시 만들기 — 본문을 고친 뒤 요약이 옛것으로 남는 걸 막는다."""
+    from src.services.jobs import start_job
+
     project = await _get_authorized_project(project_id, session, current_user)
-    if project.id in _SUMMARIZING:
-        return {"started": False, "running": True}
-    _SUMMARIZING.add(project.id)
-    task = asyncio.create_task(_resummarize_in_background(project.id))
-    _SUMMARY_TASKS.add(task)
-    task.add_done_callback(_SUMMARY_TASKS.discard)
-    return {"started": True, "running": True}
+    started = start_job(
+        project.id, INSIGHTS_JOB, lambda _job: _resummarize_in_background(project.id)
+    )
+    return {"started": started is not None, "running": True}
 
 
 @router.get("/{project_id}/progress", response_model=ProgressResponse)
@@ -1381,6 +1402,13 @@ async def delete_project(
             message="실행 중인 프로젝트는 삭제할 수 없습니다 - 게이트 도달 후 다시 시도하세요",
             code="PROJECT_RUNNING",
         )
+    # 부분 작업 기록도 함께 정리한다 — 지운 프로젝트의 '도는 중'이 메모리에 남으면
+    # 안 된다. 돌고 있던 작업은 프로젝트를 못 찾고 스스로 빠져나온다.
+    from src.services.jobs import cancel_job, clear_job
+
+    for kind in (REWRITE_JOB, INSIGHTS_JOB, PM_VERIFY_JOB):
+        cancel_job(project.id, kind)
+        clear_job(project.id, kind)
     # ORM 관계는 lazy="raise"라 session.delete()의 관계 로딩을 피하고
     # DB FK CASCADE에 맡기는 Core DELETE를 쓴다.
     await session.execute(delete(Project).where(Project.id == project.id))
@@ -1623,7 +1651,7 @@ async def _index_in_background(source: SourceInput, error_context: str) -> None:
     except Exception as exc:
         error = _index_error_message(exc)
         logger.warning("source.index_failed_bg", context=error_context, exc_info=True)
-    async with async_session_maker() as session:
+    async with open_session() as session:
         row = (
             await session.execute(
                 select(ProjectSource).where(
@@ -1880,11 +1908,6 @@ async def get_verify_report(
     return [_to_finding_read(row, resolved) for row in rows]
 
 
-# 재검증이 도는 프로젝트 - 단일 워커 전제(진행 WebSocket과 같은 가정).
-_VERIFYING: set[UUID] = set()
-_VERIFY_TASKS: set[asyncio.Task] = set()
-
-
 def _finding_key(chapter: int, category: str, section_ref: str | None, detail: str) -> str:
     """경고의 지문 - 재검증이 행을 전량 교체해도 '완료 표시'가 살아남게 하는 열쇠.
 
@@ -1924,20 +1947,15 @@ async def _reverify_in_background(project_id: UUID) -> None:
     from src.services.qa.pm_verify import run_pm_verify
     from src.workflows.stages import _models_for
 
-    try:
-        async with async_session_maker() as session:
-            project = await session.get(Project, project_id)
-            if project is None:
-                return
-            rows = await _load_sections(session, project_id)
-        if not rows:
+    async with open_session() as session:
+        project = await session.get(Project, project_id)
+        if project is None:
             return
-        state = _state_for_export(project, rows)
-        await run_pm_verify(state, model=_models_for(state)["verify"])
-    except Exception:
-        logger.warning("verify.rerun_failed", project_id=str(project_id), exc_info=True)
-    finally:
-        _VERIFYING.discard(project_id)
+        rows = await _load_sections(session, project_id)
+    if not rows:
+        return
+    state = _state_for_export(project, rows)
+    await run_pm_verify(state, model=_models_for(state)["verify"])
 
 
 @router.post("/{project_id}/verify-report", status_code=status.HTTP_202_ACCEPTED)
@@ -1950,14 +1968,11 @@ async def rerun_verify_report(
 
     검증은 조립 때 한 번만 돌아서, 지적을 고쳐도 경고가 그대로 남아 있었다.
     """
+    from src.services.jobs import start_job
+
     project = await _get_authorized_project(project_id, session, current_user)
-    if project.id in _VERIFYING:
-        return {"started": False, "running": True}
-    _VERIFYING.add(project.id)
-    task = asyncio.create_task(_reverify_in_background(project.id))
-    _VERIFY_TASKS.add(task)
-    task.add_done_callback(_VERIFY_TASKS.discard)
-    return {"started": True, "running": True}
+    started = start_job(project.id, PM_VERIFY_JOB, lambda _job: _reverify_in_background(project.id))
+    return {"started": started is not None, "running": True}
 
 
 @router.get("/{project_id}/verify-report/status")
@@ -1968,7 +1983,7 @@ async def verify_report_status(
 ) -> dict[str, bool]:
     """재검증이 도는 중인지 - 화면이 폴링을 멈출 시점을 안다."""
     project = await _get_authorized_project(project_id, session, current_user)
-    return {"running": project.id in _VERIFYING}
+    return {"running": job_running(project.id, PM_VERIFY_JOB)}
 
 
 @router.patch("/{project_id}/verify-report/{finding_id}", response_model=VerifyFindingRead)

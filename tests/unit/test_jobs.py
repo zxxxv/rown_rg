@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from uuid import uuid4
 
-from src.services.jobs import clear_job, get_job, is_running, start_job
+from src.services.jobs import cancel_job, clear_job, get_job, is_running, start_job
 
 
 class TestStartJob:
@@ -94,6 +94,39 @@ class TestStartJob:
         for pid, kind in ((a, "demo"), (b, "demo"), (a, "other")):
             clear_job(pid, kind)
 
+    async def test_cancel_stops_before_the_next_target(self):
+        """멈춤은 깃발이다 — 돌던 대상 하나는 마치고 다음으로 넘어가지 않는다.
+
+        태스크를 죽여 끊으면 절이 반쪽 상태로 저장된다(대상마다 DB 쓰기가 있다).
+        """
+        pid = uuid4()
+        processed: list[int] = []
+        first = asyncio.Event()
+
+        async def body(job):
+            for i in range(3):
+                if job.cancelled:
+                    return
+                processed.append(i)
+                if i == 0:
+                    first.set()
+                    await asyncio.sleep(0.05)
+                job.done += 1
+
+        start_job(pid, "demo", body, total=3)
+        await first.wait()
+        assert cancel_job(pid, "demo") is True
+
+        await asyncio.sleep(0.2)
+        assert processed == [0], "멈춘 뒤에는 다음 대상으로 넘어가지 않는다"
+        job = get_job(pid, "demo")
+        assert job is not None and job.cancelled is True and job.running is False
+        clear_job(pid, "demo")
+
+    async def test_cancel_on_idle_job_is_false(self):
+        pid = uuid4()
+        assert cancel_job(pid, "demo") is False, "돌지 않는 작업은 멈출 것이 없다"
+
     async def test_status_dict_shape(self):
         pid = uuid4()
 
@@ -113,5 +146,6 @@ class TestStartJob:
             "done": 1,
             "current": "",
             "failures": {"2.3 인구": "재작성 결과가 완결되지 않음"},
+            "cancelled": False,
         }
         clear_job(pid, "demo")
