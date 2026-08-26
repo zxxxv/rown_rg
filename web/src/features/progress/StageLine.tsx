@@ -1,6 +1,6 @@
-import { AlertTriangle, BadgeCheck, Loader2, PauseCircle } from "lucide-react";
+import { AlertTriangle, BadgeCheck, Loader2, PauseCircle, PlugZap } from "lucide-react";
 import { useDrift } from "@/api/drift";
-import type { ProgressSnapshot } from "@/api/progress";
+import { type ProgressSnapshot, useConfirmedStalled } from "@/api/progress";
 import { useProjectSections } from "@/api/sections";
 import type { Project } from "@/api/types";
 import { cn } from "@/lib/utils";
@@ -29,6 +29,13 @@ export function StageLine({
   const running = snapshot?.runner_alive ?? false;
   const gate = snapshot?.pending_gate;
   const finalized = Boolean(project.finalized_at);
+  // 끊긴 런 - 화면 아래 배너와 **같은 판정**을 써야 한다. 예전엔 이 줄이 그 사실을
+  // 몰라서 "실행이 중단되었습니다" 옆에서 "확정하거나 계속 손보세요"라고 말했다
+  // (2026-08-27 실측). 게다가 조립 전이라 확정은 애초에 불가능한 상태였다.
+  const stalled = useConfirmedStalled(snapshot);
+  // 조립을 지났는가 - 확정(finalize)은 조립된 보고서에만 열린다. 안 지났으면
+  // "확정하세요"는 누를 수 없는 안내다.
+  const assembled = project.status === "completed";
 
   // 색은 상태를 한눈에 가르는 첫 신호다 - 글자만으로는 훑을 때 안 읽힌다(2026-08-26
   // 지적: "너무 작고 밋밋해서 잘 안 보여"). 도는 중=파랑, 기다림=주황, 확정=초록.
@@ -42,6 +49,11 @@ export function StageLine({
     tone = "border-border-info bg-bg-info text-fg-info";
     phase = snapshot?.active_step ?? "진행 중";
     next = "끝나면 알려 드립니다";
+  } else if (stalled) {
+    icon = <PlugZap className="h-5 w-5 text-fg-danger" aria-hidden />;
+    tone = "border-fg-danger/40 bg-bg-danger text-fg";
+    phase = "실행 중단됨";
+    next = "'이어서 재개'를 누르면 멈춘 단계부터 다시 진행합니다";
   } else if (gate) {
     icon = <PauseCircle className="h-5 w-5 text-fg-warning" aria-hidden />;
     tone = "border-fg-warning/40 bg-bg-warning text-fg";
@@ -59,11 +71,13 @@ export function StageLine({
     tone = "border-fg-warning/40 bg-bg-warning text-fg";
     phase = "검토 중";
     next = `미반영 ${unreflected}개 절을 다시 쓰거나 그대로 두세요`;
+  } else if (leaves.length > 0 && done < leaves.length) {
+    next = "빈 절이 남아 있습니다";
+  } else if (!assembled) {
+    // 본문은 다 있는데 조립 전 - 확정은 아직 못 누른다. 할 수 있는 일을 말해야 한다.
+    next = "'이어서 진행'을 누르면 조립·검증까지 마칩니다";
   } else {
-    next =
-      leaves.length > 0 && done < leaves.length
-        ? "빈 절이 남아 있습니다"
-        : "확정하거나 계속 손보세요";
+    next = "확정하거나 계속 손보세요";
   }
 
   const facts: string[] = [];

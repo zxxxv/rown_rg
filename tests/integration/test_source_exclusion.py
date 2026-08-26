@@ -75,7 +75,14 @@ class TestRunnerAliveSignal:
         프로세스 재시작·태스크 크래시 후 status가 작업 단계에 남는 실사고(2026-08-12,
         3시간 '진행 중' 스피너)를 프론트가 판별할 수 있게 하는 계약.
         """
+        # 단계는 이제 **산출물에서 되짚는다**(2026-08-26). 아무것도 없는 프로젝트가
+        # 'writing'이라 주장하면 그 값이 교정되므로, 죽은 런을 재현하려면 그 단계까지
+        # 실제로 만들어진 흔적이 있어야 한다 - 색인된 청크가 있는데 러너가 없는 상태.
         project = await _make_project(test_session, super_admin_user.id, status="writing")
+        await test_session.flush()
+        test_session.add(
+            Chunk(project_id=project.id, track="content", content="색인된 조각", chunk_index=0)
+        )
         await test_session.commit()
 
         resp = await test_client.get(

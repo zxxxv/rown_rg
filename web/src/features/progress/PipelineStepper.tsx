@@ -188,7 +188,11 @@ export function PipelineStepper({ projectId, snapshot, stalled = false }: Pipeli
   const navigate = useNavigate();
   const steps = deriveSteps(projectId, snapshot);
   const status = snapshot?.status ?? "created";
-  const isActive = ["planning", "researching", "indexing", "writing", "reviewing"].includes(status);
+  // **실제로 도는 런에만** 취소 버튼을 띄운다. 단계 이름으로 판정하면 멈춰 있는
+  // 보고서에도 뜨고, 누르면 멀쩡한 문서가 통째로 cancelled가 된다 - status는 서 있는
+  // 자리지 실행 신호가 아니다(2026-08-26 파생화). 끊긴 런(stalled)은 정리해야 하므로
+  // 함께 연다.
+  const isActive = (snapshot?.runner_alive ?? false) || stalled;
   const cancelled = status === "cancelled";
 
   const cancel = useCancelProject();

@@ -410,6 +410,59 @@ export const projectsHandlers = [
     );
   }),
 
+  // POST /projects/{id}/finalize - 최종 확정. DELETE는 확정 해제.
+  // 핸들러가 없으면 실백엔드로 새고 그 401이 전역 로그아웃을 때린다(2026-08-25 실사고).
+  // '완료 = 확정' 규칙을 세우면서 이 버튼이 전면에 나왔으므로 목에도 반드시 있어야 한다.
+  http.post(url("projects/:id/finalize"), ({ params }) => {
+    const project = DEMO_PROJECTS.find((p) => p.id === String(params.id));
+    if (!project) {
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "프로젝트를 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    if (project.status !== "completed") {
+      return HttpResponse.json(
+        {
+          error: {
+            code: "PROJECT_NOT_FINALIZABLE",
+            message: "완료된 보고서만 확정할 수 있습니다",
+          },
+        },
+        { status: 422 },
+      );
+    }
+    project.finalized_at = new Date().toISOString();
+    project.updated_at = project.finalized_at;
+    return HttpResponse.json({ data: project }, { status: 200 });
+  }),
+
+  http.delete(url("projects/:id/finalize"), ({ params }) => {
+    const project = DEMO_PROJECTS.find((p) => p.id === String(params.id));
+    if (!project) {
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "프로젝트를 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    project.finalized_at = null;
+    project.updated_at = new Date().toISOString();
+    return HttpResponse.json({ data: project }, { status: 200 });
+  }),
+
+  // POST /projects/{id}/versions - 수동 버전 저장("이 상태를 남겨 두고 계속 고친다").
+  http.post(url("projects/:id/versions"), () => {
+    return HttpResponse.json({ data: { version_no: 7, created: true } }, { status: 200 });
+  }),
+
+  // POST /projects/{id}/versions/{n}/restore/{sec} - 그 절만 그때로 되돌리기.
+  http.post(url("projects/:id/versions/:no/restore/:sec"), ({ params }) => {
+    return HttpResponse.json(
+      { data: { restored: true, section_id: String(params.sec), version_no: Number(params.no) } },
+      { status: 200 },
+    );
+  }),
+
   // GET /projects/{id}/versions - 보고서 버전 스냅샷(실계약 미러).
   // 핸들러가 없으면 onUnhandledRequest:"bypass"로 실백엔드까지 새고, 그 401이
   // 전역 로그아웃 처리기를 때려 완료 프로젝트 개요가 통째로 /login으로 튕긴다
@@ -417,7 +470,38 @@ export const projectsHandlers = [
   http.get(url("projects/:id/versions"), () => {
     return HttpResponse.json(
       {
+        // 사유는 열린 형태다 - 이정표(assemble·finalize·manual·restore)와 절 단위
+        // 자동 스냅샷(edit·rewrite·block)이 섞여 내려온다. 기록 카드가 둘을 갈라
+        // 접는 게 실계약이라, 목킹도 섞어 둬야 그 화면을 눌러 볼 수 있다(2026-08-27).
         data: [
+          {
+            version_no: 6,
+            reason: "manual:부장님 검토 전",
+            created_at: new Date(Date.now() - 1_800_000).toISOString(),
+            n_sections: 20,
+            total_chars: 202_140,
+          },
+          {
+            version_no: 5,
+            reason: "restore:3.2",
+            created_at: new Date(Date.now() - 2_400_000).toISOString(),
+            n_sections: 20,
+            total_chars: 201_902,
+          },
+          {
+            version_no: 4,
+            reason: "edit:3.2",
+            created_at: new Date(Date.now() - 2_700_000).toISOString(),
+            n_sections: 20,
+            total_chars: 202_310,
+          },
+          {
+            version_no: 3,
+            reason: "rewrite:2.1",
+            created_at: new Date(Date.now() - 3_000_000).toISOString(),
+            n_sections: 20,
+            total_chars: 201_774,
+          },
           {
             version_no: 2,
             reason: "finalize",
