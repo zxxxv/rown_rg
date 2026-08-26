@@ -121,20 +121,37 @@ function foldSpaces(text: string): { norm: string; at: number[] } {
  * 근거 있는 문장까지 싸잡아 "표기 없음"으로 보이게 했다. 못 찾은 문장은 원문 그대로
  * 남긴다(억지로 맞추면 엉뚱한 대목이 칠해진다). */
 /** 문장 호버 렌더 옵션 - 층을 지나며 인자가 늘어나지 않게 한 덩이로 묶는다. */
-type ClaimRender = {
-  chunks: EvidenceChunk[];
-  markCited: boolean;
-  markUncited: boolean;
-  markUncovered: boolean;
-};
-const NO_CLAIM_RENDER: ClaimRender = {
-  chunks: [],
-  markCited: false,
-  markUncited: true,
-  markUncovered: false,
-};
-/** 밑줄 대상 - claim이 있으면 호버 카드, 없으면 "대조 안 함" 줄(설명만). */
-type Markable = { key: string; claim: ClaimAlignment | null };
+type ClaimRender = { chunks: EvidenceChunk[]; markCited: boolean; markUncited: boolean };
+const NO_CLAIM_RENDER: ClaimRender = { chunks: [], markCited: false, markUncited: true };
+type Markable = { key: string; claim: ClaimAlignment };
+
+/** 정렬되지 않은 본문 줄을 색칠 대상으로 만든다 - 마커 유무만으로 인용/AI를 가른다.
+ *
+ * 색칠과 대조는 다른 질문이다. "인용인가 창작인가"는 마커 유무라 **결정적으로** 답할
+ * 수 있는데, 종전엔 그 답을 정렬(claims) 뒤에 숨겨 둬서 정렬이 실패하면 마커 정보까지
+ * 같이 사라졌다 - 아무도 안 본 줄이 검사 통과한 줄과 똑같이 보였다(2026-08-26 지적).
+ * 대목까지는 모르므로 span은 비우고, 호버가 "여기까지만 안다"고 말한다. */
+function synthesizeClaim(unit: string): ClaimAlignment {
+  const numbers: number[] = [];
+  for (const m of unit.matchAll(/\[(\d{1,3})\]/g)) numbers.push(Number(m[1]));
+  for (const m of unit.matchAll(SOURCE_MARK_RE)) {
+    for (const part of m[1].split(",")) numbers.push(Number(part.trim()));
+  }
+  const uniq = [...new Set(numbers.filter((n) => !Number.isNaN(n)))];
+  return {
+    claim: unit,
+    numbers: uniq,
+    // 인용 마커가 있으면 "대목을 못 집은 인용 문장", 없으면 AI 서술.
+    status: uniq.length > 0 ? "unmatched" : "uncited",
+    chunk_id: null,
+    span_start: null,
+    span_end: null,
+    span_text: null,
+    score: 0,
+    ungrounded: [],
+    grounded: [],
+  };
+}
 
 function withClaimHovers(
   text: string,
@@ -146,7 +163,7 @@ function withClaimHovers(
   if (claims.length === 0) return renderText(text);
   const { norm, at } = foldSpaces(text);
   // 겹치지 않게 앞에서부터 자리 잡는다 - 긴 문장을 먼저 놓아 짧은 조각이 끼어들지 않게.
-  const spans: { start: number; end: number; claim: ClaimAlignment | null }[] = [];
+  const spans: { start: number; end: number; claim: ClaimAlignment }[] = [];
   for (const m of [...claims].sort((a, b) => b.key.length - a.key.length)) {
     const { key, claim } = m;
     const pos = norm.indexOf(key);
@@ -165,32 +182,15 @@ function withClaimHovers(
     if (sp.start > cursor) out.push(renderText(text.slice(cursor, sp.start)));
     // 키는 노드 안 위치 - 같은 문장이 두 번 나와도 자리가 다르면 갈린다.
     out.push(
-      sp.claim ? (
-        <ClaimHoverCard
-          key={`claim-${sp.start}`}
-          claim={sp.claim}
-          chunks={opts.chunks}
-          markCited={opts.markCited}
-          markUncited={opts.markUncited}
-        >
-          {renderText(text.slice(sp.start, sp.end))}
-        </ClaimHoverCard>
-      ) : (
-        // 대조 대상이 아닌 줄 - 호버 카드에 띄울 근거가 없어 설명 한 줄만 단다.
-        <span
-          key={`uncovered-${sp.start}`}
-          data-walked="1"
-          title="근거 대조 대상이 아닙니다 - 문장 종결형이 아니고 수치도 없어 검사에서 제외된 줄입니다"
-          className={cn(
-            "underline decoration-dotted decoration-2 underline-offset-4",
-            opts.markUncovered
-              ? "decoration-fg-tertiary"
-              : "decoration-transparent hover:decoration-fg-tertiary/70",
-          )}
-        >
-          {renderText(text.slice(sp.start, sp.end))}
-        </span>
-      ),
+      <ClaimHoverCard
+        key={`claim-${sp.start}`}
+        claim={sp.claim}
+        chunks={opts.chunks}
+        markCited={opts.markCited}
+        markUncited={opts.markUncited}
+      >
+        {renderText(text.slice(sp.start, sp.end))}
+      </ClaimHoverCard>,
     );
     cursor = sp.end;
   }
@@ -644,9 +644,9 @@ export interface MarkdownContentProps {
   markCited?: boolean;
   /** 표기 없는 문장(AI 서술)에 주황 밑줄(기본 켜짐) */
   markUncited?: boolean;
-  /** 근거 대조 대상이 아닌 줄 - 주면 회색 밑줄 대상이 된다 */
+  /** 정렬 대상이 아니었던 본문 줄 - 마커 유무로 인용/AI를 갈라 같은 두 색에 합류시킨다.
+   *  주지 않으면 그 줄들만 밑줄이 없어, 아무도 안 본 글이 통과한 글처럼 보인다. */
   uncovered?: string[];
-  markUncovered?: boolean;
 }
 
 export function MarkdownContent({
@@ -657,7 +657,6 @@ export function MarkdownContent({
   markCited = false,
   markUncited = true,
   uncovered,
-  markUncovered = false,
 }: MarkdownContentProps) {
   const citationMap = useMemo<CitationMap>(
     () =>
@@ -684,18 +683,18 @@ export function MarkdownContent({
       [
         ...(claims ?? []).map((c) => ({
           key: normalizeClaim(c.claim.replace(SOURCE_MARK_RE, "")),
-          claim: c as ClaimAlignment | null,
+          claim: c,
         })),
         ...(uncovered ?? []).map((u) => ({
           key: normalizeClaim(u.replace(SOURCE_MARK_RE, "")),
-          claim: null,
+          claim: synthesizeClaim(u),
         })),
       ].filter((m) => m.key.length >= CLAIM_MIN_CHARS),
     [claims, uncovered],
   );
   const claimRender = useMemo<ClaimRender>(
-    () => ({ chunks: evidence ?? [], markCited, markUncited, markUncovered }),
-    [evidence, markCited, markUncited, markUncovered],
+    () => ({ chunks: evidence ?? [], markCited, markUncited }),
+    [evidence, markCited, markUncited],
   );
   const components = useMemo(
     () => buildComponents(citationMap, evidenceMap, matchable, claimRender),

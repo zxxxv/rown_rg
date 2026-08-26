@@ -148,6 +148,7 @@ function App() {
                 citations={CITATIONS}
                 evidence={EVIDENCE.items}
                 claims={EVIDENCE.claims}
+                uncovered={EVIDENCE.uncovered}
               />
             </div>
             <p className="mb-2 mt-4 text-xs font-medium text-fg-secondary">
@@ -161,7 +162,6 @@ function App() {
                 claims={EVIDENCE.claims}
                 uncovered={EVIDENCE.uncovered}
                 markCited
-                markUncovered
               />
             </div>
           </div>

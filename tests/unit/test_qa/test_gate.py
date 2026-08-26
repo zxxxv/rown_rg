@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
+import pytest
+
 from src.core.types import (
     CheckSeverity,
     GateResult,
@@ -745,3 +747,43 @@ class TestArithmeticSuspects:
         # 피연산자와 결과가 한 문장에 함께 없으면 판정하지 않는다(정밀도 우선).
         content = "ㅇ 두 항목을 합한 비중이 절반에 가까운 것으로 조사됨 (출처 34)"
         assert arithmetic_suspects(content) == []
+
+
+class TestNominalMEnding:
+    """-ㅁ 명사형 종결은 목록이 아니라 규칙으로 판정한다.
+
+    _CLAIM_TAILS가 음·임·함·됨·짐·옴·남·듦을 낱개로 열거했는데, -ㅁ은 어간 모음에 따라
+    무한히 갈린다(나뉘다→나뉨, 갖추다→갖춤). 그래서 "…으로 나뉨"처럼 평범한 개조식
+    본문이 근거 대조·무근거 수치·산술 검사에서 통째로 증발했다 —
+    2026-08-26 실측: 완료 8개 프로젝트의 미포착 623줄 중 210줄(34%)이 이 계급이었고,
+    꼬리 분포는 보여줌 38·큼 19·둠 18·지님 13·갖춤 13으로 거의 전부 동사 명사형이었다.
+    """
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "ㅇ 검체 축은 혈액·엑소좀·조직으로, 기술 축은 PCR 기반 방법과 NGS로 나뉨",
+            "ㅇ 적용 분야를 암·유전질환·감염질환으로 구분해 분야별 시장가치를 전망하는 체계를 갖춤",
+            "ㅇ 국내 제조수출기업의 인지·이행 실태 수치는 앞 절에서 확정한 값을 따름",
+            "ㅇ EU는 최빈개도국의 녹색전환 지원과 기술지원 제공 의사를 밝힘",
+            "ㅇ 업종 협회 차원의 표준 템플릿·대행 창구 제공이 실익이 큼",
+            "ㅇ 해당 제도는 공급망 전반에 걸쳐 광범위한 영향을 미침",
+        ],
+    )
+    def test_verb_nominals_are_claims(self, line: str) -> None:
+        assert claim_units(line) == [line.removeprefix("ㅇ ")]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            # 짧은 명사 소제목은 -ㅁ으로 끝나도 후보 길이(25자)에서 먼저 걸린다.
+            "ㅇ 통합 운영 시스템",
+            "ㅇ 대응 전략 프로그램",
+        ],
+    )
+    def test_short_noun_headings_still_dropped(self, line: str) -> None:
+        assert claim_units(line) == []
+
+    def test_non_hangul_tail_untouched(self) -> None:
+        """영문 줄은 여전히 주장이 아니다 - 교차언어 원칙(test_alignment)을 지킨다."""
+        assert claim_units("ㅇ The transitional period requires reporting only") == []

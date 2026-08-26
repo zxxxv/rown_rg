@@ -924,7 +924,6 @@ function SectionView({
   const [markCited, setMarkCited] = useState(false);
   // 셋째 층 - 어떤 검사도 보지 않은 줄(개조식 명사 종결 등). 기본 끔: 늘 켜 두면
   // 개조식이 많은 절이 온통 밑줄이 된다. "왜 이 줄만 표시가 없지"를 물을 때 켜는 스위치.
-  const [markUncovered, setMarkUncovered] = useState(false);
   const evidenceBlock = evidenceIdx !== null ? (blocks[evidenceIdx] ?? null) : null;
   // 드로어 2면 중 원문 뷰어 - 근거 카드·수치에서 "원문에서 보기"를 눌렀을 때만.
   // 근거 목록으로 돌아가는 뒤로가기가 있으므로 블록이 바뀌면 반드시 비운다.
@@ -961,6 +960,7 @@ function SectionView({
       ungrounded: claims.filter((c) => c.ungrounded.length > 0).length,
     };
   }, [evidenceQuery.data]);
+  // 색칠에는 합류했지만 무근거 수치·산술 검사에서는 여전히 빠지는 줄 수 - 셈만 알린다.
   const uncoveredCount = evidenceQuery.data?.uncovered?.length ?? 0;
   // 드로어가 뜨는 조건과 정확히 같은 식을 부모에 알린다 - 부모는 이때 절 트리를 접어
   // 본문을 넓힌다. 절을 옮기거나 화면을 떠날 때도 반드시 닫힘으로 되돌린다.
@@ -1306,20 +1306,9 @@ function SectionView({
                   </>
                 ) : null}
                 {uncoveredCount > 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => setMarkUncovered((v) => !v)}
-                    aria-pressed={markUncovered}
-                    title="문장 종결형이 아니고 수치도 없어 근거 대조에서 아예 제외된 줄에 회색 점선을 그립니다"
-                    className={cn(
-                      "rounded border px-2 py-0.5 transition-colors",
-                      markUncovered
-                        ? "border-border-strong bg-bg-tertiary text-fg"
-                        : "border-border text-fg-secondary hover:border-border-strong",
-                    )}
-                  >
-                    대조 안 함 {uncoveredCount} {markUncovered ? "표시 켬" : "표시 끔"}
-                  </button>
+                  <span title="문장 종결형이 아니고 수치도 없어 무근거 수치·산술 검사에서 빠진 줄입니다 - 밑줄은 마커 유무로 칠해져 있습니다">
+                    검사 제외 {uncoveredCount}
+                  </span>
                 ) : null}
                 {evidenceQuery.data?.traceable === false ? (
                   // 근거 기록 도입(8/11) 전에 작성된 절 - 번호와 청크의 대응이 없어
@@ -1436,7 +1425,7 @@ function SectionView({
                         uncovered={evidenceQuery.data?.uncovered}
                         markCited={markCited}
                         markUncited={markUncited}
-                        markUncovered={markUncovered}
+                        uncovered={evidenceQuery.data?.uncovered}
                       />
                       {selectedIdx.has(idx) && selectedIdx.size === 1 ? (
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">

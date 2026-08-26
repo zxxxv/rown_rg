@@ -601,11 +601,33 @@ _TRAILING_PAREN_RE = re.compile(r"\([^()]{1,30}\)$")
 _HANGUL_RE = re.compile(r"[가-힣]")
 
 
+# 한글 음절의 종성 인덱스 — ㅁ(16)·ㄻ(10)이면 명사형 어미 -ㅁ으로 끝난 것으로 본다.
+# (듦=ㄻ. 유니코드 음절 = 0xAC00 + (초성*21 + 중성)*28 + 종성)
+_M_JONGSEONG = (10, 16)
+
+
+def _ends_with_m_nominal(bare: str) -> bool:
+    """마지막 글자가 -ㅁ 명사형으로 끝나는가(나뉨·갖춤·이룸·세움·됨·함…)."""
+    ch = bare[-1] if bare else ""
+    if not ("가" <= ch <= "힣"):
+        return False
+    return (ord(ch) - 0xAC00) % 28 in _M_JONGSEONG
+
+
 def _is_claim(bare: str) -> bool:
     if _SENTENCE_END_RE.search(bare) or bare.endswith(_CLAIM_TAILS):
         return True
     stripped = _TRAILING_PAREN_RE.sub("", bare).rstrip()
     if stripped != bare and (_SENTENCE_END_RE.search(stripped) or stripped.endswith(_CLAIM_TAILS)):
+        return True
+    # 명사형 어미 -ㅁ으로 끝나면 서술이다 — _CLAIM_TAILS가 음·임·함·됨·짐·옴·남·듦을
+    # **낱개로 열거**하는데 -ㅁ은 어간 모음에 따라 무한히 갈린다(나뉘다→나뉨, 갖추다→
+    # 갖춤, 이루다→이룸, 세우다→세움). 그래서 "…으로 나뉨"·"…체계를 갖춤" 같은 평범한
+    # 개조식 본문이 모든 검사에서 증발했다(2026-08-26 실측: 완료 8개 프로젝트의 미포착
+    # 623줄 중 210줄, 34%). 목록이 아니라 규칙으로 판정해 그 계급을 닫는다.
+    # 대가는 ㅁ 종결 명사 소제목("…운영 시스템")의 오탐인데, 25자 미만은 이미 후보에서
+    # 빠지므로 남는 위험이 작다 — '남'을 받아들인 것과 같은 판단이다.
+    if _ends_with_m_nominal(bare):
         return True
     # 유의미 수치를 실은 한글 문장은 꼬리와 무관하게 주장이다 — 개조식 명사 종결("…약
     # 2.5배 수준"·"…로 측정"·"…에 그침")이 모든 검사에서 증발하던 77건(2026-08-14
