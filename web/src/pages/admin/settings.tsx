@@ -22,8 +22,8 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/useAuth";
 
-// 알림용 자격증명 그룹 - 로그인(SSO)엔 불필요라 기본 접어둔다.
-const COLLAPSED_BY_DEFAULT = new Set(["네이버웍스"]);
+// 그룹은 모두 접어 둔다(2026-08-27 지시) - 한 번 넣으면 오래 안 건드리는 값들이라,
+// 펼쳐 두면 첫 화면이 입력칸으로 가득 차 무엇이 있는지가 안 보인다. 볼 것만 편다.
 const GROUP_HINT: Record<string, string> = {
   네이버웍스: "알림 봇 전용 - 로그인(SSO)엔 불필요합니다. 알림을 쓸 때만 채우세요.",
   SSO: "네이버웍스 로그인(SAML) - IdP 콘솔의 Identity Provider 정보에서 복사해 넣습니다. 위 '네이버웍스'(알림 봇)와 별개입니다.",
@@ -91,7 +91,7 @@ export default function AdminSettingsPage() {
 }
 
 function GroupCard({ group, items }: { group: string; items: SettingItem[] }) {
-  const [collapsed, setCollapsed] = useState(COLLAPSED_BY_DEFAULT.has(group));
+  const [collapsed, setCollapsed] = useState(true);
   const hint = GROUP_HINT[group];
   return (
     <Card>
