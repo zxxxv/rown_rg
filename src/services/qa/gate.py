@@ -526,6 +526,30 @@ def check_numeric_grounded(draft: SectionDraft, cited_content: str) -> GateResul
 
 # 문장 분리 — 마침표·물음표·느낌표 뒤 공백. 개조식은 줄 자체가 한 단위라 줄 먼저 나눈다.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# 관공서 날짜 표기("2026. 5. 6." · "2025.12.31.") — 마침표+공백이라 문장 분리에 그대로
+# 물려 한 문장이 세 조각으로 갈렸다. 마커는 마지막 조각에만 붙으므로 앞 두 조각이
+# "인용 표기 없음"이 되고, **멀쩡한 인용 문장이 지어낸 글로 표시된다**(2026-08-26 지적).
+# 오탐 방향이 해로운 쪽이라 날짜 안에서는 쪼개지 않는다.
+_DATE_DOTS_RE = re.compile(r"\d{4}\s*\.\s*\d{1,2}\s*\.\s*(?:\d{1,2}\s*\.)?")
+
+
+def _split_sentences(text: str) -> list[str]:
+    """문장 분리 — 날짜 표기 안의 마침표는 경계로 보지 않는다."""
+    blocked: set[int] = set()
+    for m in _DATE_DOTS_RE.finditer(text):
+        blocked.update(range(m.start(), m.end()))
+    out: list[str] = []
+    last = 0
+    for m in _SENTENCE_SPLIT_RE.finditer(text):
+        # 경계 직전의 마침표가 날짜의 일부면 건너뛴다.
+        if m.start() - 1 in blocked:
+            continue
+        out.append(text[last : m.start()])
+        last = m.end()
+    out.append(text[last:])
+    return out
+
+
 # 본문이 아닌 줄: 제목·표·인용블록·구분선.
 _NON_CLAIM_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|\||>|[-*_]{3,}\s*$)")
 # 캡션·표 메타 줄 — "표: …"·"그림 3-1: …"·"(단위: %)"는 주장이 아니라 분모를 오염시킨다
@@ -583,16 +607,38 @@ def _candidate_units(content: str) -> list[tuple[str, str]]:
         if in_fence or not line or _NON_CLAIM_LINE_RE.match(line) or _CAPTION_LINE_RE.match(line):
             continue
         body = _BULLET_RE.sub("", line)
-        for unit in _SENTENCE_SPLIT_RE.split(body):
+        for unit in _split_sentences(body):
             unit = unit.strip()
             # 판정은 마커를 뗀 문장으로 한다 — 개조식은 "…성장했음 [3]"처럼 마커로
             # 끝나는 줄이 대부분이라, 원문 그대로 보면 종결형 검사에서 전부 탈락한다
             # (2026-08-11 실측: 인용 340개짜리 절의 주장이 0건으로 잡혔다).
             bare = MARK_RE.sub("", unit).strip()
-            if len(bare) < _MIN_CLAIM_CHARS:
+            if len(bare) < _MIN_CLAIM_CHARS and not _short_but_checkable(unit, bare):
                 continue
             out.append((unit, bare))
     return out
+
+
+# 절 번호로 시작하는 줄("2.1 기술 현황"·"3 결론") — 짧아도 예외로 들이면 안 되는 소제목.
+# 숫자가 있어서 수치 조건을 통과해 버리므로 패턴으로 먼저 막는다.
+_SECTION_NUMBER_RE = re.compile(r"^\d+(?:\.\d+)*\s")
+
+
+def _short_but_checkable(unit: str, bare: str) -> bool:
+    """25자 미만이라도 검사 대상으로 들일 줄인가.
+
+    길이 컷은 소제목·나열을 막는 유일한 장치인데, **짧은 개조식 줄이 바로 수치가 사는
+    자리다** — "액체생검 시장 3.2배 성장"은 25자 미만이라 통째로 증발한다. 종결형
+    화이트리스트가 -ㅁ을 낱개로 열거해 새던 것과 같은 종류의 구멍이라, 임계를 낮추는
+    대신 조건부로 연다(2026-08-26).
+
+    조건: 인용 마커가 있거나(그 줄은 근거를 주장하고 있다) 유의미 수치가 있다(그 줄은
+    검산 대상이다). 소제목은 보통 둘 다 없어 딸려 오지 않고, 절 번호로 시작하는
+    "2.1 기술 현황"류만 따로 막으면 남는 오탐이 거의 없다.
+    """
+    if _SECTION_NUMBER_RE.match(bare):
+        return False
+    return bool(MARK_RE.search(unit)) or bool(_significant_numbers(bare))
 
 
 # 문장 끝의 짧은 보조 괄호 — "…나타남(복수응답)"·"…됨(’23년 기준)"이 꼬리 검사를

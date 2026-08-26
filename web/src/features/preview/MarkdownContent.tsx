@@ -13,16 +13,13 @@ import type { ClaimAlignment, EvidenceChunk, SectionCitation } from "@/api/types
 import { cn } from "@/lib/utils";
 import { ChartBlock } from "./ChartBlock";
 import { ClaimHoverCard } from "./ClaimHoverCard";
+import { CITE_MARK_RE, markerNumbers as markerNumbersOf, SOURCE_MARK_RE } from "./markers";
 import { CitationHoverCard } from "./SourceHoverCard";
 
 // 직접 인용 마커 - 원문을 그대로 옮긴 문장에만 붙는다(백엔드 src/core/citations.py와 동일 규약).
 // 문장 안에 그대로 남겨 배지로 렌더한다 - 어느 문장이 원문 그대로인지 보여야 하기 때문.
-const CITE_PATTERN = /\[(\d{1,3})\]/g;
-
-// 참고 표기 - 자료를 참고해 다시 쓴 문장에 붙는다. "(출처 3)"과 "(출처 3, 7)" 둘 다 받는다.
-// 본문에 흘리지 않고 블록 우상단에 모아 보인다 - 문장마다 번호가 붙으면 읽기를 방해하고,
-// 직접 인용과도 구분이 안 됐다(2026-08-11).
-const SOURCE_MARK_RE = /[^\S\n]*\(출처\s*(\d{1,3}(?:\s*,\s*\d{1,3})*)\s*\)/g;
+// 문법은 markers.ts가 단일 진실이다(인용 표기 개편 대비, 2026-08-26).
+const CITE_PATTERN = CITE_MARK_RE;
 
 function stripSourceMarks(md: string): string {
   // 마커 제거 후 라벨만 남은 줄("- 출처:")은 통째로 버린다 - 빈 껍데기가 표 밑에 뜬다.
@@ -121,8 +118,18 @@ function foldSpaces(text: string): { norm: string; at: number[] } {
  * 근거 있는 문장까지 싸잡아 "표기 없음"으로 보이게 했다. 못 찾은 문장은 원문 그대로
  * 남긴다(억지로 맞추면 엉뚱한 대목이 칠해진다). */
 /** 문장 호버 렌더 옵션 - 층을 지나며 인자가 늘어나지 않게 한 덩이로 묶는다. */
-type ClaimRender = { chunks: EvidenceChunk[]; markCited: boolean; markUncited: boolean };
-const NO_CLAIM_RENDER: ClaimRender = { chunks: [], markCited: false, markUncited: true };
+type ClaimRender = {
+  chunks: EvidenceChunk[];
+  markCited: boolean;
+  markUncited: boolean;
+  traceable: boolean;
+};
+const NO_CLAIM_RENDER: ClaimRender = {
+  chunks: [],
+  markCited: false,
+  markUncited: true,
+  traceable: true,
+};
 type Markable = { key: string; claim: ClaimAlignment };
 
 /** 정렬되지 않은 본문 줄을 색칠 대상으로 만든다 - 마커 유무만으로 인용/AI를 가른다.
@@ -132,12 +139,7 @@ type Markable = { key: string; claim: ClaimAlignment };
  * 같이 사라졌다 - 아무도 안 본 줄이 검사 통과한 줄과 똑같이 보였다(2026-08-26 지적).
  * 대목까지는 모르므로 span은 비우고, 호버가 "여기까지만 안다"고 말한다. */
 function synthesizeClaim(unit: string): ClaimAlignment {
-  const numbers: number[] = [];
-  for (const m of unit.matchAll(/\[(\d{1,3})\]/g)) numbers.push(Number(m[1]));
-  for (const m of unit.matchAll(SOURCE_MARK_RE)) {
-    for (const part of m[1].split(",")) numbers.push(Number(part.trim()));
-  }
-  const uniq = [...new Set(numbers.filter((n) => !Number.isNaN(n)))];
+  const uniq = markerNumbersOf(unit);
   return {
     claim: unit,
     numbers: uniq,
@@ -188,6 +190,7 @@ function withClaimHovers(
         chunks={opts.chunks}
         markCited={opts.markCited}
         markUncited={opts.markUncited}
+        traceable={opts.traceable}
       >
         {renderText(text.slice(sp.start, sp.end))}
       </ClaimHoverCard>,
@@ -647,6 +650,8 @@ export interface MarkdownContentProps {
   /** 정렬 대상이 아니었던 본문 줄 - 마커 유무로 인용/AI를 갈라 같은 두 색에 합류시킨다.
    *  주지 않으면 그 줄들만 밑줄이 없어, 아무도 안 본 글이 통과한 글처럼 보인다. */
   uncovered?: string[];
+  /** 마커를 청크까지 되짚을 수 있는 절인가(SectionEvidence.traceable) */
+  traceable?: boolean;
 }
 
 export function MarkdownContent({
@@ -657,6 +662,7 @@ export function MarkdownContent({
   markCited = false,
   markUncited = true,
   uncovered,
+  traceable = true,
 }: MarkdownContentProps) {
   const citationMap = useMemo<CitationMap>(
     () =>
@@ -693,8 +699,8 @@ export function MarkdownContent({
     [claims, uncovered],
   );
   const claimRender = useMemo<ClaimRender>(
-    () => ({ chunks: evidence ?? [], markCited, markUncited }),
-    [evidence, markCited, markUncited],
+    () => ({ chunks: evidence ?? [], markCited, markUncited, traceable }),
+    [evidence, markCited, markUncited, traceable],
   );
   const components = useMemo(
     () => buildComponents(citationMap, evidenceMap, matchable, claimRender),

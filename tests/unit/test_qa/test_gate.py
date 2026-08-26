@@ -787,3 +787,71 @@ class TestNominalMEnding:
     def test_non_hangul_tail_untouched(self) -> None:
         """영문 줄은 여전히 주장이 아니다 - 교차언어 원칙(test_alignment)을 지킨다."""
         assert claim_units("ㅇ The transitional period requires reporting only") == []
+
+
+class TestShortLinesWithNumbers:
+    """25자 컷은 소제목을 막는 장치지만, 짧은 개조식 줄이 바로 수치가 사는 자리다.
+
+    2겹(종결형)을 색칠 경로에서 빼면 길이 컷이 유일한 침묵 장치가 된다 - 임계를
+    낮추는 대신 조건부로 연다(2026-08-26): 마커나 유의미 수치가 있으면 짧아도 본다.
+    소제목은 보통 둘 다 없고, 절 번호로 시작하는 줄만 따로 막으면 오탐이 남지 않는다.
+    """
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "ㅇ 액체생검 시장 3.2배 성장",  # 수치만
+            "ㅇ 전년 대비 12.1% 증가 [8]",  # 수치 + 마커
+            "ㅇ 국내 점유율 41%",
+        ],
+    )
+    def test_short_numeric_lines_are_checked(self, line: str) -> None:
+        assert claim_units(line) == [line.removeprefix("ㅇ ")]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "ㅇ 시장 규모 및 전망",  # 수치·마커 없음 = 소제목
+            "ㅇ 국내 정책 동향",
+            "2.1 기술 현황",  # 절 번호 - 숫자가 있어도 소제목이다
+            "3.2 대응 방안 [4]",  # 절 번호가 마커보다 우선한다
+        ],
+    )
+    def test_headings_stay_out(self, line: str) -> None:
+        assert claim_units(line) == []
+
+
+class TestDateNotationSplit:
+    """관공서 날짜 표기("2026. 5. 6.")가 문장 분리에 물리던 자리.
+
+    마침표+공백이라 한 문장이 세 조각으로 갈리고, 마커는 마지막 조각에만 붙으므로
+    앞 조각들이 "인용 표기 없음"이 됐다 - **멀쩡한 인용 문장이 지어낸 글로 표시된다**.
+    게다가 "5."·"6." 조각은 길이 컷에 걸려 본문에서 통째로 증발했다(2026-08-26 지적).
+    """
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "고시 제2026-15호는 2026. 5. 6. 시행되며 적용 대상 품목을 확대한다 (출처 3).",
+            "기준일은 2025. 12. 31.이며 이후 분기별로 갱신된다 [8].",
+            "시행일 2026.5.6. 이후 신규 수입분부터 적용된다 (출처 7).",
+        ],
+    )
+    def test_dates_do_not_split_a_sentence(self, line: str) -> None:
+        assert claim_units(line) == [line]
+        assert uncited_units(line) == []  # 마커가 그 한 문장에 붙어 있다
+
+    @pytest.mark.parametrize(
+        ("line", "n"),
+        [
+            ("전년 대비 12.1% 증가했다. 2026년에는 두 자릿수 성장이 이어질 전망이다.", 2),
+            (
+                "① 산정경계의 포함범위에서 국내외 차이가 뚜렷하게 확인된다."
+                " ② 제3자 검증 의무화 수준에서도 상당한 격차가 확인된다.",
+                2,
+            ),
+        ],
+    )
+    def test_normal_sentence_breaks_survive(self, line: str, n: int) -> None:
+        """날짜만 예외다 - 평범한 문장 경계·원문자 항목은 그대로 쪼개져야 한다."""
+        assert len(claim_units(line)) == n

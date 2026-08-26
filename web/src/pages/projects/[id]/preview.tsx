@@ -1464,6 +1464,7 @@ function SectionView({
                         evidence={evidenceQuery.data?.items}
                         claims={evidenceQuery.data?.claims}
                         uncovered={evidenceQuery.data?.uncovered}
+                        traceable={evidenceQuery.data?.traceable}
                         markCited={markCited}
                         markUncited={markUncited}
                       />

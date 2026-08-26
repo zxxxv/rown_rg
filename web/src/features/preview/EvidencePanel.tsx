@@ -1,6 +1,8 @@
 import { ExternalLink, FileSearch } from "lucide-react";
 import { useSectionEvidence } from "@/api/sections";
 import type { ClaimAlignment, EvidenceChunk, SectionEvidence } from "@/api/types";
+import { confirmedSpan } from "./ClaimHoverCard";
+import { markerNumbers as markerNumbersOf } from "./markers";
 import type { SourceLocation } from "./SourceViewer";
 import { textFragmentUrl } from "./sourceLink";
 
@@ -23,7 +25,7 @@ import { textFragmentUrl } from "./sourceLink";
  * 셋 다 "대목을 못 집었으니 직접 보라"로 합친다. */
 function missingNote(claim: ClaimAlignment): string | null {
   if (claim.status === "uncited") return "인용 표기가 없는 문장입니다";
-  if (!claim.span_text) return "참고한 대목을 특정하지 못했습니다 - 원문에서 직접 확인하세요";
+  if (!confirmedSpan(claim)) return "참고한 대목을 특정하지 못했습니다 - 원문에서 직접 확인하세요";
   return null;
 }
 
@@ -55,7 +57,7 @@ function ClaimRow({
             end: claim.span_end,
           })
       : undefined;
-  const webUrl = textFragmentUrl(source?.url ?? null, claim.span_text);
+  const webUrl = textFragmentUrl(source?.url ?? null, confirmedSpan(claim));
 
   return (
     <li className="rounded border border-border bg-bg px-3 py-2.5">
@@ -72,9 +74,9 @@ function ClaimRow({
         </p>
       ) : null}
 
-      {claim.span_text ? (
+      {confirmedSpan(claim) ? (
         <blockquote className="mt-1.5 border-l-2 border-border-info pl-2 text-xs leading-relaxed text-fg-secondary">
-          {claim.span_text}
+          {confirmedSpan(claim)}
         </blockquote>
       ) : null}
 
@@ -119,19 +121,10 @@ function ClaimRow({
 // 우측 패널에 띄운다 - 절에 출처가 12건이어도 한 블록이 쓰는 건 보통 1~3건이라, 좁혀 보여야
 // 대조가 실제로 일어난다.
 
-const MARK_RE = /\[(\d+)\]|\(출처\s*([\d,\s]+)\)/g;
-
-/** 본문 텍스트에 등장하는 인용 번호 집합 - 블록별 근거 유무 판정(표시·패널)의 공통 원천. */
+/** 본문 텍스트에 등장하는 인용 번호 집합 - 블록별 근거 유무 판정(표시·패널)의 공통 원천.
+ *  문법은 markers.ts가 단일 진실이다(인용 표기 개편 대비). */
 export function markerNumbers(text: string): Set<number> {
-  const out = new Set<number>();
-  for (const m of text.matchAll(MARK_RE)) {
-    const raw = m[1] ?? m[2] ?? "";
-    for (const token of raw.split(",")) {
-      const n = Number.parseInt(token.trim(), 10);
-      if (!Number.isNaN(n)) out.add(n);
-    }
-  }
-  return out;
+  return new Set(markerNumbersOf(text));
 }
 
 /** 블록 근거 분류 - 배지 카운트(preview)와 패널(BlockEvidence)이 같은 기준을 쓴다.

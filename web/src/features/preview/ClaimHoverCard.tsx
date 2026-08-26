@@ -32,11 +32,26 @@ import { textFragmentUrl } from "./sourceLink";
 // 밑줄은 border-b가 아니라 text-decoration으로 그린다 - 1px 테두리는 축소된 화면에서
 // 사실상 사라졌다(2026-08-26 실사용 지적). 글자를 따라 흐르고 두께를 줄 수 있다.
 
+/** 대목을 "참고한 대목"이라 부를 수 있는가 - **status가 aligned일 때만**이다.
+ *
+ * span은 하한 없는 argmax라 인용 청크가 있으면 **무조건** 채워진다(alignment.py의
+ * `if best is None or score > best.score`). span_text가 있다고 보여주면 겹침 0.05짜리
+ * 엉뚱한 대목이 "이 문장의 근거"로 확신 있게 뜬다 - 침묵이 승인이 되던 원래 버그가
+ * "아무 대목이나 = 검증됨"으로 이름만 바꿔 돌아오는 것이고, **틀린 대목은 "확인 못 함"
+ * 보다 나쁘다**(2026-08-26 지적).
+ *
+ * 임계값(0.30)은 실제로 거른다 - 음성 대조 실측: 실제 짝 6% 통과, 다른 프로젝트 청크로
+ * 바꿔 물린 짝 0% 통과. 통과한 것만 근거로 말한다.
+ */
+export function confirmedSpan(claim: ClaimAlignment): string | null {
+  return claim.status === "aligned" && claim.span_text ? claim.span_text : null;
+}
+
 /** 호버 카드에 실을 한 줄 요약 - 빠진 것을 사람이 할 일로 말한다(판정 등급이 아니라). */
 function missingNote(claim: ClaimAlignment): string | null {
   if (claim.status === "uncited")
     return "인용 표기가 없는 문장입니다 - 자료 없이 쓰였을 수 있습니다";
-  if (!claim.span_text) return "참고한 대목을 특정하지 못했습니다 - 원문에서 직접 확인하세요";
+  if (!confirmedSpan(claim)) return "참고한 대목을 특정하지 못했습니다 - 원문에서 직접 확인하세요";
   return null;
 }
 
@@ -45,6 +60,7 @@ export function ClaimHoverCard({
   chunks,
   markCited = false,
   markUncited = true,
+  traceable = true,
   children,
 }: {
   claim: ClaimAlignment;
@@ -54,6 +70,8 @@ export function ClaimHoverCard({
   markCited?: boolean;
   /** 표기 없는 문장(AI 서술)에 주황 밑줄 */
   markUncited?: boolean;
+  /** 마커를 청크까지 되짚을 수 있는 절인가 - false면 대목을 애초에 못 찾는다 */
+  traceable?: boolean;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -78,8 +96,13 @@ export function ClaimHoverCard({
       ? chunks.find((c) => c.number === claim.numbers[0])
       : undefined;
   const source = chunk ?? fallback;
-  const note = missingNote(claim);
-  const webUrl = textFragmentUrl(source?.url ?? null, claim.span_text);
+  // 근거 기록(2026-08-11) 이전 작성분은 마커→청크 매핑이 없어 대목을 원리적으로 못 찾는다.
+  // 그 보고서는 파랑 전부가 같은 문구라, 배너를 못 보고 6장부터 읽는 사람에게도 알린다.
+  const note =
+    !traceable && claim.status !== "uncited"
+      ? "근거 기록 이전에 작성된 절입니다 - 대목까지는 되짚을 수 없고 자료 단위까지만 확인됩니다"
+      : missingNote(claim);
+  const webUrl = textFragmentUrl(source?.url ?? null, confirmedSpan(claim));
 
   return (
     <>
@@ -122,9 +145,9 @@ export function ClaimHoverCard({
                   </span>
                 </p>
               ) : null}
-              {claim.span_text ? (
+              {confirmedSpan(claim) ? (
                 <blockquote className="max-h-48 overflow-y-auto border-l-2 border-border-info pl-2 text-xs leading-relaxed text-fg-secondary">
-                  {claim.span_text}
+                  {confirmedSpan(claim)}
                 </blockquote>
               ) : null}
               {note ? <p className="text-[11px] text-fg-tertiary">{note}</p> : null}
