@@ -260,11 +260,17 @@ class TestLibraryApi:
         )
         assert body.status_code == 200, body.text
         payload = body.json()
-        assert payload["content_md"] == content_md
+        # 뷰어는 색인과 같은 것을 보여준다(2026-08-27) - 아직 청크가 없는 자료는 줄
+        # 단위 청소만 거친다. 이 픽스처는 청소가 꼬리 개행만 걷는다.
+        served = content_md.rstrip()
+        assert payload["content_md"] == served
         assert payload["title"] == "원격근무 동향"
-        assert payload["char_count"] == len(content_md)
-        assert payload["byte_count"] == len(content_md.encode("utf-8"))
+        assert payload["char_count"] == len(served)
+        assert payload["byte_count"] == len(served.encode("utf-8"))
         assert payload["byte_count"] > payload["char_count"]
+        # 배제된 청크가 없으니 배제 표시도 없다.
+        assert payload["excluded_kinds"] == []
+        assert payload["excluded_chars"] == 0
 
         # 관리자는 타인 자료도 열람한다('사용자별 자료' 미러가 트리를 보여주므로
         # 원문만 404면 화면에선 "안 보인다"가 된다 - 2026-08-20 사용자 결정).
@@ -272,7 +278,7 @@ class TestLibraryApi:
             f"/api/v1/library/sources/{source.id}/content", headers=_auth(super_admin_token)
         )
         assert admin_view.status_code == 200, admin_view.text
-        assert admin_view.json()["content_md"] == content_md
+        assert admin_view.json()["content_md"] == served
 
         # 관리자 아닌 타인(뷰어)은 여전히 존재 은닉 404.
         other = await test_client.get(

@@ -619,6 +619,14 @@ _NON_CLAIM_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|\||>|[-*_]{3,}\s*$)")
 _CAPTION_LINE_RE = re.compile(r"^\s*(?:(?:표|그림)\s*[\d\-. ]*[::]|\(단위)")
 # 캡션 수치 검사용 — (단위…)는 정의상 단위 선언이라 표·그림 캡션만 본다.
 _TABLE_FIGURE_CAPTION_RE = re.compile(r"^(?:표|그림)\s*[\d\-. ]*[::]")
+# 표·그림 밑의 출처 줄 — "(출처 5)"·"출처: (출처 1, 21)"·"\* 출처: (출처 28)(출처 14)".
+# 서술이 아니라 구조다. 종결형에서 떨어졌다고 "어떤 검사도 안 본 본문"으로 세면 화면의
+# 위험 신호가 부풀고, 실제로 그랬다 — 검사 제외 1,257줄의 **46%가 이것**이었다
+# (2026-08-27 실측). 캡션을 통에서 빼는 것과 같은 이유고 같은 자리다.
+_SOURCE_ONLY_LINE_RE = re.compile(
+    r"^\s*(?:\\?[-*•‣◦○□▪ㅇㅁ]\s*)?(?:출처\s*[::]\s*)?"
+    r"(?:[（(]\s*(?:출처|자료|참고)\s*\d[\d\s,]*[)）]\s*)+$"
+)
 # 글머리 기호(개조식) — 판정에서 떼어내고 길이를 잰다. 'ㅇ'·'ㅁ'은 한글 자모 마커다.
 _BULLET_RE = re.compile(r"^\s*(?:[-*•‣◦○□▪ㅇㅁ]|\d+[.)]|[가-힣][.)])\s+")
 # 주장으로 볼 최소 길이 — 이보다 짧은 줄은 소제목·나열 항목이라 인용을 요구하지 않는다.
@@ -666,7 +674,13 @@ def _candidate_units(content: str) -> list[tuple[str, str]]:
             # 주장으로 세면 근거 없는 주장 경고가 헛돈다.
             in_fence = not in_fence
             continue
-        if in_fence or not line or _NON_CLAIM_LINE_RE.match(line) or _CAPTION_LINE_RE.match(line):
+        if (
+            in_fence
+            or not line
+            or _NON_CLAIM_LINE_RE.match(line)
+            or _CAPTION_LINE_RE.match(line)
+            or _SOURCE_ONLY_LINE_RE.match(line)
+        ):
             continue
         body = _BULLET_RE.sub("", line)
         for unit in _split_sentences(body):
@@ -722,7 +736,18 @@ def _ends_with_m_nominal(bare: str) -> bool:
     return (ord(ch) - 0xAC00) % 28 in _M_JONGSEONG
 
 
-def _is_claim(bare: str) -> bool:
+def _is_claim(bare: str, cited: bool = False) -> bool:
+    # 저자가 인용 표기를 단 줄은 "자료를 보고 쓴 서술"이라고 스스로 밝힌 것이다 — 제목에는
+    # 출처를 달지 않는다. 개조식은 "…확산 중 (출처 10)"·"…영향을 분석 (출처 10)"처럼
+    # 명사·부사로 끝나는 서술이 흔한데, 종결형만 보면 이게 전부 검사 밖으로 샜다.
+    # 실측(2026-08-27): 검사 제외 줄 중 마커 있는 230줄은 전수가 진짜 서술이었고,
+    # 마커 없는 448줄은 전수가 제목·캡션이었다 — 마커가 둘을 깨끗이 가른다.
+    #
+    # 한글 조건은 여기서도 지킨다 — 영문 줄은 대개 인용한 원문이나 캡션이지 저자의
+    # 주장이 아니고, 그건 교차언어 계약이다(test_alignment). 마커가 붙었다고 열면
+    # 영문 원문 인용이 통째로 주장이 되어 근거 대조가 자기 자신을 대조한다.
+    if cited and _HANGUL_RE.search(bare):
+        return True
     if _SENTENCE_END_RE.search(bare) or bare.endswith(_CLAIM_TAILS):
         return True
     stripped = _TRAILING_PAREN_RE.sub("", bare).rstrip()
@@ -751,7 +776,11 @@ def claim_units(content: str) -> list[str]:
     근거 추적(services/qa/alignment)과 미인용 검사가 같은 단위를 봐야 화면의 숫자와
     경고가 어긋나지 않는다 — 그래서 분해를 여기 하나로 둔다.
     """
-    return [unit for unit, bare in _candidate_units(content) if _is_claim(bare)]
+    return [
+        unit
+        for unit, bare in _candidate_units(content)
+        if _is_claim(bare, MARK_RE.search(unit) is not None)
+    ]
 
 
 def uncovered_units(content: str) -> list[str]:
@@ -764,7 +793,11 @@ def uncovered_units(content: str) -> list[str]:
     claim_coverage가 세는 것과 같은 후보·같은 판정을 쓴다 — 숫자와 목록이 어긋나면
     둘 중 하나는 거짓말이 된다.
     """
-    return [unit for unit, bare in _candidate_units(content) if not _is_claim(bare)]
+    return [
+        unit
+        for unit, bare in _candidate_units(content)
+        if not _is_claim(bare, MARK_RE.search(unit) is not None)
+    ]
 
 
 class LineAccounting(NamedTuple):
@@ -813,7 +846,7 @@ def line_accounting(content: str) -> LineAccounting:
             continue
         if any(u in line or line in u for u, _b in units):
             counted += 1
-    claims = sum(1 for _u, b in units if _is_claim(b))
+    claims = sum(1 for u, b in units if _is_claim(b, MARK_RE.search(u) is not None))
     return LineAccounting(body, counted, claims, len(units) - claims)
 
 
@@ -828,9 +861,9 @@ def claim_coverage(content: str) -> tuple[int, int, list[str]]:
     picked = 0
     total = 0
     missed_numeric: list[str] = []
-    for _unit, bare in _candidate_units(content):
+    for unit, bare in _candidate_units(content):
         total += 1
-        if _is_claim(bare):
+        if _is_claim(bare, MARK_RE.search(unit) is not None):
             picked += 1
         elif _significant_numbers(bare):
             missed_numeric.append(bare[:60])

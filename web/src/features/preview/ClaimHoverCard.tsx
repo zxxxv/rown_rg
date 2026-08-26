@@ -47,6 +47,26 @@ export function confirmedSpan(claim: ClaimAlignment): string | null {
   return claim.status === "aligned" && claim.span_text ? claim.span_text : null;
 }
 
+/** 문장이 놓인 칸 — 표시(밑줄)와 범례가 같은 기준을 쓰게 하는 단일 진실.
+ *
+ * 축이 둘이다. **색은 "표기를 달았나"**, **선 모양은 "그 표기가 받치나"**. 종전엔 색
+ * 하나로 표기 축만 보여줘서, 표기만 달면 근거를 확인한 문장과 똑같이 파랗게 보였다 -
+ * 실측상 인용 문장의 3분의 2가 대목을 못 특정하는데 화면에는 그 구분이 없었다
+ * (2026-08-27: 확정 20.7% vs 미특정 54.2%).
+ *
+ * 두 축을 색 하나로 합치지 않은 이유: 미특정을 주황으로 옮기면 주황이 73%가 되어
+ * "표기 없음"이라는 신호가 죽는다. 색을 늘리는 대신 선 모양을 쓴다.
+ *
+ * `defect`만 다른 성격이다 - 없음이 아니라 **검사에서 걸린 것**이라 늘 보인다(6.3%). */
+export type ClaimTone = "confirmed" | "unconfirmed" | "defect" | "uncited";
+
+export function claimTone(claim: ClaimAlignment): ClaimTone {
+  if (claim.status === "uncited") return "uncited";
+  // 근거에 없는 수치가 있으면 대목을 찾았는지와 무관하게 그게 먼저다.
+  if (claim.ungrounded.length > 0) return "defect";
+  return confirmedSpan(claim) ? "confirmed" : "unconfirmed";
+}
+
 /** 호버 카드에 실을 한 줄 요약 - 빠진 것을 사람이 할 일로 말한다(판정 등급이 아니라). */
 function missingNote(claim: ClaimAlignment): string | null {
   if (claim.status === "uncited")
@@ -60,6 +80,15 @@ function missingNote(claim: ClaimAlignment): string | null {
   if (!confirmedSpan(claim)) return "참고한 대목을 특정하지 못했습니다 - 원문에서 직접 확인하세요";
   return null;
 }
+
+/** 선 모양 = 근거 축. 실선은 "대목까지 확인됨", 점선은 "거기까지는 모름",
+ *  물결은 맞춤법 검사가 쓰는 그 신호 그대로 "여기 뭔가 잘못됐다". */
+const TONE_LINE: Record<ClaimTone, string> = {
+  confirmed: "decoration-solid",
+  unconfirmed: "decoration-dotted",
+  defect: "decoration-wavy",
+  uncited: "decoration-dotted",
+};
 
 export function ClaimHoverCard({
   claim,
@@ -95,6 +124,7 @@ export function ClaimHoverCard({
   const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus, dismiss, role]);
 
   const uncited = claim.status === "uncited";
+  const tone = claimTone(claim);
   const chunk = claim.chunk_id ? chunks.find((c) => c.chunk_id === claim.chunk_id) : undefined;
   // 대목을 못 집었으면 인용 번호로라도 자료를 찾아 준다 - 자료 이름조차 없으면 실마리가 없다.
   const fallback =
@@ -118,14 +148,19 @@ export function ClaimHoverCard({
         // biome-ignore lint/a11y/noNoninteractiveTabindex: 툴팁 트리거라 키보드로도 근거를 열 수 있어야 한다 - 마우스 전용이면 검증 경로가 포인터 사용자에게만 열린다
         tabIndex={0}
         className={cn(
-          "cursor-help underline decoration-dotted decoration-2 underline-offset-4 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent",
-          uncited
-            ? markUncited
-              ? "decoration-fg-warning"
-              : "decoration-transparent hover:decoration-fg-warning/70"
-            : markCited
-              ? "decoration-fg-info"
-              : "decoration-transparent hover:decoration-fg-info/70",
+          "cursor-help underline decoration-2 underline-offset-4 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent",
+          TONE_LINE[tone],
+          // 검사에서 걸린 문장은 토글과 무관하게 늘 보인다 - 끄면 결함이 통과한 글처럼
+          // 보이는데, 그게 이 화면이 내내 걷어낸 병이다.
+          tone === "defect"
+            ? "decoration-fg-danger"
+            : uncited
+              ? markUncited
+                ? "decoration-fg-warning"
+                : "decoration-transparent hover:decoration-fg-warning/70"
+              : markCited
+                ? "decoration-fg-info"
+                : "decoration-transparent hover:decoration-fg-info/70",
         )}
       >
         {children}

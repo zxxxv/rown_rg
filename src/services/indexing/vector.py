@@ -21,7 +21,7 @@ import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import structlog
 from pydantic import BaseModel, Field, model_validator
@@ -34,6 +34,7 @@ from src.db.models.project_source import ProjectSource
 from src.services.indexing._boilerplate import excluded_metadata
 from src.services.indexing._pages import assign_chunk_pages, strip_page_markers
 from src.services.indexing.published_year import extract_published_year
+from src.services.qa.span_vectors import store_quietly
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -230,21 +231,34 @@ class VectorIndexingService:
         # 지우지 않고 검색에서만 뺀다(원문 대조 화면은 모델이 받은 것을 그대로 보여줘야 한다).
         async with self._session_maker() as session:
             metas = await excluded_metadata(session, source.project_id, chunks)
-            session.add_all(
-                [
-                    ChunkModel(
-                        project_id=source.project_id,
-                        source_id=source_id,
-                        track=source.track,
-                        content=c.content,
-                        embedding=embed_results[i].embedding,
-                        chunk_index=c.chunk_index,
-                        metadata_=metas[i],
-                    )
-                    for i, c in enumerate(chunks)
-                ]
-            )
+            models = [
+                ChunkModel(
+                    # id를 여기서 정한다 - 대목 벡터가 청크 id로 매이는데, DB가 만들게
+                    # 두면 id를 알려고 flush를 한 번 더 해야 한다. 값은 서버 기본값과
+                    # 같은 uuid4라 저장되는 것에 차이가 없다.
+                    id=uuid4(),
+                    project_id=source.project_id,
+                    source_id=source_id,
+                    track=source.track,
+                    content=c.content,
+                    embedding=embed_results[i].embedding,
+                    chunk_index=c.chunk_index,
+                    metadata_=metas[i],
+                )
+                for i, c in enumerate(chunks)
+            ]
+            session.add_all(models)
+            # 배제된 청크는 검색에 안 나오므로 근거가 될 일이 없다 - 대목 벡터도 안 만든다.
+            span_targets = [
+                (m.id, m.content)
+                for m, meta in zip(models, metas, strict=True)
+                if not meta.get("excluded")
+            ]
             await session.commit()
+
+        # 대목 벡터 - 근거 대조가 볼 때마다 다시 만들던 것을 여기서 한 번 만든다.
+        # 자료 한 건당 ~2.6초. 실패해도 색인은 성공이다(services/qa/span_vectors).
+        await store_quietly(self._session_maker, span_targets, client=self._embedding_client)
 
         elapsed = (time.perf_counter() - t0) * 1000
         logger.info(

@@ -134,6 +134,10 @@ class SourceContentResponse(BaseModel):
     content_md: str
     char_count: int
     byte_count: int
+    # 색인에서 배제된 대목 — 화면이 "무엇을 왜 뺐는지" 말할 수 있게. 조용히 지우면
+    # 사람이 "본문이 왜 잘렸지"를 알 수 없고, 안 지우면 댓글 폼·푸터를 본문으로 읽는다.
+    excluded_kinds: list[str] = Field(default_factory=list)
+    excluded_chars: int = 0
 
 
 class FolderCreateRequest(BaseModel):

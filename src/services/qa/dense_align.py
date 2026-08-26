@@ -22,9 +22,9 @@
 
 from __future__ import annotations
 
-import math
 from uuid import UUID
 
+import numpy as np
 import structlog
 
 from src.core.config import settings
@@ -43,11 +43,26 @@ logger = structlog.get_logger(__name__)
 MAX_TEXTS = 600
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b, strict=False))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    return dot / (na * nb) if na and nb else 0.0
+def _cosine_many(query: list[float], rows: list[list[float]]) -> list[float]:
+    """주장 하나 대 대목 여럿의 코사인 — 한 번의 행렬곱으로.
+
+    순수 파이썬으로 재면 1024차원 × (주장 × 대목)이 그대로 곱셈 횟수가 된다. 대목
+    벡터를 보관하기 전에는 임베딩 상한(MAX_TEXTS)이 비교 수를 눌러 줘서 안 보였는데,
+    보관분을 쓰면 그 상한에 안 걸려 비교가 늘고 이 자리가 병목이 됐다(실측
+    2026-08-27: 한 절이 5.9초에서 13.1초로 뒤집혔다 — 임베딩을 아꼈는데 더 느려졌다).
+    """
+    if not rows:
+        return []
+    mat = np.asarray(rows, dtype=np.float32)
+    q = np.asarray(query, dtype=np.float32)
+    norms = np.linalg.norm(mat, axis=1)
+    qn = float(np.linalg.norm(q))
+    if qn == 0:
+        return [0.0] * len(rows)
+    # 길이가 0인 벡터는 방향이 없다 - 나누지 않고 0점을 준다.
+    safe = np.where(norms == 0, 1.0, norms)
+    scores = (mat @ q) / (safe * qn)
+    return np.where(norms == 0, 0.0, scores).tolist()
 
 
 def _targets(
@@ -75,6 +90,7 @@ async def refine_crosslingual(
     chunk_texts: dict[UUID, str],
     *,
     client=None,
+    session=None,
 ) -> int:
     """교차언어 주장의 대목을 임베딩으로 확정한다. 승격한 건수를 돌려준다.
 
@@ -87,44 +103,76 @@ async def refine_crosslingual(
     if not targets:
         return 0
 
+    # 색인 때 만들어 둔 대목 벡터를 먼저 읽는다 - 절당 임베딩 154건 중 대목이 ~123건이라
+    # 여기서 8할이 조회로 바뀐다(실측 2026-08-27). 없으면 종전대로 그 자리에서 만든다.
+    stored: dict[tuple[UUID, int], list[float]] = {}
+    if session is not None:
+        cited = {
+            cid: chunk_texts[cid] for _, pool in targets for cid, *_ in pool if cid in chunk_texts
+        }
+        try:
+            from src.services.qa.span_vectors import load_for_chunks
+
+            stored = await load_for_chunks(session, cited)
+        except Exception:
+            # 보관분을 못 읽어도 계산 경로가 살아 있다 - 느려질 뿐 틀리지 않는다.
+            logger.warning("dense_align.stored_load_failed", exc_info=True)
+
     # 같은 텍스트를 여러 주장이 공유하므로 한 번만 임베딩한다.
     # ⚠️원격 임베딩 클라는 디스크 캐시를 **안 쓴다**(실측 2026-08-26: 같은 배치를 두 번
-    # 불러도 cached 0/423). 재계산은 매번 전액이라, 대목 벡터를 색인 시점에 저장하는
-    # 이관 전까지는 이 경로가 비싸다 - 플래그가 기본 off인 이유다.
+    # 불러도 cached 0/423). 보관분이 없는 대목은 여기서 전액을 다시 낸다.
+    #
+    # **주장을 먼저 싣는다.** 상한에 걸려 잘리는 건 뒤쪽인데, 거기 주장이 있으면 그
+    # 문장은 대목도 후보도 못 받고 통째로 빠진다. 대목이 잘리면 그 주장의 후보가 몇 개
+    # 줄 뿐이다 - 같은 상한이라면 손실이 작은 쪽을 자르는 게 맞다.
     texts: list[str] = []
     seen: set[str] = set()
-    for claim, pool in targets:
-        for t in [claim.claim] + [x[3] for x in pool]:
-            if t not in seen:
-                seen.add(t)
-                texts.append(t)
+
+    def _add(text: str) -> None:
+        if text not in seen:
+            seen.add(text)
+            texts.append(text)
+
+    for claim, _ in targets:
+        # 주장은 사람이 고쳐 쓰는 것이라 보관 대상이 아니다 - 늘 그때그때 만든다.
+        _add(claim.claim)
+    n_claims = len(texts)
+    for _, pool in targets:
+        for cid, st, _, text in pool:
+            if (cid, st) not in stored:
+                _add(text)
     if len(texts) > MAX_TEXTS:
-        logger.info("dense_align.truncated", wanted=len(texts), used=MAX_TEXTS)
+        logger.info("dense_align.truncated", wanted=len(texts), used=MAX_TEXTS, n_claims=n_claims)
         texts = texts[:MAX_TEXTS]
 
-    try:
-        if client is None:
-            from src.clients.embedding_factory import get_embedding_client
+    vec: dict[str, list[float]] = {}
+    if texts:
+        try:
+            if client is None:
+                from src.clients.embedding_factory import get_embedding_client
 
-            client = get_embedding_client()
-        results = await client.embed_batch(texts)
-    except Exception:
-        # 임베딩이 안 닿으면 종전 판정 그대로 — 화면이 조용히 덜 보여줄 뿐 틀리지 않는다.
-        logger.warning("dense_align.failed", n_texts=len(texts), exc_info=True)
-        return 0
-
-    vec = {r.text: r.embedding for r in results}
+                client = get_embedding_client()
+            results = await client.embed_batch(texts)
+        except Exception:
+            # 임베딩이 안 닿으면 종전 판정 그대로 — 화면이 조용히 덜 보여줄 뿐 틀리지 않는다.
+            logger.warning("dense_align.failed", n_texts=len(texts), exc_info=True)
+            return 0
+        vec = {r.text: r.embedding for r in results}
     promoted = 0
     for claim, pool in targets:
         qv = vec.get(claim.claim)
         if qv is None:
             continue
-        ranked: list[tuple[float, tuple[UUID, int, int, str]]] = []
+        items: list[tuple[UUID, int, int, str]] = []
+        rows: list[list[float]] = []
         for item in pool:
-            sv = vec.get(item[3])
+            # 보관분이 먼저 - 같은 모델이 만든 같은 벡터라 방금 만든 것과 구별되지 않는다.
+            sv = stored.get((item[0], item[1])) or vec.get(item[3])
             if sv is None:
                 continue
-            ranked.append((_cosine(qv, sv), item))
+            items.append(item)
+            rows.append(sv)
+        ranked = list(zip(_cosine_many(qv, rows), items, strict=True))
         ranked.sort(key=lambda x: x[0], reverse=True)
         best = ranked[0] if ranked else None
         if best is None:
@@ -167,5 +215,6 @@ async def refine_crosslingual(
         n_crosslingual=len(targets),
         promoted=promoted,
         n_texts=len(texts),
+        n_stored=len(stored),
     )
     return promoted

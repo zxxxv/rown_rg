@@ -186,10 +186,11 @@ class TestPipelineOrdering:
             )
         )
 
-        # 세션 2개 사용: upsert+delete 1개, insert 1개.
-        assert maker_call_count["n"] == 2
-        # 임베딩은 두 세션 사이에 청크 콘텐츠 순서대로 호출된다.
-        embed.embed_batch.assert_awaited_once_with(["hello world"])
+        # 세션 3개 사용: upsert+delete 1개, insert 1개, 대목 벡터(store_quietly) 1개.
+        assert maker_call_count["n"] == 3
+        # 임베딩은 두 세션 사이에 청크 콘텐츠 순서대로 호출된다. 두 번째 호출은
+        # 대목 벡터(store_quietly)의 것 - 첫 호출의 인자만 계약이다.
+        assert embed.embed_batch.await_args_list[0].args == (["hello world"],)
         # 청킹은 upsert가 반환한 source_id를 받는다.
         chunking.chunk_markdown.assert_awaited_once()
         assert chunking.chunk_markdown.call_args.args[1] == source_id

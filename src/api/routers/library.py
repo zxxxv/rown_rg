@@ -45,6 +45,7 @@ from src.api.uploads import read_validated_upload
 from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from src.core.types import Role
+from src.db.models.chunk import Chunk
 from src.db.models.library_node import LibraryNode
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
@@ -774,6 +775,38 @@ async def get_source_content(
         raise NotFoundError(
             message="수집된 본문이 없습니다(메타데이터만 있는 자료)", code="SOURCE_BODY_MISSING"
         )
+    # 화면은 **색인된 것과 같은 것**을 보여준다. 종전엔 수집 원문을 날것으로 돌려줘
+    # 댓글 폼·푸터·저작권이 그대로 보였다 - 실제로는 색인 때 배제된 대목인데 화면만
+    # 보고 "이런 게 다 들어가는구나"로 읽힌다(2026-08-27 사용자 지적).
+    # 청크가 있으면 배제되지 않은 것만 이어 붙이고, 아직 색인 전이면 줄 단위 청소만 한다.
+    from src.workflows.stages import clean_web_markdown
+
+    chunk_rows = (
+        await session.execute(
+            select(Chunk.content, Chunk.metadata_)
+            .where(Chunk.source_id == source_id)
+            .order_by(Chunk.chunk_index)
+        )
+    ).all()
+    excluded_kinds: list[str] = []
+    excluded_chars = 0
+    if chunk_rows:
+        kept: list[str] = []
+        for content, meta in chunk_rows:
+            reason = (meta or {}).get("excluded")
+            if reason:
+                excluded_chars += len(content or "")
+                if reason not in excluded_kinds:
+                    excluded_kinds.append(str(reason))
+                continue
+            kept.append(content or "")
+        body = (chr(10) * 2).join(x for x in kept if x.strip())
+        # 전부 배제된 자료는 원문을 보여준다 - 빈 화면보다 "왜 다 빠졌는지"를 보고
+        # 판단할 수 있어야 한다(필터 오판을 사람이 잡는 유일한 자리다).
+        content_md = body or clean_web_markdown(content_md)
+    else:
+        content_md = clean_web_markdown(content_md) or content_md
+
     return SourceContentResponse(
         title=src.title,
         url=src.url,
@@ -781,6 +814,8 @@ async def get_source_content(
         content_md=content_md,
         char_count=len(content_md),
         byte_count=len(content_md.encode("utf-8")),
+        excluded_kinds=excluded_kinds,
+        excluded_chars=excluded_chars,
     )
 
 

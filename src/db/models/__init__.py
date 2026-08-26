@@ -1,5 +1,6 @@
 from src.db.models.app_setting import AppSetting
 from src.db.models.chunk import Chunk
+from src.db.models.chunk_span_vector import ChunkSpanVector
 from src.db.models.consistency_graph_node import ConsistencyGraphNode
 from src.db.models.ip_whitelist import IpWhitelist
 from src.db.models.library_node import LibraryNode
@@ -24,6 +25,7 @@ from src.db.models.verify_finding import VerifyFinding
 __all__ = [
     "AppSetting",
     "Chunk",
+    "ChunkSpanVector",
     "ConsistencyGraphNode",
     "IpWhitelist",
     "LibraryNode",
