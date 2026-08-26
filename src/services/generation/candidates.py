@@ -17,6 +17,7 @@ from src.clients.llm.base import CompletionRequest, LLMClient, Message, incomple
 from src.clients.llm.factory import get_llm_client
 from src.clients.llm.token_tracker import token_context
 from src.core.citations import numbers_in_order
+from src.core.config import settings
 from src.core.types import RetrievedChunk, SectionDraft, SectionPlan
 from src.services.generation.effort import write_effort
 from src.services.generation.writer_context import WriterContext, build_writer_context
@@ -73,8 +74,19 @@ def _build_prompt(
         lines.extend(f"- {s.content}" for s in summaries)
         lines.append("")
     lines.append("근거 자료:")
-    for i, ch in enumerate(citable, start=1):
-        lines.append(f"[{i}]{_source_label(ch)} {ch.content}")
+    if settings.evidence_injection_format == "tagged":
+        # 태그 변형(A/B) - 경계와 번호를 구조로 명시한다. 평문 이어 붙이기는 청크
+        # 경계가 개행뿐이라, 모델이 몇 십 개를 읽고 쓰는 사이 번호가 이웃 청크로
+        # 미끄러진다는 가설을 잰다(오귀속 = 무근거 수치 문장의 35.1%, 2026-08-27).
+        for i, ch in enumerate(citable, start=1):
+            year = f' 발간="{ch.published_year}"' if ch.published_year else ""
+            title = f' 자료="{ch.source_title}"' if ch.source_title else ""
+            lines.append(f'<근거 번호="{i}"{title}{year}>')
+            lines.append(ch.content)
+            lines.append(f"</근거 번호={i}>")
+    else:
+        for i, ch in enumerate(citable, start=1):
+            lines.append(f"[{i}]{_source_label(ch)} {ch.content}")
     lines.extend(
         [
             "",

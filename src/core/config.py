@@ -256,6 +256,13 @@ class Settings(BaseSettings):
     # 대목을 만들어 1.8~3.3초 - 느릴 뿐 결과는 같다(실측으로 대목·승격 전부 일치).
     dense_align_enabled: bool = True
 
+    # 근거 주입 형식 - "plain"(현행: "[n](라벨) 본문" 평문 줄) | "tagged"(경계·번호를
+    # 태그로 명시). 오귀속(내용은 맞고 번호가 틀림)이 무근거 수치 문장의 35.1%라
+    # (2026-08-27 실측, 220절) 주입 구조가 원인인지 A/B로 잰다. JSON이 아니라 태그인
+    # 이유: 한국어 장문을 JSON 문자열로 넣으면 이스케이프 노이즈에 토큰만 늘고,
+    # 번호가 본문과 물리적으로 붙는 것이 오귀속에 필요한 성질이다.
+    evidence_injection_format: str = "plain"
+
     embedding_remote_url: str = ""
     embedding_remote_token: str = ""
     # 색인은 요청이 수천 건이라 개별 요청은 짧아야 한다. 512건 배치가 GPU에서 수 초다.
