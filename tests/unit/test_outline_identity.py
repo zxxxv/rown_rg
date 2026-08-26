@@ -222,7 +222,7 @@ class TestMergeSectionPlan:
 
 
 class TestMergeConfigUpdatePlan:
-    def test_outline_change_merges_plan_and_prunes_design(self):
+    def test_outline_change_merges_plan_and_drops_design(self):
         outline, _ = normalize_outline(_outline(_ch("1장", [_sec("가"), _sec("나")])))
         plan = plan_from_outline(outline)
         plan[1] = plan[1].model_copy(update={"search_queries": ["질의"]})
@@ -243,7 +243,10 @@ class TestMergeConfigUpdatePlan:
         assert [str(p.section_id) for p in got] == [keep_id]
         assert got[0].search_queries == ["질의"]
         assert (got[0].chapter_number, got[0].section_number) == (1, 1)
-        assert merged["_design_plan"] == {keep_id: {"goal": "유지"}}
+        # 소재 분담은 **통째로** 버린다. 살아남은 절 것만 남기던 것이 가장 나쁜 중간이었다
+        # - 분담 문구는 절 번호를 문자열로 박아 두는데("…는 2.1절 소관") 절이 하나 빠지면
+        # 번호가 밀려 그 문구가 엉뚱한 절을 가리키는 지시가 된다(2026-08-27).
+        assert "_design_plan" not in merged
 
     def test_outline_unchanged_keeps_plan_verbatim(self):
         outline, _ = normalize_outline(_outline(_ch("1장", [_sec("가")])))
