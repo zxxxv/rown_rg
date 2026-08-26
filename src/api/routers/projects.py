@@ -3471,7 +3471,9 @@ async def get_section_evidence(
         )
 
     units = uncited_units(row.content or "")
-    claims = _claim_rows(row, mapping, traceable, {r[0]: r[1] for r in chunk_rows}, cited_order)
+    claims = await _claim_rows(
+        row, mapping, traceable, {r[0]: r[1] for r in chunk_rows}, cited_order
+    )
     return SectionEvidenceResponse(
         section_id=str(row.id),
         items=items,
@@ -3489,7 +3491,7 @@ async def get_section_evidence(
     )
 
 
-def _claim_rows(
+async def _claim_rows(
     row: Section,
     mapping: dict[int, list[UUID]],
     traceable: bool,
@@ -3500,11 +3502,18 @@ def _claim_rows(
 
     후보가 넓어지면 "어느 마커의 근거인지"는 못 말해도 "이 절의 근거 중 이 대목이
     가장 가깝다"는 말할 수 있다. 되짚기를 포기하는 것보다 사람에게 쓸모가 있다.
+
+    어휘가 원리적으로 0점을 주는 교차언어 문장은 임베딩으로 한 번 더 본다
+    (services/qa/dense_align) - 한글 대 한글은 건드리지 않는다.
     """
     numbers = _citation_numbers(row.content or "")
     marker_chunks = mapping if traceable else {n: cited_order for n in numbers}
+    aligned = align_section(row.content or "", chunk_texts, marker_chunks)
+    from src.services.qa.dense_align import refine_crosslingual
+
+    await refine_crosslingual(aligned, chunk_texts)
     out: list[ClaimAlignmentRead] = []
-    for a in align_section(row.content or "", chunk_texts, marker_chunks):
+    for a in aligned:
         span = a.span
         out.append(
             ClaimAlignmentRead(

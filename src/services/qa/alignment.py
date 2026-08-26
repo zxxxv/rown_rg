@@ -91,6 +91,16 @@ _MIN_SPAN_CHARS = 8
 ALIGNED_THRESHOLD = 0.30
 WEAK_THRESHOLD = 0.15
 
+# 다국어 임베딩으로 대목을 확정할 문턱. 파일럿(2026-08-26, crosslingual 표본 40건)에서
+# 같은 문서·인용하지 않은 대목으로 섞은 어려운 음성 대조를 돌린 값에서 잡았다:
+#   실제 짝 top-1  중앙 0.733 · 하위10% 0.593 · 최고 0.892
+#   섞은 짝 top-1  중앙 0.617 · 하위10% 0.528 · 최고 0.765
+# 분포가 겹친다(섞은 최고가 실제 중앙보다 높다) - 같은 문서의 대목은 다 같은 주제라
+# 주제 유사도가 "이 문장을 받치는가"를 완전히 가르지는 못한다. 그래서 **섞은 것의
+# 최고보다 위**로 잡아 확신 있는 것만 올린다. 덜 얻는 대신 거짓 확신을 안 만든다 -
+# 문턱을 낮추려면 라벨을 만들어 정밀도·재현율 곡선을 먼저 그려야 한다.
+DENSE_THRESHOLD = 0.78
+
 # 점수를 낼 수 없음(비교할 피처가 모자람). 0.0과 구분해야 한다 — 0.0은 "쟀는데 안 겹침",
 # 이건 "잴 수가 없음"이고 사람이 할 일이 다르다.
 NO_SCORE = -1.0
@@ -215,6 +225,9 @@ class EvidenceSpan:
     # 이 대목의 언어로 주장을 검증할 수 있는가. 한글 주장 + 외국어 근거는 False -
     # 겹침 점수는 대목을 가리키는 데만 쓰고 뒷받침 판정은 LLM에 넘긴다.
     comparable: bool = True
+    # 다국어 임베딩 코사인(services/qa/dense_align). 어휘가 원리적으로 0점을 주는
+    # 교차언어 구간에만 채워진다 - 한글 대 한글은 겹침이 이미 잘 하므로 건드리지 않는다.
+    dense_score: float | None = None
 
 
 def _number_lines(chunk: str) -> list[tuple[int, int, str]]:
@@ -281,6 +294,10 @@ class ClaimAlignment:
             return "uncited"
         if self.span is None:
             return "unmatched" if self.evidence_comparable else "crosslingual"
+        # 교차언어라도 임베딩이 문턱을 넘겨 확정한 대목은 '대목 특정'이다 - 어휘로는
+        # 원리적으로 0점인 구간이라 이게 유일한 판별 수단이다.
+        if self.span.dense_score is not None and self.span.dense_score >= DENSE_THRESHOLD:
+            return "aligned"
         if not self.span.comparable:
             return "crosslingual"
         if self.span.score >= ALIGNED_THRESHOLD:
