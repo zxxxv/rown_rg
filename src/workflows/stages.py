@@ -1220,6 +1220,50 @@ def _ensure_section_plan(state: ProjectState) -> ProjectState:
     return state.with_section_plan(plan)
 
 
+async def _ensure_dependency_graph(state: ProjectState) -> ProjectState:
+    """의존 그래프가 비어 있으면 AI가 초안을 뽑아 채운다 — 순서와 이어받기는 한 질문이다.
+
+    작성 루프는 이미 이 그래프로 순서를 정한다(의존 있는 절은 대기, 없는 절끼리 병렬).
+    그래서 "어디를 순차로 쓸까"와 "어느 절이 앞 절을 이어받나"를 따로 물을 이유가 없다.
+    예전엔 사람이 목차 설계에서 일일이 등록해야 했고, 그래서 사실상 죽은 필드였다
+    (예타 프리셋 146절 중 5절, v6 런 주입 적립 0건).
+
+    **이미 값이 있으면 손대지 않는다** — 프리셋이 손으로 적어 둔 것, 사람이 고친 것이
+    정본이다. AI는 빈칸을 메울 뿐이다.
+
+    실패·빈 결과는 그대로 진행한다(종전과 같은 평면 병렬). 여기서 막으면 그래프 하나
+    때문에 런이 죽는다.
+    """
+    plan = list(state.section_plan)
+    if not plan or any(s.builds_on for s in plan):
+        return state
+    from src.services.generation.dependency_graph import draft_builds_on
+
+    emit_step(state.project_id, "writing", "절 의존 그래프", "started")
+    graph = await draft_builds_on(
+        plan,
+        model=_models_for(state)["planner"],
+        user_id=state.user_id,
+        project_id=state.project_id,
+    )
+    emit_step(state.project_id, "writing", "절 의존 그래프", "completed")
+    if not graph:
+        return state
+    updated = [
+        s.model_copy(update={"builds_on": graph[f"{s.chapter_number}.{s.section_number}"]})
+        if f"{s.chapter_number}.{s.section_number}" in graph
+        else s
+        for s in plan
+    ]
+    logger.info(
+        "write.dependency_graph",
+        project_id=str(state.project_id),
+        n_linked=len(graph),
+        n_sections=len(plan),
+    )
+    return state.with_section_plan(updated)
+
+
 def _hyde_enabled_for(state: ProjectState) -> bool:
     """HyDE on/off — 프로젝트 config가 전역 기본값을 오버라이드한다.
 
@@ -1555,6 +1599,7 @@ async def write(state: ProjectState) -> ProjectState:
     작성 중에도 완성분부터 보여준다 — 확정본 전량 교체는 여전히 assemble 몫.
     """
     state = _ensure_section_plan(state)
+    state = await _ensure_dependency_graph(state)
     # 정본 배정(2층) — 자료 검토·색인이 끝나 코퍼스가 확정된 지금, 자료명 수준의
     # 서술 담당을 배정해 설계(1층=구조 수준)의 owns/foreign_topics에 병합한다.
     # 설계 시점 배정은 이후 제외될 자료를 가리키는 유령이 될 수 있었다(2026-08-21).

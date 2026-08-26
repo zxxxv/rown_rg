@@ -19,7 +19,6 @@ import { HelpTip } from "@/components/ui/help-tip";
 import { Input } from "@/components/ui/input";
 import { PromptDialog } from "@/features/prompts/PromptDialog";
 import { cn } from "@/lib/utils";
-import { BuildsOnPicker } from "./BuildsOnPicker";
 import { PromptPreviewDialog } from "./PromptPreviewDialog";
 import {
   analystQueryPreviews,
@@ -559,7 +558,6 @@ export function OutlineEditor({
           duplicatedKeys={duplicatedKeys}
           issueByField={issueByField}
           issueCounts={issuesByChapter.get(ci)}
-          allChapters={chapters}
           expandedSections={expandedSections}
           onToggleSection={toggleSection}
           onExpandSection={(id) => setExpandedSections((prev) => new Set(prev).add(id))}
@@ -615,7 +613,6 @@ function ChapterEditor({
   duplicatedKeys,
   issueByField,
   issueCounts,
-  allChapters,
   expandedSections,
   onToggleSection,
   onExpandSection,
@@ -644,8 +641,6 @@ function ChapterEditor({
   issueByField: Map<string, FormIssue>;
   /** 이 장 안의 문제 수 - 접혀 있어도 머리에 보인다 */
   issueCounts: { blockers: number; warnings: number } | undefined;
-  /** 목차 전체 - 이어받기 후보를 여기서 고른다 */
-  allChapters: DraftChapter[];
   /** 펼쳐진 절 _id 집합 */
   expandedSections: Set<string>;
   onToggleSection: (id: string) => void;
@@ -815,7 +810,6 @@ function ChapterEditor({
               chapterTitle={chapter.title}
               duplicated={duplicatedKeys.has(`${index}:${si}`)}
               issueByField={issueByField}
-              allChapters={allChapters}
               expanded={expandedSections.has(section._id)}
               onToggle={() => onToggleSection(section._id)}
               drag={drag}
@@ -866,7 +860,6 @@ function SectionEditor({
   chapterTitle,
   duplicated,
   issueByField,
-  allChapters,
   expanded,
   onToggle,
   drag,
@@ -891,7 +884,6 @@ function SectionEditor({
   /** 칸별 문제("ci:si:field") */
   issueByField: Map<string, FormIssue>;
   /** 목차 전체 - 이어받기 후보 목록의 출처 */
-  allChapters: DraftChapter[];
   /** 펼쳐져 있는가 - 접히면 한 줄(번호·제목·에이전트·문제 배지)만 남는다 */
   expanded: boolean;
   onToggle: () => void;
@@ -913,7 +905,6 @@ function SectionEditor({
   const directionIssue = issueOf("direction");
   const keyPointsIssue = issueOf("keyPoints");
   const analystIssue = issueOf("analysts");
-  const buildsOnIssue = issueOf("buildsOn");
   const query = effectiveSearchQuery(chapterTitle, section.title);
   // 에이전트 질의 미리보기 - 정의는 에이전트에 있지만 "이 절에서 뭐가 검색되나"는
   // 절에서 보여야 한다(2026-08-20 결정). useAnalysts는 무한 캐시라 호출 비용 없음.
@@ -1126,39 +1117,18 @@ function SectionEditor({
             />
             <IssueNote issue={analystIssue} />
           </div>
-          <Field
-            hint="앞 절 이어받기(선택). 앞 절이 확정한 수치를 그대로 받아 씁니다"
-            helpTitle="이어받기는 언제 쓰나요?"
-            help={
-              <>
-                <p>
-                  뒤 절이 앞 절의 <b>숫자를 다시 말해야 할 때</b> 씁니다. 4.1에서 총사업비를
-                  산정하고 6.2에서 그 금액으로 재원을 배분한다면, 6.2가 4.1을 이어받습니다.
-                </p>
-                <p>
-                  이어받지 않으면 뒤 절은 그 숫자를 <b>다른 자료에서 다시 찾거나 지어냅니다</b>.
-                  같은 보고서 안에서 총사업비가 두 개가 되는 일이 실제로 있었습니다.
-                </p>
-                <p>
-                  특정 값만 받으려면 고른 절 옆 '지표' 칸에 이름을 적으세요(예: 총사업비). 장 전체를
-                  고르면 그 장에서 확정된 값을 모두 받으므로, 장 끝의 시사점 절에 적합합니다.
-                </p>
-                <p>순서를 바꾸는 기능은 아닙니다. 순서는 목차에서 끌어 옮기면 됩니다.</p>
-              </>
-            }
-            issue={buildsOnIssue}
-          >
-            <div id={fieldId("buildsOn")}>
-              <BuildsOnPicker
-                value={section.builds_on}
-                onChange={(builds_on) => onChange({ ...section, builds_on })}
-                chapters={allChapters}
-                selfChapter={chapterIndex}
-                selfSection={index}
-                issue={buildsOnIssue}
-              />
-            </div>
-          </Field>
+          {/* '앞 절 이어받기' 입력 칸은 걷어냈다(2026-08-26 결정).
+              이어받기와 **작성 순서는 한 질문**이다 - 앞 절 내용이 있어야 쓸 수 있으니
+              순차로 쓰는 것이고, 그래서 둘을 따로 물으면 사람이 두 번 답해야 한다.
+              이제 목차가 확정되면 AI가 그래프 초안을 뽑고, 작성 루프가 그대로 순서로
+              쓴다(services/generation/dependency_graph). 손으로 적으라고 하면 아무도
+              안 적었다 - 예타 프리셋 146절 중 5절, v6 런 주입 적립 0건.
+              프리셋이 이미 적어 둔 값은 그대로 정본이라 AI가 덮지 않는다. */}
+          {section.builds_on.length > 0 ? (
+            <p className="pl-8 text-[11px] text-fg-tertiary">
+              이어받기: <span className="text-fg-secondary">{section.builds_on.join(", ")}</span>
+            </p>
+          ) : null}
           {/* 이 절이 실제로 무엇으로 검색되는지 - 장 제목이 함께 들어간다는 사실을
             설명문으로 말하는 대신 결과를 보여준다. 확정 값은 실행 후 설계 검토 화면이
             서버에서 계산해 다시 보여준다. */}
