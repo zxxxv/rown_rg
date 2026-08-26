@@ -31,7 +31,6 @@ import {
 } from "@/api/projects";
 import type { Project, ProjectStatus } from "@/api/types";
 import { useFinalizeProject, useUnfinalizeProject } from "@/api/versions";
-import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageLoading } from "@/components/feedback/PageLoading";
 import { AppShell } from "@/components/layout/AppShell";
@@ -66,36 +65,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import { ReportWorkspace } from "@/pages/projects/[id]/preview";
 
-const STATUS_LABEL: Record<ProjectStatus, string> = {
-  created: "생성됨",
-  planning: "설계 검토",
-  researching: "자료 수집",
-  indexing: "인덱싱",
-  writing: "작성 중",
-  reviewing: "조립·검증 중",
-  completed: "완료",
-  archived: "보관",
-  cancelled: "취소됨",
-};
-
 // 게이트별 결정 화면과 CTA 문구. 백엔드 runner._GATE_PAGES와 같은 대응이다.
 // qa_select는 레거시 - 게이트 제거 전 백엔드로 작성돼 아직 pending인 프로젝트만 온다.
 const GATE_CTA: Record<string, { page: string; label: string }> = {
   design_brief: { page: "brief", label: "설계 검토 완료하러 가기" },
   source_pool: { page: "sources", label: "자료 검토 완료하러 가기" },
   qa_select: { page: "preview", label: "본문 검토 완료하러 가기" },
-};
-
-const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
-  created: "tertiary",
-  planning: "warning",
-  researching: "info",
-  indexing: "info",
-  writing: "info",
-  reviewing: "warning",
-  completed: "success",
-  archived: "tertiary",
-  cancelled: "danger",
 };
 
 const MODEL_MODE_LABEL: Record<string, string> = {
@@ -249,18 +224,9 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               <Badge variant="secondary" className="font-mono">
                 {presetLabel(project.preset)}
               </Badge>
-              <StatusDot kind={STATUS_KIND[project.status]} label={STATUS_LABEL[project.status]} />
-              {/* 완성 선언 분리(0045) - 파이프라인 완주는 '사이클 완료'일 뿐이고,
-                  확정 전까지는 자료를 넣고 고치며 진화하는 "검토 중" 문서다. */}
-              {project.status === "completed" ? (
-                project.finalized_at ? (
-                  <Badge className="border-fg-success/40 bg-bg-success text-fg-success">
-                    최종 확정
-                  </Badge>
-                ) : (
-                  <Badge variant="outline">검토 중</Badge>
-                )
-              ) : null}
+              {/* 상태 배지 2종(단계 점 + 검토 중/최종 확정)은 걷어냈다 - 바로 아래
+                  상태 줄이 같은 말을 더 크게 한다. 작은 글씨로 두 번 말하면 훑을 때
+                  둘 다 안 읽힌다(2026-08-26 지적). */}
             </div>
             <h1 className="max-w-3xl text-3xl font-semibold text-fg">{project.title}</h1>
             <p className="max-w-3xl text-sm text-fg-secondary">{project.topic}</p>
@@ -610,16 +576,23 @@ function PrimaryAction({
           <Lightbulb className="mr-1 h-4 w-4" />
           시사점 요약
         </Button>
-        <Button
-          size="lg"
-          variant="outline"
-          onClick={() => setReopening(true)}
-          title="자료를 보강하고 새 장·빈 절을 이어 씁니다 - 지금 완성본은 버전으로 보관"
-        >
-          <FolderSync className="mr-1 h-4 w-4" />
-          다시 열기
-        </Button>
-        <ReopenDialog projectId={project.id} open={reopening} onOpenChange={setReopening} />
+        {/* '다시 열기'는 **확정된 보고서**에만 뜬다. 확정 전에는 이미 열려 있는
+            문서라(절 편집·재작성·목차 수정이 다 되는 "검토 중"), 버튼이 있으면
+            "지금은 잠겨 있나?"라는 없는 의문을 만든다(2026-08-26 지적). */}
+        {project.finalized_at ? (
+          <>
+            <Button
+              size="lg"
+              variant="outline"
+              onClick={() => setReopening(true)}
+              title="확정을 풀고 자료를 보강해 이어 씁니다 - 지금 확정본은 버전으로 보관"
+            >
+              <FolderSync className="mr-1 h-4 w-4" />
+              다시 열기
+            </Button>
+            <ReopenDialog projectId={project.id} open={reopening} onOpenChange={setReopening} />
+          </>
+        ) : null}
       </div>
     );
   }

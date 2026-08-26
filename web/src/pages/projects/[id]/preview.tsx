@@ -9,7 +9,6 @@ import {
   Eye,
   FileSearch,
   Image as ImageIcon,
-  Loader2,
   Lock,
   LockOpen,
   Pencil,
@@ -106,17 +105,23 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   const projectQuery = useProject(projectId, 7000);
   const projectStatus = projectQuery.data?.status;
   // 생성 진행 중이면 트리를 폴링 - 절이 완성되는 대로 순차 표시(증분 미리보기)
-  const isGenerating =
+  // 폴링이 필요한 단계인가 - **표시 판단이 아니라 갱신 주기**에만 쓴다.
+  // 단계 이름으로 "도는 중"을 판정하면 안 된다: status는 서 있는 자리지 실행 신호가
+  // 아니다(2026-08-26 파생화). 실제 실행 여부는 아래 runner_alive가 답한다.
+  const maybeActive =
     projectStatus === "researching" ||
     projectStatus === "indexing" ||
     projectStatus === "writing" ||
     projectStatus === "reviewing";
-  const sectionsQuery = useProjectSections(projectId, isGenerating ? 5000 : undefined);
+  const sectionsQuery = useProjectSections(projectId, maybeActive ? 5000 : undefined);
 
   // QA 게이트 대기 감지 - 열려 있으면 상단 승인 바 + 절별 정적검사 경고 표시
   const snapshotQuery = useProgressSnapshot(projectId, true, {
-    refetchInterval: isGenerating ? 7000 : false,
+    refetchInterval: maybeActive ? 7000 : false,
   });
+  // **실제로 도는가** - 편집 잠금·표시의 유일한 근거. 단계 이름이 아니다.
+  // 다 쓴 보고서가 'reviewing'이라는 이유로 읽기 전용이 되던 회귀가 여기서 났다.
+  const running = snapshotQuery.data?.runner_alive ?? false;
   // 죽은 런(백엔드 태스크 소실) - '작성 중' 스피너 배너를 중단 안내로 바꾼다.
   const stalled = useConfirmedStalled(snapshotQuery.data);
   const qaPayload = useMemo(
@@ -156,7 +161,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   }, [qaPayload, selectedId]);
 
   // 선택된 절의 PM 경고만 본문 위에 인라인 표시 - 고칠 대상 옆에 고칠 이유를 둔다.
-  const verifyQuery = useVerifyReport(projectId, true, isGenerating);
+  const verifyQuery = useVerifyReport(projectId, true, running);
   // 완료 전이 순간에 한 번 더 - 생성 중 폴링(4초)의 마지막 회차와 pm_verify 저장
   // 사이의 레이스를 닫는다. 전이 후엔 폴링이 꺼지므로 이게 없으면 그 창에 쓰인
   // 경고는 새로고침 전까지 안 보인다.
@@ -224,7 +229,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
     // 장은 항상 이동(하위 절 통독 뷰가 완성분만 골라 보여줌). 절은 작성 중에는 본문
     // 있는 것만 - 생성이 끝난 뒤에는 빈 절도 열린다. 막아 두면 작성 실패한 절의
     // 재작성 진입점이 없다(2026-08-14 지적: 빈 절에 재작성 버튼이 없음).
-    if (!isChapter && !VIEWABLE.includes(status) && isGenerating) {
+    if (!isChapter && !VIEWABLE.includes(status) && running) {
       toast("아직 작성되지 않은 절입니다", {
         description: "작성이 완료되는 대로 순서대로 표시됩니다.",
       });
@@ -245,13 +250,9 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
           실행이 중단되었습니다 - 서버 재시작이나 오류로 실행이 끊겼습니다. 개요 화면의 '이어서
           재개'를 누르면 멈춘 단계부터 다시 진행합니다.
         </div>
-      ) : isGenerating ? (
-        <div className="flex items-center gap-2 rounded border border-border-info bg-bg-info px-3 py-2 text-xs text-fg-info">
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-          보고서 작성이 진행 중입니다 - 완성된 절부터 순서대로 표시되며, 그 자리에서 바로 편집할 수
-          있습니다.
-        </div>
       ) : null}
+      {/* '작성 진행 중' 배너는 걷어냈다(2026-08-26 사용자 결정) - 개요 상단 상태
+          표시가 같은 말을 이미 하고, 두 군데서 하면 어긋날 때 어느 쪽이 맞는지 모른다. */}
 
       {/* PM 검증 경고 - 고칠 수 있는 화면에 두되 접힌 한 줄로 시작(편집을 가리지 않게).
             절을 선택하면 그 절의 경고만 본문 위에 인라인 표시된다. */}
@@ -293,7 +294,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
         <LoadingSkeleton variant="block" />
       ) : tree.length === 0 && qaPayload ? (
         <PayloadDraftList payload={qaPayload} />
-      ) : tree.length === 0 && isGenerating ? (
+      ) : tree.length === 0 && running ? (
         <EmptyState
           icon={Eye}
           title="아직 완성된 절이 없습니다"
@@ -363,7 +364,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
                 chapter={selectedChapter}
                 chapterIndex={tree.indexOf(selectedChapter)}
                 onOpenSection={navigateTo}
-                editable={!isGenerating}
+                editable={!running}
               />
             ) : selectedId ? (
               <SectionView
@@ -372,7 +373,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
                 sectionId={selectedId}
                 contentQuery={contentQuery}
                 qaWarnings={qaWarnings}
-                editable={!isGenerating}
+                editable={!running}
                 onEvidenceOpenChange={handleEvidenceOpenChange}
               />
             ) : (

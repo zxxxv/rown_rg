@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, File, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -664,7 +664,24 @@ async def list_projects(
     if not (is_admin and scope == "all"):
         stmt = stmt.where(Project.owner_id == current_user.id)
     if status == _IN_PROGRESS_FILTER:
-        stmt = stmt.where(Project.status.in_(_IN_PROGRESS_STATUSES))
+        # 조립까지 끝났어도 **확정 전이면 진행 중**이다 - 아직 손보는 문서라
+        # 완료 칸에 두면 "다 된 것"으로 읽힌다(2026-08-26 결정).
+        stmt = stmt.where(
+            or_(
+                Project.status.in_(_IN_PROGRESS_STATUSES),
+                and_(
+                    Project.status == ProjectStage.COMPLETED.value,
+                    Project.finalized_at.is_(None),
+                ),
+            )
+        )
+    elif status == ProjectStage.COMPLETED.value:
+        # 완료 = **최종 확정된 것만**. 파이프라인 완주는 사이클이 끝난 것일 뿐이고,
+        # 사람이 확정 버튼을 눌러야 납품본이다(0045 완성 선언 분리의 화면 쪽 결말).
+        stmt = stmt.where(
+            Project.status == ProjectStage.COMPLETED.value,
+            Project.finalized_at.is_not(None),
+        )
     elif status is not None:
         stmt = stmt.where(Project.status == status)
     # 보고서 유형(프리셋) 필터 — 목록에서 유형별로 좁혀 보기 위함. 자유 주제는

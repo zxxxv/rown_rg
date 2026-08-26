@@ -189,6 +189,9 @@ export const DEMO_PROJECTS: Project[] = [
       created_at: offsetDate(-(i * 2 + 1)),
       updated_at: offsetDate(-(i % 5)),
       progress: pickProgress(status, i),
+      // 완료 중 일부만 최종 확정 - '완료' 탭은 확정본만, 나머지는 '검토 중'으로
+      // 진행 중에 남는다(2026-08-26). 두 칸이 다 채워져야 눌러 볼 수 있다.
+      finalized_at: status === "completed" && i % 2 === 0 ? offsetDate(-(i % 5)) : null,
     };
   }),
 ];

@@ -80,9 +80,10 @@ export function SectionVariantsTrigger({
         <Layers className="mr-1 h-3.5 w-3.5" />
         {DEFAULT_N}개 안 뽑기
       </Button>
-      {estimateLabel(costBasis.data, DEFAULT_N) ? (
+      {/* 금액만 - 근거(절당·출처)는 옆의 재작성 문구가 한 번 말한다. */}
+      {estimateLabel(costBasis.data, DEFAULT_N, { compact: true }) ? (
         <span className="text-[11px] text-fg-tertiary">
-          {estimateLabel(costBasis.data, DEFAULT_N)}
+          {estimateLabel(costBasis.data, DEFAULT_N, { compact: true })}
         </span>
       ) : null}
     </div>

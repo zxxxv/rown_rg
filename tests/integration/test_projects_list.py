@@ -52,12 +52,17 @@ class TestProjectListStatusFilter:
         worker_token: str,
         test_session: AsyncSession,
     ) -> None:
-        # 방금 생성 → status=created (진행 중 그룹). 다른 하나는 완료 처리.
+        # 방금 생성 → status=created (진행 중 그룹). 다른 하나는 **확정까지** 마친다.
+        # 확정(finalized_at)이 없으면 조립이 끝났어도 진행 중이다 - 아직 손보는
+        # 문서라 완료 칸에 두면 "다 된 것"으로 읽힌다(2026-08-26 결정).
+        from src.core.clock import now as clock_now
+
         in_prog = await _create_project(test_client, worker_token, "진행 중 프로젝트")
         done = await _create_project(test_client, worker_token, "완료 프로젝트")
         project = await test_session.get(Project, UUID(done["id"]))
         assert project is not None
         project.status = "completed"
+        project.finalized_at = clock_now()
         await test_session.commit()
 
         # status=in_progress → created 프로젝트는 잡히고, 완료는 제외.

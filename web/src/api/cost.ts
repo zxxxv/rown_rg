@@ -41,10 +41,19 @@ export function formatUsd(v: number | null | undefined): string | null {
   return `$${v.toFixed(2)}`;
 }
 
-/** 절 N개를 다시 쓸 때의 예상 비용 문구 - 근거까지 밝힌다(추정의 출처를 숨기지 않는다). */
-export function estimateLabel(basis: CostBasis | undefined, nSections: number): string | null {
+/** 절 N개를 다시 쓸 때의 예상 비용 문구 - 근거까지 밝힌다(추정의 출처를 숨기지 않는다).
+ *
+ *  compact는 금액만 준다. 한 줄에 두 행동(안 뽑기·재작성)이 나란히 놓이면 "절당 $0.70
+ *  (이 보고서 실측)"이 두 번 되풀이돼 어느 쪽이 어느 값인지 되레 안 읽힌다 - 근거는
+ *  한 번만 말하고 나머지는 금액만 붙인다(2026-08-26 화면 실측). */
+export function estimateLabel(
+  basis: CostBasis | undefined,
+  nSections: number,
+  opts?: { compact?: boolean },
+): string | null {
   if (!basis || basis.per_section_usd === null || nSections <= 0) return null;
   const total = formatUsd(basis.per_section_usd * nSections);
+  if (opts?.compact) return `예상 ${total}`;
   const unit = formatUsd(basis.per_section_usd);
   const source = basis.basis === "project" ? "이 보고서 실측" : "비슷한 보고서 평균";
   return `예상 ${total} · 절당 ${unit} (${source})`;

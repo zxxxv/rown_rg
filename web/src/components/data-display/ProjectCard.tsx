@@ -11,7 +11,7 @@ const STATUS_LABEL: Record<ProjectStatus, string> = {
   researching: "자료 수집",
   indexing: "인덱싱",
   writing: "작성 중",
-  reviewing: "조립·검증 중",
+  reviewing: "검토 중",
   completed: "완료",
   archived: "보관",
   cancelled: "취소됨",

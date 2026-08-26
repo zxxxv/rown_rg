@@ -160,3 +160,44 @@ class TestStageDerivation:
         ).json()
         items = listed["items"] if isinstance(listed, dict) else listed
         assert any(str(p["id"]) == str(pid) for p in items), "다시 연 보고서가 진행 중에 없다"
+
+
+class TestCompletedMeansFinalized:
+    """'완료' 칸은 **최종 확정된 것만** 보여준다(2026-08-26 결정).
+
+    파이프라인 완주는 사이클이 끝난 것일 뿐이다. 사람이 확정 버튼을 누르기 전까지는
+    자료를 넣고 절을 고치며 살아 있는 문서라, 완료 칸에 두면 "다 된 것"으로 읽힌다.
+    """
+
+    async def _ids(self, client: AsyncClient, token: str, status: str) -> set[str]:
+        resp = await client.get(f"/api/v1/projects?status={status}", headers=_auth(token))
+        body = resp.json()
+        items = body["items"] if isinstance(body, dict) else body
+        return {str(p["id"]) for p in items}
+
+    async def test_unfinalized_report_sits_in_progress_not_completed(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        from src.core.clock import now as clock_now
+
+        unsigned = await _project_with_body(
+            test_session, worker_user.id, status=ProjectStage.COMPLETED.value, completed=True
+        )
+        signed = await _project_with_body(
+            test_session, worker_user.id, status=ProjectStage.COMPLETED.value, completed=True
+        )
+        row = await test_session.get(Project, signed)
+        row.finalized_at = clock_now()
+        await test_session.commit()
+
+        done = await self._ids(test_client, worker_token, "completed")
+        doing = await self._ids(test_client, worker_token, "in_progress")
+
+        assert str(signed) in done, "확정본은 완료 칸에 있어야 한다"
+        assert str(unsigned) not in done, "확정 전인데 완료 칸에 있다"
+        assert str(unsigned) in doing, "확정 전 보고서가 어느 칸에도 없다"
+        assert str(signed) not in doing

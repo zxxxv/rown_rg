@@ -3,6 +3,7 @@ import { useDrift } from "@/api/drift";
 import type { ProgressSnapshot } from "@/api/progress";
 import { useProjectSections } from "@/api/sections";
 import type { Project } from "@/api/types";
+import { cn } from "@/lib/utils";
 
 /** 개요 상단 한 줄 - "지금 어디까지 왔고, 다음에 무엇을 하면 되나".
  *
@@ -29,26 +30,33 @@ export function StageLine({
   const gate = snapshot?.pending_gate;
   const finalized = Boolean(project.finalized_at);
 
+  // 색은 상태를 한눈에 가르는 첫 신호다 - 글자만으로는 훑을 때 안 읽힌다(2026-08-26
+  // 지적: "너무 작고 밋밋해서 잘 안 보여"). 도는 중=파랑, 기다림=주황, 확정=초록.
   let icon = <BadgeCheck className="h-4 w-4 text-fg-success" aria-hidden />;
+  let tone = "border-border bg-bg-secondary/40 text-fg";
   let phase = "검토 중";
   let next = "";
 
   if (running) {
-    icon = <Loader2 className="h-4 w-4 animate-spin text-fg-info" aria-hidden />;
+    icon = <Loader2 className="h-5 w-5 animate-spin text-fg-info" aria-hidden />;
+    tone = "border-border-info bg-bg-info text-fg-info";
     phase = snapshot?.active_step ?? "진행 중";
     next = "끝나면 알려 드립니다";
   } else if (gate) {
-    icon = <PauseCircle className="h-4 w-4 text-fg-warning" aria-hidden />;
+    icon = <PauseCircle className="h-5 w-5 text-fg-warning" aria-hidden />;
+    tone = "border-fg-warning/40 bg-bg-warning text-fg";
     phase = gate.gate === "design_brief" ? "설계 검토 대기" : "자료 검토 대기";
     next = "검토를 마치면 이어서 진행됩니다";
   } else if (project.status === "created") {
     phase = "시작 전";
     next = "자료 조사부터 시작합니다";
   } else if (finalized) {
+    tone = "border-fg-success/40 bg-bg-success text-fg";
     phase = "최종 확정";
     next = unreflected > 0 ? "미반영 절이 있습니다" : "";
   } else if (unreflected > 0) {
-    icon = <AlertTriangle className="h-4 w-4 text-fg-warning" aria-hidden />;
+    icon = <AlertTriangle className="h-5 w-5 text-fg-warning" aria-hidden />;
+    tone = "border-fg-warning/40 bg-bg-warning text-fg";
     phase = "검토 중";
     next = `미반영 ${unreflected}개 절을 다시 쓰거나 그대로 두세요`;
   } else {
@@ -63,11 +71,18 @@ export function StageLine({
   if (unreflected > 0) facts.push(`미반영 ${unreflected}`);
 
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-bg-secondary/40 px-3 py-2 text-sm">
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-4 py-2.5 text-base",
+        tone,
+      )}
+    >
       {icon}
-      <span className="font-medium text-fg">{phase}</span>
-      {facts.length > 0 ? <span className="text-fg-secondary">· {facts.join(" · ")}</span> : null}
-      {next ? <span className="text-fg-tertiary">· 다음: {next}</span> : null}
+      <span className="text-lg font-semibold">{phase}</span>
+      {facts.length > 0 ? (
+        <span className="font-medium text-fg-secondary">{facts.join(" · ")}</span>
+      ) : null}
+      {next ? <span className="text-sm text-fg-tertiary">다음: {next}</span> : null}
     </div>
   );
 }

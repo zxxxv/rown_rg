@@ -51,7 +51,14 @@ export const projectsHandlers = [
 
     let result: Project[] = [...DEMO_PROJECTS];
     if (statusRaw === "in_progress") {
-      result = result.filter((p) => inProgressStatuses.includes(p.status));
+      // 조립까지 끝났어도 확정 전이면 진행 중이다 - 아직 손보는 문서다(백엔드와 같은 규칙).
+      result = result.filter(
+        (p) =>
+          inProgressStatuses.includes(p.status) || (p.status === "completed" && !p.finalized_at),
+      );
+    } else if (statusRaw === "completed") {
+      // 완료 = 최종 확정된 것만. 파이프라인 완주는 사이클이 끝난 것일 뿐이다.
+      result = result.filter((p) => p.status === "completed" && Boolean(p.finalized_at));
     } else if (statusRaw !== null) {
       result = result.filter((p) => p.status === statusRaw);
     }
