@@ -21,6 +21,11 @@ const ProjectCreateBodySchema = z.object({
   depth_mode: DepthModeSchema,
 });
 
+// 데모에서도 '다시 만들기'가 도는 모습이 보여야 한다 - 늘 running:false면
+// 스피너·경과 시간·완료 토스트를 눌러서 확인할 길이 없다(2026-08-27).
+let insightsRunningUntil = 0;
+let insightsBuiltAt = "2026-08-26T19:28:25+00:00";
+
 export const projectsHandlers = [
   // 실계약: GET /projects?limit&offset&status&q → ProjectRead[] (봉투·total 없음, 최신순 고정)
   //   status = ProjectStage 값(오값 422), q = 제목·주제 부분검색
@@ -691,11 +696,6 @@ export const projectsHandlers = [
       { status: 200 },
     );
   }),
-
-  // 데모에서도 '다시 만들기'가 도는 모습이 보여야 한다 - 늘 running:false면
-  // 스피너·경과 시간·완료 토스트를 눌러서 확인할 길이 없다(2026-08-27).
-  let insightsRunningUntil = 0;
-  let insightsBuiltAt = "2026-08-26T19:28:25+00:00";
 
   // GET /projects/{id}/insights - 시사점 2~3쪽 요약(본문 HWPX 미포함, 별도 파일로 받음)
   http.get(url("projects/:id/insights"), () => {

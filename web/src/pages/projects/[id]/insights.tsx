@@ -1,5 +1,5 @@
 import { ArrowLeft, Download, FileText, Loader2, RefreshCw } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useInsights, useRebuildInsights } from "@/api/insights";
@@ -20,6 +20,10 @@ import { useAuth } from "@/hooks/useAuth";
  * 요약만 담은 **별도 한글 파일**로 내려받는다(2026-08-27 결정) - 화면이 그 갈래를
  * 명시해야 사용자가 본문 파일에서 찾다가 없다고 오해하지 않는다.
  */
+function fmtElapsed(seconds: number): string {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 function fmtDateTime(iso: string): string {
   return new Date(iso).toLocaleString("ko-KR", {
     timeZone: "Asia/Seoul",
@@ -45,6 +49,30 @@ export default function InsightsPage() {
   // 다시 만들기가 끝난 순간을 알린다. 요약 호출은 온도 0이라 본문이 그대로면 **같은
   // 요약**이 나온다 - 화면이 안 바뀌니 눌러도 아무 일이 없는 것처럼 보인다(2026-08-27
   // 지적). 끝났다는 사실과 내용이 같았다는 사실을 나눠서 말해 준다.
+  // 눌린 순간부터 서버가 '끝'이라고 할 때까지가 도는 중이다. POST 왕복(isPending)과
+  // 서버가 아는 running 사이에 한 순간 틈이 있어, 그때 버튼이 되살아나 두 번 눌리던
+  // 자리다 - 둘을 OR로 묶고 첫 폴링이 올 때까지는 눌린 사실을 그대로 붙들어 둔다.
+  const [justStarted, setJustStarted] = useState(false);
+  const busy = running || rebuild.isPending || justStarted;
+  useEffect(() => {
+    if (running) setJustStarted(false);
+  }, [running]);
+
+  // 30초~2분이 걸린다 - 경과 시간이 없으면 멈춘 것과 도는 것이 화면에서 같아 보인다.
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!busy) {
+      setElapsed(0);
+      return;
+    }
+    const started = Date.now();
+    const id = window.setInterval(
+      () => setElapsed(Math.floor((Date.now() - started) / 1000)),
+      1000,
+    );
+    return () => window.clearInterval(id);
+  }, [busy]);
+
   const prev = useRef<{ running: boolean; content: string | null }>({
     running: false,
     content: null,
@@ -78,7 +106,12 @@ export default function InsightsPage() {
 
   const onRebuild = () => {
     rebuild.mutate(undefined, {
-      onSuccess: () => toast.success("시사점 요약을 다시 만들고 있습니다"),
+      onSuccess: () => {
+        setJustStarted(true);
+        toast.success("시사점 요약을 다시 만들고 있습니다", {
+          description: "본문 분량에 따라 30초~2분쯤 걸립니다.",
+        });
+      },
       onError: () => toast.error("다시 만들기를 시작하지 못했습니다"),
     });
   };
@@ -135,19 +168,19 @@ export default function InsightsPage() {
             variant="outline"
             size="sm"
             onClick={onRebuild}
-            disabled={running || rebuild.isPending || !isCompleted}
+            disabled={busy || !isCompleted}
             title={
               isCompleted
                 ? "지금 저장된 본문으로 요약을 다시 만듭니다"
                 : "본문이 완성된 뒤에 만들 수 있습니다"
             }
           >
-            {running || rebuild.isPending ? (
+            {busy ? (
               <Loader2 className="mr-1 h-4 w-4 animate-spin" />
             ) : (
               <RefreshCw className="mr-1 h-4 w-4" />
             )}
-            {running ? "만드는 중…" : "다시 만들기"}
+            {busy ? `만드는 중… ${fmtElapsed(elapsed)}` : "다시 만들기"}
           </Button>
         </div>
       </header>
@@ -203,9 +236,13 @@ export default function InsightsPage() {
           }
           action={
             isCompleted ? (
-              <Button onClick={onRebuild} disabled={rebuild.isPending}>
-                <RefreshCw className="mr-1 h-4 w-4" />
-                지금 만들기
+              <Button onClick={onRebuild} disabled={busy}>
+                {busy ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-1 h-4 w-4" />
+                )}
+                {busy ? `만드는 중… ${fmtElapsed(elapsed)}` : "지금 만들기"}
               </Button>
             ) : undefined
           }
