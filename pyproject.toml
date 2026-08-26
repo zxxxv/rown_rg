@@ -52,6 +52,9 @@ dependencies = [
     "python3-saml>=1.16.0",
     "pyjwt[crypto]>=2.13.0",
     "greenlet>=3.5.2",
+    # 모니터링 — 앱 내부 에러 추적. SENTRY_DSN이 비면 init을 건너뛰므로
+    # 로컬·CI에서는 설치돼 있어도 아무 동작을 하지 않는다(src/main.py).
+    "sentry-sdk[fastapi]>=2.20",
 ]
 
 [project.optional-dependencies]
