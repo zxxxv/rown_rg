@@ -906,6 +906,8 @@ class DriftSectionRead(BaseModel):
     # plan_changed(목차 수정) | source_excluded(자료 제외) | missing(본문 없음)
     reasons: list[str]
     excluded_sources: list[dict[str, str]] = []
+    # 잠긴 절은 미반영이어도 다시 쓸 수 없다 - 화면이 고르지 못하게 막고 이유를 보인다.
+    locked: bool = False
 
 
 class DriftRead(BaseModel):
@@ -943,6 +945,9 @@ async def get_drift(
                 Section.content,
                 Section.plan_hash,
                 Section.source_ids,
+                Section.locked,
+                # 무시한 자료 제외를 기억하는 자리(meta["drift_dismissed_sources"]).
+                Section.meta,
                 # 번호도 함께 — 절 안정 id 이전 보고서의 위치 폴백에 쓴다.
                 Section.chapter_number,
                 Section.section_number,
@@ -966,16 +971,24 @@ async def get_drift(
     }
 
     def _snap(row, section_id: UUID, plan_hash: str) -> SectionSnapshot:
+        # "이 제외는 괜찮다"고 사람이 넘긴 자료는 다시 묻지 않는다(무시). 뒤에 **다른**
+        # 자료가 빠지면 그건 새 사실이라 다시 뜬다 - 무시가 영구 침묵이 되지 않게.
+        seen = {str(x) for x in (row.meta or {}).get("drift_dismissed_sources", [])}
         return SectionSnapshot(
             section_id=section_id,
             has_content=bool((row.content or "").strip()),
             plan_hash=plan_hash,
             excluded_source_ids=tuple(
-                dict.fromkeys(dropped[cid][0] for cid in (row.source_ids or []) if cid in dropped)
+                dict.fromkeys(
+                    dropped[cid][0]
+                    for cid in (row.source_ids or [])
+                    if cid in dropped and str(dropped[cid][0]) not in seen
+                )
             ),
         )
 
     snapshots = {r.id: _snap(r, r.id, r.plan_hash or "") for r in rows}
+    locked_by_id: dict[UUID, bool] = {r.id: bool(r.locked) for r in rows}
     # 절 안정 id(0043) 이전에 만들어진 보고서는 plan의 section_id와 행 id가 어긋날 수
     # 있다. 그대로 두면 **본문이 멀쩡한 절이 전부 '본문 없음'으로** 뜨고, 사람이
     # "전체 다시 쓰기"를 누르면 실측 $13를 태우고 멀쩡한 본문을 덮어쓴다(2026-08-26
@@ -987,6 +1000,7 @@ async def get_drift(
             continue
         fallback = by_pos.get((plan.chapter_number, plan.section_number))
         if fallback is not None:
+            locked_by_id[plan.section_id] = bool(fallback.locked)
             # 지문은 빈 값으로 둔다 — id가 어긋난 행의 지문은 이 절의 것이라 단정할 수
             # 없다. 판정에서 빠지므로 거짓 미반영도, 거짓 안심도 만들지 않는다.
             snapshots[plan.section_id] = _snap(fallback, plan.section_id, "")
@@ -1002,6 +1016,7 @@ async def get_drift(
                     {"id": str(sid), "title": titles.get(sid) or "(제목 없음)"}
                     for sid in d.excluded_source_ids
                 ],
+                locked=locked_by_id.get(d.section_id, False),
             )
             for d in items
         ],
@@ -1009,6 +1024,83 @@ async def get_drift(
         n_source_excluded=sum(1 for d in items if "source_excluded" in d.reasons),
         n_missing=sum(1 for d in items if "missing" in d.reasons),
     )
+
+
+class DriftDismissRequest(BaseModel):
+    """미반영 무시 - "이 절은 이대로 둔다"는 사람의 선언."""
+
+    section_ids: list[UUID] = Field(min_length=1, max_length=200)
+
+
+@router.post("/{project_id}/drift/dismiss")
+async def dismiss_drift(
+    project_id: UUID,
+    data: DriftDismissRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> dict[str, Any]:
+    """고른 절의 미반영 표시를 지운다 - 본문은 건드리지 않는다.
+
+    **왜 필요한가**: 미반영은 "다시 써야 한다"가 아니라 "계약이 바뀌었다"는 사실이다.
+    오탈자를 고치거나 핵심 포인트 하나를 다듬은 뒤라면, 본문은 이미 새 계약대로인
+    경우가 많다. 그때 표시가 계속 남아 있으면 배지가 소음이 되고, 소음이 된 배지는
+    진짜 미반영도 못 보게 만든다 - 결국 $0.67짜리 재작성을 눌러 확인하게 된다.
+
+    지우는 방법은 **지금 계획의 지문을 그대로 찍는 것**이다. "이 본문은 지금 계획을
+    이미 담고 있다"는 선언이라, 다음에 계획이 또 바뀌면 저절로 다시 뜬다. 영구 침묵이
+    아니라 지금 것만 넘기는 것이다.
+
+    본문이 없는 절(missing)은 무시할 수 없다 - 없는 것을 있다고 선언할 수는 없다.
+    """
+    from src.core.section_plan import plan_from_config
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    plans = {p.section_id: p for p in plan_from_config(project.config)}
+    rows = (
+        (
+            await session.execute(
+                select(Section).where(
+                    Section.project_id == project.id, Section.id.in_(data.section_ids)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    excluded = {
+        cid: sid
+        for cid, sid in (
+            await session.execute(
+                select(Chunk.id, Chunk.source_id)
+                .join(ProjectSource, ProjectSource.id == Chunk.source_id)
+                .where(Chunk.project_id == project.id, ProjectSource.is_included.is_(False))
+            )
+        ).all()
+    }
+
+    dismissed: list[str] = []
+    skipped: list[str] = []
+    for row in rows:
+        label = f"{row.chapter_number}.{row.section_number} {row.title}"
+        if not (row.content or "").strip():
+            skipped.append(label)
+            continue
+        plan = plans.get(row.id)
+        if plan is not None:
+            row.plan_hash = content_fingerprint(plan)
+        # 지금 빠져 있는 자료만 기억한다 - 나중에 다른 자료가 빠지면 그건 새 사실이다.
+        seen = {str(x) for x in (row.meta or {}).get("drift_dismissed_sources", [])}
+        seen |= {str(excluded[cid]) for cid in (row.source_ids or []) if cid in excluded}
+        row.meta = {**(row.meta or {}), "drift_dismissed_sources": sorted(seen)}
+        dismissed.append(label)
+    await session.commit()
+    logger.info(
+        "drift.dismissed",
+        project_id=str(project.id),
+        n_dismissed=len(dismissed),
+        n_skipped=len(skipped),
+    )
+    return {"dismissed": dismissed, "skipped": skipped}
 
 
 async def _apply_section_rewrite(
@@ -1121,6 +1213,14 @@ async def _rewrite_batch_body(
                     return
                 row = await _get_section(session, project_id, sid)
                 label = f"{row.chapter_number}.{row.section_number} {row.title}"
+                if row.locked:
+                    # 고른 뒤 잠근 절 - 실패가 아니라 존중이다. 조용히 넘긴다.
+                    logger.info(
+                        "rewrite_batch.skipped_locked",
+                        project_id=str(project_id),
+                        section_id=str(sid),
+                    )
+                    continue
                 job.current = label
                 plan = _plan_for_row(project, row)
                 draft = await _section_rewriter(project, plan, instruction)
@@ -1195,18 +1295,49 @@ async def rewrite_batch(
     project = await _get_authorized_project(project_id, session, current_user)
     await check_user_quota(project.owner_id)
     ids = list(dict.fromkeys(data.section_ids))
+    # 잠긴 절은 **요청 시점에** 덜어낸다 - 실행 중에 걸러 내면 진행률 분모가 부풀어
+    # "40절 중 12절"처럼 끝나 사람이 실패로 읽는다. 무엇이 빠졌는지도 그 자리에서 준다.
+    locked = set(
+        (
+            await session.execute(
+                select(Section.id).where(
+                    Section.project_id == project.id,
+                    Section.id.in_(ids),
+                    Section.locked.is_(True),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    targets = [sid for sid in ids if sid not in locked]
+    if not targets:
+        raise ValidationError(
+            message="고른 절이 모두 잠겨 있습니다 - 먼저 잠금을 푸세요",
+            code="ALL_SECTIONS_LOCKED",
+        )
     job = start_job(
         project.id,
         REWRITE_JOB,
         lambda j: _rewrite_batch_body(
-            project.id, ids, data.instruction, j, created_by=current_user.id
+            project.id, targets, data.instruction, j, created_by=current_user.id
         ),
-        total=len(ids),
+        total=len(targets),
     )
     if job is None:
         return {"started": False, "running": True}
-    logger.info("rewrite_batch.started", project_id=str(project.id), n_sections=len(ids))
-    return {"started": True, "running": True, "total": len(ids)}
+    logger.info(
+        "rewrite_batch.started",
+        project_id=str(project.id),
+        n_sections=len(targets),
+        n_locked=len(locked),
+    )
+    return {
+        "started": True,
+        "running": True,
+        "total": len(targets),
+        "skipped_locked": [str(sid) for sid in ids if sid in locked],
+    }
 
 
 @router.delete("/{project_id}/rewrite-batch")
@@ -3059,6 +3190,22 @@ def _section_figures(row: Section, citations: list[SectionCitation]) -> list[Fig
     ]
 
 
+def _ensure_unlocked(row: Section) -> None:
+    """잠긴 절에 AI를 못 대게 한다(0048).
+
+    잠금은 "덮어쓰지 마라"는 뜻이지 "읽지 마라"가 아니다 - 사람의 직접 편집은 그대로
+    통과시킨다. 잠근 사람이 그 사람이라, 고치려고 잠금을 풀었다 다시 거는 왕복은
+    번거롭기만 하고 지켜 주는 게 없다.
+    """
+    if row.locked:
+        raise ValidationError(
+            message=(
+                f"{row.chapter_number}.{row.section_number} 절은 잠겨 있습니다 - 먼저 잠금을 푸세요"
+            ),
+            code="SECTION_LOCKED",
+        )
+
+
 def _section_content(
     row: Section,
     citations: list[SectionCitation] | None = None,
@@ -3074,6 +3221,7 @@ def _section_content(
         citations=cites,
         evidence=_evidence_info(row),
         figures=_section_figures(row, cites),
+        locked=row.locked,
     )
 
 
@@ -3460,6 +3608,45 @@ async def _default_section_rewriter(
 _section_rewriter = _default_section_rewriter
 
 
+class SectionLockRequest(BaseModel):
+    """절 잠금 토글 - 켜면 AI 재작성 경로가 막힌다."""
+
+    locked: bool
+
+
+@router.patch("/{project_id}/sections/{section_id}/lock", response_model=SectionContentResponse)
+async def set_section_lock(
+    project_id: UUID,
+    section_id: UUID,
+    data: SectionLockRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> SectionContentResponse:
+    """이 절을 AI가 못 건드리게 잠그거나 푼다.
+
+    묶음 재작성은 수십 절을 한 번에 갈아엎는다(전체 실측 $15.5). 공들여 손본 절이
+    거기 섞이면 그 손질이 통째로 사라진다 - 버전으로 되돌릴 수는 있어도 어느 절이
+    덮였는지 찾는 건 사람 몫이다. 잠금은 그 사고를 **일어나기 전에** 막는다.
+
+    잠금 자체는 본문을 바꾸지 않으므로 버전을 얼리지 않는다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_section(session, project.id, section_id)
+    row.locked = data.locked
+    await session.flush()
+    logger.info(
+        "section.lock",
+        project_id=str(project.id),
+        section_id=str(section_id),
+        locked=data.locked,
+    )
+    await session.refresh(row)
+    return _section_content(
+        row,
+        await _section_citations(session, row, renumbered=_is_renumbered(project)),
+    )
+
+
 @router.post("/{project_id}/sections/{section_id}/rewrite", response_model=SectionContentResponse)
 async def rewrite_section(
     project_id: UUID,
@@ -3475,6 +3662,7 @@ async def rewrite_section(
     """
     project = await _get_authorized_project(project_id, session, current_user)
     row = await _get_section(session, project.id, section_id)
+    _ensure_unlocked(row)
     plan = _plan_for_row(project, row)
     draft = await _section_rewriter(project, plan, data.instruction)
     if draft.incomplete_reason or not draft.content.strip():
@@ -3527,6 +3715,7 @@ async def rewrite_section_block(
     """
     project = await _get_authorized_project(project_id, session, current_user)
     row = await _get_section(session, project.id, section_id)
+    _ensure_unlocked(row)
     if data.block not in row.content:
         raise ValidationError(
             message="지정한 블록을 본문에서 찾을 수 없습니다(본문이 갱신됐을 수 있음)",

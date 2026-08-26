@@ -2,6 +2,7 @@ import { HttpResponse, http } from "msw";
 import { z } from "zod";
 import { createProjectFolderForLibrary } from "@/api/mock/fixtures/library";
 import { DEMO_PROJECTS } from "@/api/mock/fixtures/projects";
+import { DRIFT_ROWS, SECTION_LOCKS } from "@/api/mock/fixtures/section-state";
 import { DEMO_ADMIN_USER } from "@/api/mock/fixtures/users";
 import type { Project } from "@/api/types";
 import { DepthModeSchema, ProjectConfigSchema, ProjectStatusSchema } from "@/api/types";
@@ -264,28 +265,34 @@ export const projectsHandlers = [
     return HttpResponse.json({ data: { started: true, running: true, total: 1 } }, { status: 202 });
   }),
 
+  // 미반영 무시("이대로 두기") - 서버는 지금 계획의 지문을 찍어 표시만 지운다.
+  // 데모에서도 누른 절이 목록에서 사라져야 버튼이 아무 일도 안 하는 것처럼 안 보인다.
+  http.post(url("projects/:id/drift/dismiss"), async ({ request }) => {
+    const body = (await request.json()) as { section_ids?: string[] };
+    const ids = body.section_ids ?? [];
+    const labels: string[] = [];
+    for (const id of ids) {
+      const row = DRIFT_ROWS.get(id);
+      if (!row) continue;
+      DRIFT_ROWS.delete(id);
+      labels.push(row.label);
+    }
+    return HttpResponse.json({ data: { dismissed: labels, skipped: [] } }, { status: 200 });
+  }),
+
   // GET /projects/{id}/drift - 미반영 절(설계를 고쳤는데 본문이 아직 안 담은 절)
   http.get(url("projects/:id/drift"), () => {
+    const sections = [...DRIFT_ROWS.values()].map((row) => ({
+      ...row,
+      locked: SECTION_LOCKS.get(row.section_id) ?? false,
+    }));
     return HttpResponse.json(
       {
         data: {
-          sections: [
-            {
-              section_id: "2.3",
-              label: "2.3 인구·고령화 영향",
-              reasons: ["plan_changed"],
-              excluded_sources: [],
-            },
-            {
-              section_id: "3.3",
-              label: "3.3 비용편익비 (B/C)",
-              reasons: ["source_excluded"],
-              excluded_sources: [{ id: "src_audit_gtx", title: "GTX 사업 효과 평가" }],
-            },
-          ],
-          n_plan_changed: 1,
-          n_source_excluded: 1,
-          n_missing: 0,
+          sections,
+          n_plan_changed: sections.filter((s) => s.reasons.includes("plan_changed")).length,
+          n_source_excluded: sections.filter((s) => s.reasons.includes("source_excluded")).length,
+          n_missing: sections.filter((s) => s.reasons.includes("missing")).length,
         },
       },
       { status: 200 },

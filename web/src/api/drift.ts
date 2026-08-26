@@ -21,6 +21,8 @@ export const DriftSectionSchema = z.object({
   label: z.string(),
   reasons: z.array(z.string()).default([]),
   excluded_sources: z.array(z.object({ id: z.string(), title: z.string() })).default([]),
+  /** 잠긴 절 - 미반영이어도 다시 쓸 수 없다. 사실은 사실이고, 고를 수만 없다. */
+  locked: z.boolean().default(false),
 });
 export type DriftSection = z.infer<typeof DriftSectionSchema>;
 
@@ -98,6 +100,25 @@ export function useCancelRewriteBatch(projectId: string) {
   return useMutation({
     mutationKey: [...driftKeys.detail(projectId), "rewrite-batch", "cancel"],
     mutationFn: () => apiClient.delete<unknown>(`projects/${projectId}/rewrite-batch`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: driftKeys.detail(projectId) });
+    },
+  });
+}
+
+/** 미반영 무시 - "이 절은 이대로 둔다"는 선언. 본문은 건드리지 않는다.
+ *
+ *  서버는 지금 계획의 지문을 그대로 찍는다 - 다음에 계획이 또 바뀌면 저절로 다시 뜬다.
+ *  영구 침묵이 아니라 지금 것만 넘기는 것이다. 본문 없는 절은 무시할 수 없다(skipped). */
+export function useDismissDrift(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...driftKeys.detail(projectId), "dismiss"],
+    mutationFn: (sectionIds: string[]) =>
+      apiClient.post<{ dismissed: string[]; skipped: string[] }>(
+        `projects/${projectId}/drift/dismiss`,
+        { json: { section_ids: sectionIds } },
+      ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: driftKeys.detail(projectId) });
     },

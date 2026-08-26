@@ -54,6 +54,7 @@ const PLACEHOLDER = (id: string, title: string) =>
 
 const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
   "2.3": {
+    locked: false,
     content: RICH_2_3,
     source_ids: ["src_kostat_2024", "src_kdi_aging", "src_audit_gtx"],
     qa_status: "passed",
@@ -91,6 +92,7 @@ const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
     ],
   },
   "3.3": {
+    locked: false,
     content: RICH_3_3,
     source_ids: ["src_moef_preliminary", "src_bok_econ", "src_audit_gtx"],
     qa_status: "passed",
@@ -135,6 +137,7 @@ export function buildSectionContent(
     id: sectionId,
     title,
     content: PLACEHOLDER(sectionId, title),
+    locked: false,
     source_ids: [],
     qa_status: "passed",
     level: sectionId.includes(".") ? 2 : 1,

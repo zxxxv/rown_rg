@@ -38,6 +38,16 @@ function resolvePrefixUrl(raw: string): string {
   return raw;
 }
 
+// 오류 응답 본문을 **훅에서 미리** 챙겨 둔다.
+//
+// ky는 HTTPError를 만들면서 본문을 읽어 버려, 우리 catch에서 err.response.clone()이
+// "body stream already read"로 죽는다. 그래서 서버가 {error:{code,message}}로 이유를
+// 말해 줘도 화면에는 늘 "요청을 처리할 수 없습니다"만 떴다 - 4xx 전부(잠긴 절·그래프
+// 블록·동결된 설정…)가 같은 정체불명 문구였다(2026-08-26 실측).
+// afterResponse 시점에는 아직 안 읽힌 상태라 clone이 성공한다. WeakMap이라 응답이
+// 사라지면 같이 사라진다.
+const errorBodies = new WeakMap<Response, string>();
+
 const baseClient = ky.create({
   prefix: resolvePrefixUrl(env.VITE_API_BASE_URL),
   credentials: "include",
@@ -48,6 +58,14 @@ const baseClient = ky.create({
       async ({ request, response, retryCount }) => {
         const url = new URL(request.url);
         const suppressAuth = AUTH_PATHS.some((p) => url.pathname.endsWith(p));
+
+        if (!response.ok) {
+          try {
+            errorBodies.set(response, await response.clone().text());
+          } catch {
+            // 본문을 못 읽어도 흐름은 그대로 - 아래 폴백 문구가 뜬다.
+          }
+        }
 
         if (response.status === 401 && !suppressAuth) {
           // 토큰 만료 추정 → 1회 자동 갱신 후 원요청 재시도. 갱신 실패 시 로그아웃 처리.
@@ -153,7 +171,9 @@ async function request<T>(method: string, path: string, init?: Options): Promise
     if (err instanceof HTTPError) {
       let envelope: unknown = null;
       try {
-        envelope = await err.response.clone().json();
+        const stashed = errorBodies.get(err.response);
+        const text = stashed ?? (await err.response.clone().text());
+        envelope = text ? JSON.parse(text) : null;
       } catch {
         envelope = null;
       }

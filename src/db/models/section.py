@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -12,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -60,6 +62,10 @@ class Section(Base):
     # 현재 목차 정본의 지문과 다르면 "목차 수정 미반영"이다. 빈 문자열 = 지문 기록
     # 이전에 쓰인 옛 절이라 판정에서 제외한다(0047).
     plan_hash: Mapped[str] = mapped_column(String(40), server_default="", nullable=False)
+    # 잠근 절은 AI 경로(절·블록·묶음 재작성)에서 제외된다. 사람이 직접 고치는 것은
+    # 막지 않는다 — 잠근 사람이 그 사람이다(0048). 미반영 판정에서는 빼지 않는다:
+    # 잠갔다고 설계와 어긋난 사실이 사라지지는 않는다.
+    locked: Mapped[bool] = mapped_column(Boolean, server_default=false(), nullable=False)
     meta: Mapped[dict] = mapped_column(JSONB, server_default="{}", nullable=False, default=dict)
     qa_status: Mapped[str] = mapped_column(String(10), server_default="pending", nullable=False)
     status: Mapped[str] = mapped_column(String(10), server_default="pending", nullable=False)

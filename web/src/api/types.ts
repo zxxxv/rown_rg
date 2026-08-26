@@ -293,6 +293,8 @@ export const SectionContentResponseSchema = z.object({
   evidence: EvidenceInfoSchema.default({ count: null, scarce: false, plan_failed: false }),
   /** 한글 산출물에 들어갈 그림 자리 - 화면에서도 알려 원본을 미리 찾아보게 한다 */
   figures: z.array(FigurePlaceholderSchema).default([]),
+  /** 잠근 절 - AI 재작성(절·블록·묶음)이 막힌다. 사람의 직접 편집은 그대로 */
+  locked: z.boolean().default(false),
 });
 export type SectionContentResponse = z.infer<typeof SectionContentResponseSchema>;
 

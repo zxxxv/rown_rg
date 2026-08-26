@@ -10,6 +10,8 @@ import {
   FileSearch,
   Image as ImageIcon,
   Loader2,
+  Lock,
+  LockOpen,
   Pencil,
   Save,
   Sparkles,
@@ -35,6 +37,7 @@ import {
   useSaveSection,
   useSectionContent,
   useSectionEvidence,
+  useSetSectionLock,
 } from "@/api/sections";
 import type {
   ChapterNode,
@@ -884,6 +887,7 @@ function SectionView({
   const evidenceQuery = useSectionEvidence(projectId, sectionId, EVIDENCE_UI_ENABLED);
   const save = useSaveSection(projectId, sectionId);
   const rewrite = useRewriteSection(projectId, sectionId);
+  const setLock = useSetSectionLock(projectId, sectionId);
   const rewriteBlock = useRewriteBlock(projectId, sectionId);
 
   // 절 전체 직접 편집(기존 동작)
@@ -1144,6 +1148,43 @@ function SectionView({
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* 자물쇠 - 켜면 이 절에 AI가 못 닿는다. 묶음 재작성이 수십 절을 한 번에
+              갈아엎는 자리라(전체 실측 $15.5), 공들여 손본 절을 지키는 유일한 수단이다.
+              사람의 직접 편집은 막지 않는다 - 잠근 사람이 그 사람이다. */}
+          {editable || data.locked ? (
+            <Button
+              variant={data.locked ? "outline" : "ghost"}
+              size="sm"
+              disabled={setLock.isPending}
+              aria-pressed={data.locked}
+              title={
+                data.locked
+                  ? "AI 재작성이 막혀 있습니다 - 눌러서 풉니다"
+                  : "이 절을 AI 재작성에서 제외합니다(직접 편집은 그대로)"
+              }
+              onClick={() =>
+                setLock.mutate(!data.locked, {
+                  onSuccess: (res) =>
+                    toast.success(res.locked ? "이 절을 잠갔습니다" : "잠금을 풀었습니다", {
+                      description: res.locked
+                        ? "AI 재작성에서 제외됩니다. 직접 편집은 그대로 됩니다."
+                        : "이제 AI가 다시 쓸 수 있습니다.",
+                    }),
+                  onError: (err: unknown) =>
+                    toast.error("잠금 변경 실패", {
+                      description: err instanceof ApiError ? err.message : undefined,
+                    }),
+                })
+              }
+            >
+              {data.locked ? (
+                <Lock className="mr-1 h-4 w-4" />
+              ) : (
+                <LockOpen className="mr-1 h-4 w-4" />
+              )}
+              {data.locked ? "잠김" : "잠그기"}
+            </Button>
+          ) : null}
           {editing ? (
             <>
               <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={busy}>
@@ -1425,7 +1466,6 @@ function SectionView({
                         uncovered={evidenceQuery.data?.uncovered}
                         markCited={markCited}
                         markUncited={markUncited}
-                        uncovered={evidenceQuery.data?.uncovered}
                       />
                       {selectedIdx.has(idx) && selectedIdx.size === 1 ? (
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">

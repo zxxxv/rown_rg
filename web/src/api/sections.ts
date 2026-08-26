@@ -141,6 +141,29 @@ export function useRewriteSection(projectId: string, sectionId: string) {
   });
 }
 
+/** 절 잠금 토글 - 켜면 AI가 이 절을 못 건드린다(사람의 직접 편집은 그대로).
+ *
+ *  묶음 재작성은 한 번에 수십 절을 갈아엎는다(전체 실측 $15.5). 공들여 손본 절이
+ *  거기 섞이면 그 손질이 사라진다 - 버전으로 되돌릴 수는 있어도 어느 절이 덮였는지
+ *  찾는 건 사람 몫이라, 사고를 일어나기 전에 막는 자물쇠다. */
+export function useSetSectionLock(projectId: string, sectionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...sectionKeys.content(projectId, sectionId), "lock"],
+    mutationFn: async (locked: boolean) => {
+      const data = await apiClient.patch<unknown>(
+        `projects/${projectId}/sections/${sectionId}/lock`,
+        { json: { locked } },
+      );
+      return SectionContentResponseSchema.parse(data);
+    },
+    onSuccess: () => {
+      invalidateSection(qc, projectId, sectionId);
+      void qc.invalidateQueries({ queryKey: ["drift", projectId] });
+    },
+  });
+}
+
 /** 블록 국소 재작성 - 검색 없이 지정 블록만 고쳐 치환 저장(기존 인용 범위 유지). */
 export async function rewriteSectionBlock(
   projectId: string,

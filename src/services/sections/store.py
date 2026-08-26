@@ -231,6 +231,7 @@ async def sync_rows_to_plan(session: AsyncSession, project_id, plan: list[Sectio
                 Section.content,
                 Section.source_ids,
                 Section.plan_hash,
+                Section.locked,
                 Section.meta,
                 Section.qa_status,
                 Section.status,
@@ -278,6 +279,10 @@ async def sync_rows_to_plan(session: AsyncSession, project_id, plan: list[Sectio
                 # 지문은 **그대로 옮긴다** — 여기서 새 계획으로 다시 계산하면 방금
                 # 사람이 고친 목차가 곧바로 '반영됨'으로 위장돼 미반영 판정이 죽는다.
                 plan_hash=prev.plan_hash,
+                # 잠금도 그대로 옮긴다 — 안 옮기면 목차를 한 줄만 고쳐도 잠금이 전부
+                # 풀려, 잠금이 막으려던 사고(묶음 재작성이 손본 절을 덮음)가 그대로
+                # 난다. 전량 삭제·재삽입 방식이라 새 칸을 늘릴 때마다 여기에 와야 한다.
+                locked=prev.locked,
                 meta=_relabel_meta(dict(prev.meta or {}), label),
                 qa_status=prev.qa_status,
                 status=prev.status,

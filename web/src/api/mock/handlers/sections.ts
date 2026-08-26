@@ -1,5 +1,6 @@
 import { HttpResponse, http } from "msw";
 import { buildSectionContent } from "@/api/mock/fixtures/section-content";
+import { SECTION_LOCKS } from "@/api/mock/fixtures/section-state";
 import { findSectionStatus, findSectionTitle, SECTION_TREE } from "@/api/mock/fixtures/sections";
 import { findSourceRef } from "@/api/mock/fixtures/source-refs";
 import { env } from "@/env";
@@ -42,6 +43,33 @@ export const sectionsHandlers = [
     }
     const override = CONTENT_OVERRIDES.get(sectionId);
     if (override !== undefined) content.content = override;
+    content.locked = SECTION_LOCKS.get(sectionId) ?? false;
+    return HttpResponse.json({ data: content }, { status: 200 });
+  }),
+
+  // PATCH /projects/{id}/sections/{sec}/lock - 절 잠금 토글(실계약 0048 미러).
+  // 잠긴 절은 AI 재작성이 422로 막힌다 - 목에서도 막아야 버튼이 지키는 게 뭔지 보인다.
+  http.patch(url("projects/:id/sections/:sec/lock"), async ({ params, request }) => {
+    const sectionId = String(params.sec);
+    const title = findSectionTitle(sectionId);
+    if (!title) {
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "섹션을 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    const body = (await request.json()) as { locked?: boolean };
+    SECTION_LOCKS.set(sectionId, Boolean(body.locked));
+    const content = buildSectionContent(sectionId, title);
+    if (!content) {
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "섹션을 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    const override = CONTENT_OVERRIDES.get(sectionId);
+    if (override !== undefined) content.content = override;
+    content.locked = Boolean(body.locked);
     return HttpResponse.json({ data: content }, { status: 200 });
   }),
 
@@ -103,6 +131,18 @@ export const sectionsHandlers = [
       return HttpResponse.json(
         { error: { code: "not_found", message: "섹션을 찾을 수 없습니다." } },
         { status: 404 },
+      );
+    }
+    if (SECTION_LOCKS.get(sectionId)) {
+      // 실계약과 같은 봉투 - 잠금이 진짜로 막는지 목에서도 눌러 볼 수 있어야 한다.
+      return HttpResponse.json(
+        {
+          error: {
+            code: "SECTION_LOCKED",
+            message: `${sectionId} 절은 잠겨 있습니다 - 먼저 잠금을 푸세요`,
+          },
+        },
+        { status: 422 },
       );
     }
     const body = (await request.json()) as { instruction?: string };

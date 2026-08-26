@@ -82,6 +82,8 @@ class SectionContentResponse(BaseModel):
     citations: list[SectionCitation] = Field(default_factory=list)
     evidence: EvidenceInfo = Field(default_factory=EvidenceInfo)
     figures: list[FigurePlaceholder] = Field(default_factory=list)
+    # 잠근 절 - AI 재작성 경로가 막힌다(0048). 사람의 직접 편집은 그대로.
+    locked: bool = False
 
 
 class EvidenceChunk(BaseModel):

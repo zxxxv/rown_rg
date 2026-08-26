@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, Loader2, Sparkles, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, EyeOff, Loader2, Lock, Sparkles, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -8,6 +8,7 @@ import {
   DRIFT_REASON_LABEL,
   invalidateAfterRewrite,
   useCancelRewriteBatch,
+  useDismissDrift,
   useDrift,
   useRewriteBatch,
   useRewriteBatchStatus,
@@ -29,9 +30,14 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
   const status = useRewriteBatchStatus(projectId);
   const rewrite = useRewriteBatch(projectId);
   const cancel = useCancelRewriteBatch(projectId);
+  const dismiss = useDismissDrift(projectId);
   const [picked, setPicked] = useState<Set<string>>(new Set());
 
   const sections = data?.sections ?? [];
+  // 잠긴 절은 고를 수 없다 - 골라 봐야 서버가 덜어낸다. 목록에는 남긴다:
+  // 잠갔다고 설계와 어긋난 사실이 사라지지는 않는다.
+  const pickable = new Set(sections.filter((s) => !s.locked).map((s) => s.section_id));
+  const chosen = [...picked].filter((id) => pickable.has(id));
   const running = status.data?.running ?? false;
   const failures = Object.entries(status.data?.failures ?? {});
 
@@ -55,12 +61,34 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
       return next;
     });
 
+  const onDismiss = () => {
+    dismiss.mutate(chosen, {
+      onSuccess: (res) => {
+        setPicked(new Set());
+        if (res.dismissed.length > 0) {
+          toast.success(`${res.dismissed.length}개 절을 이대로 두었습니다`, {
+            description: "본문은 그대로입니다. 설계를 또 고치면 다시 표시됩니다.",
+          });
+        }
+        if (res.skipped.length > 0) {
+          toast.warning("본문이 없는 절은 넘길 수 없습니다", {
+            description: `${res.skipped.join(", ")} - 먼저 작성해야 합니다.`,
+          });
+        }
+      },
+      onError: (err: unknown) => {
+        const msg = err instanceof ApiError ? err.message : "표시를 지우지 못했습니다.";
+        toast.error("이대로 두기 실패", { description: msg });
+      },
+    });
+  };
+
   const start = () => {
     rewrite.mutate(
-      { sectionIds: [...picked] },
+      { sectionIds: chosen },
       {
         onSuccess: () => {
-          toast.success(`${picked.size}개 절을 다시 쓰고 있습니다`, {
+          toast.success(`${chosen.length}개 절을 다시 쓰고 있습니다`, {
             description: "절당 수십 초 걸립니다 - 끝나면 목록에서 사라집니다.",
           });
           void status.refetch();
@@ -83,7 +111,7 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
         <div className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
-            disabled={picked.size === 0 || running || rewrite.isPending}
+            disabled={chosen.length === 0 || running || rewrite.isPending}
             onClick={start}
           >
             {running || rewrite.isPending ? (
@@ -91,7 +119,19 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
             ) : (
               <Sparkles className="mr-1 h-4 w-4" />
             )}
-            {picked.size > 0 ? `선택 ${picked.size}개 다시 쓰기` : "다시 쓸 절 선택"}
+            {chosen.length > 0 ? `선택 ${chosen.length}개 다시 쓰기` : "다시 쓸 절 선택"}
+          </Button>
+          {/* 다시 쓰지 않고 넘기는 길. 미반영은 "다시 써야 한다"가 아니라 "계약이
+              바뀌었다"는 사실이라, 본문이 이미 그 내용을 담고 있으면 $0.67을 태울
+              이유가 없다. 표시만 지우고 본문은 건드리지 않는다. */}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={chosen.length === 0 || running || dismiss.isPending}
+            onClick={onDismiss}
+          >
+            <EyeOff className="mr-1 h-4 w-4" />
+            이대로 두기
           </Button>
           <Button
             variant="outline"
@@ -137,14 +177,20 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
           <li key={s.section_id} className="flex flex-wrap items-center gap-1.5 text-xs">
             <Checkbox
               id={`drift-${s.section_id}`}
-              checked={picked.has(s.section_id)}
+              checked={picked.has(s.section_id) && !s.locked}
               onCheckedChange={() => toggle(s.section_id)}
-              disabled={running}
+              disabled={running || s.locked}
               aria-label={`${s.label} 다시 쓰기 선택`}
             />
             <label htmlFor={`drift-${s.section_id}`} className="cursor-pointer font-medium text-fg">
               {s.label}
             </label>
+            {s.locked ? (
+              <Badge variant="outline" className="gap-1 font-normal text-fg-tertiary">
+                <Lock className="h-3 w-3" aria-hidden />
+                잠김
+              </Badge>
+            ) : null}
             {s.reasons.map((r) => (
               <Badge key={r} variant="outline" className="font-normal">
                 {DRIFT_REASON_LABEL[r] ?? r}
