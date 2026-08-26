@@ -108,6 +108,32 @@ async def snapshot_report(
     return next_no
 
 
+async def ensure_baseline_version(
+    session: AsyncSession,
+    project_id: UUID,
+    *,
+    created_by: UUID | None = None,
+) -> int | None:
+    """덮어쓰기 **직전**에 원본을 한 번 얼린다 - 버전이 하나도 없는 문서를 위해.
+
+    재작성·편집·블록 수정은 모두 '성공 직후'를 얼린다. 거기엔 "고치기 전은 직전 버전이
+    이미 들고 있다"는 전제가 깔려 있는데, 그 전제가 **안 맞는 문서가 실제로 있었다**:
+    버전 기록이 붙기 전에 만들어진 문서, 조립 스냅샷이 남지 않은 문서(2026-08-27 실측
+    18건 중 10건). 그런 문서는 첫 수정이 원본을 통째로 지우고, 화면은 그동안
+    "이전 본문은 버전 기록에 남아 있습니다"라고 말하고 있었다.
+
+    이미 버전이 하나라도 있으면 아무것도 하지 않는다(직전 버전이 원본이다).
+    """
+    existing = (
+        await session.execute(
+            select(ReportVersion.id).where(ReportVersion.project_id == project_id).limit(1)
+        )
+    ).first()
+    if existing is not None:
+        return None
+    return await snapshot_report(session, project_id, reason="baseline", created_by=created_by)
+
+
 async def snapshot_report_standalone(project_id: UUID, *, reason: str) -> int | None:
     """요청 밖(assemble 단계) 경로 — 자체 세션을 열고 직접 커밋한다(session.py 규칙)."""
     from src.db.session import async_session_maker

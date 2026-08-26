@@ -72,7 +72,9 @@ class TestSaveMakesAVersion:
         )
         assert r.status_code == 200, r.text
         vs = await _versions(test_client, pid, worker_token)
-        assert [v["reason"] for v in vs] == ["edit:3.2"]
+        # 원본 + 고친 것, 두 벌이다. 버전이 하나도 없던 문서는 덮어쓰기 **직전**에
+        # 원본을 한 번 얼린다 - 안 그러면 첫 수정이 원본을 지운다(2026-08-27).
+        assert sorted(v["reason"] for v in vs) == ["baseline", "edit:3.2"]
 
     async def test_identical_save_makes_no_new_version(
         self,
@@ -89,7 +91,8 @@ class TestSaveMakesAVersion:
                 headers=_auth(worker_token),
                 json={"content": "같은 본문"},
             )
-        assert len(await _versions(test_client, pid, worker_token)) == 1
+        # 원본 1벌 + 첫 저장 1벌. 두 번째 저장은 지문이 같아 새로 안 만든다.
+        assert len(await _versions(test_client, pid, worker_token)) == 2
 
     async def test_outline_edit_is_versioned(
         self,
@@ -144,7 +147,8 @@ class TestRestoreOneSection:
             json={"content": "1차 수정본입니다."},
         )
         vs = await _versions(test_client, pid, worker_token)
-        v1 = min(v["version_no"] for v in vs)
+        # min이 아니라 **그 수정본**을 집는다 - 이제 그보다 앞에 원본(baseline)이 있다.
+        v1 = next(v["version_no"] for v in vs if v["reason"] == "edit:3.2")
         await test_client.patch(
             f"/api/v1/projects/{pid}/sections/{sid}",
             headers=_auth(worker_token),
