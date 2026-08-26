@@ -9,7 +9,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useDrift } from "@/api/drift";
 import { useInsights } from "@/api/insights";
 import type { ProgressSnapshot } from "@/api/progress";
@@ -51,6 +51,7 @@ export function StatePanel({
   onOpenConfig: () => void;
 }) {
   const projectId = project.id;
+  const [, setParams] = useSearchParams();
   const navigate = useNavigate();
 
   const sources = useProjectSources(projectId);
@@ -189,7 +190,17 @@ export function StatePanel({
             variant="outline"
             size="sm"
             onClick={() =>
-              document.getElementById("pm-verify")?.scrollIntoView({ behavior: "smooth" })
+              // 드로어를 **바로** 연다. 배너로 스크롤만 시키면 거기서 한 번 더 눌러야 해서
+              // 진입점이 둘로 느껴진다(2026-08-27 지적). 목적지가 하나면 문도 하나처럼
+              // 굴어야 한다 - URL로 잇는다(버전 시트가 ?versions=1을 쓰는 것과 같은 방식).
+              setParams(
+                (prev) => {
+                  const next = new URLSearchParams(prev);
+                  next.set("verify", "1");
+                  return next;
+                },
+                { replace: true },
+              )
             }
           >
             경고 보기

@@ -53,7 +53,13 @@ export function estimateLabel(
 ): string | null {
   if (!basis || basis.per_section_usd === null || nSections <= 0) return null;
   const total = formatUsd(basis.per_section_usd * nSections);
-  if (opts?.compact) return `예상 ${total}`;
+  if (opts?.compact) {
+    // 곱셈을 보이게 쓴다. "예상 $0.65"와 "예상 $1.95"가 나란히 놓이면 어느 게 맞는
+    // 값이냐고 묻게 된다(2026-08-27 지적) - 셈을 드러내면 둘의 관계가 저절로 읽힌다.
+    return nSections > 1
+      ? `예상 ${total} (${nSections}개 × ${formatUsd(basis.per_section_usd)})`
+      : `예상 ${total}`;
+  }
   const unit = formatUsd(basis.per_section_usd);
   const source = basis.basis === "project" ? "이 보고서 실측" : "비슷한 보고서 평균";
   return `예상 ${total} · 절당 ${unit} (${source})`;
