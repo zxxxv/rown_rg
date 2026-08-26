@@ -1205,13 +1205,34 @@ async def _rehearse(state: ProjectState) -> ProjectState:
 
 
 def _ensure_section_plan(state: ProjectState) -> ProjectState:
-    """섹션 계획이 없으면 최소 계획으로 폴백.
+    """섹션 계획이 없으면 **목차에서 다시 세우고**, 그것도 없을 때만 최소 계획으로 폴백.
 
-    정상 경로는 research의 플래너가 계획을 만든다. 이 폴백은 계획 없이 write에
-    진입한 비정상 흐름(레거시 데이터·테스트)에서 루프를 관통시키는 안전망이다.
+    정상 경로는 research의 플래너가 계획을 만들어 config에 남긴다(_section_plan). 그런데
+    그 키가 없는 옛 프로젝트가 있다 — 그때 곧장 2절짜리 폴백으로 떨어지면 **저장된 절이
+    전부 계획 밖으로 보여** 잔재 청소기가 본문을 통째로 지운다(2026-08-27 실사고: 35절
+    보고서가 다시 열기 후 0절이 됐다. 확정 스냅샷이 없었으면 복구도 못 했다).
+
+    config.outline은 사람이 확정한 목차이고 절 안정 id까지 들고 있어, 여기서 세운 계획은
+    저장된 행과 id로 그대로 맞는다(실측: 35/35 일치). 폴백은 목차조차 없을 때의 마지막
+    안전망으로만 남긴다.
     """
     if state.section_plan:
         return state
+    outline = state.options.get("outline") if isinstance(state.options, dict) else None
+    if isinstance(outline, dict) and outline.get("chapters"):
+        try:
+            from src.services.generation.planner import plan_from_outline
+
+            plan = plan_from_outline(outline)
+        except ValueError:  # 제목 없는 빈 목차
+            plan = []
+        if plan:
+            logger.info(
+                "write.plan_rebuilt_from_outline",
+                project_id=str(state.project_id),
+                n_sections=len(plan),
+            )
+            return state.with_section_plan(plan)
     logger.warning("write.plan_fallback", project_id=str(state.project_id))
     plan = [
         SectionPlan(chapter_number=1, section_number=1, title="개요"),
@@ -1627,6 +1648,18 @@ async def write(state: ProjectState) -> ProjectState:
     working = await _working_copy(state.project_id)
     plan_ids = {s.section_id for s in state.section_plan}
     done_ids = {sid for sid, row in working.items() if sid in plan_ids and row[0].strip()}
+    # 본문이 있는데 계획 밖으로 보이는 행 — 절 안정 id(0043) 이전 데이터이거나 계획이
+    # 어긋난 경우다. 이걸 그냥 두면 아래 청소기가 **멀쩡한 본문을 지운다**(2026-08-27
+    # 실사고: 35절이 0절이 됐다). 계획과 위치가 겹치면 완성으로 쳐 건너뛴다 —
+    # 미반영 판정이 같은 이유로 위치 폴백을 쓰는 것과 같은 판단이다.
+    orphans = {sid for sid, row in working.items() if sid not in plan_ids and row[0].strip()}
+    if orphans:
+        logger.warning(
+            "write.orphan_sections",
+            project_id=str(state.project_id),
+            n_orphans=len(orphans),
+            n_plan=len(plan_ids),
+        )
     kept_meta: dict[UUID, dict] = {}
     if done_ids:
         logger.info(
@@ -1649,6 +1682,14 @@ async def write(state: ProjectState) -> ProjectState:
                 .all()
             )
         kept_meta = {r.id: dict(r.meta or {}) for r in rows}
+    elif orphans:
+        # 본문 있는 행이 남아 있는데 계획과 id가 안 맞는다 — 지우면 사람이 손댄 결과가
+        # 사라진다. 잔재 청소는 "쓸 게 아무것도 없을 때"만 안전하다.
+        logger.warning(
+            "write.cleaner_skipped_for_orphans",
+            project_id=str(state.project_id),
+            n_orphans=len(orphans),
+        )
     else:
         await _sections_cleaner(state.project_id)  # 이전 런 잔재 제거(증분 초안과 혼재 방지)
     models = _models_for(state)

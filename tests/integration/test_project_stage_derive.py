@@ -107,6 +107,9 @@ class TestStageDerivation:
         assert row.status == ProjectStage.REVIEWING.value
         assert row.completed_at is None
         assert row.finalized_at is None
+        # 파이프라인 재개 지점은 **따로** 적힌다. status(REVIEWING)를 그대로 쓰면
+        # '이어서 진행'이 조립로 직행해 새로 올린 자료의 색인·작성을 건너뛴다.
+        assert row.config.get("resume_from") == ProjectStage.RESEARCHING.value
 
     async def test_completed_stays_completed(
         self,

@@ -1,6 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { FolderOpen, History, ListTree, PlayCircle } from "lucide-react";
-import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { progressKeys } from "@/api/progress";
@@ -28,7 +27,6 @@ export function ReopenDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const reopen = useReopenProject();
-  const navigate = useNavigate();
   const qc = useQueryClient();
 
   const confirm = () => {
@@ -38,9 +36,12 @@ export function ReopenDialog({
         onOpenChange(false);
         toast.success("보고서를 다시 열었습니다", {
           description:
-            "현재 완성본은 버전으로 보관됐습니다. 자료를 추가하고 목차를 손본 뒤 '이어서 진행'을 누르면 빈 절부터 작성합니다.",
+            "현재 완성본은 버전으로 보관됐습니다. 자료·목차·옵션 어디든 손본 뒤 '이어서 진행'을 누르면 됩니다.",
         });
-        navigate(`/projects/${projectId}/sources`);
+        // 자료 화면으로 **끌고 가지 않는다**. 다시 연 뒤에 무엇부터 할지는 사람이
+        // 정한다 - 설계를 고칠 수도, 옵션을 바꿀 수도, 자료를 보탤 수도 있다
+        // (2026-08-27 지적). 개요에 그대로 남으면 상태 패널의 여섯 줄이 그 갈림길을
+        // 전부 보여준다.
       },
       onError: (err: unknown) => {
         const msg = err instanceof ApiError ? err.message : "다시 열지 못했습니다.";

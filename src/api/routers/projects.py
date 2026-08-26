@@ -65,6 +65,7 @@ from src.api.schemas.section import (
     SectionTreeResponse,
     SourceChunkRead,
     SourceDocumentResponse,
+    SpanCandidateRead,
 )
 from src.api.schemas.source_stats import SourceUsageResponse
 from src.api.uploads import read_validated_upload
@@ -2654,6 +2655,10 @@ async def reopen_project(
     # 예전엔 RESEARCHING을 박아 넣어 화면이 "수집 실행 중"으로 읽었고, 그걸 게이트를
     # 함께 여는 것으로 덮었다(아래 주석). 이제 값 자체가 정직하다.
     project.completed_at = None
+    # 파이프라인 재개 지점을 따로 적어 둔다 - status는 이제 산출물에서 되짚은 진척이라
+    # (파생값 REVIEWING) 그대로 쓰면 '이어서 진행'이 조립로 직행해 **새로 올린 자료의
+    # 색인·작성을 건너뛴다**. 다시 열기는 "자료부터 다시"라는 뜻이다(2026-08-27).
+    project.config = {**(project.config or {}), "resume_from": ProjectStage.RESEARCHING.value}
     await session.flush()
     await sync_project_stage(session, project)
     review_id = await _open_reopen_source_gate(session, project)
@@ -3525,6 +3530,20 @@ async def _claim_rows(
                 span_end=span.end if span else None,
                 span_text=span.text if span else None,
                 score=span.score if span else 0.0,
+                # 이미 대목이 확정된 문장에는 후보를 안 싣는다(응답도 화면도 가벼워진다).
+                candidates=[]
+                if a.status == "aligned"
+                else [
+                    SpanCandidateRead(
+                        chunk_id=str(c.chunk_id),
+                        start=c.start,
+                        end=c.end,
+                        text=c.text,
+                        score=c.score,
+                        dense_score=c.dense_score,
+                    )
+                    for c in a.candidates
+                ],
                 ungrounded=a.ungrounded,
                 grounded=[
                     GroundedNumberRead(

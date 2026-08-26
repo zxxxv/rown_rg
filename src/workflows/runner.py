@@ -290,6 +290,14 @@ def _state_from_project(project: Project) -> ProjectState:
     # 없어 advance가 즉시 Done을 돌려주고, 작성 도중 죽은 런이 '완료'로 둔갑한다
     # (2026-08-09 실측: 메모리 고갈로 1.3절에서 멈춘 런). 소유 단계로 되돌려 복구한다.
     status = project.status
+    # 다시 열기가 남긴 재개 지점 — status는 이제 **산출물에서 되짚은 진척**이라
+    # (services/projects/derive) 그대로 파이프라인 위치로 쓰면 안 된다. 본문이 있으면
+    # 파생값이 REVIEWING이고, 그 단계의 Phase는 assemble이라 **새로 올린 자료의 색인과
+    # 작성을 통째로 건너뛴다**. 다시 열기는 "자료부터 다시"를 뜻하므로 그 지점을
+    # config에 따로 적어 둔다(취소의 cancelled_from과 같은 방식, 2026-08-27).
+    resume_from = (project.config or {}).get("resume_from")
+    if resume_from in {stage.value for stage in ProjectStage}:
+        status = str(resume_from)
     # 취소된 런은 재개 지점을 잃는다(status=cancelled). 취소 시 기록해 둔 직전 단계로
     # 되돌려 이어서 돌린다 — 없으면 처음부터(created). 화면의 "다시 시작" 버튼과
     # 라우터 가드가 cancelled를 재개 가능으로 보므로 여기서도 살려야 한다(2026-08-10).
@@ -400,6 +408,13 @@ async def _execute(project_id: uuid.UUID) -> None:
             owner_id = project.owner_id
 
             state = _state_from_project(project)
+            # 재개 지점은 **한 번만** 쓴다 - 안 지우면 이후 모든 재개가 자료 단계로
+            # 되감겨, 조립만 남은 런도 색인부터 다시 돈다(취소의 cancelled_from은
+            # 취소 때마다 새로 써서 같은 문제가 없다).
+            if (project.config or {}).get("resume_from"):
+                cfg = dict(project.config or {})
+                cfg.pop("resume_from", None)
+                project.config = cfg
             # 죽은 런 재개 가드 — 게이트가 resolved로 없으면 그 단계를 다시 돈다.
             state = await _normalize_resume_stage(session, project.id, state)
             if project.status == ProjectStage.CREATED.value:
