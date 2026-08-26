@@ -16,6 +16,18 @@ export const InsightsSchema = z.object({
    *  '다시 만들기'가 실제로 돌았는지는 이 값으로만 드러난다. */
   built_at: z.string().nullable().default(null),
   running: z.boolean().default(false),
+  /** 근거로 고른 절(절 안정 id) - 체크 상태의 정본. 비었으면 자동 선택으로 돈다 */
+  selected_section_ids: z.array(z.string()).default([]),
+  /** 고를 수 있는 절 전부 - 목록을 따로 부르지 않게 함께 온다 */
+  selectable: z
+    .array(
+      z.object({
+        section_id: z.string(),
+        label: z.string(),
+        chars: z.number().int().default(0),
+      }),
+    )
+    .default([]),
 });
 export type Insights = z.infer<typeof InsightsSchema>;
 
@@ -41,7 +53,11 @@ export function useRebuildInsights(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationKey: [...insightsKeys.detail(projectId), "rebuild"],
-    mutationFn: () => apiClient.post<unknown>(`projects/${projectId}/insights`, { json: {} }),
+    // sectionIds=undefined면 저장된 선택 그대로, []면 선택을 지우고 자동으로 되돌린다.
+    mutationFn: (sectionIds?: string[]) =>
+      apiClient.post<unknown>(`projects/${projectId}/insights`, {
+        json: sectionIds === undefined ? {} : { section_ids: sectionIds },
+      }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: insightsKeys.detail(projectId) });
     },

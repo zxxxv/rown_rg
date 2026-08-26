@@ -1494,6 +1494,14 @@ async def rewrite_batch_status(
     return job.as_dict()
 
 
+class InsightsSectionOption(BaseModel):
+    """요약 근거로 고를 수 있는 절 하나."""
+
+    section_id: str
+    label: str  # "3.7 역량분석 시사점"
+    chars: int
+
+
 class InsightsRead(BaseModel):
     """시사점 2~3쪽 요약 — 본문 보고서와 별개 산출물(본문 HWPX에는 안 실린다).
 
@@ -1508,6 +1516,20 @@ class InsightsRead(BaseModel):
     # 화면이 안 바뀐다. 이 값이 화면에서 유일하게 "방금 새로 만들었다"를 증명한다.
     built_at: str | None
     running: bool
+    # 근거로 고른 절(절 안정 id) — 화면이 체크 상태를 되살리는 정본. 비었으면 자동 선택.
+    selected_section_ids: list[str] = []
+    # 고를 수 있는 절 전부 — 본문이 있는 절만. 화면이 목록을 따로 부르지 않게 함께 싣는다.
+    selectable: list[InsightsSectionOption] = []
+
+
+class InsightsRebuildRequest(BaseModel):
+    """시사점 요약 다시 만들기.
+
+    section_ids=None이면 저장된 선택을 그대로 쓴다(선택도 안 건드린다).
+    빈 배열이면 선택을 지우고 자동 선택으로 되돌린다.
+    """
+
+    section_ids: list[UUID] | None = None
 
 
 async def _last_insights_built_at(session: AsyncSession, project_id: UUID) -> str | None:
@@ -1543,12 +1565,33 @@ async def get_insights(
         # 시각을 알고 있다. 이 폴백이 없으면 옛 요약은 다시 만들기 전까지 시각이
         # 빈칸이라, 정작 "돌았는지 모르겠다"는 화면이 그대로 남는다(2026-08-27).
         built_at = await _last_insights_built_at(session, project.id)
+    # 고를 수 있는 절과 지금 선택을 함께 싣는다 - 화면이 목록을 따로 부르지 않게.
+    rows = await _load_sections(session, project.id)
+    selectable = [
+        InsightsSectionOption(
+            section_id=str(r.id),
+            label=f"{r.chapter_number}.{r.section_number} {r.title}",
+            chars=len(r.content or ""),
+        )
+        for r in rows
+        if (r.content or "").strip()
+    ]
+    # 정본은 config의 사람 선택. 없으면 지난 요약이 실제로 쓴 절을 되살려 보여준다
+    # (자동 선택으로 돌았더라도 "무엇을 근거로 삼았나"는 체크로 보이는 게 맞다).
+    picked = _insights_selection(project)
+    selected = (
+        [str(x) for x in picked]
+        if picked
+        else [str(x) for x in (data.get("source_section_ids") or [])]
+    )
     return InsightsRead(
         content=data.get("content"),
         source_sections=list(data.get("source_sections") or []),
         model=data.get("model"),
         built_at=built_at,
         running=job_running(project.id, INSIGHTS_JOB),
+        selected_section_ids=selected,
+        selectable=selectable,
     )
 
 
@@ -1557,6 +1600,9 @@ async def _resummarize_in_background(project_id: UUID) -> None:
 
     입력이 최대 6만 자라 요청 안에서 처리하면 프론트가 타임아웃으로 읽는다
     — PM 재검증과 같은 이유로 백그라운드 태스크로 뺀다.
+
+    근거로 삼을 절은 config에 저장된 사람의 선택을 쓴다(_insights_sections).
+    선택이 없으면 자동 선택으로 되돌아간다 — 옛 프로젝트가 그대로 돈다.
     """
     from src.services.export.insights import build_insights, persist_insights
 
@@ -1565,22 +1611,57 @@ async def _resummarize_in_background(project_id: UUID) -> None:
         if project is None:
             return
         rows = await _load_sections(session, project_id)
+        picked = _insights_selection(project)
     if not rows:
         return
     state = _state_for_export(project, rows)
-    await persist_insights(project_id, await build_insights(state))
+    await persist_insights(project_id, await build_insights(state, section_ids=picked))
+
+
+def _insights_selection(project: Project) -> list[UUID] | None:
+    """config에 저장된 '요약 근거 절' 선택 — 없거나 망가졌으면 None(자동 선택)."""
+    raw = (project.config or {}).get("_insights_sections")
+    if not isinstance(raw, list) or not raw:
+        return None
+    out: list[UUID] = []
+    for x in raw:
+        try:
+            out.append(UUID(str(x)))
+        except (ValueError, TypeError):
+            continue
+    return out or None
 
 
 @router.post("/{project_id}/insights", status_code=status.HTTP_202_ACCEPTED)
 async def rebuild_insights(
     project_id: UUID,
+    data: InsightsRebuildRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(require_writer)],
 ) -> dict[str, bool]:
-    """시사점 요약 다시 만들기 — 본문을 고친 뒤 요약이 옛것으로 남는 걸 막는다."""
+    """시사점 요약 다시 만들기 — 본문을 고친 뒤 요약이 옛것으로 남는 걸 막는다.
+
+    section_ids를 주면 **그 절만** 근거로 삼고, 그 선택을 저장한다 — 다음 재생성과
+    조립 때도 같은 선택으로 돈다. 자동 선택은 제목 규칙에 기대는 추측이라 장별
+    시사점이 여러 개인 보고서에서 엉뚱한 절을 물어 왔다(2026-08-27).
+    빈 배열을 주면 선택을 지우고 자동으로 되돌린다.
+    """
     from src.services.jobs import start_job
 
     project = await _get_authorized_project(project_id, session, current_user)
+    if data.section_ids is not None:
+        known = {r.id for r in await _load_sections(session, project.id)}
+        unknown = [str(x) for x in data.section_ids if x not in known]
+        if unknown:
+            raise ValidationError(
+                message=f"이 보고서에 없는 절입니다: {', '.join(unknown)}",
+                code="UNKNOWN_SECTION",
+            )
+        project.config = {
+            **(project.config or {}),
+            "_insights_sections": [str(x) for x in data.section_ids],
+        }
+        await session.flush()
     started = start_job(
         project.id, INSIGHTS_JOB, lambda _job: _resummarize_in_background(project.id)
     )
@@ -3296,6 +3377,8 @@ _INTERNAL_CONFIG_KEYS = (
     # _verify_stamp = PM 검증이 판정한 본문의 지문·시각(pm_verify.persist_findings).
     # 폼이 config를 통째로 되돌려 보낼 때 지워지면 "낡은 경고" 표시가 조용히 꺼진다.
     "_verify_stamp",
+    # 요약 근거로 고른 절 - 폼 round-trip에 지워지면 자동 선택으로 조용히 되돌아간다.
+    "_insights_sections",
     "models",
     # analysts = 런 시작 시점 DB 출신 에이전트 스냅샷(러너 기록) - 그 런이 실제로 쓴 페르소나.
     "analysts",

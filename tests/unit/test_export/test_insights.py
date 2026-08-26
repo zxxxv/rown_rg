@@ -19,6 +19,7 @@ from src.services.export.insights import (
     INSIGHTS_HEADING,
     MAX_INPUT_CHARS,
     build_insights,
+    build_system,
     collect_insight_sections,
     export_insights,
     insights_blocks,
@@ -224,3 +225,56 @@ class TestExportInsights:
         assert path == tmp_path / export_filename(state.project_id)
         assert path.exists()
         assert path.stat().st_size > 0
+
+
+class TestExplicitSelection:
+    """사람이 고른 절만 근거로 삼는다 - 자동 선택은 제목 규칙에 기대는 추측이다."""
+
+    def test_uses_only_the_chosen_sections(self):
+        state = _state(
+            [
+                (1, 1, "개요", "가"),
+                (1, 5, "시사점", "나"),
+                (2, 3, "국내 기업 대응수준 진단", "다"),
+            ]
+        )
+        # 제목 규칙대로면 1.5만 뽑히지만, 사람이 1.1과 2.3을 골랐다.
+        chosen = [state.section_plan[0].section_id, state.section_plan[2].section_id]
+        picked = collect_insight_sections(state, chosen)
+        assert [label for label, _ in picked] == ["1.1 개요", "2.3 국내 기업 대응수준 진단"]
+
+    def test_keeps_outline_order_regardless_of_argument_order(self):
+        state = _state([(1, 1, "가", "A"), (2, 1, "나", "B"), (3, 1, "다", "C")])
+        ids = [p.section_id for p in state.section_plan]
+        picked = collect_insight_sections(state, [ids[2], ids[0]])
+        assert [label for label, _ in picked] == ["1.1 가", "3.1 다"]
+
+    def test_falls_back_to_auto_when_chosen_ids_are_all_gone(self):
+        # 고른 절이 목차에서 사라진 뒤 - 빈 요약을 내는 대신 자동 선택으로 돌아간다.
+        state = _state([(1, 1, "개요", "가"), (1, 5, "시사점", "나")])
+        picked = collect_insight_sections(state, [uuid4()])
+        assert [label for label, _ in picked] == ["1.5 시사점"]
+
+    def test_empty_selection_is_same_as_no_selection(self):
+        state = _state([(1, 1, "개요", "가"), (1, 5, "시사점", "나")])
+        assert collect_insight_sections(state, []) == collect_insight_sections(state, None)
+
+
+class TestCommonTemplate:
+    """프리셋 무관 공통 틀 - 세 덩어리와 규칙 두 개가 프롬프트에 박혀 있어야 한다."""
+
+    def test_implication_count_is_substituted(self):
+        assert "시사점 정확히 3개" in build_system(3)
+        assert "시사점 정확히 4개" in build_system(4)
+
+    def test_carries_three_slots_and_two_rules(self):
+        sys_ = build_system()
+        for slot in ("## 한눈에", "## 시사점", "## 종합 판단"):
+            assert slot in sys_
+        for stage in ("**확인된 것**", "**뜻하는 것**", "**달라져야 하는 것**"):
+            assert stage in sys_
+        # 규칙은 금지형이 아니라 "있는 값은 옮기고 없는 값은 만들지 마라"여야 한다 -
+        # 금지만 말했더니 모델이 수치를 통째로 회피해 B/C 값이 빠졌다(골든 v1).
+        assert "그대로 옮겨 쓴다" in sys_
+        assert "없는 값은 만들지 마라" in sys_
+        assert "주체를 붙일 수 없는 문장은 제언이 아니다" in sys_

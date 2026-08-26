@@ -1830,8 +1830,24 @@ async def assemble(state: ProjectState) -> ProjectState:
         try:
             from src.services.export.insights import build_insights, persist_insights
 
+            # 근거로 삼을 절은 사람이 고른 것이 정본이다(config._insights_sections).
+            # 재개해서 다시 조립할 때도 그 선택이 유지돼야 화면과 산출이 어긋나지 않는다.
+            picked_raw = (state.options or {}).get("_insights_sections") or None
+            picked = None
+            if isinstance(picked_raw, list) and picked_raw:
+                from uuid import UUID as _UUID
+
+                picked = []
+                for x in picked_raw:
+                    try:
+                        picked.append(_UUID(str(x)))
+                    except (ValueError, TypeError):
+                        continue
+                picked = picked or None
             # 용어집과 같은 코루틴 상한 벨트 — 조립이 LLM 무응답에 물리면 안 된다.
-            insights = await asyncio.wait_for(build_insights(state), timeout=240)
+            insights = await asyncio.wait_for(
+                build_insights(state, section_ids=picked), timeout=240
+            )
             await persist_insights(state.project_id, insights)
         except Exception:
             # 요약은 보조 산출물 — 실패해도 렌더·완료를 막지 않는다(화면이 빈 상태).

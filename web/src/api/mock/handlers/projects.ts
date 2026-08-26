@@ -24,6 +24,7 @@ const ProjectCreateBodySchema = z.object({
 // 데모에서도 '다시 만들기'가 도는 모습이 보여야 한다 - 늘 running:false면
 // 스피너·경과 시간·완료 토스트를 눌러서 확인할 길이 없다(2026-08-27).
 let insightsRunningUntil = 0;
+let insightsPicked: string[] = ["sec-2-5", "sec-6-2"];
 let insightsBuiltAt = "2026-08-26T19:28:25+00:00";
 
 export const projectsHandlers = [
@@ -731,6 +732,15 @@ export const projectsHandlers = [
           model: "claude-sonnet-4-6",
           built_at: insightsBuiltAt,
           running: Date.now() < insightsRunningUntil,
+          // 근거 절은 사람이 고른다(2026-08-27) - 화면이 체크 상태를 되살릴 정본은 id다.
+          selected_section_ids: insightsPicked,
+          selectable: [
+            { section_id: "sec-1-1", label: "1.1 사업 배경", chars: 8291 },
+            { section_id: "sec-1-5", label: "1.5 시사점", chars: 10518 },
+            { section_id: "sec-2-3", label: "2.3 국내 기업 대응수준 진단", chars: 10016 },
+            { section_id: "sec-2-5", label: "2.5 환경분석 종합 및 시사점", chars: 11384 },
+            { section_id: "sec-6-2", label: "6.2 핵심 시사점 및 제언", chars: 9755 },
+          ],
         },
       },
       { status: 200 },
@@ -758,7 +768,10 @@ export const projectsHandlers = [
   }),
 
   // POST /projects/{id}/insights - 요약 다시 만들기(데모는 즉시 수락만)
-  http.post(url("projects/:id/insights"), () => {
+  http.post(url("projects/:id/insights"), async ({ request }) => {
+    // 고른 절을 기억한다 - 안 그러면 '고른 절로 다시 만들기'를 눌러도 체크가 되돌아간다.
+    const body = (await request.json().catch(() => ({}))) as { section_ids?: string[] };
+    if (Array.isArray(body?.section_ids)) insightsPicked = body.section_ids;
     // 실제로는 30초~2분 - 데모는 12초로 줄여 도는 구간을 눌러 볼 수 있게 한다.
     insightsRunningUntil = Date.now() + 12_000;
     insightsBuiltAt = new Date(insightsRunningUntil).toISOString();

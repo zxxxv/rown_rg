@@ -1,4 +1,4 @@
-import { ArrowLeft, Download, FileText, Loader2, RefreshCw } from "lucide-react";
+import { ArrowLeft, Download, FileText, ListChecks, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -104,8 +104,20 @@ export default function InsightsPage() {
       label: "시사점 요약 HWPX",
     });
 
-  const onRebuild = () => {
-    rebuild.mutate(undefined, {
+  // 어떤 절을 근거로 삼을지는 사람이 고른다 - 자동 선택은 제목 규칙에 기대는
+  // 추측이라 장별 시사점이 여러 개인 보고서에서 엉뚱한 절을 물어 왔다(2026-08-27).
+  const [picking, setPicking] = useState(false);
+  const [chosen, setChosen] = useState<Set<string> | null>(null);
+  const selected = chosen ?? new Set(insights?.selected_section_ids ?? []);
+  const toggle = (id: string) => {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setChosen(next);
+  };
+
+  const onRebuild = (ids?: string[]) => {
+    rebuild.mutate(ids, {
       onSuccess: () => {
         setJustStarted(true);
         toast.success("시사점 요약을 다시 만들고 있습니다", {
@@ -167,7 +179,7 @@ export default function InsightsPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={onRebuild}
+            onClick={() => onRebuild()}
             disabled={busy || !isCompleted}
             title={
               isCompleted
@@ -215,7 +227,79 @@ export default function InsightsPage() {
                   {label}
                 </button>
               ))}
+              {/* 무엇을 요약할지는 사람이 정한다 - 여기가 그 문이다. */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-auto shrink-0"
+                onClick={() => setPicking((v) => !v)}
+                aria-expanded={picking}
+              >
+                <ListChecks className="mr-1 h-4 w-4" aria-hidden />
+                {picking ? "고르기 닫기" : "절 고르기"}
+              </Button>
             </header>
+          ) : null}
+          {picking ? (
+            <div className="flex flex-col gap-2 border-b border-border bg-bg-secondary px-6 py-4">
+              <p className="text-sm text-fg-secondary">
+                요약의 근거로 삼을 절을 고르세요. 고른 절에 있는 사실·값만 쓰이고, 여기 없는 내용은
+                요약에 들어가지 않습니다. 아무것도 안 고르면 제목이 시사점·제언·결론인 절을 자동으로
+                씁니다.
+              </p>
+              <ul className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
+                {insights.selectable.map((o) => (
+                  <li key={o.section_id}>
+                    <label className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-bg">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 shrink-0 accent-accent"
+                        checked={selected.has(o.section_id)}
+                        onChange={() => toggle(o.section_id)}
+                      />
+                      <span className="min-w-0 flex-1 truncate text-fg">{o.label}</span>
+                      <span className="shrink-0 text-xs text-fg-tertiary">
+                        {o.chars.toLocaleString()}자
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setPicking(false);
+                    onRebuild([...selected]);
+                  }}
+                >
+                  <RefreshCw className="mr-1 h-4 w-4" aria-hidden />
+                  고른 절로 다시 만들기
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setChosen(new Set());
+                    setPicking(false);
+                    onRebuild([]);
+                  }}
+                  title="선택을 지우고 제목 규칙으로 자동 선택합니다"
+                >
+                  자동 선택으로
+                </Button>
+                <span className="text-xs text-fg-tertiary">
+                  고른 절 {selected.size}개 ·{" "}
+                  {insights.selectable
+                    .filter((o) => selected.has(o.section_id))
+                    .reduce((n, o) => n + o.chars, 0)
+                    .toLocaleString()}
+                  자
+                </span>
+              </div>
+            </div>
           ) : null}
           <div className="px-6 py-4">
             <MarkdownContent content={insights.content} />
@@ -236,7 +320,7 @@ export default function InsightsPage() {
           }
           action={
             isCompleted ? (
-              <Button onClick={onRebuild} disabled={busy}>
+              <Button onClick={() => onRebuild()} disabled={busy}>
                 {busy ? (
                   <Loader2 className="mr-1 h-4 w-4 animate-spin" />
                 ) : (
