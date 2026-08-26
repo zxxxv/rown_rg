@@ -109,6 +109,13 @@ export default function InsightsPage() {
   const [picking, setPicking] = useState(false);
   const [chosen, setChosen] = useState<Set<string> | null>(null);
   const selected = chosen ?? new Set(insights?.selected_section_ids ?? []);
+  // 고른 분량과 상한 - 넘치면 뒤쪽 절이 요약에 안 들어간다. 값이 나가기 전에 알려야
+  // 의미가 있어 고르는 자리에서 센다(서버는 절 단위로 끊고 빠진 절을 돌려준다).
+  const cap = insights?.max_input_chars ?? 0;
+  const pickedChars = (insights?.selectable ?? [])
+    .filter((o) => selected.has(o.section_id))
+    .reduce((n, o) => n + o.chars, 0);
+  const overCap = cap > 0 && pickedChars > cap;
   const toggle = (id: string) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
@@ -213,6 +220,14 @@ export default function InsightsPage() {
         <article className="mx-auto w-full max-w-4xl rounded border border-border bg-bg">
           {/* 무엇을 압축한 요약인지가 먼저다 - 본문 끝에 두면 다 읽고 나서야 출처를
               만난다(2026-08-27 지시로 맨 위로 올리고 글씨를 키움). */}
+          {insights.dropped_sections.length > 0 ? (
+            /* 골랐는데 요약이 못 본 절 - 이걸 안 밝히면 위의 '요약한 절'만 보고
+               전부 반영됐다고 읽는다. 요약의 유일한 검증 수단이 '무엇을 보고 썼나'다. */
+            <p className="border-b border-border-warning bg-bg-warning px-6 py-3 text-sm text-fg-warning">
+              길이 상한을 넘겨 {insights.dropped_sections.length}개 절은 요약에 들어가지 않았습니다:{" "}
+              {insights.dropped_sections.join(", ")}
+            </p>
+          ) : null}
           {insights.source_sections.length > 0 ? (
             <header className="flex flex-wrap items-center gap-2 border-b border-border px-6 py-4 text-base text-fg-secondary">
               <FileText className="h-5 w-5 shrink-0" aria-hidden />
@@ -247,6 +262,14 @@ export default function InsightsPage() {
                 요약에 들어가지 않습니다. 아무것도 안 고르면 제목이 시사점·제언·결론인 절을 자동으로
                 씁니다.
               </p>
+              {overCap ? (
+                /* 넘친 사실은 만들기 **전에** 말한다 - 만든 뒤에 알려 주면 값은 이미
+                   나갔고, 요약은 뒤쪽 절을 못 본 채로 나온다. */
+                <p className="rounded border border-border-warning bg-bg-warning px-3 py-2 text-xs text-fg-warning">
+                  고른 분량이 상한을 넘습니다. 앞에서부터 담다가 넘치는 절부터는 요약에 들어가지
+                  않습니다 - 절을 덜 고르거나, 장을 나눠 두 번 만드세요.
+                </p>
+              ) : null}
               <ul className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
                 {insights.selectable.map((o) => (
                   <li key={o.section_id}>
@@ -291,12 +314,8 @@ export default function InsightsPage() {
                   자동 선택으로
                 </Button>
                 <span className="text-xs text-fg-tertiary">
-                  고른 절 {selected.size}개 ·{" "}
-                  {insights.selectable
-                    .filter((o) => selected.has(o.section_id))
-                    .reduce((n, o) => n + o.chars, 0)
-                    .toLocaleString()}
-                  자
+                  고른 절 {selected.size}개 · {pickedChars.toLocaleString()}자
+                  {cap > 0 ? ` / 상한 ${cap.toLocaleString()}자` : ""}
                 </span>
               </div>
             </div>

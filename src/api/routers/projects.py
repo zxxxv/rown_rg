@@ -1526,6 +1526,11 @@ class InsightsRead(BaseModel):
     selected_section_ids: list[str] = []
     # 고를 수 있는 절 전부 — 본문이 있는 절만. 화면이 목록을 따로 부르지 않게 함께 싣는다.
     selectable: list[InsightsSectionOption] = []
+    # 골랐지만 길이 상한에 밀려 요약이 못 본 절. 비어 있는 게 정상이다.
+    dropped_sections: list[str] = []
+    # 한 번에 넣을 수 있는 근거 분량. 고르는 자리에서 미리 알리라고 화면에 함께 준다 —
+    # 넘친 사실을 만든 뒤에 알려 주면 값은 이미 나갔다.
+    max_input_chars: int = 0
 
 
 class InsightsRebuildRequest(BaseModel):
@@ -1572,6 +1577,8 @@ async def get_insights(
         # 빈칸이라, 정작 "돌았는지 모르겠다"는 화면이 그대로 남는다(2026-08-27).
         built_at = await _last_insights_built_at(session, project.id)
     # 고를 수 있는 절과 지금 선택을 함께 싣는다 - 화면이 목록을 따로 부르지 않게.
+    from src.services.export.insights import MAX_INPUT_CHARS
+
     rows = await _load_sections(session, project.id)
     selectable = [
         InsightsSectionOption(
@@ -1598,6 +1605,8 @@ async def get_insights(
         running=job_running(project.id, INSIGHTS_JOB),
         selected_section_ids=selected,
         selectable=selectable,
+        dropped_sections=list(data.get("dropped_sections") or []),
+        max_input_chars=MAX_INPUT_CHARS,
     )
 
 

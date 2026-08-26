@@ -154,6 +154,60 @@ class TestBuildInsights:
         # 주제·지시문이 앞에 붙으니 본문 몫만 상한을 넘지 않으면 된다.
         assert len(sent) < MAX_INPUT_CHARS + 1_000
 
+    async def test_drops_whole_sections_not_mid_sentence(self):
+        """상한을 넘으면 **절 단위로** 뺀다 - 반토막 절은 잘못 요약된다.
+
+        종전에는 이어 붙인 글을 통째로 잘라 마지막 절이 문장 중간에서 끊긴 채
+        들어갔다. 모델은 그것도 온전한 절로 읽는다.
+        """
+        client = _StubClient('```json\n{"insights": "## 핵심 요약"}\n```')
+        half = MAX_INPUT_CHARS // 2 + 1_000
+        state = _state(
+            [
+                (6, 1, "제언 하나", "가" * half),
+                (6, 2, "제언 둘", "나" * half),
+                (6, 3, "제언 셋", "다" * 500),
+            ]
+        )
+
+        out = await build_insights(state, client=client, model="stub-model")
+
+        assert out is not None
+        sent = client.calls[0].messages[0].content
+        assert "6.1 제언 하나" in sent
+        assert "6.2 제언 둘" not in sent, "넘치는 절은 통째로 빠져야 한다"
+        assert "6.3 제언 셋" not in sent, "앞에서 끊었으면 뒤도 담지 않는다(순서가 뜻이다)"
+        # 반토막 흔적이 없어야 한다 - 담긴 절은 통째로 담겼다(지시문에도 '가'가
+        # 있어 세는 대신 그 절의 본문 전체가 통으로 들어갔는지를 본다).
+        assert "가" * half in sent
+
+    async def test_records_what_the_model_never_saw(self):
+        """빠진 절을 기록하고, 근거 목록에서도 뺀다.
+
+        요약의 유일한 검증 수단은 '무엇을 보고 썼나'다. 모델이 못 본 절이 근거로
+        적혀 있으면 그 기록이 거짓말이 된다.
+        """
+        client = _StubClient('```json\n{"insights": "## 핵심 요약"}\n```')
+        half = MAX_INPUT_CHARS // 2 + 1_000
+        state = _state([(6, 1, "제언 하나", "가" * half), (6, 2, "제언 둘", "나" * half)])
+
+        out = await build_insights(state, client=client, model="stub-model")
+
+        assert out is not None
+        assert out["source_sections"] == ["6.1 제언 하나"]
+        assert out["dropped_sections"] == ["6.2 제언 둘"]
+        assert len(out["source_section_ids"]) == 1
+
+    async def test_nothing_dropped_when_it_fits(self):
+        client = _StubClient('```json\n{"insights": "## 핵심 요약"}\n```')
+        state = _state([(6, 1, "제언 하나", "가" * 500), (6, 2, "제언 둘", "나" * 500)])
+
+        out = await build_insights(state, client=client, model="stub-model")
+
+        assert out is not None
+        assert out["dropped_sections"] == []
+        assert out["source_sections"] == ["6.1 제언 하나", "6.2 제언 둘"]
+
 
 class TestInsightsBlocks:
     """요약 마크다운 → 블록. 표지·목차 없이 제목 한 줄과 본문만 나가는 브리핑 문서다."""

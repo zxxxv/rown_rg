@@ -28,6 +28,10 @@ export const InsightsSchema = z.object({
       }),
     )
     .default([]),
+  /** 골랐지만 길이 상한에 밀려 요약이 못 본 절. 비어 있는 게 정상이다 */
+  dropped_sections: z.array(z.string()).default([]),
+  /** 한 번에 넣을 수 있는 근거 분량 - 고르는 자리에서 미리 알리는 데 쓴다 */
+  max_input_chars: z.number().int().default(0),
 });
 export type Insights = z.infer<typeof InsightsSchema>;
 

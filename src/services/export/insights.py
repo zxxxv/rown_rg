@@ -37,10 +37,12 @@ DEFAULT_MAX_TOKENS = 6000
 # 토큰 사용 기록에 남는 이름 — 이 호출 기록이 곧 "요약을 언제 만들었나"의 답이라
 # 조회 쪽(projects 라우터)이 같은 상수를 본다(문자열 두 벌이면 조용히 어긋난다).
 INSIGHTS_OPERATION = "assemble.insights"
-# 입력 상한 — 시사점 절만 모아도 프리셋상 최대 2~3절 × 7,500자다. 여유를 두되
-# 무한정 밀어 넣지 않는다(pm_verify가 24,000자 상한에 조용히 잘려 본문 47.6%만
-# 보고 판정하던 전례가 있다 — 여기선 넘치면 로그를 남긴다).
-MAX_INPUT_CHARS = 60_000
+# 입력 상한 — 실측 **1토큰 ≈ 1.1자**(2026-08-27, COMPA 두 절 21,337자 → 19,324토큰).
+# 요약 모델(Sonnet 4.6)의 200k 토큰에서 시스템·출력(6k)·여유를 빼고 잡은 값이다.
+# 60,000자였을 때는 사람이 절을 넉넉히 고르면 뒤가 잘렸는데, 그 사실이 로그에만 남고
+# 화면과 저장 기록에는 "이 절들을 근거로 썼다"고 **전부 적혀 있었다** — 모델이 못 본
+# 절까지. 상한은 이제 화면이 함께 받아서 고르는 자리에서 미리 알린다.
+MAX_INPUT_CHARS = 150_000
 # 2~3쪽 목표. 본문 12pt·줄간격 160%·여백 20/20/15/15 기준 A4 1쪽 ≈ 1,500자.
 TARGET_MIN_CHARS = 3_000
 TARGET_MAX_CHARS = 4_500
@@ -140,20 +142,42 @@ def collect_insight_sections(
     ]
 
 
-def _build_input(sections: list[tuple[str, str]]) -> str:
+def _build_input(sections: list[tuple[str, str]]) -> tuple[str, list[str]]:
+    """근거 본문과 **상한에 밀려 빠진 절 이름**을 함께 돌려준다.
+
+    종전에는 이어 붙인 글을 통째로 잘랐다(text[:MAX_INPUT_CHARS]). 두 가지가 나빴다:
+    문장 중간에서 끊겨 마지막 절이 반토막인 채 들어갔고(모델은 그 절을 잘못 요약한다),
+    빠진 사실이 로그에만 남아 화면과 저장 기록에는 그 절도 근거로 적혀 있었다.
+
+    이제 **절 단위로** 담다가 넘치면 거기서 끊는다. 뒤에 짧은 절이 있어도 끼워 넣지
+    않는다 — 앞에서부터 읽다 끊는 규칙이라야 '뒤 N개가 빠졌다'고 말할 수 있다.
+    첫 절 하나가 이미 상한을 넘으면 그것만은 담되 문단 경계에서 끊는다.
+    """
     from src.services.export.report import _strip_citations
 
     lines: list[str] = []
+    dropped: list[str] = []
+    total = 0
     for label, content in sections:
-        lines.append(f"\n## {label}\n{_strip_citations(content)}")
-    text = "\n".join(lines)
-    if len(text) > MAX_INPUT_CHARS:
-        # 조용히 자르지 않는다 — 무엇이 빠졌는지 로그로 남긴다.
+        piece = f"\n## {label}\n{_strip_citations(content)}"
+        if dropped or (lines and total + len(piece) > MAX_INPUT_CHARS):
+            dropped.append(label)
+            continue
+        if not lines and len(piece) > MAX_INPUT_CHARS:
+            cut = piece.rfind("\n\n", 0, MAX_INPUT_CHARS)
+            piece = piece[: cut if cut > 0 else MAX_INPUT_CHARS]
+            logger.warning("insights.section_truncated", label=label, kept_chars=len(piece))
+        lines.append(piece)
+        total += len(piece)
+    if dropped:
         logger.warning(
-            "insights.input_truncated", total_chars=len(text), kept_chars=MAX_INPUT_CHARS
+            "insights.sections_dropped",
+            n_dropped=len(dropped),
+            dropped=dropped,
+            kept_chars=total,
+            max_chars=MAX_INPUT_CHARS,
         )
-        text = text[:MAX_INPUT_CHARS]
-    return text
+    return "\n".join(lines), dropped
 
 
 def _picked_ids(state: ProjectState, sections: list[tuple[str, str]]) -> list[UUID]:
@@ -184,6 +208,10 @@ async def build_insights(
         return None
     client = client or get_llm_client()
     model = model or settings.insights_model
+    evidence, dropped = _build_input(sections)
+    # 상한에 밀린 절은 근거 목록에서도 뺀다 — 모델이 못 본 절을 근거로 적으면
+    # 그 기록이 거짓말이 된다(무엇을 보고 썼는지가 이 산출물의 유일한 검증 수단이다).
+    used = [(label, content) for label, content in sections if label not in set(dropped)]
 
     request = CompletionRequest(
         messages=[
@@ -192,7 +220,7 @@ async def build_insights(
                 content=(
                     f"보고서 주제: {state.topic}\n\n"
                     "아래가 근거로 삼을 절 전부다. 여기 없는 사실·값은 쓰지 마라.\n"
-                    f"{_build_input(sections)}"
+                    f"{evidence}"
                 ),
             )
         ],
@@ -215,13 +243,16 @@ async def build_insights(
     logger.info(
         "insights.built",
         project_id=str(state.project_id),
-        n_sections=len(sections),
+        n_sections=len(used),
+        n_dropped=len(dropped),
         chars=len(body),
     )
     return {
         "content": body,
-        "source_sections": [label for label, _ in sections],
-        "source_section_ids": [str(sid) for sid in _picked_ids(state, sections)],
+        "source_sections": [label for label, _ in used],
+        "source_section_ids": [str(sid) for sid in _picked_ids(state, used)],
+        # 골랐지만 상한에 밀려 빠진 절 — 화면이 그대로 보여 준다.
+        "dropped_sections": dropped,
         "n_implications": n_implications,
         "model": model,
         # 만든 시각을 요약과 함께 남긴다 — 온도 0이라 같은 본문이면 같은 요약이 나와
