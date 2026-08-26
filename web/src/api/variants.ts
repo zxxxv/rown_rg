@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
-import { sectionKeys } from "@/api/sections";
+import { invalidateSection, sectionKeys } from "@/api/sections";
 import { SectionContentResponseSchema } from "@/api/types";
 
 // 실계약: /projects/{id}/sections/{sid}/variants - 한 절을 여러 벌 뽑아 놓고 고른다.
@@ -9,7 +9,8 @@ import { SectionContentResponseSchema } from "@/api/types";
 // 재작성은 한 번에 하나만 준다. 마음에 안 들면 다시 눌러야 하고, 그러면 방금 것은
 // 사라진다 - 둘을 나란히 놓고 고를 수가 없었다. 실제로 사람이 하는 일은 "이게 나은가
 // 저게 나은가"인데 화면이 그걸 못 하게 막고 있었다.
-// 값이 안 개수에 곱해지므로(절당 실측 $0.4~$1.3) 기본 3·최대 4다.
+// 값이 안 개수에 곱해지므로(절당 실측 $0.4~$1.3) 기본 2·최대 4다 - 지금 본문까지
+// 합쳐 셋을 견준다.
 
 export const SectionVariantSchema = z.object({
   id: z.string(),
@@ -88,8 +89,10 @@ export function useAdoptVariant(projectId: string, sectionId: string) {
       return SectionContentResponseSchema.parse(data);
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: sectionKeys.content(projectId, sectionId) });
-      void qc.invalidateQueries({ queryKey: sectionKeys.tree(projectId) });
+      // 재작성과 **같은 무효화**를 쓴다. 여기에 손으로 목록을 적어 두었더니 근거 대조와
+      // PM 경고 캐시가 빠져, 안을 채택해 본문이 248자로 바뀐 뒤에도 머리글이 옛 본문의
+      // "본문 120줄 중 83줄을 대조 · 무근거 수치 9"를 그대로 띄웠다(2026-08-27 실측).
+      void invalidateSection(qc, projectId, sectionId);
       void qc.invalidateQueries({ queryKey: variantKey(projectId, sectionId) });
       void qc.invalidateQueries({ queryKey: ["drift", projectId] });
     },

@@ -88,7 +88,7 @@ export function useSectionEvidence(projectId: string, sectionId: string | null, 
 
 // ─── 부분 편집: 수동 저장(PATCH) · AI 재작성(POST) ──────────────────────────
 
-async function invalidateSection(
+export async function invalidateSection(
   qc: ReturnType<typeof useQueryClient>,
   projectId: string,
   sectionId: string,

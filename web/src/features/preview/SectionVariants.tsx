@@ -12,8 +12,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { markerNumbers } from "./markers";
 
-const DEFAULT_N = 3;
+// 새로 뽑는 벌 수. 견줄 것은 셋이다 - **지금 본문 + 새 안 2**. 셋을 새로 뽑으면
+// 넷이 되는데, 넷을 한 화면에서 견주는 사람은 없다(2026-08-27 지적). 값도 곱해진다.
+const DEFAULT_N = 2;
+
+/** 목록에서 '지금 본문' 행을 가리키는 자리표 - 실제 안의 id와 겹치지 않는다. */
+const CURRENT_ID = "__current__";
 
 /** 한 절을 여러 벌 뽑아 나란히 놓고 고른다.
  *
@@ -55,8 +61,8 @@ export function SectionVariantsTrigger({
       { n: DEFAULT_N, instruction },
       {
         onSuccess: () => {
-          toast.success(`${DEFAULT_N}개 안을 뽑고 있습니다`, {
-            description: "완성되는 대로 본문 위에 쌓입니다. 본문은 고를 때까지 그대로입니다.",
+          toast.success(`다른 안 ${DEFAULT_N}개를 뽑고 있습니다`, {
+            description: "완성되는 대로 지금 본문 옆에 쌓입니다. 본문은 고를 때까지 그대로입니다.",
           });
           void query.refetch();
         },
@@ -75,10 +81,10 @@ export function SectionVariantsTrigger({
         size="sm"
         disabled={disabled || start.isPending}
         onClick={onStart}
-        title="같은 절을 서로 다른 안으로 3벌 뽑아 나란히 보고 고릅니다"
+        title="지금 본문은 그대로 두고 다른 안을 2벌 뽑아 셋을 나란히 놓고 고릅니다"
       >
         <Layers className="mr-1 h-3.5 w-3.5" />
-        {DEFAULT_N}개 안 뽑기
+        다른 안 {DEFAULT_N}개 뽑기
       </Button>
       {/* 금액만 - 근거(절당·출처)는 옆의 재작성 문구가 한 번 말한다. */}
       {estimateLabel(costBasis.data, DEFAULT_N, { compact: true }) ? (
@@ -95,9 +101,13 @@ export function SectionVariantsTrigger({
 export function SectionVariantsPanel({
   projectId,
   sectionId,
+  currentContent,
 }: {
   projectId: string;
   sectionId: string;
+  /** 지금 본문 - **후보 하나로 함께 세운다**. 새 안만 나란히 놓으면 견줄 기준이
+   *  화면 밖(아래 본문)에 있어, 스크롤을 오가며 기억으로 견주게 된다(2026-08-27). */
+  currentContent: string;
 }) {
   const query = useSectionVariants(projectId, sectionId);
   const discard = useDiscardVariants(projectId, sectionId);
@@ -144,7 +154,10 @@ export function SectionVariantsPanel({
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-fg">
-          <Layers className="h-4 w-4 shrink-0" aria-hidden />안 고르기 {variants.length}개
+          <Layers className="h-4 w-4 shrink-0" aria-hidden />안 고르기
+          <span className="font-normal text-fg-secondary">
+            지금 본문 + 새 안 {variants.length}개
+          </span>
           {running ? (
             <span className="ml-1 inline-flex items-center gap-1 text-xs font-normal text-fg-secondary">
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -165,15 +178,58 @@ export function SectionVariantsPanel({
       </div>
 
       <p className="text-xs text-fg-secondary">
-        본문은 고를 때까지 그대로입니다. 고른 안은 재작성과 같은 경로로 반영되고, 이전 본문은 버전
-        기록에 남습니다.
+        지금 본문을 포함해 셋 중 하나를 고릅니다. 고를 때까지 본문은 그대로이고, 새 안을 고르면
+        재작성과 같은 경로로 반영되며 지금 본문은 버전 기록에 남습니다.
       </p>
 
       <ul className="flex flex-col gap-2">
+        {/* 지금 본문 - 새 안과 **같은 모양**으로 세운다. 자수·인용·근거가 같은 잣대로
+            보여야 "이게 나은가"가 눈으로 판정된다. 고르는 행동은 '그대로 두기'다. */}
+        <li className="rounded border border-accent bg-bg-info/40 p-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-medium text-fg">지금 본문</span>
+            <span className="text-fg-tertiary">
+              {currentContent.length.toLocaleString()}자 · 인용{" "}
+              {markerNumbers(currentContent).length}
+            </span>
+            <span className="ml-auto flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setOpenId((cur) => (cur === CURRENT_ID ? null : CURRENT_ID))}
+              >
+                {openId === CURRENT_ID ? "접기" : "전문 보기"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                disabled={discard.isPending || running}
+                title={
+                  running
+                    ? "뽑는 중에는 멈추고 버리기를 쓰세요"
+                    : "새 안을 버리고 지금 본문을 그대로 둡니다"
+                }
+                onClick={() => discard.mutate()}
+              >
+                이대로 두기
+              </Button>
+            </span>
+          </div>
+          <p
+            className={cn(
+              "mt-1 whitespace-pre-wrap text-xs leading-relaxed text-fg-secondary",
+              openId === CURRENT_ID ? "max-h-96 overflow-y-auto" : "line-clamp-3",
+            )}
+          >
+            {currentContent}
+          </p>
+        </li>
         {variants.map((v, i) => (
           <li key={v.id} className="rounded border border-border bg-bg p-2">
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="font-medium text-fg">{i + 1}안</span>
+              <span className="font-medium text-fg">새 안 {i + 1}</span>
               <span className="text-fg-tertiary">
                 {v.n_chars.toLocaleString()}자 · 인용 {v.n_markers} · 근거 {v.evidence_count}
               </span>
