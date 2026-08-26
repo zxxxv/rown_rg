@@ -6,9 +6,10 @@ from uuid import uuid4
 
 from src.services.qa.alignment import (
     ALIGNED_THRESHOLD,
+    NO_SCORE,
     align_section,
     overlap_score,
-)
+)  # noqa: F401
 from src.services.qa.gate import claim_units
 
 
@@ -40,8 +41,23 @@ class TestOverlapScore:
         long = "수출이 늘었다. " + "그밖에 무관한 서술이 길게 이어진다. " * 20
         assert overlap_score(claim, long) == overlap_score(claim, short)
 
-    def test_empty_claim_is_zero(self):
-        assert overlap_score("[1]", "아무 근거") == 0.0
+    def test_empty_claim_has_no_score(self):
+        """셀 게 없으면 0.0이 아니라 NO_SCORE - 독스트링이 원래 약속하던 계약이다.
+
+        0.0은 "쟀는데 안 겹침"이고 NO_SCORE는 "잴 수가 없음"이라 사람이 할 일이 다르다.
+        코드가 0.0을 돌려주는 바람에 미측정이 불일치로 읽혔다(2026-08-26).
+        """
+        assert overlap_score("[1]", "아무 근거") == NO_SCORE
+
+    def test_collapsed_denominator_has_no_score(self):
+        """영문 근거 + 수치 두세 개면 분모가 붕괴해 우연 일치가 1.00이 된다.
+
+        실측(탄소규제 보고서 1,317줄): 0.9 이상 150건 중 118건이 피처 2~3개짜리
+        이 계급이었고, 한글 2-gram이 남아 있는 건 3건뿐이었다.
+        """
+        assert overlap_score("2030년 60% 달성", "Targets of 60% by 2030") == NO_SCORE
+        # 한글 대 한글은 짧아도 2-gram이 넉넉해 이 하한에 안 걸린다.
+        assert overlap_score("수출이 늘었다", "수출이 늘었다") > 0
 
 
 class TestClaimUnits:

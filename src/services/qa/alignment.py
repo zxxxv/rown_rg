@@ -91,6 +91,26 @@ _MIN_SPAN_CHARS = 8
 ALIGNED_THRESHOLD = 0.30
 WEAK_THRESHOLD = 0.15
 
+# 점수를 낼 수 없음(비교할 피처가 모자람). 0.0과 구분해야 한다 — 0.0은 "쟀는데 안 겹침",
+# 이건 "잴 수가 없음"이고 사람이 할 일이 다르다.
+NO_SCORE = -1.0
+# 점수를 인정할 최소 피처 수 — 이보다 적으면 분모가 붕괴해 우연 일치가 1.00이 된다.
+#
+# 근거가 영문이면 한글 2-gram이 분모에서 빠지고 수치·라틴 토큰만 남는다. 남은 게 두세 개면
+# 그것들이 청크에 있기만 해도 1.00이다. "거의 완벽한 일치"가 아니라 **셀 게 없는 것**인데
+# 점수는 확신 있게 나온다 — 정보 없음이 정보 있음으로 표시되는 그 계급이다.
+#
+# 실측(2026-08-26, 탄소규제 보고서 1,317줄): 0.9 이상 150건의 피처 개수가 1개 5 · 2개 61 ·
+# 3개 52 · 4개 이상 32건이고, 종류는 ln(라틴+수치) 133 · n 9 · l 5로 **한글 2-gram이 있는
+# 건 3건뿐**이었다. 한글 대 한글은 짧은 문장도 2-gram이 열 개 넘게 나오므로 이 구간에
+# 안 걸린다 — 4로 자르면 붕괴 덩어리(2~3개, 118건=79%)만 정확히 떨어진다.
+#
+# 4 이상인 32건은 남는다(수치 네 개가 다 맞는 경우 등). 그건 crosslingual 게이트와
+# dense 유사도 경로가 맡을 몫이고, 여기서 막는 것은 **게이트 순서에 기대지 않는 하한**이다
+# — 점수를 우선순위·prior로 쓰는 경로(판정 LLM 후보 정렬, 재랭킹)에 저 덩어리가
+# 최고 확신으로 맨 앞에 서는 것을 산출식 안에서 끊는다.
+_MIN_SUPPORT = 4
+
 
 def _weighted_tokens(text: str) -> dict[str, float]:
     """텍스트 → {토큰: 가중치}. 한글은 글자 2-gram이라 조사 차이를 넘어 매칭된다."""
@@ -146,11 +166,13 @@ def overlap_score(claim: str, span: str) -> float:
     """
     claim_tokens = _weighted_tokens(claim)
     if not claim_tokens:
-        return 0.0
+        return NO_SCORE
     if not _HANGUL_RUN_RE.search(span):
         claim_tokens = {t: w for t, w in claim_tokens.items() if not t.startswith("k:")}
-        if not claim_tokens:
-            return 0.0
+    # 셀 게 모자라면 점수를 내지 않는다 — 0.0으로 돌리면 "안 겹침"으로 읽히고,
+    # 그대로 계산하면 우연 일치가 1.00으로 나온다(둘 다 사실이 아니다).
+    if len(claim_tokens) < _MIN_SUPPORT:
+        return NO_SCORE
     span_tokens = _weighted_tokens(span)
     hit = sum(w for t, w in claim_tokens.items() if t in span_tokens)
     return hit / sum(claim_tokens.values())
@@ -382,7 +404,9 @@ def _grounded_spans(
                 # (2026-08-14 화면 검증). 수치가 든 문장까지 좁힌다.
                 s, e, seg = _narrow_to_sentence(line, start, norm)
                 score = overlap_score(bare_claim, seg)
-                if score > best_score:
+                # 여기 후보는 number_in_text가 이미 확인한 것들이라 점수는 순위용이다.
+                # NO_SCORE(-1)가 나와도 버리면 안 된다 — 수치는 실제로 그 줄에 있다.
+                if best is None or score > best_score:
                     best_score = score
                     best = NumberSpan(token=token, chunk_id=cid, start=s, end=e, text=seg.strip())
         if best is not None:

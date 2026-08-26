@@ -20,7 +20,7 @@ from typing import Any
 
 import structlog
 
-from src.services.qa.alignment import overlap_score
+from src.services.qa.alignment import NO_SCORE, overlap_score
 
 logger = structlog.get_logger(__name__)
 
@@ -93,7 +93,13 @@ def covered(term: str, text: str) -> bool:
         return False
     if term.replace(" ", "") in text.replace(" ", ""):
         return True
-    return overlap_score(term, text) >= COVERED_THRESHOLD
+    score = overlap_score(term, text)
+    # NO_SCORE(잴 수가 없음)를 미달로 읽으면 "안 다뤘다"는 경고가 헛돈다 - 표면 일치가
+    # 위에서 이미 실패했으므로 여기서는 보수적으로 '커버 안 됨'을 유지하되, 판정 근거가
+    # 겹침이 아니라 **측정 불가**였다는 것을 구분해 둔다(0.0과 -1은 다른 사실이다).
+    if score == NO_SCORE:
+        return False
+    return score >= COVERED_THRESHOLD
 
 
 def findings_for_section(
