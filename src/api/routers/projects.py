@@ -109,6 +109,7 @@ from src.services.indexing.exclusion import apply_index_outcome
 from src.services.indexing.published_year import year_from_page_age
 from src.services.indexing.vector import SourceInput
 from src.services.jobs import is_running as job_running
+from src.services.projects.derive import sync_project_stage
 from src.services.prompts import resolve_analysts
 from src.services.qa.alignment import align_section
 from src.services.qa.gate import uncited_units, uncovered_units
@@ -701,6 +702,13 @@ async def get_project(
             )
         )
     ).scalar_one()
+    # 단계는 **산출물에서 되짚어** 답한다. 컬럼 하나가 "어디까지 왔나"와 "지금 뭐가
+    # 도나"를 겸하던 탓에, 멈춘 뒤에도 "AI가 자료를 검색하고 있습니다"가 스피너와 함께
+    # 남았다(2026-08-25 재개 사고). 여기서 다시 새겨 옛 행도 열어 보는 순간 낫는다.
+    if await sync_project_stage(session, project, running=is_running(project.id)):
+        # flush가 updated_at(onupdate)을 만료시킨다 - 그대로 직렬화하면 pydantic이
+        # 그 칸을 읽다가 비동기 밖에서 IO를 시도한다(MissingGreenlet). 미리 되읽는다.
+        await session.refresh(project)
     read = ProjectRead.model_validate(project)
     read.total_chars = int(total)
     return read
@@ -1550,6 +1558,10 @@ async def get_progress(
             ).where(TokenUsage.project_id == project.id)
         )
     ).one()
+    # 진행 스냅샷은 화면이 7초마다 묻는 자리다 - 여기서도 단계를 되짚어 새긴다.
+    # 안 그러면 한 번도 열어 보지 않은 프로젝트가 폴링 내내 옛 단계를 답한다.
+    alive = is_running(project.id)
+    await sync_project_stage(session, project, running=alive)
     percent = _STAGE_PERCENT.get(project.status, 0)
     if project.status == ProjectStage.WRITING.value:
         # 작성이 벽시계의 몸통(~35분)인데 단계 고정값이면 내내 60%에 멈춰 보인다
@@ -1582,7 +1594,7 @@ async def get_progress(
         active_steps=_active_step_labels(project.status, project.id),
         active_seconds=active_seconds,
         source_target=settings.research_min_sources,
-        runner_alive=is_running(project.id),
+        runner_alive=alive,
         last_event_at=last_event_at(project.id),
     )
 
@@ -2621,8 +2633,12 @@ async def reopen_project(
     # 재개 직전 보존 — 완료 후 수동 편집분까지 잡는 마지막 기회. 조립 직후 그대로면
     # 내용 지문이 같아 새 버전은 생기지 않는다.
     await snapshot_report(session, project.id, reason="reopen", created_by=current_user.id)
-    project.status = ProjectStage.RESEARCHING.value
+    # 단계는 정하지 않고 **되짚는다** - 본문이 있으니 파생값은 REVIEWING이 된다.
+    # 예전엔 RESEARCHING을 박아 넣어 화면이 "수집 실행 중"으로 읽었고, 그걸 게이트를
+    # 함께 여는 것으로 덮었다(아래 주석). 이제 값 자체가 정직하다.
+    project.completed_at = None
     await session.flush()
+    await sync_project_stage(session, project)
     review_id = await _open_reopen_source_gate(session, project)
     await session.refresh(project)
     logger.info(

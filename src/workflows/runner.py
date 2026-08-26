@@ -656,11 +656,31 @@ def _spawn_limited(project_id: uuid.UUID, work: Any, *, clear_cancel_on_exit: bo
             if project_id in _WAITING:  # 대기 중 태스크가 죽은 비정상 경로 정리
                 _WAITING.remove(project_id)
             _RUNNING.discard(project_id)
+            # 멈춘 순간 단계를 산출물로 되짚어 다시 새긴다. 러너가 쓴 값은 "도는 동안"의
+            # 진실이라, 그대로 두면 목록이 멈춘 프로젝트를 "작성 중"으로 보여 준다
+            # (컬럼 하나가 진척과 실행을 겸하던 병 — services/projects/derive).
+            await _resync_stage(project_id)
             if clear_cancel_on_exit:
                 cancel.clear(project_id)  # 취소 요청이 남아도 다음 실행이 즉시 취소되지 않게
 
     _spawn(_run())
     return True
+
+
+async def _resync_stage(project_id: uuid.UUID) -> None:
+    """실행이 끝난 뒤 단계를 다시 새긴다 — 실패해도 실행 정리를 막지 않는다."""
+    from src.db.session import open_session
+    from src.services.projects.derive import sync_project_stage
+
+    try:
+        async with open_session() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                return
+            await sync_project_stage(session, project, running=False)
+            await session.commit()
+    except Exception:
+        logger.warning("run.stage_resync_failed", project_id=str(project_id), exc_info=True)
 
 
 def _spawn_guarded(project_id: uuid.UUID) -> bool:

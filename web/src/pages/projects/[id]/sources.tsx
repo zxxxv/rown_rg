@@ -46,7 +46,13 @@ export default function SourcesPage() {
   // 실행 중에는 잠근다 - 작성이 쓰고 있는 자료 집합을 도중에 바꾸면 절마다 근거가 달라진다.
   const canCurate = reviewOpen || !(snapshot.data?.runner_alive ?? false);
   // 초기 수집 진행 중 - 게이트 전이라 검토는 아직 못 하지만, 상태는 알려야 한다.
-  const gathering = snapshot.data?.status === "researching" && !reviewOpen;
+  // **runner_alive를 함께 본다**: status는 이제 "어디까지 왔나"지 "지금 뭐가 도나"가
+  // 아니다(2026-08-26 파생화). 단계만 보고 스피너를 걸면 멈춰 있는 프로젝트가 영원히
+  // "수집 중"으로 남는다 - 이 화면이 바로 그 사고가 났던 자리다.
+  const gathering =
+    snapshot.data?.status === "researching" &&
+    !reviewOpen &&
+    (snapshot.data?.runner_alive ?? false);
   const notStarted = (snapshot.data?.status ?? "created") === "created";
   // 자료 삭제는 백엔드가 시작 전·수집 중에만 허용한다(색인 이후엔 청크 정합 때문).
   const canDelete = notStarted || snapshot.data?.status === "researching";

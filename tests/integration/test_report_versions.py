@@ -95,7 +95,10 @@ class TestReopen:
         await test_session.commit()
         resp = await test_client.post(f"/api/v1/projects/{pid}/reopen", headers=_auth(worker_token))
         assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == "researching"
+        # 재개가 서는 자리는 '검토'다 — 본문이 이미 있으니까(2026-08-26 단계 파생화).
+        # 예전엔 RESEARCHING을 박아 넣었는데, 그 값이 '수집 실행 중'의 표시 상태이기도
+        # 해서 자료 화면이 스피너를 걸고 끝나지 않았다. 이제 단계는 산출물이 답한다.
+        assert resp.json()["status"] == "reviewing"
         versions = await test_client.get(
             f"/api/v1/projects/{pid}/versions", headers=_auth(worker_token)
         )

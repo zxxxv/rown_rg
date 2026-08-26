@@ -160,6 +160,34 @@ export const projectsHandlers = [
     );
   }),
 
+  // POST /projects/{id}/reopen - 완료 보고서를 다시 연다.
+  // 단계는 정하지 않고 **되짚는다**: 본문이 있으니 reviewing이다. 예전엔 researching을
+  // 박아 넣어 자료 화면이 "AI가 검색 중"으로 읽었다(2026-08-26 파생화).
+  http.post(url("projects/:id/reopen"), ({ params }) => {
+    const project = DEMO_PROJECTS.find((p) => p.id === String(params.id));
+    if (!project) {
+      return HttpResponse.json(
+        { error: { code: "not_found", message: "프로젝트를 찾을 수 없습니다." } },
+        { status: 404 },
+      );
+    }
+    if (project.status !== "completed") {
+      return HttpResponse.json(
+        {
+          error: {
+            code: "PROJECT_NOT_REOPENABLE",
+            message: "완료된 보고서만 다시 열 수 있습니다",
+          },
+        },
+        { status: 422 },
+      );
+    }
+    project.status = "reviewing";
+    project.finalized_at = null;
+    project.updated_at = new Date().toISOString();
+    return HttpResponse.json({ data: project }, { status: 200 });
+  }),
+
   // POST /projects/{id}/cancel - 진행 중 실행 취소(협조적). 목에선 즉시 cancelled.
   http.post(url("projects/:id/cancel"), ({ params }) => {
     const id = String(params.id);
