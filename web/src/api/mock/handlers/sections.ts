@@ -12,6 +12,16 @@ function url(path: string): string {
 
 // 수동 편집·AI 재작성 결과를 세션 동안 유지하는 오버라이드 저장소(섹션 id → 본문).
 const CONTENT_OVERRIDES = new Map<string, string>();
+// 뽑아 둔 안 - 목 세션 동안만 산다(실백엔드는 절 meta에 쌓는다).
+type MockVariant = {
+  id: string;
+  content: string;
+  n_chars: number;
+  n_markers: number;
+  evidence_count: number;
+  volume_scaled: boolean;
+};
+const SECTION_VARIANTS = new Map<string, MockVariant[]>();
 
 export const sectionsHandlers = [
   http.get(url("projects/:id/sections"), () => {
@@ -121,6 +131,73 @@ export const sectionsHandlers = [
       );
     }
     content.content = body.content ?? "";
+    return HttpResponse.json({ data: content }, { status: 200 });
+  }),
+
+  // ─── 안 고르기(한 절 3안) ───
+  // 실제로는 절 재작성을 n번 도는 백그라운드 작업이다. 목에서는 즉시 3안을 채워
+  // "쌓인 뒤" 화면만 확인한다 - 진행 중 화면은 running:true로 한 번 돌려 준다.
+  http.post(url("projects/:id/sections/:sec/variants"), async ({ params, request }) => {
+    const sectionId = String(params.sec);
+    const body = (await request.json()) as { n?: number; instruction?: string };
+    const n = body.n ?? 3;
+    const base = buildSectionContent(sectionId, findSectionTitle(sectionId) ?? "절");
+    const source = CONTENT_OVERRIDES.get(sectionId) ?? base?.content ?? "";
+    const hint = body.instruction?.trim() ? ` (지시: ${body.instruction.trim()})` : "";
+    SECTION_VARIANTS.set(
+      sectionId,
+      Array.from({ length: n }, (_, i) => ({
+        id: `var_${sectionId}_${i + 1}`,
+        content: `${i + 1}안${hint}
+
+${source}`.slice(0, 1200),
+        n_chars: 900 + i * 180,
+        n_markers: 3 + i,
+        evidence_count: 12 + i * 2,
+        volume_scaled: i === 2,
+      })),
+    );
+    return HttpResponse.json({ data: { started: true, running: true, total: n } }, { status: 202 });
+  }),
+
+  http.get(url("projects/:id/sections/:sec/variants"), ({ params }) => {
+    const variants = SECTION_VARIANTS.get(String(params.sec)) ?? [];
+    return HttpResponse.json(
+      {
+        data: {
+          running: false,
+          total: variants.length,
+          done: variants.length,
+          failures: {},
+          variants,
+        },
+      },
+      { status: 200 },
+    );
+  }),
+
+  http.delete(url("projects/:id/sections/:sec/variants"), ({ params }) => {
+    SECTION_VARIANTS.delete(String(params.sec));
+    return HttpResponse.json({ data: { discarded: true, cancelled: false } }, { status: 200 });
+  }),
+
+  http.post(url("projects/:id/sections/:sec/variants/:vid/adopt"), ({ params }) => {
+    const sectionId = String(params.sec);
+    const title = findSectionTitle(sectionId);
+    const picked = (SECTION_VARIANTS.get(sectionId) ?? []).find((v) => v.id === String(params.vid));
+    if (!title || !picked) {
+      return HttpResponse.json(
+        { error: { code: "VARIANT_NOT_FOUND", message: "그 안을 찾을 수 없습니다" } },
+        { status: 404 },
+      );
+    }
+    CONTENT_OVERRIDES.set(sectionId, picked.content);
+    SECTION_VARIANTS.delete(sectionId);
+    const content = buildSectionContent(sectionId, title);
+    if (content) {
+      content.content = picked.content;
+      content.locked = SECTION_LOCKS.get(sectionId) ?? false;
+    }
     return HttpResponse.json({ data: content }, { status: 200 });
   }),
 

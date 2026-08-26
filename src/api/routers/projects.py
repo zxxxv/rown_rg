@@ -3712,6 +3712,249 @@ class SectionLockRequest(BaseModel):
     locked: bool
 
 
+VARIANTS_JOB = "section_variants"
+_MAX_VARIANTS = 4
+
+
+class SectionVariantsRequest(BaseModel):
+    """한 절을 서로 다른 안으로 여러 벌 뽑는다 - 골라 쓰기 위해."""
+
+    n: int = Field(3, ge=2, le=_MAX_VARIANTS)
+    instruction: str = Field(default="", max_length=2000)
+
+
+class SectionVariantRead(BaseModel):
+    """안 1개. 본문 전체를 실어 화면이 바로 견줄 수 있게 한다(비교가 목적이다)."""
+
+    id: str
+    content: str
+    n_chars: int
+    n_markers: int
+    evidence_count: int
+    # 재료가 모자라 분량 목표를 내렸는가 - 짧은 이유를 사람이 알아야 고를 수 있다.
+    volume_scaled: bool = False
+
+
+class SectionVariantsRead(BaseModel):
+    running: bool = False
+    total: int = 0
+    done: int = 0
+    failures: dict[str, str] = {}
+    variants: list[SectionVariantRead] = []
+
+
+def _variant_reads(row: Section) -> list[SectionVariantRead]:
+    out: list[SectionVariantRead] = []
+    for v in (row.meta or {}).get("variants") or []:
+        if not isinstance(v, dict) or not str(v.get("content") or "").strip():
+            continue
+        content = str(v["content"])
+        out.append(
+            SectionVariantRead(
+                id=str(v.get("id") or ""),
+                content=content,
+                n_chars=len(content),
+                n_markers=len(numbers_in_order(content)),
+                evidence_count=len(v.get("pool_chunk_ids") or []),
+                volume_scaled=bool(v.get("volume_scaled")),
+            )
+        )
+    return out
+
+
+async def _variants_body(
+    project_id: UUID,
+    section_id: UUID,
+    n: int,
+    instruction: str,
+    job,
+    *,
+    created_by: UUID | None = None,
+):
+    """안을 하나씩 뽑아 **완성되는 대로** 쌓는다 - 셋을 다 기다리지 않게.
+
+    절 재작성과 **같은 경로**(_section_rewriter)로 뽑는다. 따로 짜면 페르소나·분량
+    목표·분할 작성이 갈려, 고른 안이 평소 재작성과 다른 물건이 된다. 안끼리의 차이는
+    모델의 표집과 지시문이 만든다.
+
+    한 안이 실패해도 나머지는 계속 간다 - 셋 중 둘만 나와도 고를 수 있다.
+    """
+    for i in range(n):
+        if job.cancelled:
+            return
+        job.current = f"{i + 1}번째 안"
+        try:
+            async with open_session() as session:
+                project = await session.get(Project, project_id)
+                if project is None:
+                    return
+                row = await _get_section(session, project_id, section_id)
+                plan = _plan_for_row(project, row)
+                draft = await _section_rewriter(project, plan, instruction)
+                if draft.incomplete_reason or not draft.content.strip():
+                    job.failures[f"{i + 1}번째 안"] = "결과가 완결되지 않음"
+                    continue
+                variants = [
+                    v for v in ((row.meta or {}).get("variants") or []) if isinstance(v, dict)
+                ]
+                variants.append(
+                    {
+                        "id": str(uuid4()),
+                        "content": draft.content,
+                        "cited_chunk_ids": [str(c) for c in draft.cited_chunk_ids],
+                        "pool_chunk_ids": [str(c) for c in draft.pool_chunk_ids],
+                        "volume_scaled": bool(draft.volume_scaled),
+                        "split_fallback": bool(draft.split_fallback),
+                        "created_at": clock_now().isoformat(),
+                    }
+                )
+                row.meta = {**(row.meta or {}), "variants": variants}
+                await session.commit()
+        except Exception as exc:  # 한 안의 실패가 나머지를 죽이지 않는다
+            job.failures[f"{i + 1}번째 안"] = str(exc)[:200]
+            logger.warning(
+                "section_variants.failed",
+                project_id=str(project_id),
+                section_id=str(section_id),
+                exc_info=True,
+            )
+        finally:
+            job.done += 1
+
+
+@router.post("/{project_id}/sections/{section_id}/variants", status_code=status.HTTP_202_ACCEPTED)
+async def start_section_variants(
+    project_id: UUID,
+    section_id: UUID,
+    data: SectionVariantsRequest,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> dict[str, Any]:
+    """이 절의 안을 n벌 뽑는다 - 적용하지 않고 쌓아 두고, 고르는 것은 사람이 한다.
+
+    **왜 여러 벌인가**: 재작성은 한 번에 하나만 준다. 마음에 안 들면 다시 눌러야 하고,
+    그러면 방금 것은 사라진다 - 둘을 나란히 놓고 고를 수가 없었다. 실제로 사람이 하는
+    일은 "이게 나은가 저게 나은가"인데 화면이 그걸 못 하게 막고 있었다.
+
+    값은 안 개수에 곱해진다(절당 실측 $0.4~$1.3). 그래서 기본 3, 최대 4로 묶고
+    화면이 누르기 전에 예상 비용을 보여 준다.
+    """
+    from src.clients.llm.quota_gate import check_user_quota
+    from src.services.jobs import start_job
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_section(session, project.id, section_id)
+    _ensure_unlocked(row)
+    await check_user_quota(project.owner_id)
+    # 새로 뽑으면 이전 안은 버린다 - 두 벌이 섞이면 어느 것이 어느 지시의 결과인지 모른다.
+    row.meta = {**(row.meta or {}), "variants": []}
+    await session.commit()
+
+    job = start_job(
+        project.id,
+        VARIANTS_JOB,
+        lambda j: _variants_body(
+            project.id, section_id, data.n, data.instruction, j, created_by=current_user.id
+        ),
+        total=data.n,
+    )
+    if job is None:
+        return {"started": False, "running": True}
+    logger.info(
+        "section_variants.started",
+        project_id=str(project.id),
+        section_id=str(section_id),
+        n=data.n,
+    )
+    return {"started": True, "running": True, "total": data.n}
+
+
+@router.get("/{project_id}/sections/{section_id}/variants", response_model=SectionVariantsRead)
+async def get_section_variants(
+    project_id: UUID,
+    section_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SectionVariantsRead:
+    """뽑힌 안들 + 진행 상황. 완성되는 대로 쌓이므로 도는 중에도 읽을 게 있다."""
+    from src.services.jobs import get_job
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_section(session, project.id, section_id)
+    job = get_job(project.id, VARIANTS_JOB)
+    return SectionVariantsRead(
+        running=bool(job and job.running),
+        total=job.total if job else 0,
+        done=job.done if job else 0,
+        failures=dict(job.failures) if job else {},
+        variants=_variant_reads(row),
+    )
+
+
+@router.delete("/{project_id}/sections/{section_id}/variants")
+async def discard_section_variants(
+    project_id: UUID,
+    section_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> dict[str, bool]:
+    """안을 버린다 - 본문은 그대로. 도는 중이면 멈추기도 함께."""
+    from src.services.jobs import cancel_job
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_section(session, project.id, section_id)
+    cancelled = cancel_job(project.id, VARIANTS_JOB)
+    row.meta = {**(row.meta or {}), "variants": []}
+    await session.commit()
+    return {"discarded": True, "cancelled": cancelled}
+
+
+@router.post(
+    "/{project_id}/sections/{section_id}/variants/{variant_id}/adopt",
+    response_model=SectionContentResponse,
+)
+async def adopt_section_variant(
+    project_id: UUID,
+    section_id: UUID,
+    variant_id: str,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> SectionContentResponse:
+    """고른 안을 본문으로 삼는다 - 재작성과 **같은 반영 경로**를 지난다.
+
+    전역 인용 재매핑·근거 추적 meta·버전 스냅샷이 한 곳(_apply_section_rewrite)에
+    모여 있다. 여기서 따로 저장하면 고른 안만 문서와 어긋난다(묶음 재작성이 실제로
+    그랬다, 2026-08-26).
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_section(session, project.id, section_id)
+    _ensure_unlocked(row)
+    variants = [v for v in ((row.meta or {}).get("variants") or []) if isinstance(v, dict)]
+    picked = next((v for v in variants if str(v.get("id")) == variant_id), None)
+    if picked is None:
+        raise NotFoundError(message="그 안을 찾을 수 없습니다", code="VARIANT_NOT_FOUND")
+
+    draft = SectionDraft(
+        section_id=row.id,
+        content=str(picked.get("content") or ""),
+        cited_chunk_ids=[UUID(c) for c in (picked.get("cited_chunk_ids") or [])],
+        pool_chunk_ids=[UUID(c) for c in (picked.get("pool_chunk_ids") or [])],
+        volume_scaled=bool(picked.get("volume_scaled")),
+        split_fallback=bool(picked.get("split_fallback")),
+    )
+    plan = _plan_for_row(project, row)
+    await _apply_section_rewrite(session, project, row, plan, draft, created_by=current_user.id)
+    # 고르고 나면 나머지는 버린다 - 이미 본문이 된 안 옆에 후보가 남아 있으면
+    # "아직 안 골랐다"로 읽힌다.
+    row.meta = {**(row.meta or {}), "variants": []}
+    await session.commit()
+    await session.refresh(row)
+    return _section_content(
+        row,
+        await _section_citations(session, row, renumbered=_is_renumbered(project)),
+    )
+
+
 @router.patch("/{project_id}/sections/{section_id}/lock", response_model=SectionContentResponse)
 async def set_section_lock(
     project_id: UUID,

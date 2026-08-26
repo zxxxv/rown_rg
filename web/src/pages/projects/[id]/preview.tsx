@@ -62,6 +62,7 @@ import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
 import { chartFallbackTable } from "@/features/preview/chartSpec";
 import { BlockEvidence, partitionBlockEvidence } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
+import { SectionVariantsPanel, SectionVariantsTrigger } from "@/features/preview/SectionVariants";
 import { type SourceLocation, SourceViewer } from "@/features/preview/SourceViewer";
 import { findTable, isTableCaption, type MarkdownTable } from "@/features/preview/tableToChart";
 import { VersionDiffView } from "@/features/versions/VersionDiffView";
@@ -1392,6 +1393,9 @@ function SectionView({
                 ) : null}
               </div>
             ) : null}
+            {/* 뽑아 둔 안 - 바로 아래가 현재 본문이라 그 자리에서 견준다. 스크롤을 함께
+                타므로 얼마든 길어져도 되고, 하단 고정 바를 부풀리지 않는다. */}
+            <SectionVariantsPanel projectId={projectId} sectionId={sectionId} />
             <div className="flex flex-col gap-1">
               {blocks.map((block, idx) => (
                 // biome-ignore lint/a11y/useSemanticElements: 블록 안에 인용 링크(<a>)가 렌더돼 <button> 중첩은 invalid HTML - div+role/키핸들러로 대체
@@ -1695,6 +1699,17 @@ function SectionView({
               </button>
             ) : null}
           </div>
+          {/* 안 고르기 - 절 전체를 대상으로 할 때만. 블록 하나에 3안은 견줄 거리가
+              못 되고 값만 는다. 지시는 위 칸을 그대로 쓴다(지시 칸이 둘이면 어느 쪽이
+              먹는지 모른다). */}
+          {selectedBlocks.length === 0 ? (
+            <SectionVariantsTrigger
+              projectId={projectId}
+              sectionId={sectionId}
+              instruction={instruction}
+              disabled={busy || data.locked}
+            />
+          ) : null}
           {/* 절 전체 재작성은 실측 $0.4~$1.3짜리 버튼이다 - 누르기 전에 값을 안다.
               블록 재작성은 검색 없이 LLM 1콜이라 값이 다르므로 붙이지 않는다. */}
           {selectedBlocks.length === 0 && !busy && estimateLabel(costBasis.data, 1) ? (
