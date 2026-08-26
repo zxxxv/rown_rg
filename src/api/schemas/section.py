@@ -10,6 +10,15 @@ SectionStatus = str  # pending | writing | completed | failed
 QaStatus = str  # passed | failed | pending
 
 
+# 절 본문 상한 — 실측 최대 절이 18,933자, 평균 10,561자다(2026-08-27, 전 프로젝트).
+# 10배를 열어 두면 정상 편집은 절대 걸리지 않고, 무제한이던 구멍만 막힌다.
+#
+# 왜 막는가: 파일 업로드는 50MB로 막아 뒀는데 JSON 본문은 아무 제한이 없었다. 거대한
+# 본문이 한 번 저장되면 그 뒤 **모든 버전 스냅샷이 그것을 통째로 복사**하고(스냅샷은
+# 보고서 전체를 담는다), HWPX 렌더와 시사점 빌더가 함께 막힌다.
+MAX_SECTION_CHARS = 200_000
+
+
 class SectionNode(BaseModel):
     id: str
     title: str
@@ -241,11 +250,20 @@ class SectionRewriteRequest(BaseModel):
 
 
 class SectionBlockRewriteRequest(BaseModel):
-    block: str = Field(..., min_length=1, description="본문에서 재작성할 블록의 원문(정확 일치)")
+    block: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_SECTION_CHARS,
+        description="본문에서 재작성할 블록의 원문(정확 일치)",
+    )
     instruction: str = Field(
         "", max_length=2000, description="블록 재작성 지시(빈 문자열이면 문장 다듬기)"
     )
 
 
 class SectionContentUpdate(BaseModel):
-    content: str = Field(..., description="수정한 섹션 본문(마크다운/개조식)")
+    content: str = Field(
+        ...,
+        max_length=MAX_SECTION_CHARS,
+        description="수정한 섹션 본문(마크다운/개조식)",
+    )
