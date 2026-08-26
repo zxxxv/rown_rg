@@ -65,6 +65,7 @@ async def _add_project(
     owner: User,
     status: str,
     completed_at: datetime | None = None,
+    finalized_at: datetime | None = None,
 ) -> Project:
     project = Project(
         title="테스트 리포트",
@@ -74,10 +75,13 @@ async def _add_project(
     )
     session.add(project)
     await session.commit()
-    if completed_at is not None:
+    if completed_at is not None or finalized_at is not None:
         # 상태 전이 시점의 자동 기록(now) 대신 테스트가 원하는 경계값으로 덮어쓴다.
         # status는 건드리지 않으므로 completed_at 동기화 훅은 재실행되지 않는다.
-        project.completed_at = completed_at
+        if completed_at is not None:
+            project.completed_at = completed_at
+        if finalized_at is not None:
+            project.finalized_at = finalized_at
         await session.commit()
     await session.refresh(project)
     return project
@@ -308,32 +312,46 @@ class TestAdminDashboardPeriod:
 
 
 class TestAdminDashboardCompletedReports:
-    async def test_completed_reports_counts_by_completed_at_not_updated_at(
+    async def test_completed_reports_counts_finalized_not_assembled(
         self,
         test_client: AsyncClient,
         test_session: AsyncSession,
         admin_user: User,
         admin_token: str,
     ) -> None:
+        """'완료'는 **최종 확정**이다 - 조립만 끝난 건 아직 손보는 중이다(2026-08-27).
+
+        completed_at은 조립이 끝난 시각이라, 그걸로 세면 검토 중인 보고서까지 완료로
+        올라간다. 목록 필터('완료 = finalized_at IS NOT NULL')와 어긋나서 같은 프로젝트가
+        두 화면에서 다르게 세어지던 것을 맞춘다.
+        """
         today = now()
         this_month_start = _this_month_start(today)
 
-        # completed_at이 이번 달 범위 안 -> 집계에 포함
+        # 이번 달에 확정 -> 집계에 포함
         in_range = await _add_project(
-            test_session, admin_user, ProjectStage.COMPLETED.value, completed_at=today
+            test_session,
+            admin_user,
+            ProjectStage.COMPLETED.value,
+            completed_at=today,
+            finalized_at=today,
         )
-        # completed_at은 지난달이지만 updated_at(생성 시각)은 이번 달 -> updated_at 기준이었다면
-        # 잘못 포함됐을 케이스. completed_at 기준으로는 제외되어야 한다.
-        out_of_range = await _add_project(
+        # 지난달 확정 -> 이번 달 집계에서 제외
+        await _add_project(
             test_session,
             admin_user,
             ProjectStage.COMPLETED.value,
             completed_at=this_month_start - timedelta(seconds=1),
+            finalized_at=this_month_start - timedelta(seconds=1),
         )
-        # completed 상태가 아니면 completed_at이 없으므로 집계에서 제외
+        # 조립은 이번 달에 끝났지만 **확정 전** -> 완료가 아니다
+        assembled_only = await _add_project(
+            test_session, admin_user, ProjectStage.COMPLETED.value, completed_at=today
+        )
+        # 작성 중 -> 완료가 아니다
         await _add_project(test_session, admin_user, ProjectStage.WRITING.value)
-        assert in_range.completed_at is not None
-        assert out_of_range.completed_at is not None
+        assert in_range.finalized_at is not None
+        assert assembled_only.finalized_at is None
 
         # 경계값이 '이번 달' 기준이므로 명시적으로 this_month로 조회한다(기본은 최근 30일).
         response = await test_client.get(
@@ -344,6 +362,36 @@ class TestAdminDashboardCompletedReports:
 
         assert response.status_code == 200
         assert response.json()["kpis"]["completed_reports"] == 1
+
+    async def test_unfinalized_report_counts_as_active(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        admin_user: User,
+        admin_token: str,
+    ) -> None:
+        """조립까지 끝났어도 확정 전이면 '진행 중'이다 - 아직 사람이 손보는 중이다.
+
+        종전에는 status가 completed로 넘어가는 순간 진행 중에서도 완료에서도 빠져
+        어느 칸에도 안 잡혔다.
+        """
+        await _add_project(
+            test_session, admin_user, ProjectStage.COMPLETED.value, completed_at=now()
+        )
+        await _add_project(
+            test_session,
+            admin_user,
+            ProjectStage.COMPLETED.value,
+            completed_at=now(),
+            finalized_at=now(),
+        )
+        await _add_project(test_session, admin_user, ProjectStage.WRITING.value)
+
+        response = await test_client.get("/api/v1/admin/dashboard", headers=_auth(admin_token))
+
+        assert response.status_code == 200
+        kpis = response.json()["kpis"]
+        assert kpis["active_projects"] == 2, "미확정 보고서가 진행 중에서 빠졌다"
 
     async def test_reverting_completed_status_removes_it_from_count(
         self,

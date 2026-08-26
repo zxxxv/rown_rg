@@ -7,7 +7,7 @@ from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.db import get_async_session
@@ -45,7 +45,7 @@ from src.core.quota_settings import (
     parse_quota_setting_key,
     validate_quota_setting_value,
 )
-from src.core.types import Role
+from src.core.types import ProjectStage, Role
 from src.db.models.ip_whitelist import IpWhitelist
 from src.db.models.limit_request import LimitRequest
 from src.db.models.project import Project
@@ -65,7 +65,9 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-# DB의 ProjectStage 값 기준 '진행 중' 상태 (created/completed/archived 제외)
+# DB의 ProjectStage 값 기준 '진행 중' 상태 (created/completed/archived 제외).
+# 조립까지 끝났어도 **확정 전이면 진행 중**이라, 아래 질의가 그 경우를 따로 얹는다
+# (2026-08-27: 목록의 '완료 = 최종 확정' 규칙과 대시보드가 어긋나 있었다).
 _ACTIVE_PROJECT_STATUSES = ("researching", "indexing", "writing", "reviewing")
 
 # '현재 접속중' 판정 창 — 하트비트(last_seen_at)가 이 시간 내면 접속중으로 센다.
@@ -159,16 +161,26 @@ async def get_admin_dashboard(
         await session.execute(
             select(func.count())
             .select_from(Project)
-            .where(Project.status.in_(_ACTIVE_PROJECT_STATUSES))
+            .where(
+                or_(
+                    Project.status.in_(_ACTIVE_PROJECT_STATUSES),
+                    and_(
+                        Project.status == ProjectStage.COMPLETED.value,
+                        Project.finalized_at.is_(None),
+                    ),
+                )
+            )
         )
     ).scalar_one()
+    # 완료 = **최종 확정**. completed_at은 조립이 끝난 시각이라, 그걸로 세면 아직
+    # 손보는 중인 보고서가 '완료'로 집계된다(목록 필터와 같은 기준으로 맞춘다).
     completed_reports = (
         await session.execute(
             select(func.count())
             .select_from(Project)
             .where(
-                Project.completed_at >= range_start,
-                Project.completed_at < range_end,
+                Project.finalized_at >= range_start,
+                Project.finalized_at < range_end,
             )
         )
     ).scalar_one()

@@ -242,13 +242,13 @@ function DashboardBody({
         <StatCard
           label="진행 중 프로젝트"
           value={`${data.kpis.active_projects}건`}
-          hint="status = researching / indexing / writing / reviewing"
+          hint="아직 확정하지 않은 보고서 - 작성 중이거나 검토 중"
           icon={Activity}
         />
         <StatCard
           label="완료된 보고서"
           value={`${data.kpis.completed_reports}건`}
-          hint={`${periodLabel} 완료`}
+          hint={`${periodLabel} 최종 확정`}
           icon={FileCheck2}
           tone="success"
         />
