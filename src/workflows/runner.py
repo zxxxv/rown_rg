@@ -871,6 +871,70 @@ async def _replan(project_id: uuid.UUID) -> None:
             await _notify_safe(owner_id, project_id, "failed", page="brief")
 
 
+async def refresh_design_plan(project_id: uuid.UUID) -> None:
+    """목차가 바뀌었으니 설계를 다시 뽑는다 — 게이트 없이, 조용히.
+
+    **왜 자동인가**: 설계(브리프·소재 분담)는 목차에서 파생되는 값이고 LLM 1콜(≈$0.01)
+    이다. 수집·작성과 달리 되돌리기 비싼 일이 아니라, 사람에게 물을 이유가 없다.
+
+    **왜 필요한가**: 남겨 두면 거짓말을 한다. 소재 분담은 절 번호를 문자열로 박아 둔다
+    ("…는 1.2절 소관, 참조 한 문장으로 대체하라"). 목차에서 절을 하나 끼워 넣으면 번호가
+    밀리는데 그 문자열은 그대로라, 작성기가 **엉뚱한 절을 가리키는 지시**를 따른다
+    (2026-08-27 실측: 운영 프로젝트의 foreign_topics가 전부 라벨 문자열이었다).
+    새로 생긴 절은 담당이 없어 다른 절과 같은 소재를 또 쓴다.
+
+    게이트는 열지 않는다 — 게이트는 실행을 멈추는 장치인데 여기서 멈출 이유가 없다.
+    새 브리프는 resolved 상태로 남겨 설계 검토 화면이 최신본을 보여주게 한다.
+
+    수집·작성은 **따라 돌지 않는다**. 절 하나 재작성이 실측 $0.4~1.3, 전체가 $15.5라
+    목차 한 줄에 자동으로 딸려 돌면 사고다 — 그건 '미반영'으로 표시하고 사람이 고른다.
+    """
+    from src.core.clock import now as clock_now
+    from src.workflows.pipeline import _design_brief_gate
+    from src.workflows.stages import plan_brief
+
+    try:
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                return
+            state = _state_from_project(project)
+        state = await plan_brief(state)
+        review = _design_brief_gate(state)
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                return
+            project.config = config_with_plan(project.config, state.section_plan)
+            session.add(
+                ReviewPoint(
+                    id=review.id,
+                    project_id=project_id,
+                    gate=review.gate.value,
+                    payload=review.payload,
+                    # 결정이 필요 없는 갱신이다 - 처음부터 resolved로 남긴다.
+                    status="resolved",
+                    decision={"outcome": "auto_refresh", "reason": "outline_changed"},
+                    created_at=review.created_at,
+                    resolved_at=clock_now(),
+                )
+            )
+            # 소재 분담(_design_plan)을 새 목차 기준으로 다시 커밋한다 - 같은 세션
+            # 안에서 해야 방금 심은 plan 정본을 보고 절 id를 맞춘다.
+            await _commit_design_plan(session, project_id, review.payload)
+            await session.commit()
+        logger.info("design_plan.refreshed", project_id=str(project_id))
+    except Exception:
+        logger.exception("design_plan.refresh_failed", project_id=str(project_id))
+
+
+def spawn_design_refresh(project_id: uuid.UUID) -> bool:
+    """설계 재계산을 백그라운드로 — 저장 버튼이 LLM 콜을 기다리지 않게."""
+    return _spawn_limited(
+        project_id, lambda: refresh_design_plan(project_id), clear_cancel_on_exit=False
+    )
+
+
 async def _collect_more(project_id: uuid.UUID, *, reopen_gate: bool = True) -> None:
     """자료 보충 — 기존 풀 유지 + research_more_batch건 추가(URL 중복 제거).
 

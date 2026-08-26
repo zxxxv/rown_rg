@@ -20,29 +20,31 @@ const MODES: {
   model: string;
   cost: string;
   hint: string;
+  recommended?: boolean;
 }[] = [
-  {
-    value: "standard",
-    label: "표준",
-    // 수집 담당까지 밝힌다 - 'Sonnet 4.6'만 쓰면 수집도 Sonnet으로 오해한다
-    // (2026-08-14 실사용 오해 - 실제 수집 기본은 Haiku, 작성이 Sonnet).
-    model: "수집 Haiku 4.5 + 본문 Sonnet 4.6",
-    cost: "기준",
-    hint: "사람이 한 번 훑는 초안입니다. 수치와 표는 검토 화면에서 확인하세요",
-  },
   {
     value: "premium",
     label: "고급",
+    // 수집 담당까지 밝힌다 - 본문 모델만 쓰면 수집도 그 모델로 오해한다
+    // (2026-08-14 실사용 오해). 수집은 어느 등급이든 Haiku다.
     model: "수집 Haiku 4.5 + 본문 Opus 5",
-    cost: "비용 더 높음",
-    hint: "근거를 더 많이 끌어쓰고 단정이 덜 세서 검토 부담이 가장 적습니다",
+    cost: "비용 가장 높음",
+    hint: "본문 품질이 가장 좋습니다. 근거를 더 많이 끌어 쓰고 단정이 덜 세서 사람이 고칠 일이 가장 적습니다",
+    recommended: true,
+  },
+  {
+    value: "standard",
+    label: "표준",
+    model: "수집 Haiku 4.5 + 본문 Sonnet 4.6",
+    cost: "중간",
+    hint: "쓸 만한 초안이 나오지만 수치와 단정은 사람이 한 번 훑어야 합니다",
   },
   {
     value: "economy",
     label: "절약",
-    model: "Haiku 4.5 + GPT-5.4-mini",
-    cost: "비용 낮음",
-    hint: "구조와 흐름만 보는 테스트용입니다. 사실 확인은 전부 사람이 해야 합니다",
+    model: "수집 Haiku 4.5 + 본문 GPT-5.4-mini",
+    cost: "비용 가장 낮음",
+    hint: "구조와 흐름만 보는 시험용입니다. 사실 확인은 전부 사람 몫이라 납품용으로는 권하지 않습니다",
   },
 ];
 
@@ -97,7 +99,16 @@ export function ModelModePicker({ disabled }: ModelModePickerProps) {
                   )}
                 />
                 <div className="flex flex-1 flex-col gap-1">
-                  <span className="text-sm font-semibold text-fg">{m.label}</span>
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-sm font-semibold text-fg">{m.label}</span>
+                    {/* 품질이 가장 좋은 쪽을 기본으로 두고 그렇다고 말한다 - 고르는
+                        사람이 등급 이름만으로는 어느 쪽이 나은지 알 수 없다. */}
+                    {m.recommended ? (
+                      <span className="rounded-full border border-accent bg-bg-info px-2 py-0.5 text-[10px] font-medium text-fg-info">
+                        추천
+                      </span>
+                    ) : null}
+                  </span>
                   <span className="font-mono text-xs text-fg-secondary">{m.model}</span>
                   <span className="text-xs font-medium text-fg-secondary">{m.cost}</span>
                   <p className="text-xs text-fg-tertiary">{m.hint}</p>

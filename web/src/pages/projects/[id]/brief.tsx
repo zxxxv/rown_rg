@@ -31,6 +31,7 @@ import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Textarea } from "@/components/ui/textarea";
 import {
   type DraftChapter,
@@ -94,9 +95,11 @@ function ReviewSummary({
 }) {
   const est = brief.estimate;
   const remaining = est?.remaining_limit_usd;
-  // 경고 기준은 절수 비례 추정이 아니라 모드별 런 1회 고정 예상 비용(고급 $30/표준
-  // $20/절약 $15) - 남은 한도가 그보다 적으면 "이 모드로 한 번 돌릴 여유가 없다".
-  const expected = est?.expected_run_cost_usd;
+  // 경고 기준은 **이 보고서의 예상 비용 상단**이다. 예전엔 모드별 고정값(고급 $30/
+  // 표준 $20/절약 $15)과 견줬는데, 그건 35절짜리 기준이라 5절 보고서에서 "예상
+  // $4.5~9인데 $30보다 한도가 적다"는 앞뒤 안 맞는 경고가 떴다(2026-08-27 지적).
+  // 같은 카드 안의 두 숫자가 서로를 부정하면 둘 다 안 읽힌다.
+  const expected = est?.cost_usd_max;
   const short = remaining != null && expected != null && remaining < expected;
   const checks = [
     {
@@ -124,6 +127,10 @@ function ReviewSummary({
       danger: false,
     },
   ].filter((c) => c.count > 0);
+  // 한 목록에 섞여 있으면 "소재 분담 5"가 문제 5건으로 읽힌다(2026-08-27 지적).
+  // 사람이 볼 것과 이미 끝난 것을 갈라 놓고, 끝난 쪽은 개수 대신 '적용됨'이라 쓴다.
+  const todo = checks.filter((c) => c.danger);
+  const done = checks.filter((c) => !c.danger);
   const jump = (id: string) =>
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   return (
@@ -157,18 +164,24 @@ function ReviewSummary({
               </dd>
             </div>
           ) : null}
-          <p className="text-[10px] text-fg-tertiary">과거 실측 단가 기반 추정</p>
+          {/* 한도는 이 설계를 만들던 **그 시점**의 잔액이다(payload에 박제). 지금 값이
+              아니라고 말해 두지 않으면 오래된 브리프를 열었을 때 거짓말이 된다. */}
+          <p className="text-[10px] text-fg-tertiary">
+            과거 실측 단가 기반 추정 · 한도는 이 설계를 만든 시점 기준
+          </p>
         </dl>
       ) : null}
       {short ? (
         <p className="flex items-start gap-1.5 text-[11px] leading-snug text-fg-warning">
-          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />이 모드 1회 예상 비용($
-          {expected})보다 한도가 적습니다 - 진행하면 도중에 한도에 걸려 멈출 수 있습니다.
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+          예상 비용 상단(${expected})보다 남은 한도가 적습니다 - 진행하면 도중에 한도에 걸려 멈출 수
+          있습니다.
         </p>
       ) : null}
-      {checks.length > 0 ? (
+      {todo.length > 0 ? (
         <div className="flex flex-col gap-0.5 border-t border-border pt-2">
-          {checks.map((c) => (
+          <p className="px-1 pb-0.5 text-[10px] text-fg-tertiary">살펴볼 것 (그대로 둬도 진행)</p>
+          {todo.map((c) => (
             <button
               key={c.id}
               type="button"
@@ -189,6 +202,27 @@ function ReviewSummary({
                 {c.label}
               </span>
               <span className="font-mono text-fg-secondary">{c.count}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {done.length > 0 ? (
+        // 이미 처리된 것 - 개수가 아니라 '적용됨'이라 쓴다. 숫자를 그대로 두면
+        // 살펴볼 것과 같은 무게로 읽혀 "5건 남았다"로 오해된다.
+        <div className="flex flex-col gap-0.5 border-t border-border pt-2">
+          <p className="px-1 pb-0.5 text-[10px] text-fg-tertiary">자동으로 끝난 것</p>
+          {done.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => jump(c.id)}
+              className="flex items-center justify-between gap-2 rounded px-1 py-1 text-left text-xs hover:bg-bg"
+            >
+              <span className="flex items-center gap-1.5 text-fg-secondary">
+                <Check className="h-3 w-3 shrink-0 text-fg-success" aria-hidden />
+                {c.label} {c.count}건
+              </span>
+              <span className="text-[10px] text-fg-tertiary">적용됨</span>
             </button>
           ))}
         </div>
@@ -275,10 +309,38 @@ function OutlineOverlaps({ brief }: { brief: DesignBriefPayload }) {
   if (overlaps.length === 0) return null;
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-fg-danger/40 bg-bg-danger p-4">
-      <p className="text-sm font-medium text-fg-danger">목차 소재 겹침</p>
+      {/* 두 카드가 무엇이 다른지 사람이 헷갈렸다(2026-08-27 지적) - 위는 **진단**이고
+          아래는 **이미 적용된 처방**이다. 배지 한 줄로 성격을 먼저 못 박고, 문구도
+          "사람이 정할 것 / 자동으로 끝난 것"으로 갈라 쓴다. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-medium text-fg-danger">목차 소재 겹침</p>
+        <span className="rounded-full border border-fg-danger/40 px-2 py-0.5 text-[10px] text-fg-danger">
+          구조 경고
+        </span>
+        <HelpTip title="겹침과 분담은 어떻게 다른가요?">
+          <p>
+            <b>겹침</b>은 진단입니다. 두 절의 제목·방향이 같은 소재를 요구한다는 뜻으로, 목차
+            구조에서 비롯됩니다.
+          </p>
+          <p>
+            <b>분담</b>은 그 진단에 대한 자동 처방입니다. 절들은 서로 무엇을 쓰는지 모른 채 동시에
+            작성되므로, 소재마다 정본으로 쓸 절 하나를 정해 작성 지시에 실어 둡니다.
+          </p>
+          <p>
+            그래서 분담이 반복은 눌러 주지만 <b>구조는 그대로</b>입니다. 겹친 두 절이 계속 비슷한
+            자리를 다투는 게 싫다면 목차에서 역할을 갈라 두는 편이 낫고, 그대로 두셔도 진행에는
+            문제가 없습니다.
+          </p>
+        </HelpTip>
+      </div>
       <p className="text-xs text-fg-secondary">
-        아래 절 쌍은 목차 자체가 같은 소재를 요구합니다 - 역할을 가르지 않으면 같은 내용이
-        반복됩니다. 제안대로 두거나, 목차 편집에서 절의 방향을 고치세요.
+        아래 절 쌍은 <b>목차 구조 자체가</b> 같은 소재를 요구합니다. 두 절이 같은 내용을 되풀이할
+        소지가 있다는 뜻입니다.
+      </p>
+      <p className="text-xs text-fg-secondary">
+        아래 <b>소재 분담이 반복은 눌러 뒀습니다</b>(절마다 정본을 정해 작성 지시에 실음). 다만 그건
+        완화책이고 <b>목차 구조는 그대로</b>입니다 - 그대로 진행해도 되고, 절의 역할을 아예 갈라
+        두고 싶으면 목차 편집에서 방향을 고치시면 됩니다.
       </p>
       <ul className="flex flex-col gap-1.5">
         {overlaps.map((o) => (
@@ -301,11 +363,31 @@ function TopicOwnership({ brief }: { brief: DesignBriefPayload }) {
   if (topics.length === 0) return null;
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-bg-secondary p-4">
-      <p className="text-sm font-medium text-fg-primary">소재 분담</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-medium text-fg-primary">소재 분담</p>
+        <span className="rounded-full border border-fg-success/40 bg-bg-success px-2 py-0.5 text-[10px] text-fg-success">
+          적용됨 · 손댈 것 없습니다
+        </span>
+        <HelpTip title="분담은 무엇을 바꾸나요?">
+          <p>
+            목차를 고치지는 <b>않습니다</b>. 절마다 내려가는 <b>작성 지시</b>에 한 줄이 더해집니다 -
+            "이 절이 정본으로 서술할 토픽: …, 개요·수치·맥락을 여기서 완결하라", 그리고 나머지
+            절에는 "…는 N절 소관, 참조 한 문장으로 대체하라".
+          </p>
+          <p>
+            근거는 실측입니다. 담당을 안 정하고 병렬로 쓰게 했더니 절 간 중복이 463문장, 한 장이 앞
+            장을 통째로 다시 쓰는 일까지 있었습니다.
+          </p>
+        </HelpTip>
+      </div>
       <p className="text-xs text-fg-secondary">
-        여러 절이 되풀이 서술할 위험이 있는 공용 소재를 절 하나에 배정했습니다 - 담당 절이 정본으로
-        완결하고, 다른 절은 참조 한 문장으로 대체합니다. 자료 단위 담당(정본 배정)은 자료 검토가
-        끝난 뒤 작성 직전에 확정됩니다.
+        절들은 <b>서로 무엇을 쓰는지 모른 채 동시에</b> 작성됩니다. 그래서 되풀이될 위험이 있는
+        소재마다 <b>정본으로 쓸 절 하나</b>를 정해 작성 지시에 실었습니다 - 담당 절은 개요·수치·
+        맥락을 여기서 완결하고, 나머지 절은 참조 한 문장으로 대체합니다.
+      </p>
+      <p className="text-[11px] text-fg-tertiary">
+        자료 단위 담당(어느 자료를 어느 절이 정본으로 쓸지)은 자료 검토가 끝난 뒤 작성 직전에 따로
+        정합니다 - 지금 정하면 나중에 제외될 자료를 가리킬 수 있습니다.
       </p>
       <ul className="flex flex-col gap-1">
         {topics.map((t) => (
@@ -951,135 +1033,150 @@ export default function BriefPage() {
               }
             />
             <div className="flex min-w-0 flex-col gap-4">
-            <div id="check-dupq" className="scroll-mt-4">
-              <DuplicateWarning brief={brief} />
-            </div>
-            <div id="check-overlaps" className="scroll-mt-4">
-              <OutlineOverlaps brief={brief} />
-            </div>
-            <div id="check-ownership" className="scroll-mt-4">
-              <TopicOwnership brief={brief} />
-            </div>
-            {!gateOpen ? (
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-bg-info px-4 py-3">
-                {replanning ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-fg-tertiary" />
-                ) : null}
-                <p className="text-xs text-fg-secondary">
-                  {replanning
-                    ? "계획을 다시 계산하는 중입니다 - 잠시 후 새 계획이 이 화면에 표시됩니다."
-                    : `${resolvedAt ? `${resolvedAt}에 확정된` : "확정된"} 설계입니다 - 자료 수집과 본문 작성이 아래 절별 계획대로 진행됩니다.`}
-                </p>
+              <div id="check-dupq" className="scroll-mt-4">
+                <DuplicateWarning brief={brief} />
               </div>
-            ) : null}
-            {gateOpen && !brief.ai_plan ? (
-              <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-bg-secondary px-4 py-3">
-                <p className="text-xs text-fg-secondary">
-                  AI 실행 계획을 만들지 못했습니다 - 결정적 항목(질의·분량·비용)만으로 검토하거나
-                  다시 계산할 수 있습니다.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void submit(undefined, "replan")}
-                  disabled={submitting}
-                >
-                  {submitting ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
-                  계획 다시 계산
-                </Button>
+              <div id="check-overlaps" className="scroll-mt-4">
+                <OutlineOverlaps brief={brief} />
               </div>
-            ) : null}
-            <FlowGraph brief={brief} />
-            {brief.warnings.sections_without_analyst.length > 0 ? (
-              <p id="check-noagent" className="scroll-mt-4 text-xs text-fg-tertiary">
-                담당 에이전트가 없는 절: {brief.warnings.sections_without_analyst.join(" · ")}
-              </p>
-            ) : null}
-
-            {/* 장 단위 그룹 - 장 헤더(목표+수집 질의) 아래 그 장의 절들이 붙는다.
-                수집(장마다 1회)과 절 검색이 한 위계로 보여야 20절짜리 목차가 읽힌다. */}
-            <div className="rounded-lg border border-border">
-              <div className="border-b border-border px-4 py-2">
-                <p className="text-xs font-medium text-fg">장별 실행 계획</p>
-                <p className="text-[11px] text-fg-tertiary">
-                  수집 질의(장마다 1회)는 주제란 문장이 쓰이는 유일한 자리입니다. 절의 검색:은 모은
-                  자료 안에서 근거를 찾는 실제 문자열입니다.
-                </p>
+              <div id="check-ownership" className="scroll-mt-4">
+                <TopicOwnership brief={brief} />
               </div>
-              {chapterGroups.map((group) => {
-                const isOpen = openChapters.has(group.chapter_number);
-                const warnCount = group.sections.filter((s) =>
-                  warnSectionLabels.has(`${s.chapter_number}.${s.section_number}`),
-                ).length;
-                return (
-                <div key={group.chapter_number} className="border-b border-border last:border-b-0">
-                  <button
-                    type="button"
-                    onClick={() => toggleChapter(group.chapter_number)}
-                    className="flex w-full flex-col gap-1 bg-bg-secondary px-4 py-2.5 text-left hover:bg-bg-secondary/70"
-                  >
-                    <span className="flex items-center gap-1.5 text-sm font-semibold text-fg">
-                      {isOpen ? (
-                        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" aria-hidden />
-                      ) : (
-                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" aria-hidden />
-                      )}
-                      {group.chapter_number}장 {group.title || "(제목 없음)"}
-                      <span className="text-xs font-normal text-fg-tertiary">
-                        ({group.sections.length}절)
-                      </span>
-                      {warnCount > 0 ? (
-                        <span className="flex items-center gap-0.5 rounded-sm border border-fg-danger/30 bg-bg-danger px-1 py-0.5 text-[10px] font-medium text-fg-danger">
-                          <AlertTriangle className="h-2.5 w-2.5" aria-hidden />
-                          {warnCount}
-                        </span>
-                      ) : null}
-                    </span>
-                    {isOpen && chapterGoals.get(group.chapter_number) ? (
-                      <p className="text-xs font-normal text-fg-secondary">
-                        {chapterGoals.get(group.chapter_number)}
-                      </p>
-                    ) : null}
-                    {isOpen && group.collection_query ? (
-                      <p className="text-[11px] font-normal text-fg-tertiary">
-                        수집:{" "}
-                        <code className="break-all font-mono text-fg-secondary">
-                          {group.collection_query}
-                        </code>
-                      </p>
-                    ) : null}
-                  </button>
-                  {isOpen ? (
-                  <ul>
-                    {group.sections.map((s) => (
-                      <SectionRow
-                        key={s.section_id}
-                        section={s}
-                        duplicated={duplicatedLabels.has(`${s.chapter_number}.${s.section_number}`)}
-                        plan={
-                          planEdits[`${s.chapter_number}.${s.section_number}`] ??
-                          sectionPlans.get(`${s.chapter_number}.${s.section_number}`)
-                        }
-                        edited={gateOpen && `${s.chapter_number}.${s.section_number}` in planEdits}
-                        onPlanChange={
-                          gateOpen
-                            ? (label, fields) =>
-                                setPlanEdits((prev) => ({ ...prev, [label]: fields }))
-                            : undefined
-                        }
-                        incoming={incomingFlows.get(`${s.chapter_number}.${s.section_number}`)}
-                        planQueries={
-                          sectionPlans.get(`${s.chapter_number}.${s.section_number}`)
-                            ?.search_queries
-                        }
-                      />
-                    ))}
-                  </ul>
+              {!gateOpen ? (
+                <div className="flex items-center gap-2 rounded-lg border border-border bg-bg-info px-4 py-3">
+                  {replanning ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-fg-tertiary" />
                   ) : null}
+                  <p className="text-xs text-fg-secondary">
+                    {replanning
+                      ? "계획을 다시 계산하는 중입니다 - 잠시 후 새 계획이 이 화면에 표시됩니다."
+                      : `${resolvedAt ? `${resolvedAt}에 확정된` : "확정된"} 설계입니다 - 자료 수집과 본문 작성이 아래 절별 계획대로 진행됩니다.`}
+                  </p>
                 </div>
-                );
-              })}
-            </div>
+              ) : null}
+              {gateOpen && !brief.ai_plan ? (
+                <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-bg-secondary px-4 py-3">
+                  <p className="text-xs text-fg-secondary">
+                    AI 실행 계획을 만들지 못했습니다 - 결정적 항목(질의·분량·비용)만으로 검토하거나
+                    다시 계산할 수 있습니다.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void submit(undefined, "replan")}
+                    disabled={submitting}
+                  >
+                    {submitting ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
+                    계획 다시 계산
+                  </Button>
+                </div>
+              ) : null}
+              <FlowGraph brief={brief} />
+              {brief.warnings.sections_without_analyst.length > 0 ? (
+                <p id="check-noagent" className="scroll-mt-4 text-xs text-fg-tertiary">
+                  담당 에이전트가 없는 절: {brief.warnings.sections_without_analyst.join(" · ")}
+                </p>
+              ) : null}
+
+              {/* 장 단위 그룹 - 장 헤더(목표+수집 질의) 아래 그 장의 절들이 붙는다.
+                수집(장마다 1회)과 절 검색이 한 위계로 보여야 20절짜리 목차가 읽힌다. */}
+              <div className="rounded-lg border border-border">
+                <div className="border-b border-border px-4 py-2">
+                  <p className="text-xs font-medium text-fg">장별 실행 계획</p>
+                  <p className="text-[11px] text-fg-tertiary">
+                    수집 질의(장마다 1회)는 주제란 문장이 쓰이는 유일한 자리입니다. 절의 검색:은
+                    모은 자료 안에서 근거를 찾는 실제 문자열입니다.
+                  </p>
+                </div>
+                {chapterGroups.map((group) => {
+                  const isOpen = openChapters.has(group.chapter_number);
+                  const warnCount = group.sections.filter((s) =>
+                    warnSectionLabels.has(`${s.chapter_number}.${s.section_number}`),
+                  ).length;
+                  return (
+                    <div
+                      key={group.chapter_number}
+                      className="border-b border-border last:border-b-0"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleChapter(group.chapter_number)}
+                        className="flex w-full flex-col gap-1 bg-bg-secondary px-4 py-2.5 text-left hover:bg-bg-secondary/70"
+                      >
+                        <span className="flex items-center gap-1.5 text-sm font-semibold text-fg">
+                          {isOpen ? (
+                            <ChevronDown
+                              className="h-3.5 w-3.5 shrink-0 text-fg-tertiary"
+                              aria-hidden
+                            />
+                          ) : (
+                            <ChevronRight
+                              className="h-3.5 w-3.5 shrink-0 text-fg-tertiary"
+                              aria-hidden
+                            />
+                          )}
+                          {group.chapter_number}장 {group.title || "(제목 없음)"}
+                          <span className="text-xs font-normal text-fg-tertiary">
+                            ({group.sections.length}절)
+                          </span>
+                          {warnCount > 0 ? (
+                            <span className="flex items-center gap-0.5 rounded-sm border border-fg-danger/30 bg-bg-danger px-1 py-0.5 text-[10px] font-medium text-fg-danger">
+                              <AlertTriangle className="h-2.5 w-2.5" aria-hidden />
+                              {warnCount}
+                            </span>
+                          ) : null}
+                        </span>
+                        {isOpen && chapterGoals.get(group.chapter_number) ? (
+                          <p className="text-xs font-normal text-fg-secondary">
+                            {chapterGoals.get(group.chapter_number)}
+                          </p>
+                        ) : null}
+                        {isOpen && group.collection_query ? (
+                          <p className="text-[11px] font-normal text-fg-tertiary">
+                            수집:{" "}
+                            <code className="break-all font-mono text-fg-secondary">
+                              {group.collection_query}
+                            </code>
+                          </p>
+                        ) : null}
+                      </button>
+                      {isOpen ? (
+                        <ul>
+                          {group.sections.map((s) => (
+                            <SectionRow
+                              key={s.section_id}
+                              section={s}
+                              duplicated={duplicatedLabels.has(
+                                `${s.chapter_number}.${s.section_number}`,
+                              )}
+                              plan={
+                                planEdits[`${s.chapter_number}.${s.section_number}`] ??
+                                sectionPlans.get(`${s.chapter_number}.${s.section_number}`)
+                              }
+                              edited={
+                                gateOpen && `${s.chapter_number}.${s.section_number}` in planEdits
+                              }
+                              onPlanChange={
+                                gateOpen
+                                  ? (label, fields) =>
+                                      setPlanEdits((prev) => ({ ...prev, [label]: fields }))
+                                  : undefined
+                              }
+                              incoming={incomingFlows.get(
+                                `${s.chapter_number}.${s.section_number}`,
+                              )}
+                              planQueries={
+                                sectionPlans.get(`${s.chapter_number}.${s.section_number}`)
+                                  ?.search_queries
+                              }
+                            />
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}

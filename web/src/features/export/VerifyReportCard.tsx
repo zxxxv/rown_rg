@@ -3,6 +3,7 @@ import {
   ArrowRight,
   ChevronDown,
   Loader2,
+  PanelRight,
   RotateCw,
   ShieldAlert,
   ShieldCheck,
@@ -65,6 +66,7 @@ export function VerifyReportCard({
   collapsible = false,
   onOpenEditor,
   onJump,
+  onExpand,
 }: {
   projectId: string;
   compact?: boolean;
@@ -74,6 +76,8 @@ export function VerifyReportCard({
   /** 경고 → 해당 절로 이동. 넘기면 목록 항목이 클릭 가능해진다.
    * section_id(절 안정 id)가 정본이고 section_ref는 표시값 폴백이다. */
   onJump?: (target: { section_ref?: string | null; section_id?: string | null }) => void;
+  /** 접힌 배너를 눌렀을 때 **바깥이** 여는 경우(우측 드로어). 넘기면 인라인으로 펴지 않는다. */
+  onExpand?: () => void;
 }) {
   const query = useVerifyReport(projectId);
   const projectQuery = useProject(projectId);
@@ -178,7 +182,9 @@ export function VerifyReportCard({
       >
         <button
           type="button"
-          onClick={() => setOpen(true)}
+          // onExpand가 있으면 **바깥이 연다**(우측 드로어). 목록을 본문 위에 펴면 본문이
+          // 아래로 밀려, 경고를 읽는 동안 정작 고칠 글이 안 보인다(2026-08-27 지적).
+          onClick={() => (onExpand ? onExpand() : setOpen(true))}
           className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left"
         >
           {criticalCount > 0 ? (
@@ -196,8 +202,14 @@ export function VerifyReportCard({
           {done.length > 0 ? (
             <span className="text-xs text-fg-tertiary">처리함 {done.length}건</span>
           ) : null}
-          <span className="text-xs text-fg-tertiary">펼쳐서 항목을 누르면 해당 절로 이동</span>
-          <ChevronDown className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
+          <span className="text-xs text-fg-tertiary">
+            {onExpand ? "옆에 펼쳐 놓고 본문과 나란히 봅니다" : "펼쳐서 항목을 누르면 해당 절로 이동"}
+          </span>
+          {onExpand ? (
+            <PanelRight className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
+          ) : (
+            <ChevronDown className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
+          )}
         </button>
         {staleBadge}
         {rerunButton}

@@ -2,7 +2,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   BadgeCheck,
-  ClipboardList,
   Download,
   FileSearch,
   FolderSync,
@@ -30,7 +29,7 @@ import {
   useUpdateProjectConfig,
 } from "@/api/projects";
 import type { Project, ProjectStatus } from "@/api/types";
-import { useFinalizeProject, useUnfinalizeProject } from "@/api/versions";
+import { useFinalizeProject, useReportVersions, useUnfinalizeProject } from "@/api/versions";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageLoading } from "@/components/feedback/PageLoading";
 import { AppShell } from "@/components/layout/AppShell";
@@ -62,7 +61,6 @@ import type { ProjectFormValues } from "@/features/project-config/schema";
 import { SourceUsageCard } from "@/features/stats/SourceUsageCard";
 import { ReopenDialog } from "@/features/versions/ReopenDialog";
 import { useAuth } from "@/hooks/useAuth";
-import { cn } from "@/lib/utils";
 import { ReportWorkspace } from "@/pages/projects/[id]/preview";
 
 // 게이트별 결정 화면과 CTA 문구. 백엔드 runner._GATE_PAGES와 같은 대응이다.
@@ -178,6 +176,13 @@ interface OverviewBodyProps {
 }
 
 function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) {
+  // 맨 위 배지용 - 지금 원고가 어느 버전인지. 목록은 최신부터라 [0]이 마지막 버전이고,
+  // 어느 버전도 지금 본문과 같지 않으면 그 뒤로 손을 댄 것이다.
+  const versionsQuery = useReportVersions(project.id);
+  const latestVersion = versionsQuery.data?.[0] ?? null;
+  const versionDirty = Boolean(
+    versionsQuery.data?.length && !versionsQuery.data.some((v) => v.is_current),
+  );
   const navigate = useNavigate();
   // 실측 사용량 + 스테퍼 입력 - /progress 스냅샷. 종결 상태가 아니면 폴링으로
   // 단계 전이·게이트 개방을 따라잡는다(개요가 실행을 지켜보는 화면이 되도록).
@@ -264,6 +269,24 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
                 </span>
               ) : null}
               <span className="h-3 w-px bg-border" aria-hidden />
+              {/* 지금 원고가 어느 버전인가 - 버전이 비교할 때만 쓰이는 값이 아니라
+                  "지금 보고 있는 게 뭔지"를 말하는 값이라 맨 위에 둔다(2026-08-27).
+                  마지막 스냅샷 이후 손을 댔으면 그 사실까지 말한다 - 번호만 적으면
+                  얼려 둔 v6과 지금 원고가 같다는 거짓말이 된다. */}
+              {latestVersion ? (
+                <Badge
+                  variant="secondary"
+                  className="font-mono"
+                  title={
+                    versionDirty
+                      ? "마지막으로 얼린 버전 이후에 본문이 바뀌었습니다 - 지금 원고는 어느 버전과도 같지 않습니다"
+                      : "지금 원고가 이 버전과 같습니다"
+                  }
+                >
+                  v{latestVersion.version_no}
+                  {versionDirty ? " + 수정됨" : ""}
+                </Badge>
+              ) : null}
               <Badge variant="secondary">
                 목차 ·{" "}
                 {project.config.outline
@@ -349,12 +372,11 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
           {/* 완료 요약 카드는 제거 - 본문이 같은 화면에 인라인이라 '보고서 열기'
               타일이 자기 자신을 가리켰다(2026-08-09 사용자 지적). 숫자는 헤더 타일과
               PM 경고 배너가 이미 보여준다. */}
-          <QuickActions
-            project={project}
-            pendingGate={usageQuery.data?.pending_gate ?? null}
-            onNavigate={navigate}
-            liveStatus={usageQuery.data?.status}
-          />
+          {/* '설계 검토'·'자료 검토' 바로가기 카드는 제거했다 - 우측 상태 패널이
+              같은 문을 이미 갖고 있어 화면에 진입점이 두 벌이었다(2026-08-27 지적).
+              자료는 완전한 중복이었고(둘 다 /sources), 설계는 목적지가 달라서
+              (설계 검토 화면 / 목차 편집) 더 헷갈렸다 - 이제 상태 패널의 '설계' 줄이
+              그 둘을 나란히 갖는다. 진입점은 한 곳에 모은다. */}
 
           <Accordion type="single" collapsible value={openPanel} onValueChange={setOpenPanel}>
             <AccordionItem
@@ -362,10 +384,14 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               id="project-config"
               className="rounded-lg border border-border bg-bg"
             >
+              {/* 이름을 '이 보고서 > 설계'의 버튼과 맞춘다. 버튼은 '목차 편집'이라
+                  하고 여기는 '프로젝트 옵션'이라 하니, 같은 자리를 여는 문이 둘로
+                  보였다(2026-08-27 지적). 안에 목차 편집기와 옵션이 함께 있으므로
+                  이름이 둘 다를 말해야 한다. */}
               <AccordionTrigger className="px-4 py-3 hover:no-underline">
                 <span className="flex items-center gap-2 text-sm font-semibold text-fg">
                   <Settings2 className="h-4 w-4 text-fg-secondary" aria-hidden />
-                  프로젝트 옵션
+                  목차 편집 · 프로젝트 옵션
                 </span>
               </AccordionTrigger>
               <AccordionContent className="px-4 pb-4">
@@ -632,132 +658,5 @@ function PrimaryAction({
       <PlayCircle className="mr-1 h-4 w-4" />
       {run.isPending ? "재개 중…" : "멈췄으면 이어서 진행"}
     </Button>
-  );
-}
-
-function QuickAction({
-  icon: Icon,
-  title,
-  description,
-  disabled,
-  badge,
-  onClick,
-}: {
-  icon: typeof PlayCircle;
-  title: string;
-  description: string;
-  disabled?: boolean;
-  badge?: { text: string; tone: "warning" | "muted" };
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        "flex items-start gap-3 rounded border border-border bg-bg p-4 text-left transition-colors",
-        disabled
-          ? "cursor-not-allowed opacity-50"
-          : "hover:border-border-strong hover:bg-bg-secondary",
-      )}
-    >
-      <Icon className="mt-0.5 h-5 w-5 shrink-0 text-fg-secondary" aria-hidden />
-      <div className="flex flex-1 flex-col gap-0.5">
-        <span className="flex items-center gap-2 text-sm font-medium text-fg">
-          {title}
-          {badge ? (
-            <span
-              className={cn(
-                "rounded-sm border px-1.5 py-0.5 text-[10px] font-normal",
-                badge.tone === "warning"
-                  ? "border-fg-warning/30 bg-bg-warning text-fg-warning"
-                  : "border-border bg-bg-secondary text-fg-tertiary",
-              )}
-            >
-              {badge.text}
-            </span>
-          ) : null}
-        </span>
-        <span className="text-xs text-fg-tertiary">{description}</span>
-      </div>
-    </button>
-  );
-}
-
-// 단계 도달 판정용 순서 - 카드가 자기 단계 전에는 비활성(빈 화면으로 보내지 않기).
-// cancelled는 어디까지 갔는지 화면에서 모른다 - 갔던 데이터가 남아 있을 수 있어 열어 둔다.
-const STAGE_ORDER = [
-  "created",
-  "planning",
-  "researching",
-  "indexing",
-  "writing",
-  "reviewing",
-  "completed",
-  "archived",
-];
-
-function stageReached(status: string, stage: string): boolean {
-  if (status === "cancelled") return true;
-  return STAGE_ORDER.indexOf(status) >= STAGE_ORDER.indexOf(stage);
-}
-
-function QuickActions({
-  project,
-  pendingGate,
-  onNavigate,
-  liveStatus,
-}: {
-  project: Project;
-  pendingGate: { gate: string } | null;
-  onNavigate: (to: string) => void;
-  /** 진행 스냅샷의 상태 - 상세 스냅샷은 /run 뒤 한동안 낡아 있어서 실행이
-   * 시작됐는데도 카드가 "실행을 시작하면 열립니다"로 남았다. */
-  liveStatus?: ProjectStatus;
-}) {
-  {
-    /* '모순 해결' 카드는 페이지(reconcile)와 함께 제거됨(2026-08-04) -
-       문서 횡단 검증은 PM 검증(verify_findings)이 실물로 수행한다. */
-  }
-  // 한번 연 단계는 계속 열려 있다(사후 열람) - 아직 안 간 단계만 잠근다.
-  const status = liveStatus ?? project.status;
-  const briefReached = stageReached(status, "planning");
-  const sourcesReached = stageReached(status, "researching");
-  return (
-    <section>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <QuickAction
-          icon={ClipboardList}
-          title="설계 검토"
-          description={
-            briefReached ? "수집 전 절별 계획·검색 질의·예상 비용 확인" : "실행을 시작하면 열립니다"
-          }
-          disabled={!briefReached}
-          badge={
-            pendingGate?.gate === "design_brief"
-              ? { text: "결정 필요", tone: "warning" }
-              : undefined
-          }
-          onClick={() => onNavigate(`/projects/${project.id}/brief`)}
-        />
-        <QuickAction
-          icon={FileSearch}
-          title="자료 검토"
-          description={
-            sourcesReached ? "채택할 자료를 선택하고 추가 업로드" : "설계를 확정하면 열립니다"
-          }
-          disabled={!sourcesReached}
-          badge={
-            pendingGate?.gate === "source_pool" ? { text: "결정 필요", tone: "warning" } : undefined
-          }
-          onClick={() => onNavigate(`/projects/${project.id}/sources`)}
-        />
-        {/* '보고서 미리보기·편집' 카드도 제거 - 본문이 이 페이지 아래에 인라인이라
-            버튼이 자기 아래 내용을 가리켰다(2026-08-09 사용자 지적). */}
-        {/* 'HWPX 다운로드' 카드는 제거됨 - 완료 시 헤더 CTA가 같은 출력 페이지로
-            이동하는 중복 진입점이었다(진입점 정리 원칙). */}
-      </div>
-    </section>
   );
 }

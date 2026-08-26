@@ -6,8 +6,6 @@ import {
   FolderOpen,
   History,
   ListTree,
-  Loader2,
-  RefreshCw,
   ShieldCheck,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
@@ -18,7 +16,7 @@ import type { ProgressSnapshot } from "@/api/progress";
 import { useProjectSections } from "@/api/sections";
 import { useProjectSources } from "@/api/sources";
 import type { Project } from "@/api/types";
-import { useRerunVerify, useVerifyReport } from "@/api/verify";
+import { useVerifyReport } from "@/api/verify";
 import { useReportVersions } from "@/api/versions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,7 +24,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { env } from "@/env";
 import { useDownload } from "@/features/export/useDownload";
 import { ElapsedRow } from "@/features/progress/PipelineStepper";
-import { isMilestoneReason, reasonLabel } from "@/features/versions/reasons";
+import { reasonLabel } from "@/features/versions/reasons";
 import { VersionHistoryCard } from "@/features/versions/VersionHistoryCard";
 
 /** 상태 패널 - 런이 멈춰 있을 때의 우측 기둥.
@@ -61,7 +59,6 @@ export function StatePanel({
   const verify = useVerifyReport(projectId);
   const versions = useReportVersions(projectId);
   const insights = useInsights(projectId);
-  const rerunVerify = useRerunVerify(projectId);
   const { download, pending: downloading } = useDownload();
 
   const items = sources.data?.items ?? [];
@@ -77,9 +74,6 @@ export function StatePanel({
   const nCritical = findings.filter((f) => f.severity === "critical").length;
 
   const nVersions = versions.data?.length ?? 0;
-  // 패널 요약은 기록 카드의 기본 목록과 같은 수를 말해야 한다 - 절 단위 자동
-  // 스냅샷까지 세면 "버전 47개"가 되어 두 화면이 서로 다른 말을 한다(2026-08-27).
-  const nMilestones = (versions.data ?? []).filter((v) => isMilestoneReason(v.reason)).length;
   // 목록은 최신순 - 마지막에 무슨 일이 있었는지가 한눈에 들어와야 한다.
   const latest = versions.data?.[0];
   const hasInsights = Boolean(insights.data?.content);
@@ -159,12 +153,17 @@ export function StatePanel({
           ) : null
         }
         action={
+          // 본문은 **이 화면 아래에 이미 있다**. 예전에도 같은 이유로 '보고서
+          // 미리보기' 카드를 걷어냈는데(2026-08-09), 패널을 만들며 되살아났다
+          // - 버튼이 자기 아래 내용을 가리키면 누른 사람은 화면이 바뀔 줄 안다.
           <Button
             variant="outline"
             size="sm"
-            onClick={() => navigate(`/projects/${projectId}/preview`)}
+            onClick={() =>
+              document.getElementById("report-body")?.scrollIntoView({ behavior: "smooth" })
+            }
           >
-            본문 열기
+            본문 보기
             <ArrowRight className="ml-1 h-3.5 w-3.5" />
           </Button>
         }
@@ -183,18 +182,18 @@ export function StatePanel({
           ) : null
         }
         action={
+          // '다시 검증'은 경고를 보고 있는 카드에만 둔다 - 같은 일을 하는 버튼이 화면에
+          // 둘이면 어느 쪽을 눌러야 하는지 묻게 된다(2026-08-27 지적, 설계·자료 카드를
+          // 걷어낸 것과 같은 이유). 패널은 그 자리로 데려가는 문만 맡는다.
           <Button
             variant="outline"
             size="sm"
-            disabled={rerunVerify.isPending}
-            onClick={() => rerunVerify.mutate()}
+            onClick={() =>
+              document.getElementById("pm-verify")?.scrollIntoView({ behavior: "smooth" })
+            }
           >
-            {rerunVerify.isPending ? (
-              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-1 h-3.5 w-3.5" />
-            )}
-            다시 검증
+            경고 보기
+            <ArrowRight className="ml-1 h-3.5 w-3.5" />
           </Button>
         }
       />
@@ -227,7 +226,7 @@ export function StatePanel({
         label="버전"
         detail={
           latest
-            ? `주요 ${nMilestones}개 · 마지막 v${latest.version_no} (${reasonLabel(latest.reason)})`
+            ? `${nVersions}개 · 마지막 v${latest.version_no} (${reasonLabel(latest.reason)})`
             : "아직 없음"
         }
         action={

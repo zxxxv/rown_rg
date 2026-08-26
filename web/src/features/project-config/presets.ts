@@ -51,7 +51,7 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
     // 분석 역량은 목차 설계의 섹션별 에이전트 배정으로 일원화 - analyzers는 레거시(항상 빈 값)
     enabled_analyzers: [],
     depth_mode: "full_report",
-    model_mode: "standard",
+    model_mode: "premium",
     hyde_enabled: false,
     notification_channels: [],
     output_formats: ["hwpx"],
@@ -60,7 +60,7 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
     preset: "business_review",
     enabled_analyzers: [],
     depth_mode: "full_report",
-    model_mode: "standard",
+    model_mode: "premium",
     hyde_enabled: false,
     notification_channels: [],
     output_formats: ["hwpx"],
@@ -69,7 +69,7 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
     preset: "policy_research",
     enabled_analyzers: [],
     depth_mode: "full_report",
-    model_mode: "standard",
+    model_mode: "premium",
     hyde_enabled: false,
     notification_channels: [],
     output_formats: ["hwpx"],
@@ -79,7 +79,9 @@ export const PRESET_DEFAULTS: Record<Preset, ProjectConfig> = {
     enabled_analyzers: [],
     // 깊이 UI 제거(2026-08-07) - 신규 생성은 항상 full_report(분할 생성이 분량을 감당)
     depth_mode: "full_report",
-    model_mode: "economy",
+    // 자유 주제도 고급이 기본이다 - 품질이 가장 좋은 쪽을 기본으로 두고, 값을 아끼려는
+    // 사람이 내려서 고르게 한다(2026-08-27 결정). 예전 기본(절약)은 테스트 흔적이었다.
+    model_mode: "premium",
     hyde_enabled: false,
     notification_channels: [],
     output_formats: ["hwpx"],

@@ -1771,6 +1771,14 @@ async def update_project_config(
 
         await snapshot_report(session, project.id, reason="outline", created_by=current_user.id)
     await session.refresh(project)
+    if outline_changed and not is_running(project.id):
+        # 설계(브리프·소재 분담)를 새 목차로 다시 뽑는다 - 목차에서 파생되는 값이고
+        # LLM 1콜(≈$0.01)이라 사람에게 물을 이유가 없다. 저장 응답을 기다리게 하지
+        # 않으려고 백그라운드로 띄운다. **수집·작성은 따라 돌지 않는다**(절당 실측
+        # $0.4~1.3) - 그건 '미반영'으로 표시하고 사람이 고른다.
+        from src.workflows.runner import spawn_design_refresh
+
+        spawn_design_refresh(project.id)
     return project
 
 
@@ -2846,6 +2854,7 @@ def _version_read(
     *,
     author: str | None = None,
     prev: Any = None,
+    current_hash: str | None = None,
 ) -> ReportVersionRead:
     """버전 1행 → 목록 항목. prev(번호가 하나 작은 버전)가 있으면 변화량까지 센다."""
     sections = row.sections or []
@@ -2872,6 +2881,7 @@ def _version_read(
         created_by_name=author,
         delta_chars=delta,
         n_changed_sections=n_changed,
+        is_current=bool(current_hash) and row.content_hash == current_hash,
     )
 
 
@@ -2900,6 +2910,10 @@ async def list_report_versions(
         .scalars()
         .all()
     )
+    # 지금 본문의 지문을 한 번만 뜬다 - 어느 버전이 지금 원고와 같은지 표시용.
+    from src.services.sections.versions import sections_fingerprint
+
+    current_hash = await sections_fingerprint(session, project.id) if rows else None
     author_ids = {r.created_by for r in rows if r.created_by is not None}
     names: dict[UUID, str] = {}
     if author_ids:
@@ -2913,6 +2927,7 @@ async def list_report_versions(
             r,
             author=names.get(r.created_by) if r.created_by else None,
             prev=rows[i + 1] if i + 1 < len(rows) else None,
+            current_hash=current_hash,
         )
         for i, r in enumerate(rows)
     ]
@@ -3301,8 +3316,9 @@ def merge_config_update(current: dict[str, Any] | None, incoming: dict[str, Any]
     캐시·실행 계획·본문 행 연결이 전부 끊겼다. plan이 아직 없으면(브리프 전) 그대로
     없음 — 이후 단계가 outline의 안정 id로 만든다.
 
-    _design_plan(절 id 키)은 살아남은 절만 남기고, 리허설 재개방 예산은 새로
-    시작한다(절 구성이 달라지면 수집 공백 판단도 달라진다).
+    _design_plan(소재 분담)은 통째로 버린다 - 절 번호를 문자열로 박아 두는 값이라
+    번호가 밀리면 엉뚱한 절을 가리킨다. 버린 뒤 곧바로 다시 뽑는다(refresh_design_plan).
+    리허설 재개방 예산도 새로 시작한다(절 구성이 달라지면 수집 공백 판단도 달라진다).
     """
     keep = {k: v for k, v in (current or {}).items() if k in _INTERNAL_CONFIG_KEYS}
     if incoming.get("outline") != (current or {}).get("outline"):
@@ -3317,16 +3333,12 @@ def merge_config_update(current: dict[str, Any] | None, incoming: dict[str, Any]
             except ValueError:
                 # 빈 목차 등 — 검증이 먼저 막지만, 병합 실패가 저장을 죽이면 안 된다.
                 merged = []
-            alive = {str(p.section_id) for p in merged}
-            design = keep.get("_design_plan")
-            if isinstance(design, dict):
-                pruned = {k: v for k, v in design.items() if k in alive}
-                if pruned:
-                    keep["_design_plan"] = pruned
-                else:
-                    keep.pop("_design_plan", None)
-        else:
-            keep.pop("_design_plan", None)
+        # 소재 분담(_design_plan)은 **통째로 버린다**. 살아남은 절만 남기던 종전 방식은
+        # 가장 나쁜 중간이었다: 분담 문구가 절 번호를 문자열로 박아 두는데
+        # ("…는 1.2절 소관, 참조 한 문장으로 대체하라") 절을 끼워 넣으면 번호가 밀려
+        # **엉뚱한 절을 가리키는 지시**가 남는다(2026-08-27 실측). 새로 생긴 절은 담당이
+        # 없어 남의 소재를 또 쓴다. 없는 편이 틀린 것보다 낫고, 곧바로 다시 뽑는다.
+        keep.pop("_design_plan", None)
         # 목차가 바뀌면 절 구성이 달라진다 — 리허설 재개방 예산도 새로 시작.
         keep.pop("_rehearsal_reopens", None)
     return {**incoming, **keep}
@@ -3658,7 +3670,7 @@ async def get_section_evidence(
     units = uncited_units(row.content or "")
     _accounting = line_accounting(row.content or "")
     claims = await _claim_rows(
-        row, mapping, traceable, {r[0]: r[1] for r in chunk_rows}, cited_order
+        row, mapping, traceable, {r[0]: r[1] for r in chunk_rows}, cited_order, session
     )
     return SectionEvidenceResponse(
         section_id=str(row.id),
@@ -3685,6 +3697,7 @@ async def _claim_rows(
     traceable: bool,
     chunk_texts: dict[UUID, str],
     cited_order: list[UUID],
+    session: AsyncSession,
 ) -> list[ClaimAlignmentRead]:
     """문장별 근거 대조 - 마커가 청크까지 안 풀리는 옛 절은 인용 근거 전체를 후보로 둔다.
 
@@ -3699,7 +3712,7 @@ async def _claim_rows(
     aligned = align_section(row.content or "", chunk_texts, marker_chunks)
     from src.services.qa.dense_align import refine_crosslingual
 
-    await refine_crosslingual(aligned, chunk_texts)
+    await refine_crosslingual(aligned, chunk_texts, session=session)
     out: list[ClaimAlignmentRead] = []
     for a in aligned:
         span = a.span

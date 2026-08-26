@@ -28,7 +28,7 @@ import {
   useDecideQaSelect,
 } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
-import { estimateLabel, useCostBasis } from "@/api/cost";
+import { estimateLabel, formatUsd, useCostBasis } from "@/api/cost";
 import { progressKeys, useConfirmedStalled, useProgressSnapshot } from "@/api/progress";
 import { useProject } from "@/api/projects";
 import {
@@ -48,6 +48,7 @@ import type {
   SectionStatus,
 } from "@/api/types";
 import { useVerifyReport, verifyKeys } from "@/api/verify";
+import type { SectionHistoryEntry } from "@/api/versions";
 import { StatusDot, type StatusKind } from "@/components/data-display/StatusDot";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
@@ -57,6 +58,7 @@ import { Button } from "@/components/ui/button";
 import { HelpTip } from "@/components/ui/help-tip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
@@ -123,6 +125,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   });
   // **실제로 도는가** - 편집 잠금·표시의 유일한 근거. 단계 이름이 아니다.
   // 다 쓴 보고서가 'reviewing'이라는 이유로 읽기 전용이 되던 회귀가 여기서 났다.
+  const [verifyOpen, setVerifyOpen] = useState(false);
   const running = snapshotQuery.data?.runner_alive ?? false;
   // 죽은 런(백엔드 태스크 소실) - '작성 중' 스피너 배너를 중단 안내로 바꾼다.
   const stalled = useConfirmedStalled(snapshotQuery.data);
@@ -247,7 +250,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div id="report-body" className="flex flex-col gap-4">
       {qaPayload ? (
         <QaApproveBar projectId={projectId} payload={qaPayload} />
       ) : stalled ? (
@@ -264,7 +267,35 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
 
       {/* PM 검증 경고 - 고칠 수 있는 화면에 두되 접힌 한 줄로 시작(편집을 가리지 않게).
             절을 선택하면 그 절의 경고만 본문 위에 인라인 표시된다. */}
-      <VerifyReportCard projectId={projectId} collapsible onJump={jumpToRef} />
+      {/* 앵커 - 상태 패널의 '경고 보기'가 이 자리로 데려온다. 재검증 버튼은 경고를
+          보고 있는 이 배너에만 둔다(패널에도 두면 같은 일을 하는 버튼이 둘이다). */}
+      <div id="pm-verify">
+        <VerifyReportCard
+          projectId={projectId}
+          collapsible
+          onJump={jumpToRef}
+          onExpand={() => setVerifyOpen(true)}
+        />
+      </div>
+
+      {/* 경고 목록은 **오른쪽에 펼친다**. 본문 위에 펴면 글이 아래로 밀려, 경고를 읽는
+          동안 정작 고칠 문장이 안 보인다(2026-08-27 지적). modal=false라 열어 둔 채로
+          본문을 만질 수 있고, 항목을 눌러 절을 옮겨 다니는 동안 목록이 그대로 있다. */}
+      <Sheet open={verifyOpen} onOpenChange={setVerifyOpen} modal={false}>
+        <SheetContent
+          side="right"
+          overlay={false}
+          className="w-full overflow-y-auto shadow-2xl sm:max-w-lg"
+          onInteractOutside={(e) => e.preventDefault()}
+        >
+          <SheetHeader>
+            <SheetTitle>PM 검증 경고</SheetTitle>
+          </SheetHeader>
+          <div className="mt-4">
+            <VerifyReportCard projectId={projectId} onJump={jumpToRef} />
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* 버전 기록 목록은 개요 상태 패널의 '기록 열기'(시트)로 옮겼다 - 여기 끼워
             두면 PM 경고와 본문 사이를 가로막아 읽는 흐름이 끊긴다(2026-08-27 지적).
@@ -275,6 +306,18 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
           projectId={projectId}
           base={compareBase}
           target={compareTarget}
+          onChange={(b, t) =>
+            setParams(
+              (prev) => {
+                const next = new URLSearchParams(prev);
+                next.set("compare", String(b));
+                if (t === null) next.delete("compareTo");
+                else next.set("compareTo", String(t));
+                return next;
+              },
+              { replace: true },
+            )
+          }
           onClose={() =>
             setParams(
               (prev) => {
@@ -833,8 +876,11 @@ const MARKER_ONLY_BLOCK_RE =
 // 자주 쓰는 지시를 버튼으로 둔다(2026-08-26). 고르면 지시 칸에 쌓이고, 손으로 이어
 // 붙일 수도 있다 - 대체가 아니라 출발점이다.
 // 대상이 절이냐 블록이냐에 따라 쓸모가 갈려 따로 둔다.
+// 어느 절에서 눌러도 말이 되는 것만 둔다. '정책 시사점을 앞세워서'는 시장 규모·기술
+// 동향 절에서는 뜻이 안 통했다(2026-08-27 지적) - 보고서 유형·절 성격을 가리지 않는
+// 지시만 남긴다. 절마다 다른 지시가 필요하면 그건 손으로 적는 자리다.
 const SECTION_HINTS = [
-  "정책 시사점을 앞세워서",
+  "결론을 앞세워서",
   "수치와 출처를 더 촘촘히",
   "중복 서술을 걷어내고 간결하게",
   "앞 절과 이어지게",
@@ -910,6 +956,9 @@ function SectionView({
 
   // 이 절의 이력 - 버전 기록을 절 쪽에서 여는 문(2026-08-27).
   const [historyOpen, setHistoryOpen] = useState(false);
+  // 옛 원고를 **본문 자리에서** 읽는 중. 되돌린 게 아니라 잠깐 펴 놓은 것이다 -
+  // 이력 칸을 좁게 펴서 읽는 것보다 같은 폭·같은 서식으로 읽는 게 빠르다(2026-08-27).
+  const [peek, setPeek] = useState<SectionHistoryEntry | null>(null);
   // 절 전체 직접 편집(기존 동작)
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -924,7 +973,12 @@ function SectionView({
   // 표→그래프 변환 중인 블록 위치 - 대화상자에서 유형·축을 고르고 저장한다.
   const [convertIdx, setConvertIdx] = useState<number | null>(null);
 
-  const blocks = useMemo(() => (data ? splitBlocks(data.content) : []), [data]);
+  // 옛 원고를 보는 중이면 본문 자리에 그 내용을 편다. 편집·선택은 그동안 막는다
+  // (읽는 것과 고치는 것을 섞으면 어느 원고를 고치는지 알 수 없다).
+  const shownContent = peek ? peek.content : (data?.content ?? "");
+  // 읽는 중에는 고칠 수 없다 - 눈앞의 글이 저장 대상이 아니기 때문이다.
+  const canEdit = editable && peek === null;
+  const blocks = useMemo(() => splitBlocks(shownContent), [shownContent]);
   // 자료를 빼면서 근거 표기를 잃은 블록. 서버가 마커가 지워지는 순간 문단을 기록해 둔다
   // (지워진 마커는 흔적이 없어 나중에는 알 수 없다). 절 전체 재작성은 실측 $0.4~$1.3인데
   // 이 블록만 고치면 1콜이라 십수 배 싸다 - 어디를 고치면 되는지 짚어 주는 게 핵심이다.
@@ -1086,7 +1140,7 @@ function SectionView({
 
   // 클릭 = 토글(다중 선택). 직접 편집 중이면 대상이 바뀌지 않게 잠근다.
   const toggleBlock = (idx: number) => {
-    if (!editable || editing || editingIdx !== null) return;
+    if (!canEdit || editing || editingIdx !== null) return;
     setSelectedIdx((prev) => {
       const next = new Set(prev);
       if (next.has(idx)) next.delete(idx);
@@ -1202,7 +1256,7 @@ function SectionView({
           {/* 자물쇠 - 켜면 이 절에 AI가 못 닿는다. 묶음 재작성이 수십 절을 한 번에
               갈아엎는 자리라(전체 실측 $15.5), 공들여 손본 절을 지키는 유일한 수단이다.
               사람의 직접 편집은 막지 않는다 - 잠근 사람이 그 사람이다. */}
-          {editable || data.locked ? (
+          {canEdit || data.locked ? (
             <Button
               variant={data.locked ? "outline" : "ghost"}
               size="sm"
@@ -1247,7 +1301,7 @@ function SectionView({
                 {save.isPending ? "저장 중…" : "저장"}
               </Button>
             </>
-          ) : editable ? (
+          ) : canEdit ? (
             // 블록별 인라인 편집이 기본 경로라 전체 편집은 ghost로 낮춘다
             // (긴 본문을 한 상자에 넣으면 쓰기 불편하다는 실사용 지적, 2026-08-09)
             <Button variant="ghost" size="sm" onClick={startEdit} disabled={busy}>
@@ -1261,12 +1315,35 @@ function SectionView({
         </div>
       </header>
 
+      {peek ? (
+        <div className="flex flex-wrap items-center gap-2 border-b border-fg-info/30 bg-bg-info px-6 py-2.5 text-xs text-fg">
+          <Eye className="h-3.5 w-3.5 shrink-0 text-fg-info" aria-hidden />
+          <span className="font-medium">
+            v{peek.version_no}
+            {peek.until_version !== peek.version_no ? `~v${peek.until_version}` : ""} 시점의 원고를
+            보는 중
+          </span>
+          <span className="text-fg-secondary">
+            읽기 전용입니다 - 본문은 그대로이고, 되돌리려면 아래 이력에서 '이 내용으로'를 누르세요.
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto h-7 px-2 text-xs"
+            onClick={() => setPeek(null)}
+          >
+            <X className="mr-1 h-3.5 w-3.5" aria-hidden />
+            지금 본문으로
+          </Button>
+        </div>
+      ) : null}
       {historyOpen ? (
         <SectionHistoryPanel
           projectId={projectId}
           sectionId={sectionId}
           current={data.content}
           editable={editable}
+          onPeek={setPeek}
         />
       ) : null}
 
@@ -1753,7 +1830,7 @@ function SectionView({
             placeholder={
               selectedBlocks.length > 0
                 ? "예: 더 간결하게, 수치를 앞세워서"
-                : "예: 정책 시사점을 강조해서 다시 작성"
+                : "예: 최신 수치로 갱신하고 근거를 더 달아서"
             }
             className="h-9 flex-1 text-xs"
             disabled={chartSelected}
@@ -1773,6 +1850,15 @@ function SectionView({
                 ? `선택 ${selectedBlocks.length}개 재작성`
                 : "절 전체 재작성"}
           </Button>
+          {/* 값은 **그 버튼 옆에** 붙인다. 예전엔 두 값이 아래 한 줄에 나란히 놓여
+              어느 것이 어느 버튼 값인지 알 수 없었다(2026-08-27 지적: "가격이 3개
+              있는데 뭐가 맞는지 모르겠다"). 근거(절당 단가·출처)는 아래 한 번만 쓴다. */}
+          {selectedBlocks.length === 0 && !busy
+            ? (() => {
+                const one = estimateLabel(costBasis.data, 1, { compact: true });
+                return one ? <span className="text-[11px] text-fg-tertiary">{one}</span> : null;
+              })()
+            : null}
           {/* 눌러 담는 지시 - 빈 칸을 마주하는 시간을 없앤다. 이미 담긴 말은 다시
               담지 않는다(같은 지시를 두 번 쓰면 모델이 그 방향으로 과하게 기운다). */}
           <div className="flex w-full flex-wrap items-center gap-1">
@@ -1814,10 +1900,13 @@ function SectionView({
               disabled={busy || data.locked}
             />
           ) : null}
-          {/* 절 전체 재작성은 실측 $0.4~$1.3짜리 버튼이다 - 누르기 전에 값을 안다.
-              블록 재작성은 검색 없이 LLM 1콜이라 값이 다르므로 붙이지 않는다. */}
-          {selectedBlocks.length === 0 && !busy && estimateLabel(costBasis.data, 1) ? (
-            <span className="text-[11px] text-fg-tertiary">{estimateLabel(costBasis.data, 1)}</span>
+          {/* 값의 근거는 한 번만 말한다 - 버튼마다 "(이 보고서 실측)"을 되풀이하면
+              정작 금액이 안 읽힌다. */}
+          {selectedBlocks.length === 0 && !busy && costBasis.data?.per_section_usd != null ? (
+            <span className="w-full text-[11px] text-fg-tertiary">
+              절당 {formatUsd(costBasis.data.per_section_usd)} 기준 (
+              {costBasis.data.basis === "project" ? "이 보고서 실측" : "비슷한 보고서 평균"})
+            </span>
           ) : null}
           {/* 설명은 버튼이 스스로 말하게 하고 걷어냈다(2026-08-14 사용자 결정: 입력칸만).
               그래프 차단 안내만 남긴다 - 버튼이 비활성인 이유는 말해줘야 한다. */}

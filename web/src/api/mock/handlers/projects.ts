@@ -477,7 +477,7 @@ export const projectsHandlers = [
             {
               version_no: 6,
               until_version: 6,
-              reason: "manual:부장님 검토 전",
+              reason: "manual:표 손보기 전",
               created_at: new Date(Date.now() - 1_800_000).toISOString(),
               until_at: new Date(Date.now() - 1_800_000).toISOString(),
               title: "사업 배경",
@@ -541,8 +541,10 @@ export const projectsHandlers = [
         data: [
           {
             version_no: 6,
-            reason: "manual:부장님 검토 전",
+            reason: "manual:표 손보기 전",
             created_by_name: "관리자",
+            // 지금 본문이 이 버전과 같다 - 개요 배지가 'v6'(수정됨 없이)로 뜨는 경우.
+            is_current: true,
             delta_chars: 238,
             n_changed_sections: 1,
             created_at: new Date(Date.now() - 1_800_000).toISOString(),
@@ -690,6 +692,11 @@ export const projectsHandlers = [
     );
   }),
 
+  // 데모에서도 '다시 만들기'가 도는 모습이 보여야 한다 - 늘 running:false면
+  // 스피너·경과 시간·완료 토스트를 눌러서 확인할 길이 없다(2026-08-27).
+  let insightsRunningUntil = 0;
+  let insightsBuiltAt = "2026-08-26T19:28:25+00:00";
+
   // GET /projects/{id}/insights - 시사점 2~3쪽 요약(본문 HWPX 미포함, 별도 파일로 받음)
   http.get(url("projects/:id/insights"), () => {
     return HttpResponse.json(
@@ -722,8 +729,8 @@ export const projectsHandlers = [
           ].join("\n"),
           source_sections: ["2.5 환경분석 종합 및 시사점", "6.2 핵심 시사점 및 제언"],
           model: "claude-sonnet-4-6",
-          built_at: "2026-08-26T19:28:25+00:00",
-          running: false,
+          built_at: insightsBuiltAt,
+          running: Date.now() < insightsRunningUntil,
         },
       },
       { status: 200 },
@@ -752,6 +759,9 @@ export const projectsHandlers = [
 
   // POST /projects/{id}/insights - 요약 다시 만들기(데모는 즉시 수락만)
   http.post(url("projects/:id/insights"), () => {
+    // 실제로는 30초~2분 - 데모는 12초로 줄여 도는 구간을 눌러 볼 수 있게 한다.
+    insightsRunningUntil = Date.now() + 12_000;
+    insightsBuiltAt = new Date(insightsRunningUntil).toISOString();
     return HttpResponse.json({ data: { started: true, running: true } }, { status: 202 });
   }),
 
