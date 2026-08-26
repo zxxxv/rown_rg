@@ -1823,7 +1823,8 @@ async def assemble(state: ProjectState) -> ProjectState:
         # 설명은 장식 — 실패해도 풀네임만으로 렌더를 계속한다.
         logger.warning("assemble.glossary_failed", project_id=str(pid), exc_info=True)
     # (표지 뒤 요약문 생성·렌더는 r6에서 제거 — 최종 산출물에 싣지 않기로 함, 2026-08-13.)
-    # 시사점 2~3쪽 요약 — 웹 /insights 전용이라 아래 렌더에는 넘기지 않는다.
+    # 시사점 2~3쪽 요약 — 본문에 싣지 않는 별도 산출물이라 아래 렌더에는 넘기지 않는다
+    # (받아 볼 땐 /insights/export가 요약만 담은 한글 파일을 따로 렌더한다).
     # 원본 보고서는 그대로 두고 별도 산출물만 만든다(2026-08-25 결정).
     if settings.insights_enabled:
         try:

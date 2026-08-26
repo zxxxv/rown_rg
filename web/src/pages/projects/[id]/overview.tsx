@@ -571,7 +571,7 @@ function PrimaryAction({
           size="lg"
           variant="outline"
           onClick={() => navigate(`/projects/${project.id}/insights`)}
-          title="시사점·제언을 2~3쪽으로 압축한 요약 - 한글 파일에는 들어가지 않습니다"
+          title="시사점·제언을 2~3쪽으로 압축한 요약 - 본문 파일과 별개의 한글 파일로 받습니다"
         >
           <Lightbulb className="mr-1 h-4 w-4" />
           시사점 요약

@@ -4,13 +4,17 @@ import { apiClient } from "@/api/client";
 
 // 실계약: GET /projects/{id}/insights - 시사점 2~3쪽 요약.
 // 조립 시 LLM 1콜이 시사점·제언 절을 압축해 저장한다. 원본 보고서와 별개 산출물이라
-// HWPX에는 실리지 않는다(2026-08-25 결정) - 이 화면에서만 본다.
+// 본문 HWPX에는 실리지 않고(2026-08-25 결정), 요약만 담은 한글 파일로 따로 받는다
+// (2026-08-27, GET /projects/{id}/insights/export).
 // content=null은 오류가 아니라 '아직 없음'이다(조립 전이거나 생성 실패).
 export const InsightsSchema = z.object({
   content: z.string().nullable(),
   /** 요약의 원천이 된 절 라벨 - 무엇을 압축한 것인지 화면에 밝힌다 */
   source_sections: z.array(z.string()).default([]),
   model: z.string().nullable(),
+  /** 만든 시각(UTC ISO) - 온도 0이라 같은 본문이면 같은 요약이 나온다.
+   *  '다시 만들기'가 실제로 돌았는지는 이 값으로만 드러난다. */
+  built_at: z.string().nullable().default(null),
   running: z.boolean().default(false),
 });
 export type Insights = z.infer<typeof InsightsSchema>;

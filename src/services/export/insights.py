@@ -3,8 +3,9 @@
 본문의 시사점·제언 절은 그 자체로 3~5쪽이라(프리셋 min/max_chars 4500~7500) 결정권자가
 한눈에 훑기엔 길다. 그 절들을 다시 2~3쪽으로 압축한 별도 산출물을 만든다.
 
-**원본 보고서는 건드리지 않는다** — 이 요약은 HWPX에 실리지 않고 웹 /insights에서만 본다
-(2026-08-25 사용자 결정). 그래서 렌더 경로에는 아무 배선도 없다: 안 실리는 게 기본이다.
+**원본 보고서는 건드리지 않는다** — 이 요약은 본문 HWPX에 실리지 않는다(2026-08-25 결정).
+그래서 report_blocks 경로에는 아무 배선도 없다: 안 실리는 게 기본이다. 대신 요약만 담은
+**별도 한글 파일**을 따로 렌더해 내려받는다(2026-08-27 결정, export_insights).
 
 실패는 비치명 — 요약이 없으면 웹 화면이 "아직 없음"을 보여줄 뿐 렌더·완료를 막지 않는다.
 """
@@ -12,6 +13,8 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -20,8 +23,10 @@ import structlog
 from src.clients.llm.base import CompletionRequest, LLMClient, Message
 from src.clients.llm.factory import get_llm_client
 from src.clients.llm.token_tracker import token_context
+from src.core.clock import now
 from src.core.config import settings
 from src.core.state import ProjectState
+from src.export.hwpx_writer import Block, Heading, Paragraph, build_report
 from src.services.generation.planner import _parse_manifest
 
 logger = structlog.get_logger(__name__)
@@ -146,6 +151,10 @@ async def build_insights(
         "content": body,
         "source_sections": [label for label, _ in sections],
         "model": model,
+        # 만든 시각을 요약과 함께 남긴다 — 온도 0이라 같은 본문이면 같은 요약이 나와
+        # '다시 만들기'가 돌아도 화면이 그대로다. 그때 눌린 것이 실제로 돌았는지는
+        # 이 값만이 알려준다(projects.updated_at은 다른 편집에도 움직인다).
+        "built_at": now().isoformat(),
     }
 
 
@@ -161,3 +170,73 @@ async def persist_insights(project_id: UUID, insights: dict[str, Any] | None) ->
             update(Project).where(Project.id == project_id).values(insights=insights)
         )
         await session.commit()
+
+
+# 별도 파일의 첫 줄 제목 — 웹 화면(/insights)과 같은 이름을 써 둘이 같은 산출물임을
+# 파일만 받은 사람도 알아보게 한다.
+INSIGHTS_HEADING = "시사점 요약"
+
+
+def insights_blocks(state: ProjectState, content: str) -> list[Block]:
+    """요약 마크다운 → HWPX 블록.
+
+    본문 보고서와 **같은 서식**(용지 20/20/15/15·본문 12pt·개조식 계단)을 쓰되
+    표지·목차·참고문헌은 없다 — 2~3쪽 브리핑에 겉장 한 장을 앞세우면 읽을 것보다
+    겉이 두껍다. 대신 제목 아래 한 줄로 어느 보고서의 요약인지 밝힌다(파일이 따로
+    돌아다녀도 출처를 잃지 않게).
+    """
+    from src.services.export.report import _KST, _strip_citations, markdown_to_blocks
+
+    created = state.created_at
+    if created.tzinfo is None:  # 방어: naive면 UTC로 간주(저장은 UTC 규약)
+        created = created.replace(tzinfo=UTC)
+    origin = "  ·  ".join(
+        part
+        for part in (
+            (state.title or state.topic or "").strip(),
+            created.astimezone(_KST).strftime("%Y년 %m월 %d일"),
+        )
+        if part
+    )
+    blocks: list[Block] = [Heading(level=1, text=INSIGHTS_HEADING)]
+    if origin:
+        blocks.append(Paragraph(text=origin, align="LEFT"))
+    # (출처 n)은 프롬프트가 이미 옮기지 말라고 못박았지만 새어 나올 때가 있다. 이
+    # 파일엔 참고문헌 목록이 없어 번호만 남으면 가리킬 데가 없는 표식이 된다.
+    blocks.extend(markdown_to_blocks(_strip_citations(content)))
+    return blocks
+
+
+def export_insights(
+    state: ProjectState,
+    content: str,
+    *,
+    output_dir: str | Path | None = None,
+) -> Path:
+    """시사점 요약을 별도 HWPX로 렌더하고 경로를 반환.
+
+    본문 완성본과 섞이지 않게 `<export_dir>/_insights/`에 project_id로 이름 짓는다.
+    다운로드마다 다시 렌더하므로(요약은 3~5천 자, 1초 미만) 신선도 판정이 필요 없다 —
+    다시 만들기로 요약이 바뀌면 다음 내려받기가 곧 새 파일이다.
+    """
+    from src.services.export.report import export_filename
+
+    out_dir = (
+        Path(output_dir) if output_dir is not None else Path(settings.export_dir) / "_insights"
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    template = Path(settings.export_template_path) if settings.export_template_path else None
+    path = out_dir / export_filename(state.project_id)
+    build_report(
+        insights_blocks(state, content),
+        path,
+        template_path=template,
+        apply_chrome=template is None,
+    )
+    logger.info(
+        "insights.hwpx_written",
+        project_id=str(state.project_id),
+        path=str(path),
+        chars=len(content),
+    )
+    return path

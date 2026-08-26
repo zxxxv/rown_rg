@@ -1,4 +1,4 @@
-"""시사점 요약 빌더 — 입력 절 선별과 매니페스트 파싱 검증 (stub LLM, DB 없음).
+"""시사점 요약 빌더·별도 한글 파일 렌더 검증 (stub LLM, DB 없음).
 
 핵심 계약: **제목이 시사점·제언인 절만 골라 넣는다.** 프리셋 10종에서 그 절들이 이미
 그 장(또는 보고서 전체)의 결론을 담고, 나머지 본문까지 밀어 넣으면 입력이 20만 자로
@@ -7,15 +7,21 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 from src.clients.llm.base import CompletionRequest, CompletionResponse
 from src.core.state import ProjectState
 from src.core.types import SectionCandidate, SectionCandidateSet, SectionDraft, SectionPlan
+from src.export.hwpx_writer import Heading, Paragraph
 from src.services.export.insights import (
+    INSIGHTS_HEADING,
     MAX_INPUT_CHARS,
     build_insights,
     collect_insight_sections,
+    export_insights,
+    insights_blocks,
 )
 
 
@@ -146,3 +152,75 @@ class TestBuildInsights:
         sent = client.calls[0].messages[0].content
         # 주제·지시문이 앞에 붙으니 본문 몫만 상한을 넘지 않으면 된다.
         assert len(sent) < MAX_INPUT_CHARS + 1_000
+
+
+class TestInsightsBlocks:
+    """요약 마크다운 → 블록. 표지·목차 없이 제목 한 줄과 본문만 나가는 브리핑 문서다."""
+
+    def _brief_state(self) -> ProjectState:
+        return ProjectState(
+            user_id=uuid4(),
+            topic="탄소규제 대응",
+            title="EU 탄소국경조정제도 대응 전략",
+            created_at=datetime(2026, 8, 20, 3, 0, tzinfo=UTC),  # KST 12:00
+        )
+
+    def test_leads_with_heading_and_origin_line(self):
+        blocks = insights_blocks(
+            self._brief_state(),
+            """## 핵심 요약
+
+□ 첫 항목""",
+        )
+
+        assert blocks[0] == Heading(level=1, text=INSIGHTS_HEADING)
+        # 파일이 따로 돌아다녀도 어느 보고서의 요약인지 알아야 한다(작성일은 KST 표시).
+        assert isinstance(blocks[1], Paragraph)
+        assert "EU 탄소국경조정제도 대응 전략" in blocks[1].text
+        assert "2026년 08월 20일" in blocks[1].text
+
+    def test_body_keeps_outline_levels(self):
+        blocks = insights_blocks(
+            self._brief_state(),
+            """## 제언
+
+□ 대주제
+ㅇ 중간
+- 세부""",
+        )
+
+        body = blocks[2:]
+        assert body[0] == Heading(level=3, text="제언")
+        assert [b.indent for b in body[1:]] == [0, 1, 2]
+
+    def test_strips_leaked_source_marks(self):
+        """이 파일엔 참고문헌이 없다 — 새어 나온 (출처 n)은 가리킬 데가 없는 번호가 된다."""
+        blocks = insights_blocks(self._brief_state(), "□ 배출량 12% 감소 (출처 7)")
+
+        assert blocks[-1].text == "□ 배출량 12% 감소"
+
+    def test_falls_back_to_topic_when_untitled(self):
+        """제목 없이 만든 옛 프로젝트도 첫 줄이 비지 않게 — 표지 규칙과 같은 폴백."""
+        state = ProjectState(user_id=uuid4(), topic="탄소규제 대응")
+
+        assert "탄소규제 대응" in insights_blocks(state, "□ 항목")[1].text
+
+
+class TestExportInsights:
+    def test_writes_separate_hwpx_file(self, tmp_path: Path):
+        """본문 완성본과 다른 폴더·같은 이름 규칙 — 섞이지 않고 렌더 버전은 함께 붙는다."""
+        from src.services.export.report import export_filename
+
+        state = ProjectState(user_id=uuid4(), topic="탄소규제 대응", title="대응 전략")
+
+        path = export_insights(
+            state,
+            """## 핵심 요약
+
+□ 첫 항목""",
+            output_dir=tmp_path,
+        )
+
+        assert path == tmp_path / export_filename(state.project_id)
+        assert path.exists()
+        assert path.stat().st_size > 0

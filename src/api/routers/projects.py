@@ -1495,7 +1495,7 @@ async def rewrite_batch_status(
 
 
 class InsightsRead(BaseModel):
-    """시사점 2~3쪽 요약 — 웹 전용 산출물(HWPX에는 안 실린다).
+    """시사점 2~3쪽 요약 — 본문 보고서와 별개 산출물(본문 HWPX에는 안 실린다).
 
     content=None은 오류가 아니라 "아직 없음"이다(조립 전이거나 생성 실패). 화면은
     빈 상태와 다시 만들기 버튼을 보여주면 되므로 404로 만들지 않는다.
@@ -1504,6 +1504,9 @@ class InsightsRead(BaseModel):
     content: str | None
     source_sections: list[str]
     model: str | None
+    # 만든 시각(UTC ISO) — 같은 본문이면 같은 요약이 나와 '다시 만들기'가 돌아도
+    # 화면이 안 바뀐다. 이 값이 화면에서 유일하게 "방금 새로 만들었다"를 증명한다.
+    built_at: str | None
     running: bool
 
 
@@ -1513,13 +1516,14 @@ async def get_insights(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> InsightsRead:
-    """조립 시 만든 시사점 요약 — 원본 보고서와 별개 산출물이라 한글 파일엔 없다."""
+    """조립 시 만든 시사점 요약 — 본문 한글 파일엔 없고, 별도 파일로 내려받는다."""
     project = await _get_authorized_project(project_id, session, current_user)
     data = project.insights or {}
     return InsightsRead(
         content=data.get("content"),
         source_sections=list(data.get("source_sections") or []),
         model=data.get("model"),
+        built_at=data.get("built_at"),
         running=job_running(project.id, INSIGHTS_JOB),
     )
 
@@ -1557,6 +1561,46 @@ async def rebuild_insights(
         project.id, INSIGHTS_JOB, lambda _job: _resummarize_in_background(project.id)
     )
     return {"started": started is not None, "running": True}
+
+
+@router.get("/{project_id}/insights/export")
+async def download_insights(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> FileResponse:
+    """시사점 요약을 **별도 한글 파일**로 다운로드 — 본문 보고서 파일은 그대로.
+
+    요약은 본문 HWPX에 싣지 않기로 한 산출물이라(2026-08-25), 받아 보려면 자기
+    파일이 있어야 한다(2026-08-27 결정). 저장된 요약에서 그때그때 렌더하므로
+    '다시 만들기' 결과가 곧바로 파일에 반영된다.
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    content = str((project.insights or {}).get("content") or "").strip()
+    if not content:
+        raise NotFoundError(
+            message="시사점 요약이 아직 없습니다 - 요약을 먼저 만들어 주세요",
+            code="INSIGHTS_NOT_READY",
+        )
+    from src.services.export.insights import export_insights
+
+    owner = await session.get(User, project.owner_id)
+    rows = await _load_sections(session, project.id)
+    state = _state_for_export(project, rows, author=owner.name if owner else "")
+    try:
+        path = export_insights(state, content)
+    except PermissionError:
+        # 표준 경로가 잠겼다(사용자가 한컴에서 그 파일을 열어둔 경우) — 본문
+        # 다운로드와 같은 처방으로 임시 경로에 렌더해 내준다.
+        path = export_insights(
+            state, content, output_dir=Path(settings.export_dir) / "_insights" / "_locked"
+        )
+        logger.warning("insights.export_to_temp", project_id=str(project.id), path=str(path))
+    return FileResponse(
+        path,
+        filename=f"{project.title} 시사점 요약.hwpx",
+        media_type="application/octet-stream",
+    )
 
 
 @router.get("/{project_id}/progress", response_model=ProgressResponse)
@@ -1739,8 +1783,10 @@ async def delete_project(
     await session.execute(delete(Project).where(Project.id == project.id))
     # 렌더 버전이 파일명에 붙으므로 남은 버전을 전부 훑어 지운다(옛 버전 잔재 포함).
     try:
-        for stale in Path(settings.export_dir).glob(export_file_pattern(project.id)):
-            stale.unlink(missing_ok=True)
+        export_dir = Path(settings.export_dir)
+        for base in (export_dir, export_dir / "_insights"):
+            for stale in base.glob(export_file_pattern(project.id)):
+                stale.unlink(missing_ok=True)
     except OSError:
         # 파일 잠금 등으로 못 지워도 삭제 자체는 성공 처리(다음 삭제/정리 때 재시도)
         logger.warning("project.export_cleanup_failed", project_id=str(project.id))

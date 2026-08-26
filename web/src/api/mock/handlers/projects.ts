@@ -690,7 +690,7 @@ export const projectsHandlers = [
     );
   }),
 
-  // GET /projects/{id}/insights - 시사점 2~3쪽 요약(웹 전용, HWPX 미포함)
+  // GET /projects/{id}/insights - 시사점 2~3쪽 요약(본문 HWPX 미포함, 별도 파일로 받음)
   http.get(url("projects/:id/insights"), () => {
     return HttpResponse.json(
       {
@@ -722,11 +722,32 @@ export const projectsHandlers = [
           ].join("\n"),
           source_sections: ["2.5 환경분석 종합 및 시사점", "6.2 핵심 시사점 및 제언"],
           model: "claude-sonnet-4-6",
+          built_at: "2026-08-26T19:28:25+00:00",
           running: false,
         },
       },
       { status: 200 },
     );
+  }),
+
+  // GET /projects/{id}/insights/export - 시사점 요약만 담은 한글 파일(더미 blob)
+  http.get(url("projects/:id/insights/export"), ({ params }) => {
+    const project = DEMO_PROJECTS.find((p) => p.id === String(params.id));
+    const title = project?.title ?? "보고서";
+    const blob = new Blob([`HWPX insights demo for ${title}`], {
+      type: "application/octet-stream",
+    });
+    return new HttpResponse(blob, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/octet-stream",
+        // 헤더 값은 ISO-8859-1만 담을 수 있다 - 한글은 전부 퍼센트 인코딩해야
+        // Headers 생성이 던지지 않는다(실백엔드도 RFC 5987로 내려보낸다).
+        "Content-Disposition": `attachment; filename*=utf-8''${encodeURIComponent(
+          `${title} 시사점 요약.hwpx`,
+        )}`,
+      },
+    });
   }),
 
   // POST /projects/{id}/insights - 요약 다시 만들기(데모는 즉시 수락만)
