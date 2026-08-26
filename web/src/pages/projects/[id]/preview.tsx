@@ -63,6 +63,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
 import { chartFallbackTable } from "@/features/preview/chartSpec";
+import { claimTone } from "@/features/preview/ClaimHoverCard";
 import { BlockEvidence, partitionBlockEvidence } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { SectionVariantsPanel, SectionVariantsTrigger } from "@/features/preview/SectionVariants";
@@ -125,7 +126,17 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   });
   // **실제로 도는가** - 편집 잠금·표시의 유일한 근거. 단계 이름이 아니다.
   // 다 쓴 보고서가 'reviewing'이라는 이유로 읽기 전용이 되던 회귀가 여기서 났다.
-  const [verifyOpen, setVerifyOpen] = useState(false);
+  const [verifyOpen, setVerifyOpen] = useState(params.get("verify") === "1");
+  // 상태 패널의 '경고 보기'가 ?verify=1을 붙인다 - 다른 열에 있는 컴포넌트라 프롭을
+  // 깊게 넘기는 대신 URL로 잇는다. 열고 나서 지운다: 안 지우면 닫았다가 다시 눌러도
+  // URL이 그대로라 아무 일도 안 일어난다(버전 시트에서 겪은 것과 같은 함정).
+  useEffect(() => {
+    if (params.get("verify") !== "1") return;
+    setVerifyOpen(true);
+    const next = new URLSearchParams(params);
+    next.delete("verify");
+    setParams(next, { replace: true });
+  }, [params, setParams]);
   const running = snapshotQuery.data?.runner_alive ?? false;
   // 죽은 런(백엔드 태스크 소실) - '작성 중' 스피너 배너를 중단 안내로 바꾼다.
   const stalled = useConfirmedStalled(snapshotQuery.data);
@@ -1021,18 +1032,22 @@ function SectionView({
   // 70~90%가 비확정(검증런 실측)이라 모든 블록이 경고색이 되고 신호가 죽는다.
   const evidenceCounts = useMemo(() => {
     const data = evidenceQuery.data;
-    if (!data) return [] as { count: number; alert: number; needsCheck: number }[];
+    if (!data)
+      return [] as { count: number; alert: number; needsCheck: number; defect: number }[];
     return blocks.map((block) => {
       const { primary, claims } = partitionBlockEvidence([block], data);
       const alert = claims.filter(
         (c) => c.status === "unmatched" || c.ungrounded.length > 0,
       ).length;
+      // 문장 밑줄과 같은 함수로 가른다 - 배지와 본문이 다른 기준을 쓰면 "확인 필요 2"인데
+      // 물결이 3개인 어긋남이 난다.
+      const tones = claims.map(claimTone);
       // 인용은 했는데 대목까지는 못 간 문장 - "근거 있음"과 "근거는 있는데 확인이 필요함"을
       // 가르는 값이다. 배지가 둘을 같은 모양으로 그리면 사람이 어디를 열지 못 고른다.
-      const needsCheck = claims.filter(
-        (c) => c.status !== "aligned" && c.status !== "uncited",
-      ).length;
-      return { count: primary.length, alert, needsCheck };
+      const needsCheck = tones.filter((t) => t === "unconfirmed").length;
+      // 검사에서 걸린 문장 - 미확정과 같은 색이면 "볼 만한 것"과 "틀린 것"이 섞인다.
+      const defect = tones.filter((t) => t === "defect").length;
+      return { count: primary.length, alert, needsCheck, defect };
     });
   }, [blocks, evidenceQuery.data]);
   // 절 단위 대조 요약 - 블록을 일일이 열지 않아도 어디를 볼지 가늠하게(2026-08-14 지적).
@@ -1042,15 +1057,16 @@ function SectionView({
     // 판정 5종(대목 특정·추정·못 찾음·외국어·표기 없음)을 그대로 늘어놓으면 읽는 사람이
     // 할 일이 안 보인다 - weak·unmatched·crosslingual의 차이는 검출기 사정이라
     // "대목까지 확인됨 / 직접 확인 필요 / 표기 없음" 셋으로 접는다(2026-08-26 화면 정리).
-    const by = (s: string) => claims.filter((c) => c.status === s).length;
-    const uncited = by("uncited");
-    const aligned = by("aligned");
+    // 칸 나누기는 본문 밑줄과 **같은 함수**를 쓴다(claimTone) - 종전엔 여기서 status로,
+    // 본문에서 마커로 따로 갈라 "대목 확인 2"인데 실선이 3개인 어긋남이 가능했다.
+    const tally = { confirmed: 0, unconfirmed: 0, defect: 0, uncited: 0 };
+    for (const c of claims) tally[claimTone(c)] += 1;
     return {
       total: claims.length,
-      aligned,
-      needsCheck: claims.length - aligned - uncited,
-      uncited,
-      ungrounded: claims.filter((c) => c.ungrounded.length > 0).length,
+      aligned: tally.confirmed,
+      needsCheck: tally.unconfirmed,
+      uncited: tally.uncited,
+      ungrounded: tally.defect,
     };
   }, [evidenceQuery.data]);
   // 색칠에는 합류했지만 무근거 수치·산술 검사에서는 여전히 빠지는 줄 수 - 셈만 알린다.
@@ -1439,25 +1455,30 @@ function SectionView({
                       빠집니다.
                     </p>
                     <p>
-                      <b>대목 확인</b> - 인용한 자료에서 그 문장을 받치는 대목까지 찾은 것. 문장에
-                      마우스를 올리면 그 대목이 뜹니다.
+                      본문 밑줄은 두 가지를 한꺼번에 말합니다 - <b>색</b>은 인용 표기를 달았는지
+                      (파랑 있음 / 주황 없음), <b>선 모양</b>은 그 표기가 실제로 받치는지입니다.
                     </p>
                     <p>
-                      <b>확인 필요</b> - 인용 표기는 있는데 대목을 못 집은 것. 근거가 외국어면
-                      겹침으로 잴 수 없어 여기 들어갑니다 - 틀렸다는 뜻이 아니라 사람이 원문을 봐야
-                      한다는 뜻입니다.
+                      <b>대목 확인</b> (파랑 실선) - 인용한 자료에서 그 문장을 받치는 대목까지 찾은
+                      것. 문장에 마우스를 올리면 그 대목이 뜹니다.
                     </p>
                     <p>
-                      <b>표기 없음</b> - 인용 표기 없이 쓰인 문장. AI가 자료 없이 쓴 서술일 수 있어
-                      본문에 주황 밑줄로 표시됩니다.
+                      <b>확인 필요</b> (파랑 점선) - 인용 표기는 있는데 대목을 못 집은 것. 근거가
+                      외국어면 겹침으로 잴 수 없어 여기 들어갑니다 - 틀렸다는 뜻이 아니라 사람이
+                      원문을 봐야 한다는 뜻입니다.
+                    </p>
+                    <p>
+                      <b>무근거 수치</b> (빨강 물결) - 인용한 자료에서 못 찾은 수치가 든 문장.
+                      지어냈거나 다른 자료에서 왔을 수 있습니다. 없는 게 아니라 <b>검사에서 걸린
+                      것</b>이라 표시 스위치와 무관하게 늘 보입니다.
+                    </p>
+                    <p>
+                      <b>표기 없음</b> (주황 점선) - 인용 표기 없이 쓰인 문장. AI가 자료 없이 쓴
+                      서술일 수 있습니다.
                     </p>
                     <p>
                       <b>검사 제외</b> - 문장 종결형이 아니고 수치도 없어 무근거 수치·산술 검사에서
                       빠진 줄. 밑줄은 마커 유무로 칠해져 있습니다.
-                    </p>
-                    <p>
-                      <b>무근거 수치</b> - 인용한 자료에서 못 찾은 수치. 지어냈거나 다른 자료에서
-                      왔을 수 있습니다.
                     </p>
                   </HelpTip>
                   {claimStats ? (
@@ -1483,10 +1504,20 @@ function SectionView({
                           <span className="text-fg-warning">확인 필요 {claimStats.needsCheck}</span>
                         </>
                       ) : null}
+                      {claimStats.ungrounded > 0 ? (
+                        <>
+                          <span aria-hidden>·</span>
+                          {/* 없음이 아니라 **걸린 것**이라 셈에도 세운다 - 물음표 안에만
+                              두면 실제로 결함이 있는 절과 없는 절이 같아 보인다. */}
+                          <span className="text-fg-danger">
+                            무근거 수치 {claimStats.ungrounded}
+                          </span>
+                        </>
+                      ) : null}
                       {claimStats.uncited > 0 ? (
                         <>
                           <span aria-hidden>·</span>
-                          <span>표기 없음 {claimStats.uncited}</span>
+                          <span className="text-fg-warning">표기 없음 {claimStats.uncited}</span>
                         </>
                       ) : null}
                     </>
@@ -1660,9 +1691,11 @@ function SectionView({
                         <button
                           type="button"
                           title={
-                            (evidenceCounts[idx]?.needsCheck ?? 0) > 0
-                              ? "인용은 했지만 대목까지 확인되지 않은 문장이 있습니다 - 눌러서 확인하세요"
-                              : "이 블록의 문장이 어느 자료의 어느 대목을 보고 쓰였는지 봅니다"
+                            (evidenceCounts[idx]?.defect ?? 0) > 0
+                              ? "인용한 자료에서 못 찾은 수치가 있습니다 - 눌러서 확인하세요"
+                              : (evidenceCounts[idx]?.needsCheck ?? 0) > 0
+                                ? "인용은 했지만 대목까지 확인되지 않은 문장이 있습니다 - 눌러서 확인하세요"
+                                : "이 블록의 문장이 어느 자료의 어느 대목을 보고 쓰였는지 봅니다"
                           }
                           onClick={(e) => {
                             e.stopPropagation();
@@ -1672,21 +1705,26 @@ function SectionView({
                           onKeyDown={(e) => e.stopPropagation()}
                           className={cn(
                             "absolute -top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors",
-                            // 세 상태를 색으로 가른다(2026-08-27 요청): 열림 · 확인 필요 ·
-                            // 전부 확인됨. 종전엔 뒤 둘이 같은 회색이라 "근거 3"만 보고는
-                            // 열어 볼 값어치가 있는지 알 수 없었다.
+                            // 네 상태를 색으로 가른다: 열림 · 걸린 것 · 확인 필요 · 전부
+                            // 확인됨. 종전엔 "걸린 것"과 "확인 필요"가 같은 주황이라
+                            // **틀린 블록과 아직 안 본 블록이 같아 보였다** - 앞은 고쳐야
+                            // 하고 뒤는 읽어 보면 되는 것이라 할 일이 다르다(2026-08-27).
                             evidenceIdx === idx
                               ? "border-accent bg-bg-info text-fg-info"
-                              : (evidenceCounts[idx]?.needsCheck ?? 0) > 0
-                                ? "border-fg-warning/50 bg-bg-warning text-fg hover:border-fg-warning"
-                                : "border-fg-success/40 bg-bg-success text-fg-success hover:border-fg-success",
+                              : (evidenceCounts[idx]?.defect ?? 0) > 0
+                                ? "border-fg-danger/50 bg-bg-danger text-fg-danger hover:border-fg-danger"
+                                : (evidenceCounts[idx]?.needsCheck ?? 0) > 0
+                                  ? "border-fg-warning/50 bg-bg-warning text-fg hover:border-fg-warning"
+                                  : "border-fg-success/40 bg-bg-success text-fg-success hover:border-fg-success",
                           )}
                         >
                           <FileSearch className="h-3 w-3" aria-hidden />
                           근거 {evidenceCounts[idx]?.count}
-                          {(evidenceCounts[idx]?.needsCheck ?? 0) > 0
-                            ? ` · 확인 필요 ${evidenceCounts[idx]?.needsCheck}`
-                            : ""}
+                          {(evidenceCounts[idx]?.defect ?? 0) > 0
+                            ? ` · 무근거 수치 ${evidenceCounts[idx]?.defect}`
+                            : (evidenceCounts[idx]?.needsCheck ?? 0) > 0
+                              ? ` · 확인 필요 ${evidenceCounts[idx]?.needsCheck}`
+                              : ""}
                         </button>
                       ) : null}
                       <MarkdownContent

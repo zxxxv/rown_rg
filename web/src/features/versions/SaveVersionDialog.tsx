@@ -82,7 +82,7 @@ export function SaveVersionDialog({
                 void submit();
               }
             }}
-            placeholder="예: 부장님 검토 전"
+            placeholder="예: 표 손보기 전"
             disabled={save.isPending}
           />
           <p className="text-xs text-fg-tertiary">

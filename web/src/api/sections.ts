@@ -12,6 +12,7 @@ import {
   SourceDocumentSchema,
   SourceSchema,
 } from "@/api/types";
+import { verifyKeys } from "@/api/verify";
 
 export const sectionKeys = {
   all: ["sections"] as const,
@@ -97,6 +98,10 @@ async function invalidateSection(
     qc.invalidateQueries({ queryKey: sectionKeys.tree(projectId) }),
     // 본문이 바뀌면 인용 마커와 무인용 주장 수가 함께 달라진다.
     qc.invalidateQueries({ queryKey: sectionKeys.evidence(projectId, sectionId) }),
+    // PM 검증 상태도 다시 읽는다 - 본문이 바뀌면 남아 있는 경고가 낡는데(stale),
+    // 이걸 안 무효화하면 캐시가 "안 낡았다"를 계속 돌려줘 배지가 **새로고침 전엔
+    // 안 뜬다**(2026-08-27 사용자 지적: "그런 말이 없어").
+    qc.invalidateQueries({ queryKey: verifyKeys.all }),
   ]);
 }
 

@@ -9,12 +9,18 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useRestoreSection, useVersionDiff, type VersionDiffEntry } from "@/api/versions";
+import {
+  useReportVersions,
+  useRestoreSection,
+  useVersionDiff,
+  type VersionDiffEntry,
+} from "@/api/versions";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { cn } from "@/lib/utils";
+import { reasonLabel } from "./reasons";
 import { type BlockOp, type DiffOp, diffBlocks, diffWords, isOpaqueBlock } from "./textDiff";
 
 // 버전 비교 뷰 - "그때(vN)와 지금"을 절 단위로 훑는다.
@@ -537,16 +543,31 @@ export function VersionDiffView({
   projectId,
   base,
   target = null,
+  onChange,
   onClose,
 }: {
   projectId: string;
   base: number;
   /** null이면 현재 작업 사본과 비교(가장 흔한 용례). 값이 있으면 버전끼리 견준다 */
   target?: number | null;
+  /** 도구줄에서 견줄 짝을 바꿨다 - 부모가 URL을 갈아 끼운다 */
+  onChange: (base: number, target: number | null) => void;
   onClose: () => void;
 }) {
   const query = useVersionDiff(projectId, base, target);
   const restore = useRestoreSection(projectId, base);
+  // 견줄 버전을 여기서 바로 바꾼다 - 그전에는 다른 버전을 보려면 개요로 돌아가
+  // 기록을 다시 열어야 했다(2026-08-27 지적). 비교는 여러 번 갈아 보는 화면이다.
+  const versionList = useReportVersions(projectId);
+  // 왼쪽은 늘 더 오래된 쪽이다. 고르개를 자유롭게 두면 v6↔v3처럼 뒤집힌 짝이 나오는데,
+  // 그러면 "왼쪽=그때"라는 이 화면의 약속이 깨지고 추가/삭제가 거꾸로 읽힌다.
+  const pick = useCallback(
+    (b: number, t: number | null) => {
+      if (t !== null && t < b) onChange(t, b);
+      else onChange(b, t);
+    },
+    [onChange],
+  );
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [mode, setMode] = useState<"split" | "inline">("split");
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -570,9 +591,38 @@ export function VersionDiffView({
           그리고 닫는 문이 계속 손에 닿아야 한다. */}
       <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 rounded border border-border bg-bg-secondary px-3 py-2">
         <GitCompare className="h-4 w-4 shrink-0 text-fg-secondary" aria-hidden />
-        <span className="text-sm font-medium text-fg">
-          v{base} ↔ {target === null ? "현재 본문" : `v${target}`} 비교
-        </span>
+        <select
+          aria-label="왼쪽(그때) 버전"
+          className="h-7 rounded border border-border bg-bg px-1.5 text-xs text-fg"
+          value={base}
+          onChange={(e) => pick(Number(e.target.value), target)}
+        >
+          {/* 반대쪽에 이미 고른 버전은 뺀다 - 같은 버전끼리 견주면 늘 '변화 없음'이라
+              고를 수 있는 것 자체가 오답이다(2026-08-27 관통에서 잡힘). */}
+          {(versionList.data ?? [])
+            .filter((v) => v.version_no !== target)
+            .map((v) => (
+              <option key={v.version_no} value={v.version_no}>
+                v{v.version_no} {reasonLabel(v.reason)}
+              </option>
+            ))}
+        </select>
+        <span className="shrink-0 text-sm text-fg-secondary">↔</span>
+        <select
+          aria-label="오른쪽(견줄) 버전"
+          className="h-7 rounded border border-border bg-bg px-1.5 text-xs text-fg"
+          value={target === null ? "current" : String(target)}
+          onChange={(e) => pick(base, e.target.value === "current" ? null : Number(e.target.value))}
+        >
+          <option value="current">현재 본문</option>
+          {(versionList.data ?? [])
+            .filter((v) => v.version_no !== base)
+            .map((v) => (
+              <option key={v.version_no} value={v.version_no}>
+                v{v.version_no} {reasonLabel(v.reason)}
+              </option>
+            ))}
+        </select>
         {diff ? (
           <span className="text-xs text-fg-secondary">
             <span className="text-fg-success">추가 {diff.n_added}</span> ·{" "}

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { apiClient } from "@/api/client";
 import { projectKeys } from "@/api/projects";
 import { sectionKeys } from "@/api/sections";
+import { verifyKeys } from "@/api/verify";
 
 // 실계약: /projects/{id}/versions* - 보고서 버전 스냅샷(append-only)과 절 단위 비교.
 // 스냅샷은 조립 완성·재개 직전에 자동으로 쌓이고, diff는 절 안정 id로 서버가 판정한다.
@@ -20,6 +21,8 @@ export const ReportVersionSchema = z.object({
   /** 직전 버전 대비 변화 - 첫 버전은 null(견줄 앞이 없다) */
   delta_chars: z.number().int().nullish(),
   n_changed_sections: z.number().int().nullish(),
+  /** 지금 본문이 이 버전과 같은가 - 어느 것도 true가 아니면 마지막 스냅샷 이후 손댄 것 */
+  is_current: z.boolean().default(false),
 });
 export type ReportVersion = z.infer<typeof ReportVersionSchema>;
 
@@ -204,6 +207,8 @@ export function useRestoreSection(projectId: string, versionNo: number) {
       // 본문도 다시 읽는다 - 절 이력에서 되돌리면 눈앞의 본문이 바로 바뀌어야 한다
       // (비교 뷰에서만 쓰이던 시절엔 diff만 새로 받으면 됐다).
       void qc.invalidateQueries({ queryKey: sectionKeys.all });
+      // 되돌리기도 본문을 바꾼다 - PM 검증 판정이 낡았다는 표시가 따라와야 한다.
+      void qc.invalidateQueries({ queryKey: verifyKeys.all });
     },
   });
 }

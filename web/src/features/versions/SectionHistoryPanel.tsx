@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Undo2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Eye, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
@@ -45,12 +45,15 @@ function Entry({
   entry,
   current,
   editable,
+  onPeek,
 }: {
   projectId: string;
   sectionId: string;
   entry: SectionHistoryEntry;
   current: string;
   editable: boolean;
+  /** 본문 자리에서 이 시점 원고를 편다 - 접힌 칸을 펴서 좁게 읽는 것보다 빠르다 */
+  onPeek: (entry: SectionHistoryEntry | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const restore = useRestoreSection(projectId, entry.version_no);
@@ -61,10 +64,13 @@ function Entry({
 
   const onRestore = () => {
     restore.mutate(sectionId, {
-      onSuccess: () =>
+      onSuccess: () => {
+        // 되돌린 내용이 곧 본문이다 - 엿보기를 켜 둔 채면 같은 글이 두 겹으로 보인다.
+        onPeek(null);
         toast.success(`v${entry.version_no}의 내용으로 되돌렸습니다`, {
           description: "이 절만 바뀌었고, 되돌린 직후도 버전으로 남아 다시 되돌릴 수 있습니다.",
-        }),
+        });
+      },
       onError: (err: unknown) =>
         toast.error("되돌리기에 실패했습니다", {
           description: err instanceof ApiError ? err.message : "잠시 후 다시 시도해 주세요.",
@@ -107,7 +113,19 @@ function Entry({
           >
             지금 본문
           </Badge>
-        ) : editable ? (
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 shrink-0 px-2 text-xs"
+            onClick={() => onPeek(entry)}
+            title="이 시점 원고를 본문 자리에 펴서 읽습니다 - 되돌리는 것은 아닙니다"
+          >
+            <Eye className="mr-1 h-3.5 w-3.5" aria-hidden />
+            본문에서 보기
+          </Button>
+        )}
+        {!entry.is_current && editable ? (
           <Button
             variant="ghost"
             size="sm"
@@ -139,12 +157,14 @@ export function SectionHistoryPanel({
   sectionId,
   current,
   editable,
+  onPeek,
 }: {
   projectId: string;
   sectionId: string;
   /** 지금 화면의 본문 - 어느 칸이 현재와 같은지, 무엇이 달라졌는지 여기서 잰다 */
   current: string;
   editable: boolean;
+  onPeek: (entry: SectionHistoryEntry | null) => void;
 }) {
   const query = useSectionHistory(projectId, sectionId);
   if (query.isLoading) {
@@ -179,6 +199,7 @@ export function SectionHistoryPanel({
                 entry={e}
                 current={current}
                 editable={editable}
+                onPeek={onPeek}
               />
             ))}
           </ul>

@@ -13,6 +13,7 @@ import { useSearchParams } from "react-router-dom";
 import { useReportVersions } from "@/api/versions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { HelpTip } from "@/components/ui/help-tip";
 import { env } from "@/env";
 import { useDownload } from "@/features/export/useDownload";
 import { cn } from "@/lib/utils";
@@ -107,13 +108,36 @@ export function VersionHistoryCard({
               <span className="text-sm font-medium text-fg">버전 기록</span>
             </>
           )}
-          {/* 목록에 보이는 수(주요 버전)와 실제 마지막 변경을 갈라 말한다 - 그냥
-              "6개 · 최신 v6"이라고 하면 접힌 목록에 없는 번호를 가리켜 어긋난다. */}
+          {/* 수는 **전체**를 말한다. 한때 접힌 목록에 맞춰 "주요 버전 4개"라고 썼는데,
+              '주요'가 무슨 뜻인지가 화면 어디에도 없어 새 낱말만 하나 는 셈이었다
+              (2026-08-27 지적). 접었다는 사실은 바로 아래 토글 줄이 이미 말한다. */}
           <span className="text-xs text-fg-tertiary">
-            주요 버전 {versions.length - nMinor}개 · 마지막 변경 v{versions[0].version_no} (
+            {versions.length}개 · 마지막 변경 v{versions[0].version_no} (
             {fmtDate(versions[0].created_at)})
           </span>
         </button>
+        {/* 접는 머리가 <button>이라 도움말을 그 안에 넣으면 버튼 안 버튼이 된다
+            - 형제로 둔다. */}
+        <HelpTip title="버전 기록이란?" className="shrink-0">
+          <p>
+            본문이 바뀌는 순간마다 그때 원고를 통째로 얼려 둡니다. 나중에 "그때가 나았는데" 싶으면{" "}
+            <b>절 하나만</b> 그 시점으로 되돌릴 수 있습니다(전체 롤백은 없습니다 - 그 사이 손본 다른
+            절까지 잃으니까요).
+          </p>
+          <p className="mt-2">
+            자동으로 쌓이는 때: 보고서 완성, 다시 열기 직전, 최종 확정, 목차·자료 변경, 그리고 절을
+            재작성하거나 직접 고칠 때마다.
+          </p>
+          <p className="mt-2">
+            <b>버전 저장</b>은 그 사이에 사람이 직접 찍는 표식입니다. 이름을 붙여 두면 나중에
+            목록에서 찾을 지점이 됩니다. 같은 내용이면 새 버전을 만들지 않으니 눌러도 손해가
+            없습니다.
+          </p>
+          <p className="mt-2 text-fg-tertiary">
+            목록은 기본으로 문서 전체가 달라진 지점만 보여줍니다. 절 하나를 고칠 때마다 쌓이는
+            기록은 아래 토글로 펼칩니다.
+          </p>
+        </HelpTip>
         <Button
           type="button"
           variant="ghost"
@@ -180,6 +204,14 @@ export function VersionHistoryCard({
                     {reasonLabel(v.reason)}
                   </span>
                   <span className="shrink-0 text-xs text-fg-tertiary">{fmtDate(v.created_at)}</span>
+                  {v.is_current ? (
+                    <Badge
+                      variant="outline"
+                      className="shrink-0 border-fg-success/40 bg-bg-success text-fg-success"
+                    >
+                      지금 본문
+                    </Badge>
+                  ) : null}
                   <span className="min-w-0 flex-1 truncate text-xs text-fg-tertiary">
                     {/* 절대값(20절·20만자)은 어느 줄에서나 같아서 훑을 수가 없다 -
                         직전 버전 대비 변화를 앞세운다. 첫 버전만 절대값을 쓴다. */}
