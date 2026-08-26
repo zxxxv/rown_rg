@@ -360,3 +360,146 @@ class TestManualVersion:
         )
         assert resp.status_code == 422
         assert resp.json()["error"]["code"] == "NOTHING_TO_SNAPSHOT"
+
+
+class TestSectionHistory:
+    """절 쪽에서 들어가는 버전 이력 — 같은 내용 구간은 한 칸으로 접힌다."""
+
+    async def test_history_collapses_unchanged_runs(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        pid = await _insert_project(test_session, worker_user.id, "completed")
+        mine, other = uuid.uuid4(), uuid.uuid4()
+        test_session.add_all(
+            [_row(pid, mine, 3, 2, "편익 추정", "본문 A"), _row(pid, other, 1, 1, "개요", "가")]
+        )
+        await test_session.flush()
+        assert await snapshot_report(test_session, pid, reason="assemble") == 1
+        # 남의 절만 고친 버전 두 개 — 내 절 이력에는 한 칸도 늘지 않아야 한다.
+        for i, text in enumerate(("나", "다"), start=2):
+            (await test_session.get(Section, other)).content = text
+            await test_session.flush()
+            assert await snapshot_report(test_session, pid, reason="edit:1.1") == i
+        # 이제 내 절을 고친다.
+        (await test_session.get(Section, mine)).content = "본문 B"
+        await test_session.flush()
+        assert await snapshot_report(test_session, pid, reason="rewrite:3.2") == 4
+        await test_session.commit()
+
+        resp = await test_client.get(
+            f"/api/v1/projects/{pid}/sections/{mine}/history", headers=_auth(worker_token)
+        )
+        assert resp.status_code == 200, resp.text
+        entries = resp.json()["entries"]
+        # A(v1~v3) · B(v4) — 남의 절만 바뀐 v2·v3는 접힌다.
+        assert [(e["version_no"], e["until_version"]) for e in entries] == [(4, 4), (1, 3)]
+        assert entries[0]["content"] == "본문 B"
+        assert entries[0]["is_current"] is True
+        assert entries[1]["content"] == "본문 A"
+        assert entries[1]["is_current"] is False
+
+    async def test_history_skips_versions_without_the_section(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        pid = await _insert_project(test_session, worker_user.id, "completed")
+        first = uuid.uuid4()
+        test_session.add(_row(pid, first, 1, 1, "가", "처음"))
+        await test_session.flush()
+        assert await snapshot_report(test_session, pid, reason="assemble") == 1
+        later = uuid.uuid4()
+        test_session.add(_row(pid, later, 1, 2, "나중에 생긴 절", "새 본문"))
+        await test_session.flush()
+        assert await snapshot_report(test_session, pid, reason="outline") == 2
+        await test_session.commit()
+
+        resp = await test_client.get(
+            f"/api/v1/projects/{pid}/sections/{later}/history", headers=_auth(worker_token)
+        )
+        assert resp.status_code == 200, resp.text
+        entries = resp.json()["entries"]
+        assert [e["version_no"] for e in entries] == [2]
+
+
+class TestVersionListMetadata:
+    async def test_list_carries_author_and_delta(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        pid = await _insert_project(test_session, worker_user.id, "completed")
+        sid = uuid.uuid4()
+        test_session.add(_row(pid, sid, 1, 1, "가", "짧은 본문"))
+        await test_session.commit()
+        await test_client.post(
+            f"/api/v1/projects/{pid}/versions", headers=_auth(worker_token), json={}
+        )
+        row = await test_session.get(Section, sid)
+        row.content = "짧은 본문에 더 붙인 긴 본문"
+        await test_session.commit()
+        await test_client.post(
+            f"/api/v1/projects/{pid}/versions", headers=_auth(worker_token), json={}
+        )
+
+        versions = (
+            await test_client.get(f"/api/v1/projects/{pid}/versions", headers=_auth(worker_token))
+        ).json()
+        assert versions[0]["created_by_name"] == worker_user.name
+        assert versions[0]["delta_chars"] == len("짧은 본문에 더 붙인 긴 본문") - len("짧은 본문")
+        assert versions[0]["n_changed_sections"] == 1
+        # 첫 버전은 견줄 앞이 없다.
+        assert versions[1]["delta_chars"] is None
+        assert versions[1]["n_changed_sections"] is None
+
+
+class TestVerifyStaleness:
+    """PM 검증 경고가 지금 본문에 대한 판정인지 — 절을 고치면 낡았다고 말해야 한다."""
+
+    async def test_stale_flips_after_editing_a_section(
+        self,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+        test_session: AsyncSession,
+    ):
+        from src.services.qa.pm_verify import persist_findings
+
+        pid = await _insert_project(test_session, worker_user.id, "completed")
+        sid = uuid.uuid4()
+        test_session.add(_row(pid, sid, 1, 1, "가", "검증 대상 본문"))
+        await test_session.commit()
+
+        before = (
+            await test_client.get(
+                f"/api/v1/projects/{pid}/verify-report/status", headers=_auth(worker_token)
+            )
+        ).json()
+        # 검증 전에는 모른다 — 모르는 것을 낡았다고 하지 않는다.
+        assert before["stale"] is False and before["verified_at"] is None
+
+        await persist_findings(pid, [])
+        fresh = (
+            await test_client.get(
+                f"/api/v1/projects/{pid}/verify-report/status", headers=_auth(worker_token)
+            )
+        ).json()
+        assert fresh["stale"] is False and fresh["verified_at"] is not None
+
+        row = await test_session.get(Section, sid)
+        row.content = "사람이 고친 본문"
+        await test_session.commit()
+        stale = (
+            await test_client.get(
+                f"/api/v1/projects/{pid}/verify-report/status", headers=_auth(worker_token)
+            )
+        ).json()
+        assert stale["stale"] is True

@@ -28,6 +28,7 @@ from sqlalchemy import delete, select
 from src.clients.llm.base import CompletionRequest, LLMClient, Message
 from src.clients.llm.factory import get_llm_client
 from src.clients.llm.token_tracker import token_context
+from src.core.clock import now as clock_now
 from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import SectionDraft, SectionPlan
@@ -378,14 +379,30 @@ async def ledger_join_findings(project_id: UUID) -> list[dict[str, Any]]:
 
 
 async def persist_findings(project_id: UUID, rows: list[dict[str, Any]]) -> None:
-    """프로젝트 단위 전량 교체 저장 — 재실행 시 stale 경고가 남지 않는다."""
+    """프로젝트 단위 전량 교체 저장 — 재실행 시 stale 경고가 남지 않는다.
+
+    저장과 **같은 트랜잭션에서** 판정 대상 본문의 지문·시각을 찍는다(projects.config
+    의 _verify_stamp). 이게 없으면 화면은 "지금 남아 있는 경고가 지금 본문에 대한
+    판정인지"를 알 방법이 없다 — 절을 고쳐도 검증은 자동으로 다시 돌지 않으므로,
+    낡은 경고가 최신 판정처럼 보였다(2026-08-27). 지문은 버전 스냅샷과 같은 것을 써서
+    두 기능이 "본문이 달라졌다"를 같은 기준으로 말하게 한다.
+    """
+    from src.db.models.project import Project
     from src.db.models.verify_finding import VerifyFinding
     from src.db.session import async_session_maker
+    from src.services.sections.versions import sections_fingerprint
 
     async with async_session_maker() as session:
         await session.execute(delete(VerifyFinding).where(VerifyFinding.project_id == project_id))
         for row in rows:
             session.add(VerifyFinding(project_id=project_id, **row))
+        project = await session.get(Project, project_id)
+        if project is not None:
+            stamp = {
+                "hash": await sections_fingerprint(session, project_id),
+                "at": clock_now().isoformat(),
+            }
+            project.config = {**(project.config or {}), "_verify_stamp": stamp}
         await session.commit()
 
 

@@ -37,6 +37,8 @@ from src.api.schemas.project import (
     ProjectRead,
     ReportVersionDetail,
     ReportVersionRead,
+    SectionHistoryEntry,
+    SectionHistoryResponse,
     SourceIncludeUpdate,
     SourceItemRead,
     UserPresetRead,
@@ -2313,10 +2315,29 @@ async def verify_report_status(
     project_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
-) -> dict[str, bool]:
-    """재검증이 도는 중인지 - 화면이 폴링을 멈출 시점을 안다."""
+) -> dict[str, Any]:
+    """재검증이 도는 중인지 + **지금 경고가 지금 본문에 대한 것인지**.
+
+    검증은 조립 때와 사람이 누를 때만 돈다. 그 사이에 절을 고치거나 되돌리면 남아
+    있는 경고는 옛 본문에 대한 판정인데, 화면에는 그 사실이 어디에도 없었다
+    (2026-08-27). 판정 시점 지문(_verify_stamp)과 현재 본문 지문을 대조해 알려준다.
+
+    지문이 없으면(옛 프로젝트·검증 전) stale=false — 모르는 것을 낡았다고 하지 않는다.
+    """
+    from src.services.sections.versions import sections_fingerprint
+
     project = await _get_authorized_project(project_id, session, current_user)
-    return {"running": job_running(project.id, PM_VERIFY_JOB)}
+    stamp = (project.config or {}).get("_verify_stamp")
+    stale = False
+    verified_at = None
+    if isinstance(stamp, dict) and stamp.get("hash"):
+        verified_at = stamp.get("at")
+        stale = await sections_fingerprint(session, project.id) != stamp["hash"]
+    return {
+        "running": job_running(project.id, PM_VERIFY_JOB),
+        "stale": stale,
+        "verified_at": verified_at,
+    }
 
 
 @router.patch("/{project_id}/verify-report/{finding_id}", response_model=VerifyFindingRead)
@@ -2750,14 +2771,37 @@ async def save_manual_version(
     return ManualVersionResponse(version_no=version_no, created=version_no > before)
 
 
-def _version_read(row: Any) -> ReportVersionRead:
+def _version_read(
+    row: Any,
+    *,
+    author: str | None = None,
+    prev: Any = None,
+) -> ReportVersionRead:
+    """버전 1행 → 목록 항목. prev(번호가 하나 작은 버전)가 있으면 변화량까지 센다."""
     sections = row.sections or []
+    total = sum(len(s.get("content") or "") for s in sections)
+    delta = None
+    n_changed = None
+    if prev is not None:
+        prev_sections = prev.sections or []
+        delta = total - sum(len(s.get("content") or "") for s in prev_sections)
+        # 절 안정 id로 맞춘다 — 번호가 밀린 것을 '바뀐 절'로 세지 않는다(diff와 같은 규칙).
+        before = {str(s.get("section_id")): s for s in prev_sections}
+        n_changed = 0
+        for cur in sections:
+            was = before.pop(str(cur.get("section_id")), None)
+            if was is None or (was.get("content") or "") != (cur.get("content") or ""):
+                n_changed += 1
+        n_changed += len(before)  # 그 사이 사라진 절
     return ReportVersionRead(
         version_no=row.version_no,
         reason=row.reason,
         created_at=row.created_at,
         n_sections=len(sections),
-        total_chars=sum(len(s.get("content") or "") for s in sections),
+        total_chars=total,
+        created_by_name=author,
+        delta_chars=delta,
+        n_changed_sections=n_changed,
     )
 
 
@@ -2767,7 +2811,11 @@ async def list_report_versions(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> list[ReportVersionRead]:
-    """버전 히스토리 — 최신부터. 커밋 로그처럼 사유·시각·규모만 싣는다(본문은 상세로)."""
+    """버전 히스토리 — 최신부터. 커밋 로그처럼 사유·시각·규모·누가·변화량만 싣는다.
+
+    본문은 상세(/versions/{n})로. 변화량은 저장하지 않고 인접 버전을 견줘 계산한다 —
+    스냅샷이 이미 전량이라 추가 비용이 없고, 저장하면 옛 행에는 없는 값이 된다.
+    """
     project = await _get_authorized_project(project_id, session, current_user)
     from src.db.models.report_version import ReportVersion
 
@@ -2782,7 +2830,22 @@ async def list_report_versions(
         .scalars()
         .all()
     )
-    return [_version_read(r) for r in rows]
+    author_ids = {r.created_by for r in rows if r.created_by is not None}
+    names: dict[UUID, str] = {}
+    if author_ids:
+        for u in (
+            (await session.execute(select(User).where(User.id.in_(author_ids)))).scalars().all()
+        ):
+            names[u.id] = u.name
+    # rows는 내림차순이라 뒤 항목이 곧 직전 버전이다.
+    return [
+        _version_read(
+            r,
+            author=names.get(r.created_by) if r.created_by else None,
+            prev=rows[i + 1] if i + 1 < len(rows) else None,
+        )
+        for i, r in enumerate(rows)
+    ]
 
 
 async def _get_version(session: AsyncSession, project_id: UUID, version_no: int):
@@ -2851,6 +2914,50 @@ async def get_report_version(
     return ReportVersionDetail(
         **head.model_dump(),
         sections=[VersionSection.model_validate(s) for s in row.sections or []],
+    )
+
+
+@router.get("/{project_id}/sections/{section_id}/history", response_model=SectionHistoryResponse)
+async def get_section_history(
+    project_id: UUID,
+    section_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SectionHistoryResponse:
+    """이 절 하나의 이력 — 버전 기록을 절 쪽에서 들어가는 문.
+
+    실제 동선이 "이 절, 예전 게 나았는데"인데 그전에는 버전 기록 → 비교 → 그 절
+    찾기로 거꾸로 가야 했다(2026-08-27). 여기서는 바로 이 절이 달라진 시점만 본다.
+
+    같은 내용이 이어지는 구간은 한 칸으로 접는다 — 버전은 어느 절을 고쳐도 하나씩
+    생겨서, 접지 않으면 20절 보고서에서 한 절의 이력이 '안 바뀐 기록'으로 가득 찬다.
+    """
+    from src.db.models.report_version import ReportVersion
+    from src.services.sections.versions import section_timeline
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    row = await _get_section(session, project.id, section_id)
+    versions = (
+        await session.execute(
+            select(
+                ReportVersion.version_no,
+                ReportVersion.reason,
+                ReportVersion.created_at,
+                ReportVersion.sections,
+            )
+            .where(ReportVersion.project_id == project.id)
+            .order_by(ReportVersion.version_no)
+        )
+    ).all()
+    entries = section_timeline([(v[0], v[1], v[2], v[3]) for v in versions], section_id)
+    current = row.content or ""
+    for e in entries:
+        e["is_current"] = e["content"] == current
+    # 최신부터 읽는다(목록·비교와 같은 방향).
+    entries.reverse()
+    return SectionHistoryResponse(
+        section_id=str(section_id),
+        entries=[SectionHistoryEntry.model_validate(e) for e in entries],
     )
 
 
@@ -3101,6 +3208,9 @@ async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID
 _INTERNAL_CONFIG_KEYS = (
     "cancelled_from",
     "verify_resolved",
+    # _verify_stamp = PM 검증이 판정한 본문의 지문·시각(pm_verify.persist_findings).
+    # 폼이 config를 통째로 되돌려 보낼 때 지워지면 "낡은 경고" 표시가 조용히 꺼진다.
+    "_verify_stamp",
     "models",
     # analysts = 런 시작 시점 DB 출신 에이전트 스냅샷(러너 기록) - 그 런이 실제로 쓴 페르소나.
     "analysts",

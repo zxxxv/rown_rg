@@ -260,13 +260,20 @@ class VerifyFindingResolve(BaseModel):
 
 
 class ReportVersionRead(BaseModel):
-    """보고서 버전 목록 항목 — 커밋 로그처럼 읽힌다(사유·시각·규모)."""
+    """보고서 버전 목록 항목 — 커밋 로그처럼 읽힌다(사유·시각·규모·누가)."""
 
     version_no: int
     reason: str  # assemble | reopen | manual
     created_at: datetime
     n_sections: int
     total_chars: int
+    # 누가 남긴 버전인가 — 자동 스냅샷(조립)은 없음. 여럿이 만지는 보고서에서
+    # "누가 언제 왜"의 '누가'가 빠져 있었다(2026-08-27).
+    created_by_name: str | None = None
+    # 직전(번호가 하나 작은) 버전 대비 변화 — 절대값(총 20절·20만자)만으로는
+    # 목록을 훑어 "여기서 뭐가 바뀌었나"를 볼 수 없다. 첫 버전은 None.
+    delta_chars: int | None = None
+    n_changed_sections: int | None = None
 
 
 class VersionSection(BaseModel):
@@ -292,6 +299,29 @@ class VersionDiffEntry(BaseModel):
     moved: bool = False
     base: VersionSection | None = None
     target: VersionSection | None = None
+
+
+class SectionHistoryEntry(BaseModel):
+    """한 절의 이력 한 칸 — 같은 내용이 이어진 구간은 하나로 접혀 있다."""
+
+    # 이 내용이 처음 나타난 버전 / 같은 내용이 유지된 마지막 버전
+    version_no: int
+    until_version: int
+    reason: str
+    created_at: datetime
+    until_at: datetime
+    title: str
+    chapter_number: int
+    section_number: int
+    content: str
+    char_count: int
+    # 지금 본문과 같은 내용인가 — 되돌릴 필요가 없는 칸을 화면이 갈라 보여준다.
+    is_current: bool = False
+
+
+class SectionHistoryResponse(BaseModel):
+    section_id: str
+    entries: list[SectionHistoryEntry]
 
 
 class VersionDiffResponse(BaseModel):

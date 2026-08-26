@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Eye,
   FileSearch,
+  History,
   Image as ImageIcon,
   Lock,
   LockOpen,
@@ -65,8 +66,8 @@ import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { SectionVariantsPanel, SectionVariantsTrigger } from "@/features/preview/SectionVariants";
 import { type SourceLocation, SourceViewer } from "@/features/preview/SourceViewer";
 import { findTable, isTableCaption, type MarkdownTable } from "@/features/preview/tableToChart";
+import { SectionHistoryPanel } from "@/features/versions/SectionHistoryPanel";
 import { VersionDiffView } from "@/features/versions/VersionDiffView";
-import { VersionHistoryCard } from "@/features/versions/VersionHistoryCard";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
@@ -143,6 +144,12 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
   // 버전 비교 모드 - URL 파라미터(?compare=1)라 새로고침·링크 공유에도 유지된다.
   const compareBase = useMemo(() => {
     const raw = params.get("compare");
+    const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [params]);
+  // 견줄 상대 - 없으면 현재 본문과 비교(가장 흔한 용례).
+  const compareTarget = useMemo(() => {
+    const raw = params.get("compareTo");
     const n = raw ? Number.parseInt(raw, 10) : Number.NaN;
     return Number.isFinite(n) && n > 0 ? n : null;
   }, [params]);
@@ -259,32 +266,21 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
             절을 선택하면 그 절의 경고만 본문 위에 인라인 표시된다. */}
       <VerifyReportCard projectId={projectId} collapsible onJump={jumpToRef} />
 
-      {/* 버전 기록 - 조립 완성·재개 직전 자동 스냅샷. "현재와 비교"를 누르면 아래
-            본문 영역이 절 단위 diff 뷰로 바뀐다(URL 파라미터라 링크 공유 가능). */}
-      <VersionHistoryCard
-        projectId={projectId}
-        projectTitle={projectQuery.data?.title ?? "보고서"}
-        onCompare={(v) =>
-          setParams(
-            (prev) => {
-              const next = new URLSearchParams(prev);
-              next.set("compare", String(v));
-              return next;
-            },
-            { replace: true },
-          )
-        }
-      />
+      {/* 버전 기록 목록은 개요 상태 패널의 '기록 열기'(시트)로 옮겼다 - 여기 끼워
+            두면 PM 경고와 본문 사이를 가로막아 읽는 흐름이 끊긴다(2026-08-27 지적).
+            비교(diff)는 넓은 자리가 필요해 아래 본문 영역을 그대로 쓴다. */}
 
       {compareBase !== null ? (
         <VersionDiffView
           projectId={projectId}
           base={compareBase}
+          target={compareTarget}
           onClose={() =>
             setParams(
               (prev) => {
                 const next = new URLSearchParams(prev);
                 next.delete("compare");
+                next.delete("compareTo");
                 return next;
               },
               { replace: true },
@@ -912,6 +908,8 @@ function SectionView({
   const costBasis = useCostBasis(projectId);
   const rewriteBlock = useRewriteBlock(projectId, sectionId);
 
+  // 이 절의 이력 - 버전 기록을 절 쪽에서 여는 문(2026-08-27).
+  const [historyOpen, setHistoryOpen] = useState(false);
   // 절 전체 직접 편집(기존 동작)
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -1189,6 +1187,18 @@ function SectionView({
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* 이 절의 이력 - 되돌리기는 읽기 전용에서도 '보는 것'까지는 된다.
+              버전 기록 카드로 가서 비교를 열고 이 절을 찾아 내려가던 길을 없앤다. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-pressed={historyOpen}
+            onClick={() => setHistoryOpen((v) => !v)}
+            title="이 절이 예전에 어땠는지 보고, 그때 내용으로 되돌립니다"
+          >
+            <History className="mr-1 h-4 w-4" />
+            이력
+          </Button>
           {/* 자물쇠 - 켜면 이 절에 AI가 못 닿는다. 묶음 재작성이 수십 절을 한 번에
               갈아엎는 자리라(전체 실측 $15.5), 공들여 손본 절을 지키는 유일한 수단이다.
               사람의 직접 편집은 막지 않는다 - 잠근 사람이 그 사람이다. */}
@@ -1250,6 +1260,15 @@ function SectionView({
           )}
         </div>
       </header>
+
+      {historyOpen ? (
+        <SectionHistoryPanel
+          projectId={projectId}
+          sectionId={sectionId}
+          current={data.content}
+          editable={editable}
+        />
+      ) : null}
 
       {data.evidence.plan_failed ? (
         // 분할 계획이 무너지면 절이 단일 호출로 떨어져 짧아지고 인용이 준다.

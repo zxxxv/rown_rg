@@ -262,9 +262,20 @@ export const projectsHandlers = [
     );
   }),
 
-  // GET /projects/{id}/verify-report/status - 재검증 진행 여부(데모는 항상 idle)
+  // GET /projects/{id}/verify-report/status - 재검증 진행 여부 + 판정이 낡았는지.
+  // stale=검증 뒤 본문이 바뀜(실계약: 서버가 판정 시점 지문과 지금을 대조). 데모는
+  // 낡은 상태로 둔다 - 이 표시가 있고 없고가 화면에서 갈리는 것을 눌러 볼 수 있게.
   http.get(url("projects/:id/verify-report/status"), () => {
-    return HttpResponse.json({ data: { running: false } }, { status: 200 });
+    return HttpResponse.json(
+      {
+        data: {
+          running: false,
+          stale: true,
+          verified_at: new Date(Date.now() - 5_400_000).toISOString(),
+        },
+      },
+      { status: 200 },
+    );
   }),
 
   // POST /projects/{id}/verify-report - 재검증 시작(데모는 즉시 수락만)
@@ -455,6 +466,60 @@ export const projectsHandlers = [
     return HttpResponse.json({ data: { version_no: 7, created: true } }, { status: 200 });
   }),
 
+  // GET /projects/{id}/sections/{sid}/history - 이 절 하나의 이력.
+  // 같은 내용이 이어진 구간은 서버가 접어서 준다(version_no~until_version).
+  http.get(url("projects/:id/sections/:sid/history"), ({ params }) => {
+    return HttpResponse.json(
+      {
+        data: {
+          section_id: String(params.sid),
+          entries: [
+            {
+              version_no: 6,
+              until_version: 6,
+              reason: "manual:부장님 검토 전",
+              created_at: new Date(Date.now() - 1_800_000).toISOString(),
+              until_at: new Date(Date.now() - 1_800_000).toISOString(),
+              title: "사업 배경",
+              chapter_number: 1,
+              section_number: 1,
+              content: "이 섹션은 작성 완료 상태이지만 시연용 본문은 아직 준비되지 않았습니다.",
+              char_count: 47,
+              is_current: true,
+            },
+            {
+              version_no: 3,
+              until_version: 5,
+              reason: "rewrite:1.1",
+              created_at: new Date(Date.now() - 3_000_000).toISOString(),
+              until_at: new Date(Date.now() - 2_400_000).toISOString(),
+              title: "사업 배경",
+              chapter_number: 1,
+              section_number: 1,
+              content: "AI가 다시 쓰기 전 본문입니다. 표현이 더 길고 늘어졌습니다.",
+              char_count: 33,
+              is_current: false,
+            },
+            {
+              version_no: 1,
+              until_version: 2,
+              reason: "assemble",
+              created_at: new Date(Date.now() - 86_400_000).toISOString(),
+              until_at: new Date(Date.now() - 3_600_000).toISOString(),
+              title: "사업 배경",
+              chapter_number: 1,
+              section_number: 1,
+              content: "처음 완성됐을 때의 본문.",
+              char_count: 14,
+              is_current: false,
+            },
+          ],
+        },
+      },
+      { status: 200 },
+    );
+  }),
+
   // POST /projects/{id}/versions/{n}/restore/{sec} - 그 절만 그때로 되돌리기.
   http.post(url("projects/:id/versions/:no/restore/:sec"), ({ params }) => {
     return HttpResponse.json(
@@ -477,6 +542,9 @@ export const projectsHandlers = [
           {
             version_no: 6,
             reason: "manual:부장님 검토 전",
+            created_by_name: "관리자",
+            delta_chars: 238,
+            n_changed_sections: 1,
             created_at: new Date(Date.now() - 1_800_000).toISOString(),
             n_sections: 20,
             total_chars: 202_140,
@@ -484,6 +552,9 @@ export const projectsHandlers = [
           {
             version_no: 5,
             reason: "restore:3.2",
+            created_by_name: "관리자",
+            delta_chars: -408,
+            n_changed_sections: 1,
             created_at: new Date(Date.now() - 2_400_000).toISOString(),
             n_sections: 20,
             total_chars: 201_902,
@@ -491,6 +562,9 @@ export const projectsHandlers = [
           {
             version_no: 4,
             reason: "edit:3.2",
+            created_by_name: "관리자",
+            delta_chars: 536,
+            n_changed_sections: 1,
             created_at: new Date(Date.now() - 2_700_000).toISOString(),
             n_sections: 20,
             total_chars: 202_310,
@@ -498,6 +572,9 @@ export const projectsHandlers = [
           {
             version_no: 3,
             reason: "rewrite:2.1",
+            created_by_name: "관리자",
+            delta_chars: 216,
+            n_changed_sections: 1,
             created_at: new Date(Date.now() - 3_000_000).toISOString(),
             n_sections: 20,
             total_chars: 201_774,
@@ -505,6 +582,9 @@ export const projectsHandlers = [
           {
             version_no: 2,
             reason: "finalize",
+            created_by_name: "관리자",
+            delta_chars: 5354,
+            n_changed_sections: 3,
             created_at: new Date(Date.now() - 3_600_000).toISOString(),
             n_sections: 20,
             total_chars: 201_558,
@@ -522,19 +602,88 @@ export const projectsHandlers = [
     );
   }),
 
-  // GET /projects/{id}/versions/diff - 절 단위 비교(데모는 변화 없음)
+  // GET /projects/{id}/versions/diff - 절 단위 비교.
+  // 좌우 분할·목차·단어 색칠을 눌러 보려면 실제로 바뀐 절이 있어야 한다 - 수정
+  // (문단 일부·표 수치)·추가·삭제를 한 벌씩 담는다(2026-08-27).
   http.get(url("projects/:id/versions/diff"), ({ request }) => {
-    const base = Number(new URL(request.url).searchParams.get("base") ?? 1);
+    const q = new URL(request.url).searchParams;
+    const base = Number(q.get("base") ?? 1);
+    const targetRaw = q.get("target");
+    const NL = String.fromCharCode(10);
+    const sec = (
+      section_id: string,
+      chapter_number: number,
+      section_number: number,
+      chapter_title: string,
+      title: string,
+      content: string,
+    ) => ({ section_id, chapter_number, section_number, chapter_title, title, content });
+    const beforeBody = [
+      "□ EU CBAM 전환기간이 2026년 종료되면서 국내 수출기업의 부담이 시작된다",
+      "",
+      "  ㅇ 철강·알루미늄·시멘트 3개 품목이 대EU 수출액의 12.4%를 차지한다",
+      "",
+      "| 품목 | 수출액 | 비중 |",
+      "| --- | --- | --- |",
+      "| 철강 | 41억 달러 | 7.1% |",
+      "| 알루미늄 | 18억 달러 | 3.1% |",
+      "",
+      "□ 전환기간 중에는 보고 의무만 있었다",
+    ].join(NL);
+    const afterBody = [
+      "□ EU CBAM 전환기간이 2026년 종료되면서 국내 수출기업의 실질 부담이 본격화된다",
+      "",
+      "  ㅇ 철강·알루미늄·시멘트 3개 품목이 대EU 수출액의 12.4%를 차지한다",
+      "",
+      "| 품목 | 수출액 | 비중 |",
+      "| --- | --- | --- |",
+      "| 철강 | 43억 달러 | 7.4% |",
+      "| 알루미늄 | 18억 달러 | 3.1% |",
+      "",
+      "□ 전환기간 중에는 보고 의무만 있었고, 2026년부터 인증서 구매 의무가 더해진다",
+      "",
+      "  ㅇ 실측 기반 산정으로 전환한 기업은 기본값 적용 대비 부담이 30% 이상 낮아진다",
+    ].join(NL);
+    const entries = [
+      {
+        section_id: "sec-1-1",
+        status: "modified",
+        moved: false,
+        base: sec("sec-1-1", 1, 1, "사업 개요", "사업 배경", beforeBody),
+        target: sec("sec-1-1", 1, 1, "사업 개요", "사업 배경", afterBody),
+      },
+      {
+        section_id: "sec-1-2",
+        status: "unchanged",
+        moved: false,
+        base: sec("sec-1-2", 1, 2, "사업 개요", "사업 목적", "□ 바뀌지 않은 절."),
+        target: sec("sec-1-2", 1, 2, "사업 개요", "사업 목적", "□ 바뀌지 않은 절."),
+      },
+      {
+        section_id: "sec-2-1",
+        status: "added",
+        moved: false,
+        base: null,
+        target: sec("sec-2-1", 2, 1, "사업 환경 분석", "거시 환경 (STEEP)", "□ 이번에 새로 쓴 절."),
+      },
+      {
+        section_id: "sec-2-9",
+        status: "removed",
+        moved: false,
+        base: sec("sec-2-9", 2, 9, "사업 환경 분석", "중복 진단", "□ 목차에서 뺀 절."),
+        target: null,
+      },
+    ];
     return HttpResponse.json(
       {
         data: {
           base_version: base,
-          target_version: null,
-          n_added: 0,
-          n_removed: 0,
-          n_modified: 0,
-          n_unchanged: 20,
-          entries: [],
+          target_version: targetRaw === null ? null : Number(targetRaw),
+          n_added: 1,
+          n_removed: 1,
+          n_modified: 1,
+          n_unchanged: 17,
+          entries,
         },
       },
       { status: 200 },

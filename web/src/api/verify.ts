@@ -85,7 +85,16 @@ export function useVerifyStatus(projectId: string, enabled = true) {
     queryKey: [...verifyKeys.report(projectId), "status"],
     queryFn: async () => {
       const data = await apiClient.get<unknown>(`projects/${projectId}/verify-report/status`);
-      return z.object({ running: z.boolean() }).parse(data);
+      return z
+        .object({
+          running: z.boolean(),
+          // 지금 남아 있는 경고가 **지금 본문**에 대한 판정인가. 검증은 조립 때와
+          // 사람이 누를 때만 돌아서, 그 사이 절을 고치면 경고가 낡는다(2026-08-27).
+          // 옛 백엔드·검증 전에는 필드가 없거나 null - 모르는 것을 낡았다고 하지 않는다.
+          stale: z.boolean().catch(false),
+          verified_at: z.string().nullish(),
+        })
+        .parse(data);
     },
     enabled: Boolean(projectId) && enabled,
     refetchInterval: (query) => (query.state.data?.running ? 4000 : false),

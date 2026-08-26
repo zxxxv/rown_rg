@@ -32,7 +32,8 @@ import { cn } from "@/lib/utils";
 const UNCOVERED_AXES = "절 간 지표 값 대조(예정)·자료 시점·코퍼스 밖 사실 검증";
 
 // 활성 검사 축 요약 - 축별 상세는 경고 카테고리가 이미 말해준다.
-const ACTIVE_AXES = "근거 대조(수치)·코퍼스 재검색(오귀속/창작 구분)·산술·형식·잔재·마커 오귀속·절 간 중복";
+const ACTIVE_AXES =
+  "근거 대조(수치)·코퍼스 재검색(오귀속/창작 구분)·산술·형식·잔재·마커 오귀속·절 간 중복";
 
 function CoverageLine({ projectId }: { projectId: string }) {
   const query = useVerifyCoverage(projectId);
@@ -78,7 +79,12 @@ export function VerifyReportCard({
   const projectQuery = useProject(projectId);
   const rerun = useRerunVerify(projectId);
   const resolve = useResolveFinding(projectId);
-  const running = useVerifyStatus(projectId).data?.running ?? false;
+  const status = useVerifyStatus(projectId).data;
+  const running = status?.running ?? false;
+  // 검증은 조립 때와 사람이 누를 때만 돈다 - 그 사이 절을 고치면 남은 경고(그리고
+  // '경고 없음'까지)가 옛 본문에 대한 판정이 된다. 그 사실이 화면 어디에도 없었다
+  // (2026-08-27). 서버가 판정 시점 본문 지문과 지금을 대조해 알려준다.
+  const stale = (status?.stale ?? false) && !running;
   const [open, setOpen] = useState(false);
   // 처리한 경고는 기본으로 접는다 - 남은 일만 보이는 게 목록의 목적이다.
   const [showDone, setShowDone] = useState(false);
@@ -88,13 +94,36 @@ export function VerifyReportCard({
   const done = all.filter((f) => f.resolved);
   const findings = showDone ? all : all.filter((f) => !f.resolved);
 
+  const verifiedAt = status?.verified_at ? new Date(status.verified_at) : null;
+  const verifiedLabel =
+    verifiedAt && !Number.isNaN(verifiedAt.getTime())
+      ? `${verifiedAt.getMonth() + 1}/${verifiedAt.getDate()} ${String(
+          verifiedAt.getHours(),
+        ).padStart(2, "0")}:${String(verifiedAt.getMinutes()).padStart(2, "0")}`
+      : null;
+  // 낡음 표시 - 경고가 있든 없든 함께 붙는다. 0건이 낡은 채로 '깨끗함'처럼 읽히는
+  // 것이 이 구멍에서 제일 위험하다.
+  const staleBadge = stale ? (
+    <span
+      title={`마지막 검증${verifiedLabel ? ` ${verifiedLabel}` : ""} 이후 본문이 바뀌었습니다 - 지금 보이는 결과는 그때 본문에 대한 판정입니다`}
+      className="inline-flex shrink-0 items-center gap-1 rounded border border-fg-warning/50 bg-bg-warning px-1.5 py-0.5 text-[11px] text-fg"
+    >
+      <AlertTriangle className="h-3 w-3" aria-hidden />
+      검증 뒤 본문이 바뀜
+    </span>
+  ) : null;
+
   const rerunButton = (
     <Button
       size="sm"
-      variant="outline"
+      variant={stale ? "default" : "outline"}
       onClick={() => rerun.mutate()}
       disabled={running || rerun.isPending}
-      title="수정한 내용을 반영해 검증을 다시 실행합니다"
+      title={
+        stale
+          ? "본문이 바뀌었습니다 - 지금 본문으로 다시 판정합니다"
+          : "수정한 내용을 반영해 검증을 다시 실행합니다"
+      }
     >
       {running || rerun.isPending ? (
         <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" aria-hidden />
@@ -124,6 +153,7 @@ export function VerifyReportCard({
         <div className="flex flex-wrap items-center gap-2">
           <ShieldCheck className="h-4 w-4 shrink-0 text-fg-success" aria-hidden />
           PM 검증 경고 없음 - 아래 검사 범위에서 지적할 것을 찾지 못했습니다
+          {staleBadge}
           <span className="ml-auto">{rerunButton}</span>
         </div>
         <CoverageLine projectId={projectId} />
@@ -169,6 +199,7 @@ export function VerifyReportCard({
           <span className="text-xs text-fg-tertiary">펼쳐서 항목을 누르면 해당 절로 이동</span>
           <ChevronDown className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
         </button>
+        {staleBadge}
         {rerunButton}
       </div>
     );
@@ -193,6 +224,7 @@ export function VerifyReportCard({
           PM 검증 경고 {findings.length}건{criticalCount > 0 ? ` (critical ${criticalCount})` : ""}
         </span>
         <span className="text-xs text-fg-tertiary">납품 전 확인 권장</span>
+        {staleBadge}
         {onOpenEditor ? (
           <Button size="sm" variant="outline" className="ml-auto" onClick={onOpenEditor}>
             미리보기·편집에서 확인 <ArrowRight className="ml-1 h-3.5 w-3.5" />
@@ -229,6 +261,10 @@ export function VerifyReportCard({
         </h2>
         <span className="text-xs text-fg-tertiary">납품 전 확인 권장 - 편집기에서 수정 가능</span>
         <div className="ml-auto flex items-center gap-2">
+          {staleBadge}
+          {verifiedLabel && !stale ? (
+            <span className="text-xs text-fg-tertiary">마지막 검증 {verifiedLabel}</span>
+          ) : null}
           {done.length > 0 ? (
             <button
               type="button"

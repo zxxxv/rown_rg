@@ -130,6 +130,59 @@ async def current_sections_snapshot(
     return _snapshot_sections(list(rows))
 
 
+async def sections_fingerprint(session: AsyncSession, project_id: UUID) -> str:
+    """현재 본문의 지문 — "이 판정이 어느 본문에 대한 것이었나"를 나중에 대조하려고.
+
+    버전 중복 판정과 **같은 지문**을 쓴다(절 id·번호·제목·본문). PM 검증처럼 본문을
+    통째로 보고 판정하는 절차는 이 값을 찍어 두면, 뒤에 사람이 절을 고쳤을 때
+    "그 판정은 지금 본문에 대한 게 아니다"를 화면이 말할 수 있다(2026-08-27).
+    """
+    return _content_hash(await current_sections_snapshot(session, project_id))
+
+
+def section_timeline(
+    versions: list[tuple[int, str, Any, Any]], section_id: UUID
+) -> list[dict[str, Any]]:
+    """버전 목록 → **이 절 하나**의 이력. 같은 내용이 이어지는 구간은 하나로 접는다.
+
+    versions는 (version_no, reason, created_at, sections JSONB)를 **오름차순**으로 받는다.
+
+    접는 이유: 버전은 어느 절을 고쳐도 하나씩 생긴다(절 20개 보고서에서 3.2를 한 번
+    고치면 나머지 19절의 이력에도 같은 내용이 한 줄씩 늘어난다). 접지 않으면 이력이
+    "안 바뀐 기록"으로 가득 찬다 — 사람이 보려는 건 이 절이 **달라진 시점**뿐이다.
+
+    각 항목의 version_no는 그 내용이 **처음 나타난** 버전이고, until_version은 같은
+    내용이 유지된 마지막 버전이다(어느 쪽에서 되돌려도 결과가 같다).
+    """
+    out: list[dict[str, Any]] = []
+    for version_no, reason, created_at, sections in versions:
+        snap = next(
+            (s for s in (sections or []) if str(s.get("section_id")) == str(section_id)), None
+        )
+        if snap is None:
+            continue  # 그 시점 목차에 없던 절(나중에 추가됨)
+        content = str(snap.get("content") or "")
+        if out and out[-1]["content"] == content and out[-1]["title"] == snap.get("title"):
+            out[-1]["until_version"] = version_no
+            out[-1]["until_at"] = created_at
+            continue
+        out.append(
+            {
+                "version_no": version_no,
+                "until_version": version_no,
+                "reason": reason,
+                "created_at": created_at,
+                "until_at": created_at,
+                "title": str(snap.get("title") or ""),
+                "chapter_number": int(snap.get("chapter_number") or 0),
+                "section_number": int(snap.get("section_number") or 0),
+                "content": content,
+                "char_count": len(content),
+            }
+        )
+    return out
+
+
 async def latest_version_no(session: AsyncSession, project_id: UUID) -> int:
     n = (
         await session.execute(

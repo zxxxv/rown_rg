@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
 import { projectKeys } from "@/api/projects";
+import { sectionKeys } from "@/api/sections";
 
 // 실계약: /projects/{id}/versions* - 보고서 버전 스냅샷(append-only)과 절 단위 비교.
 // 스냅샷은 조립 완성·재개 직전에 자동으로 쌓이고, diff는 절 안정 id로 서버가 판정한다.
@@ -14,6 +15,11 @@ export const ReportVersionSchema = z.object({
   created_at: z.string(),
   n_sections: z.number().int(),
   total_chars: z.number().int(),
+  /** 남긴 사람. 자동 스냅샷(조립·검증)은 없다 */
+  created_by_name: z.string().nullish(),
+  /** 직전 버전 대비 변화 - 첫 버전은 null(견줄 앞이 없다) */
+  delta_chars: z.number().int().nullish(),
+  n_changed_sections: z.number().int().nullish(),
 });
 export type ReportVersion = z.infer<typeof ReportVersionSchema>;
 
@@ -79,6 +85,45 @@ export function useVersionDiff(projectId: string, base: number | null, target: n
       return VersionDiffSchema.parse(data);
     },
     enabled: Boolean(projectId) && base !== null,
+    staleTime: 30_000,
+  });
+}
+
+// ─── 절 하나의 이력 ───
+// 실제 동선은 "이 절, 예전 게 나았는데"다 - 버전 기록에서 시작해 그 절을 찾아가는 게
+// 아니라 절에서 이력으로 들어간다. 같은 내용이 이어진 구간은 서버가 접어서 준다.
+
+export const SectionHistoryEntrySchema = z.object({
+  /** 이 내용이 처음 나타난 버전 / 같은 내용이 유지된 마지막 버전 */
+  version_no: z.number().int(),
+  until_version: z.number().int(),
+  reason: z.string().catch("manual"),
+  created_at: z.string(),
+  until_at: z.string(),
+  title: z.string(),
+  chapter_number: z.number().int(),
+  section_number: z.number().int(),
+  content: z.string(),
+  char_count: z.number().int(),
+  is_current: z.boolean().default(false),
+});
+export type SectionHistoryEntry = z.infer<typeof SectionHistoryEntrySchema>;
+
+const SectionHistorySchema = z.object({
+  section_id: z.string(),
+  entries: z.array(SectionHistoryEntrySchema),
+});
+
+export function useSectionHistory(projectId: string, sectionId: string | null) {
+  return useQuery({
+    queryKey: [...versionKeys.all, projectId, "section", sectionId],
+    queryFn: async () => {
+      const data = await apiClient.get<unknown>(
+        `projects/${projectId}/sections/${sectionId}/history`,
+      );
+      return SectionHistorySchema.parse(data);
+    },
+    enabled: Boolean(projectId) && Boolean(sectionId),
     staleTime: 30_000,
   });
 }
@@ -156,6 +201,9 @@ export function useRestoreSection(projectId: string, versionNo: number) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: versionKeys.all });
       void qc.invalidateQueries({ queryKey: projectKeys.detail(projectId) });
+      // 본문도 다시 읽는다 - 절 이력에서 되돌리면 눈앞의 본문이 바로 바뀌어야 한다
+      // (비교 뷰에서만 쓰이던 시절엔 diff만 새로 받으면 됐다).
+      void qc.invalidateQueries({ queryKey: sectionKeys.all });
     },
   });
 }
