@@ -51,6 +51,12 @@ export function confirmedSpan(claim: ClaimAlignment): string | null {
 function missingNote(claim: ClaimAlignment): string | null {
   if (claim.status === "uncited")
     return "인용 표기가 없는 문장입니다 - 자료 없이 쓰였을 수 있습니다";
+  // 근거가 외국어면 겹침 점수가 성립하지 않는다 - 수치·영문 고유명사만 남아 그것만
+  // 맞아도 1.00이 나오고, 그렇게 '일치'가 된 문장의 40%가 실제로는 근거 없음이었다
+  // (alignment.overlap_score 주석, 2026-08-12 실측). "대목이 없다"와 "잴 수가 없다"는
+  // 사람이 할 일이 다르므로 갈라 말한다 - 실측상 못 맞춘 문장의 70%가 이쪽이다.
+  if (claim.status === "crosslingual")
+    return "근거가 외국어라 자동 대조가 되지 않습니다 - 원문에서 직접 확인하세요";
   if (!confirmedSpan(claim)) return "참고한 대목을 특정하지 못했습니다 - 원문에서 직접 확인하세요";
   return null;
 }

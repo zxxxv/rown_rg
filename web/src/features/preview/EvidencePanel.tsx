@@ -21,10 +21,13 @@ import { textFragmentUrl } from "./sourceLink";
 
 /** 문장이 무엇을 못 갖췄는지 한 줄로 — 판정 등급 대신 사람이 할 일로 말한다.
  *
- * weak·unmatched·crosslingual의 차이는 검출기 사정이지 읽는 사람의 사정이 아니다.
- * 셋 다 "대목을 못 집었으니 직접 보라"로 합친다. */
+ * weak·unmatched의 차이는 검출기 사정이지 읽는 사람의 사정이 아니라 하나로 합친다.
+ * 다만 crosslingual은 갈라 말한다 - "대목이 없다"가 아니라 "외국어라 잴 수가 없다"라서
+ * 사람이 할 일이 다르고, 실측상 못 맞춘 문장의 70%가 이쪽이다(2026-08-26). */
 function missingNote(claim: ClaimAlignment): string | null {
   if (claim.status === "uncited") return "인용 표기가 없는 문장입니다";
+  if (claim.status === "crosslingual")
+    return "근거가 외국어라 자동 대조가 되지 않습니다 - 원문에서 직접 확인하세요";
   if (!confirmedSpan(claim)) return "참고한 대목을 특정하지 못했습니다 - 원문에서 직접 확인하세요";
   return null;
 }

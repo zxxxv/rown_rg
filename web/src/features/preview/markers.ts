@@ -32,11 +32,19 @@ export const SOURCE_MARK_RE =
 export const SOURCE_MARK_LOOSE_RE =
   /[（(][^)）]{0,20}?(?:출처|자료|참고)\s*(\d{1,3}(?:\s*,\s*\d{1,3})*)[^)）]{0,40}?[)）]/g;
 
+/** 괄호 안에 부정어가 있으면 마커가 아니다 — "(출처 26 없음)"은 근거가 **없다고 명시한**
+ *  문장이라, 마커로 세면 의미가 정반대로 뒤집혀 파랑(자료를 보고 씀)이 된다.
+ *  다른 변종("참조"·"준하는")은 인용 쪽이라 그대로 받는다(실측 2026-08-26). */
+const NEGATED_RE = /없음|없다|미제시|불명|미상|해당\s*없/;
+
+function markerMatches(text: string): RegExpMatchArray[] {
+  return [...text.matchAll(SOURCE_MARK_LOOSE_RE)].filter((m) => !NEGATED_RE.test(m[0]));
+}
+
 /** 두 문법을 합친 판정용 — "이 줄이 근거를 주장하는가". */
 export function hasMarker(text: string): boolean {
   CITE_MARK_RE.lastIndex = 0;
-  SOURCE_MARK_LOOSE_RE.lastIndex = 0;
-  return CITE_MARK_RE.test(text) || SOURCE_MARK_LOOSE_RE.test(text);
+  return CITE_MARK_RE.test(text) || markerMatches(text).length > 0;
 }
 
 /** 텍스트에 등장하는 인용 번호 — 첫 등장 순서, 중복 없이. 두 문법 모두에서 모은다. */
@@ -49,8 +57,8 @@ export function markerNumbers(text: string): number[] {
     }
   };
   for (const m of text.matchAll(CITE_MARK_RE)) push(m[1]);
-  // 판정은 관대한 쪽 - 놓치면 인용 문장이 AI 서술로 뒤집힌다.
-  for (const m of text.matchAll(SOURCE_MARK_LOOSE_RE)) push(m[1]);
+  // 판정은 관대한 쪽 - 놓치면 인용 문장이 AI 서술로 뒤집힌다. 부정어 괄호는 제외.
+  for (const m of markerMatches(text)) push(m[1]);
   return out;
 }
 
