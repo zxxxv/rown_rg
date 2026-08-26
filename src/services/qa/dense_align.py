@@ -28,7 +28,13 @@ from uuid import UUID
 import structlog
 
 from src.core.config import settings
-from src.services.qa.alignment import ClaimAlignment, EvidenceSpan, _spans
+from src.services.qa.alignment import (
+    DENSE_THRESHOLD,
+    MAX_CANDIDATES,
+    ClaimAlignment,
+    EvidenceSpan,
+    _spans,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -113,21 +119,33 @@ async def refine_crosslingual(
         qv = vec.get(claim.claim)
         if qv is None:
             continue
-        best: tuple[float, tuple[UUID, int, int, str]] | None = None
+        ranked: list[tuple[float, tuple[UUID, int, int, str]]] = []
         for item in pool:
             sv = vec.get(item[3])
             if sv is None:
                 continue
-            score = _cosine(qv, sv)
-            if best is None or score > best[0]:
-                best = (score, item)
-        # 문턱은 status가 본다 — 여기서 미달을 걸러 두면 dense_score가 사라져
-        # "왜 안 올라갔나"를 되짚을 수 없다. 최고 후보를 그대로 싣고 판정은 한곳에서.
+            ranked.append((_cosine(qv, sv), item))
+        ranked.sort(key=lambda x: x[0], reverse=True)
+        best = ranked[0] if ranked else None
         if best is None:
             continue
+        # 후보는 문턱과 무관하게 싣는다 — 확정은 못 해도 "여기서 가져왔을 것 같다"를
+        # 몇 개 보여주면 사람이 고를 수 있다. 어휘가 0점인 구간이라 이 순위가
+        # 그 문장에 대한 **유일한 실마리**다.
+        claim.candidates = [
+            EvidenceSpan(
+                chunk_id=c,
+                number=claim.numbers[0] if claim.numbers else None,
+                start=st,
+                end=en,
+                text=tx.strip(),
+                score=0.0,
+                comparable=False,
+                dense_score=round(sc, 3),
+            )
+            for sc, (c, st, en, tx) in ranked[:MAX_CANDIDATES]
+        ]
         score, (cid, start, end, text) = best
-        from src.services.qa.alignment import DENSE_THRESHOLD
-
         if score < DENSE_THRESHOLD:
             continue
         claim.span = EvidenceSpan(

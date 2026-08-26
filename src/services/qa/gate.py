@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from typing import NamedTuple
 from uuid import UUID
 
 import structlog
@@ -703,6 +704,56 @@ def uncovered_units(content: str) -> list[str]:
     둘 중 하나는 거짓말이 된다.
     """
     return [unit for unit, bare in _candidate_units(content) if not _is_claim(bare)]
+
+
+class LineAccounting(NamedTuple):
+    """본문 한 절의 줄 회계 — 화면이 분모를 보여줄 수 있게.
+
+    "86개 중 2개 확인"은 86이 무엇인지 모르면 좋은 비율인지 나쁜 비율인지 알 수 없다.
+    실제 본문은 122줄인데 86만 대조 대상이었다면 2/86이 아니라 2/122가 실상에 가깝다
+    (2026-08-27 지적: 분모를 안 보여주면 숫자가 거짓말을 한다).
+
+    두 제외 통은 성격이 다르므로 합치지 않는다:
+      not_candidate — 구조로 갈린다(제목·표 행·캡션·구분선·짧은 줄). 문장이 아니라
+        구조라서 "이 문장이 어느 근거를 봤나"를 물을 대상이 아니다. 위험도 낮음.
+      uncovered — 본문 서술인데 종결형 검사에서 떨어진 것. **판정**이라 틀릴 수 있고,
+        실제로 여기서 크게 샜다(-ㅁ 명사형 210줄). 숫자가 갑자기 늘면 새고 있다는 신호다.
+    합쳐서 "36줄 안 봤음"으로 보여주면 위험한 4가 안전한 32에 묻힌다.
+    """
+
+    body_lines: int  # 빈 줄·코드펜스를 뺀 본문 줄
+    counted_lines: int  # 후보 단위를 하나라도 낸 줄
+    claims: int  # 주장 단위(문장)
+    uncovered: int  # 후보였으나 종결형에서 떨어진 단위
+
+
+def line_accounting(content: str) -> LineAccounting:
+    """본문 줄 → (전체·대조한 줄·주장·검사 제외). 화면 분모의 단일 출처."""
+    body = 0
+    in_fence = False
+    for raw in content.splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if not in_fence and line:
+            body += 1
+    units = _candidate_units(content)
+    # 한 줄이 문장 여럿으로 갈릴 수 있으므로 줄과 단위를 섞지 않는다 — 줄 수는 원문에서
+    # 다시 센다(단위를 세면 122 < 90+α 같은 어긋난 산수가 나온다).
+    counted = 0
+    in_fence = False
+    for raw in content.splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not line:
+            continue
+        if any(u in line or line in u for u, _b in units):
+            counted += 1
+    claims = sum(1 for _u, b in units if _is_claim(b))
+    return LineAccounting(body, counted, claims, len(units) - claims)
 
 
 def claim_coverage(content: str) -> tuple[int, int, list[str]]:

@@ -330,6 +330,19 @@ export const GroundedNumberSchema = z.object({
 export type GroundedNumber = z.infer<typeof GroundedNumberSchema>;
 
 /** 본문 문장 하나 ↔ 그 문장이 나온 원문 대목(청크 안의 줄) */
+/** 확정 못 한 문장에 내놓는 후보 대목 - 기계는 좁히고 사람이 고른다. */
+export const SpanCandidateSchema = z.object({
+  chunk_id: z.string(),
+  start: z.number().int(),
+  end: z.number().int(),
+  text: z.string(),
+  /** 어휘 겹침(한글 대 한글) */
+  score: z.number().default(0),
+  /** 다국어 임베딩 코사인(교차언어) - 어휘가 0점인 구간의 유일한 순위 */
+  dense_score: z.number().nullable().default(null),
+});
+export type SpanCandidate = z.infer<typeof SpanCandidateSchema>;
+
 export const ClaimAlignmentSchema = z.object({
   claim: z.string(),
   numbers: z.array(z.number().int()).default([]),
@@ -343,6 +356,7 @@ export const ClaimAlignmentSchema = z.object({
   score: z.number().default(0),
   ungrounded: z.array(z.string()).default([]),
   grounded: z.array(GroundedNumberSchema).default([]),
+  candidates: z.array(SpanCandidateSchema).default([]),
 });
 export type ClaimAlignment = z.infer<typeof ClaimAlignmentSchema>;
 
@@ -361,6 +375,9 @@ export const SectionEvidenceSchema = z.object({
   uncited_samples: z.array(z.string()).default([]),
   /** 주장 단위로 안 잡혀 어떤 검사도 못 본 줄 - 명사 종결 + 수치 없는 개조식 줄이 대부분 */
   uncovered: z.array(z.string()).default([]),
+  /** 본문 줄 회계 - 분모를 보여주려면 필요하다("86개 중 2개"의 86이 무엇인가) */
+  body_lines: z.number().int().default(0),
+  counted_lines: z.number().int().default(0),
   traceable: z.boolean().default(true),
 });
 export type SectionEvidence = z.infer<typeof SectionEvidenceSchema>;

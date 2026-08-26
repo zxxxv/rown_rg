@@ -134,6 +134,19 @@ class GroundedNumberRead(BaseModel):
     text: str = ""  # 발견된 줄(표 행이면 길다) - 점프의 본체는 오프셋이라 잘라 보낸다
 
 
+class SpanCandidateRead(BaseModel):
+    """확정 못 한 문장에 내놓는 후보 대목 하나."""
+
+    chunk_id: str
+    start: int
+    end: int
+    text: str
+    # 어휘 겹침(한글 대 한글) 또는 다국어 임베딩 코사인(교차언어). 둘 중 하나만 유효하다 -
+    # 어느 자로 순위를 매겼는지 화면이 알아야 "추정 근거"를 정직하게 말할 수 있다.
+    score: float = 0.0
+    dense_score: float | None = None
+
+
 class ClaimAlignmentRead(BaseModel):
     """본문 문장 하나 ↔ 그 문장이 나온 근거 대목.
 
@@ -153,6 +166,10 @@ class ClaimAlignmentRead(BaseModel):
     score: float = 0.0
     ungrounded: list[str] = Field(default_factory=list)  # 이 문장에서 근거에 없는 수치
     grounded: list[GroundedNumberRead] = Field(default_factory=list)  # 근거에서 찾은 수치 위치
+    # 확정하지 못했을 때 사람이 고를 후보 대목(순위 내림차순). 대목을 단정하면 거짓
+    # 확신이 되지만 후보로 내놓으면 기계가 좁히고 사람이 고르는 것이 된다.
+    # aligned인 문장에는 실리지 않는다 - 이미 답이 있는데 후보를 늘어놓을 이유가 없다.
+    candidates: list[SpanCandidateRead] = Field(default_factory=list)
 
 
 class SectionEvidenceResponse(BaseModel):
@@ -173,6 +190,10 @@ class SectionEvidenceResponse(BaseModel):
     # 주장 단위로 안 잡혀 어떤 검사도 못 본 줄 - 명사 종결 + 수치 없는 개조식 줄이
     # 대부분이다. 화면이 "대조 안 함"으로 짚어 준다(안 그러면 밑줄 없는 이유를 알 수 없다).
     uncovered: list[str] = Field(default_factory=list)
+    # 줄 회계 - 화면이 분모를 보여줄 수 있게(services/qa/gate.line_accounting).
+    # "86개 중 2개 확인"은 86이 무엇인지 모르면 좋은 비율인지 알 수 없다.
+    body_lines: int = 0  # 빈 줄·코드펜스를 뺀 본문 줄
+    counted_lines: int = 0  # 그중 근거 대조 대상이 된 줄(나머지는 제목·표·캡션·짧은 줄)
     # 마커를 청크까지 되짚을 수 있는가. 옛 절(기록 없음)은 자료 단위까지만 가능하다.
     traceable: bool = True
 

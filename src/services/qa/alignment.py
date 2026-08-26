@@ -101,6 +101,13 @@ WEAK_THRESHOLD = 0.15
 # 문턱을 낮추려면 라벨을 만들어 정밀도·재현율 곡선을 먼저 그려야 한다.
 DENSE_THRESHOLD = 0.78
 
+# 사람에게 보여줄 후보 대목 수. 확정하지 못한 문장에 "여기서 가져왔을 것 같다"를
+# 몇 개 내놓고 사람이 고르게 한다 — 낮은 점수 대목을 "근거"라 단정하면 거짓 확신이지만,
+# 후보로 내놓으면 단정이 아니다. 그래서 **후보에는 문턱이 필요 없다**: 순위만 있으면 되고,
+# 순위는 문서 간에 안정적이다(절대 점수는 코퍼스 언어 구성에 따라 크게 흔들린다 —
+# 2026-08-27 실측: 같은 문턱에서 RE100 보고서 25% vs COMPA 6%).
+MAX_CANDIDATES = 3
+
 # 점수를 낼 수 없음(비교할 피처가 모자람). 0.0과 구분해야 한다 — 0.0은 "쟀는데 안 겹침",
 # 이건 "잴 수가 없음"이고 사람이 할 일이 다르다.
 NO_SCORE = -1.0
@@ -285,6 +292,10 @@ class ClaimAlignment:
     # 새며 '근거 불일치' 경고가 부풀던 갭(2026-08-15 실측: 대표 예문 20건 정탐 0,
     # 오탐 15건의 주범이 직역 케이스).
     evidence_comparable: bool = True
+    # 확정하지 못했을 때 사람이 고를 후보(점수 내림차순, span 제외). 어휘가 0점인
+    # 교차언어에서는 비고 dense_align이 채운다 — 어휘 순위가 무의미한 구간이라
+    # 억지로 채우면 아무 대목이나 후보로 올리는 꼴이 된다.
+    candidates: list[EvidenceSpan] = field(default_factory=list)
 
     @property
     def status(self) -> str:
@@ -327,6 +338,7 @@ def align_section(
         # 마커 자체는 어휘가 아니다 — 점수 계산 전에 뗀다.
         bare = _MARK_RE.sub(" ", claim).strip()
         best: EvidenceSpan | None = None
+        scored: list[EvidenceSpan] = []  # 후보 추림용 — 점수가 성립한 대목만 담는다
         cited_text: list[str] = []
         cited_chunks: list[tuple[UUID, str]] = []  # 수치 위치 탐색용(중복 제거)
         seen_cids: set[UUID] = set()
@@ -344,25 +356,37 @@ def align_section(
                 for start, end, span_text in _spans(chunk):
                     comparable = not (claim_has_hangul and not _HANGUL_RUN_RE.search(span_text))
                     score = overlap_score(bare, span_text)
+                    span = EvidenceSpan(
+                        chunk_id=cid,
+                        number=number,
+                        start=start,
+                        end=end,
+                        text=span_text.strip(),
+                        score=round(score, 3),
+                        comparable=comparable,
+                    )
+                    # NO_SCORE(잴 수 없음)는 후보에서 뺀다 — 교차언어에서 전부 -1이라
+                    # 담으면 순위가 없는 목록이 된다. 그 구간은 dense_align이 채운다.
+                    if score > 0:
+                        scored.append(span)
                     if best is None or score > best.score:
-                        best = EvidenceSpan(
-                            chunk_id=cid,
-                            number=number,
-                            start=start,
-                            end=end,
-                            text=span_text.strip(),
-                            score=round(score, 3),
-                            comparable=comparable,
-                        )
+                        best = span
         # 수치는 대목이 아니라 인용 근거 전체를 상대로 본다(같은 자료의 다른
         # 줄에 있을 수 있다) — 게이트와 같은 판정을 쓴다.
         ungrounded = ungrounded_numbers(bare, "\n".join(cited_text)) if numbers else []
         joined_evidence = "\n".join(cited_text)
+        scored.sort(key=lambda x: x.score, reverse=True)
+        candidates = [
+            x
+            for x in scored
+            if best is None or (x.chunk_id, x.start) != (best.chunk_id, best.start)
+        ][:MAX_CANDIDATES]
         out.append(
             ClaimAlignment(
                 claim=claim,
                 numbers=numbers,
                 span=best,
+                candidates=candidates,
                 cited_chunk_ids=[cid for cid, _text in cited_chunks],
                 ungrounded=ungrounded,
                 grounded=_grounded_spans(bare, cited_chunks, ungrounded),

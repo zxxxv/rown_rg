@@ -53,6 +53,7 @@ import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { HelpTip } from "@/components/ui/help-tip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -968,13 +969,18 @@ function SectionView({
   // 70~90%가 비확정(검증런 실측)이라 모든 블록이 경고색이 되고 신호가 죽는다.
   const evidenceCounts = useMemo(() => {
     const data = evidenceQuery.data;
-    if (!data) return [] as { count: number; alert: number }[];
+    if (!data) return [] as { count: number; alert: number; needsCheck: number }[];
     return blocks.map((block) => {
       const { primary, claims } = partitionBlockEvidence([block], data);
       const alert = claims.filter(
         (c) => c.status === "unmatched" || c.ungrounded.length > 0,
       ).length;
-      return { count: primary.length, alert };
+      // 인용은 했는데 대목까지는 못 간 문장 - "근거 있음"과 "근거는 있는데 확인이 필요함"을
+      // 가르는 값이다. 배지가 둘을 같은 모양으로 그리면 사람이 어디를 열지 못 고른다.
+      const needsCheck = claims.filter(
+        (c) => c.status !== "aligned" && c.status !== "uncited",
+      ).length;
+      return { count: primary.length, alert, needsCheck };
     });
   }, [blocks, evidenceQuery.data]);
   // 절 단위 대조 요약 - 블록을 일일이 열지 않아도 어디를 볼지 가늠하게(2026-08-14 지적).
@@ -997,6 +1003,10 @@ function SectionView({
   }, [evidenceQuery.data]);
   // 색칠에는 합류했지만 무근거 수치·산술 검사에서는 여전히 빠지는 줄 수 - 셈만 알린다.
   const uncoveredCount = evidenceQuery.data?.uncovered?.length ?? 0;
+  // 분모 - 화면이 "무엇 중 몇 개"를 말할 수 있게(gate.line_accounting).
+  const bodyLines = evidenceQuery.data?.body_lines ?? 0;
+  const countedLines = evidenceQuery.data?.counted_lines ?? 0;
+  const notCandidate = Math.max(0, bodyLines - countedLines);
   // 드로어가 뜨는 조건과 정확히 같은 식을 부모에 알린다 - 부모는 이때 절 트리를 접어
   // 본문을 넓힌다. 절을 옮기거나 화면을 떠날 때도 반드시 닫힘으로 되돌린다.
   const drawerOpen = evidenceBlock !== null;
@@ -1319,33 +1329,108 @@ function SectionView({
               />
             ) : null}
             {/* 절 단위 대조 요약 - 블록을 일일이 열지 않아도 이 절의 근거 상태를 한 줄로.
-                자세한 대조는 경고색 블록의 '근거 N' 표시를 눌러 드로어에서 한다. */}
+                셈과 스위치를 갈라 놓는다: 위는 "이 절이 어떤 상태인가"(읽기), 아래는
+                "본문에 무엇을 칠할까"(조작). 종전엔 둘이 섞여 서술형 문구와 버튼이
+                번갈아 나와 어느 것이 눌리는지도 안 보였다(2026-08-27 지적).
+                용어는 물음표에 모아 둔다 - 줄에 설명을 붙이면 다시 길어진다. */}
             {EVIDENCE_UI_ENABLED && (claimStats || uncoveredCount > 0) ? (
-              // 11px은 읽히지 않았다(2026-08-26 지적) - 이 줄은 절을 훑기 전에 어디를
-              // 볼지 정하는 자리라 본문과 같은 크기로 읽혀야 한다.
-              <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-secondary">
-                <span className="font-medium text-fg">근거 대조</span>
-                {claimStats ? (
-                  <>
-                    <span>
-                      문장 {claimStats.total}개 중 {claimStats.aligned}개는 원문 대목까지 확인됨
-                    </span>
-                    {claimStats.needsCheck > 0 ? (
-                      <span className="text-fg-warning">
-                        직접 확인 필요 {claimStats.needsCheck}
+              <div className="mb-2 flex flex-col gap-1.5 text-sm">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-fg-secondary">
+                  <span className="font-medium text-fg">근거 대조</span>
+                  <HelpTip title="이 셈이 뜻하는 것">
+                    <p>
+                      <b>문장</b> - 근거 대조 대상으로 잡힌 본문 문장. 제목·표·캡션과 너무 짧은 줄은
+                      빠집니다.
+                    </p>
+                    <p>
+                      <b>대목 확인</b> - 인용한 자료에서 그 문장을 받치는 대목까지 찾은 것. 문장에
+                      마우스를 올리면 그 대목이 뜹니다.
+                    </p>
+                    <p>
+                      <b>확인 필요</b> - 인용 표기는 있는데 대목을 못 집은 것. 근거가 외국어면
+                      겹침으로 잴 수 없어 여기 들어갑니다 - 틀렸다는 뜻이 아니라 사람이 원문을 봐야
+                      한다는 뜻입니다.
+                    </p>
+                    <p>
+                      <b>표기 없음</b> - 인용 표기 없이 쓰인 문장. AI가 자료 없이 쓴 서술일 수 있어
+                      본문에 주황 밑줄로 표시됩니다.
+                    </p>
+                    <p>
+                      <b>검사 제외</b> - 문장 종결형이 아니고 수치도 없어 무근거 수치·산술 검사에서
+                      빠진 줄. 밑줄은 마커 유무로 칠해져 있습니다.
+                    </p>
+                    <p>
+                      <b>무근거 수치</b> - 인용한 자료에서 못 찾은 수치. 지어냈거나 다른 자료에서
+                      왔을 수 있습니다.
+                    </p>
+                  </HelpTip>
+                  {claimStats ? (
+                    <>
+                      {/* 분모를 맨 앞에 세운다 - "86개 중 2개 확인"은 86이 무엇인지
+                          모르면 좋은 비율인지 알 수 없다. 실제 본문은 122줄인데 86만
+                          대조 대상이었다면 2/86이 아니라 2/122가 실상에 가깝다
+                          (2026-08-27 지적). 숫자가 닫히게 대상 아님까지 함께 보인다. */}
+                      {bodyLines > 0 ? (
+                        <span>
+                          본문 {bodyLines}줄 중 {countedLines}줄을 대조
+                        </span>
+                      ) : (
+                        <span>문장 {claimStats.total}</span>
+                      )}
+                      <span aria-hidden>—</span>
+                      <span className={claimStats.aligned > 0 ? "text-fg-success" : undefined}>
+                        대목 확인 {claimStats.aligned}
                       </span>
-                    ) : null}
-                  </>
-                ) : (
-                  // 주장이 하나도 안 잡힌 절 - 여기서 줄을 통째로 감추면 "왜 표시가
-                  // 없지"에 답할 자리가 사라진다. 이 기능이 풀려던 문제가 정확히 그것이다.
-                  <span>대조 대상으로 잡힌 문장이 없습니다</span>
-                )}
-                {/* 본문 밑줄 스위치 2개 - 종전 토글은 통계 사이에 끼인 회색 글씨라 있는
-                    줄도 몰랐다(2026-08-26 지적). 테두리를 줘 스위치로 보이게 하고, 켜짐은
-                    각 층의 색으로 남긴다. 끄더라도 마우스를 올리면 밑줄과 카드가 뜬다. */}
+                      {claimStats.needsCheck > 0 ? (
+                        <>
+                          <span aria-hidden>·</span>
+                          <span className="text-fg-warning">확인 필요 {claimStats.needsCheck}</span>
+                        </>
+                      ) : null}
+                      {claimStats.uncited > 0 ? (
+                        <>
+                          <span aria-hidden>·</span>
+                          <span>표기 없음 {claimStats.uncited}</span>
+                        </>
+                      ) : null}
+                    </>
+                  ) : (
+                    // 주장이 하나도 안 잡힌 절 - 여기서 줄을 통째로 감추면 "왜 표시가
+                    // 없지"에 답할 자리가 사라진다. 이 기능이 풀려던 문제가 정확히 그것이다.
+                    <span>대조 대상으로 잡힌 문장이 없습니다</span>
+                  )}
+                  {uncoveredCount > 0 ? (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span>검사 제외 {uncoveredCount}</span>
+                    </>
+                  ) : null}
+                  {notCandidate > 0 ? (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span className="text-fg-tertiary">대상 아님 {notCandidate}</span>
+                    </>
+                  ) : null}
+                  {claimStats && claimStats.ungrounded > 0 ? (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span className="text-fg-danger">무근거 수치 {claimStats.ungrounded}</span>
+                    </>
+                  ) : null}
+                  {evidenceQuery.data?.traceable === false ? (
+                    // 근거 기록 도입(8/11) 전에 작성된 절 - 번호와 청크의 대응이 없어
+                    // 블록 배지·드로어를 못 연다. 그 사실을 알려야 "왜 배지가 없지"가 안 된다.
+                    <span className="text-fg-tertiary">
+                      (근거 기록이 없는 옛 작성분 - 블록별 근거 보기는 새로 작성한 절부터)
+                    </span>
+                  ) : null}
+                </div>
+                {/* 본문 밑줄 스위치 - 셈과 갈라 아래 줄에 둔다. 테두리를 줘 스위치로
+                    보이게 하고, 켜짐은 각 층의 색으로 남긴다. 꺼도 마우스를 올리면
+                    밑줄과 카드가 뜬다(표시는 훑기용, 호버는 확인용). */}
                 {claimStats ? (
-                  <>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-fg-tertiary">본문 표시</span>
                     <button
                       type="button"
                       onClick={() => setMarkUncited((v) => !v)}
@@ -1358,7 +1443,7 @@ function SectionView({
                           : "border-border text-fg-secondary hover:border-border-strong",
                       )}
                     >
-                      AI 서술 {claimStats.uncited} {markUncited ? "표시 켬" : "표시 끔"}
+                      AI 서술 {markUncited ? "켬" : "끔"}
                     </button>
                     <button
                       type="button"
@@ -1372,25 +1457,9 @@ function SectionView({
                           : "border-border text-fg-secondary hover:border-border-strong",
                       )}
                     >
-                      인용 문장 {claimStats.total - claimStats.uncited}{" "}
-                      {markCited ? "표시 켬" : "표시 끔"}
+                      인용 문장 {markCited ? "켬" : "끔"}
                     </button>
-                  </>
-                ) : null}
-                {uncoveredCount > 0 ? (
-                  <span title="문장 종결형이 아니고 수치도 없어 무근거 수치·산술 검사에서 빠진 줄입니다 - 밑줄은 마커 유무로 칠해져 있습니다">
-                    검사 제외 {uncoveredCount}
-                  </span>
-                ) : null}
-                {evidenceQuery.data?.traceable === false ? (
-                  // 근거 기록 도입(8/11) 전에 작성된 절 - 번호와 청크의 대응이 없어
-                  // 블록 배지·드로어를 못 연다. 그 사실을 알려야 "왜 배지가 없지"가 안 된다.
-                  <span>
-                    (근거 기록이 없는 옛 작성분 - 블록별 근거 보기는 새로 작성한 절부터 지원됩니다)
-                  </span>
-                ) : null}
-                {claimStats && claimStats.ungrounded > 0 ? (
-                  <span className="text-fg-danger">근거 없는 수치 {claimStats.ungrounded}</span>
+                  </div>
                 ) : null}
               </div>
             ) : null}
@@ -1470,7 +1539,15 @@ function SectionView({
                           근거 빠짐 {lostByBlock[idx]}
                         </button>
                       ) : null}
-                      {EVIDENCE_UI_ENABLED && (evidenceCounts[idx]?.count ?? 0) === 0 ? (
+                      {/* 근거가 **로드된 뒤에만** 없다고 말한다. 종전엔 배지 조건이
+                          `count > 0`이라 로딩·실패 때 조용히 안 그렸는데, '근거 없음'을
+                          추가하면서 `?? 0`이 로딩 중과 0건을 같은 값으로 만들었다 -
+                          응답이 늦거나 실패하면 **모든 블록이 "근거 없음"**이 된다
+                          (2026-08-27 실사고: COMPA에서 전 블록이 그렇게 보였다).
+                          정보 없음을 정보 있음처럼 표시하는 그 계급이라 조건을 분리한다. */}
+                      {EVIDENCE_UI_ENABLED &&
+                      evidenceQuery.data &&
+                      (evidenceCounts[idx]?.count ?? 0) === 0 ? (
                         // 인용이 하나도 없는 블록 - 종전엔 배지를 아예 안 그려서 "근거 없이
                         // 쓰인 블록"이 **부재**로만 나타났다. 규칙을 아는 사람만 읽을 수 있는
                         // 신호라 훑을 때 놓친다(2026-08-26 지적). 부재를 존재로 바꾼다.
@@ -1486,7 +1563,11 @@ function SectionView({
                       {EVIDENCE_UI_ENABLED && (evidenceCounts[idx]?.count ?? 0) > 0 ? (
                         <button
                           type="button"
-                          title="이 블록이 인용한 근거 원문을 오른쪽 패널로 봅니다"
+                          title={
+                            (evidenceCounts[idx]?.needsCheck ?? 0) > 0
+                              ? "인용은 했지만 대목까지 확인되지 않은 문장이 있습니다 - 눌러서 확인하세요"
+                              : "이 블록의 문장이 어느 자료의 어느 대목을 보고 쓰였는지 봅니다"
+                          }
                           onClick={(e) => {
                             e.stopPropagation();
                             setEvidenceIdx((v) => (v === idx ? null : idx));
@@ -1495,17 +1576,20 @@ function SectionView({
                           onKeyDown={(e) => e.stopPropagation()}
                           className={cn(
                             "absolute -top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] transition-colors",
+                            // 세 상태를 색으로 가른다(2026-08-27 요청): 열림 · 확인 필요 ·
+                            // 전부 확인됨. 종전엔 뒤 둘이 같은 회색이라 "근거 3"만 보고는
+                            // 열어 볼 값어치가 있는지 알 수 없었다.
                             evidenceIdx === idx
                               ? "border-accent bg-bg-info text-fg-info"
-                              : (evidenceCounts[idx]?.alert ?? 0) > 0
+                              : (evidenceCounts[idx]?.needsCheck ?? 0) > 0
                                 ? "border-fg-warning/50 bg-bg-warning text-fg hover:border-fg-warning"
-                                : "border-border bg-bg text-fg-tertiary hover:border-border-strong hover:text-fg-secondary",
+                                : "border-fg-success/40 bg-bg-success text-fg-success hover:border-fg-success",
                           )}
                         >
                           <FileSearch className="h-3 w-3" aria-hidden />
                           근거 {evidenceCounts[idx]?.count}
-                          {(evidenceCounts[idx]?.alert ?? 0) > 0
-                            ? ` · 확인 ${evidenceCounts[idx]?.alert}`
+                          {(evidenceCounts[idx]?.needsCheck ?? 0) > 0
+                            ? ` · 확인 필요 ${evidenceCounts[idx]?.needsCheck}`
                             : ""}
                         </button>
                       ) : null}

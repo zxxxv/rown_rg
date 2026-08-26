@@ -59,6 +59,7 @@ const EVIDENCE: SectionEvidence = {
       score: 0.82,
       ungrounded: [],
       grounded: [],
+      candidates: [],
     },
     {
       claim: "전환기간 동안에는 보고 의무만 부과되며, 인증서 구매는 2026년부터 시작된다",
@@ -71,6 +72,7 @@ const EVIDENCE: SectionEvidence = {
       score: 0.11,
       ungrounded: [],
       grounded: [],
+      candidates: [],
     },
     {
       claim: "국내 철강업계의 대EU 수출 물량은 연간 320만 톤으로 추정된다",
@@ -83,6 +85,7 @@ const EVIDENCE: SectionEvidence = {
       score: 0.31,
       ungrounded: ["320만"],
       grounded: [],
+      candidates: [],
     },
     {
       claim: "이 제도는 향후 다른 품목으로도 확대될 전망이다",
@@ -95,6 +98,7 @@ const EVIDENCE: SectionEvidence = {
       score: 0,
       ungrounded: [],
       grounded: [],
+      candidates: [],
     },
   ] as SectionEvidence["claims"],
   aligned_count: 1,
@@ -106,6 +110,8 @@ const EVIDENCE: SectionEvidence = {
   uncited_count: 1,
   uncited_samples: [],
   uncovered: ["적용 품목 확대와 인증서 가격 산정 방식은 이행법령에서 구체화 예정"],
+  body_lines: 9,
+  counted_lines: 5,
   traceable: true,
 } as SectionEvidence;
 

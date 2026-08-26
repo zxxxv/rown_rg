@@ -152,6 +152,7 @@ function synthesizeClaim(unit: string): ClaimAlignment {
     score: 0,
     ungrounded: [],
     grounded: [],
+    candidates: [],
   };
 }
 

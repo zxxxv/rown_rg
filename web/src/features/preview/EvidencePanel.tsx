@@ -85,6 +85,42 @@ function ClaimRow({
 
       {note ? <p className="mt-1.5 text-[11px] text-fg-tertiary">{note}</p> : null}
 
+      {claim.candidates.length > 0 ? (
+        // 확정은 못 했지만 "여기서 가져왔을 것 같다"를 몇 개 내놓는다 - 대목을 단정하면
+        // 거짓 확신이지만 후보로 내놓으면 기계가 좁히고 사람이 고르는 것이 된다.
+        // 순위만 쓰므로 문턱이 필요 없고, 순위는 문서 간에 안정적이다(절대 점수는
+        // 코퍼스 언어 구성에 따라 크게 흔들린다 - 2026-08-27).
+        <details className="mt-2 rounded border border-border-info/50 bg-bg-info/30 px-2 py-1.5">
+          <summary className="cursor-pointer text-[11px] text-fg-info">
+            추정 후보 {claim.candidates.length}개 - 이 중에 있을 수 있습니다
+          </summary>
+          <ul className="mt-1.5 flex flex-col gap-1.5">
+            {claim.candidates.map((c) => (
+              <li key={`${c.chunk_id}:${c.start}`}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onLocate?.({
+                      sourceId: chunks.find((x) => x.chunk_id === c.chunk_id)?.source_id ?? "",
+                      chunkId: c.chunk_id,
+                      start: c.start,
+                      end: c.end,
+                    })
+                  }
+                  disabled={!onLocate}
+                  className="w-full border-l-2 border-border-info pl-2 text-left text-xs leading-relaxed text-fg-secondary hover:border-fg-info hover:text-fg disabled:cursor-default"
+                >
+                  {c.text}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5 text-[10px] text-fg-tertiary">
+            자동 추정이라 틀릴 수 있습니다 - 눌러서 원문 위치를 확인하세요.
+          </p>
+        </details>
+      ) : null}
+
       {claim.ungrounded.length > 0 ? (
         // 근거에서 못 찾은 수치 - "어디를 참고했나"의 답이 '아무 데도'인 경우라 남긴다.
         <p className="mt-1 text-[11px] text-fg-danger">

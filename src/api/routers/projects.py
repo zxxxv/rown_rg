@@ -113,7 +113,7 @@ from src.services.jobs import is_running as job_running
 from src.services.projects.derive import sync_project_stage
 from src.services.prompts import resolve_analysts
 from src.services.qa.alignment import align_section
-from src.services.qa.gate import uncited_units, uncovered_units
+from src.services.qa.gate import line_accounting, uncited_units, uncovered_units
 from src.services.sections.drift import content_fingerprint
 from src.services.sections.evidence import marker_chunk_ids
 from src.services.stats.source_usage import build_source_usage
@@ -3476,6 +3476,7 @@ async def get_section_evidence(
         )
 
     units = uncited_units(row.content or "")
+    _accounting = line_accounting(row.content or "")
     claims = await _claim_rows(
         row, mapping, traceable, {r[0]: r[1] for r in chunk_rows}, cited_order
     )
@@ -3489,6 +3490,8 @@ async def get_section_evidence(
         uncited_count=len(units),
         uncited_samples=units[:_MAX_UNCITED_SAMPLES],
         uncovered=uncovered_units(row.content or ""),
+        body_lines=_accounting.body_lines,
+        counted_lines=_accounting.counted_lines,
         aligned_count=sum(1 for c in claims if c.status == "aligned"),
         weak_count=sum(1 for c in claims if c.status == "weak"),
         unmatched_count=sum(1 for c in claims if c.status == "unmatched"),
