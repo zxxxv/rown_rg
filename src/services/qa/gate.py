@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from functools import lru_cache
 from typing import NamedTuple
 from uuid import UUID
 
@@ -123,6 +124,16 @@ _KOR_NUM_PART = r"\d[\d,]*(?:\.\d+)?\s*[조억만천]"
 _KOR_NUMBER_RE = re.compile(rf"{_KOR_NUM_PART}(?:\s*{_KOR_NUM_PART})*")
 # 영문 자릿수 표기 — 값을 이 단위로 환산한 가수(mantissa)를 후보로 만든다.
 _EN_SCALES: tuple[float, ...] = (10**12, 10**9, 10**6, 10**3)
+# 각 자릿수를 근거가 적는 낱말 — 짧은 가수는 이게 붙어야 인정한다(아래).
+_SCALE_WORDS: dict[float, str] = {
+    10**12: r"trillion|tn",
+    10**9: r"billion|bn",
+    10**6: r"million|mn",
+    10**3: r"thousand|k",
+}
+# 가수가 이보다 짧으면 그 자체로는 변별력이 없다 — "10억"의 가수는 "1"이라
+# 숫자가 하나라도 든 아무 글에나 붙는다(2026-08-27 실측, 아래 number_in_text 참조).
+_MIN_MANTISSA_DIGITS = 3
 
 
 def korean_magnitude(token: str) -> float | None:
@@ -158,7 +169,9 @@ def number_variants(token: str) -> list[str]:
     out.append(_trim(value))  # 자리 단위를 푼 온전한 숫자
     for scale in _EN_SCALES:
         mantissa = value / scale
-        if 0.1 <= mantissa < 1000:
+        # 짧은 가수는 맨 문자열로 내보내지 않는다 — 낱말을 요구하는 쪽은
+        # number_in_text가 맡는다(SQL LIKE 선별은 좁게 가는 편이 안전하다).
+        if 0.1 <= mantissa < 1000 and len(_trim(mantissa).replace(".", "")) >= _MIN_MANTISSA_DIGITS:
             out.append(_trim(mantissa))
     # 공백을 넣어 쓴 한국어 표기도 근거에 있을 수 있다("2억 450만").
     spaced = re.sub(r"([조억만천])(\d)", r"\1 \2", norm)
@@ -167,9 +180,57 @@ def number_variants(token: str) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+@lru_cache(maxsize=2048)
+def _short_mantissa_patterns(token: str) -> tuple[re.Pattern[str], ...]:
+    """짧은 가수를 자릿수 낱말과 함께 찾는 패턴 — "10억"이면 `1 billion`.
+
+    가수가 1~2자리면 맨 부분문자열 대조가 무너진다: "10억"의 가수 "1"은 "제1장"에도
+    "2018"에도 들어 있어, **딱 떨어지는 큰 수는 숫자가 하나라도 든 아무 글에나 붙었다**
+    (2026-08-27 실측 — AI 암 진단 시장 "10억 달러" 주장이 영문 그림 캡션
+    "Fig. 31 Others market, 2018 - 2030 (USD Million)"에 근거 있음으로 판정됐고,
+    무근거 경고가 0건이라 화면에는 아무 표시도 안 떴다).
+
+    그렇다고 환산을 버리면 코퍼스의 8할이 영문인 지금 "USD 1 billion"을 영영 못 만난다.
+    그래서 버리는 대신 **낱말을 요구한다** — 자릿수 낱말이 바로 뒤에 오면 그 "1"은
+    우연이 아니다. `1.0 billion`처럼 소수 꼬리를 붙여 쓴 표기도 받는다.
+    """
+    value = korean_magnitude(token)
+    if value is None:
+        return ()
+    out: list[re.Pattern[str]] = []
+    for scale, words in _SCALE_WORDS.items():
+        mantissa = value / scale
+        if not 0.1 <= mantissa < 1000:
+            continue
+        text = _trim(mantissa)
+        if len(text.replace(".", "")) >= _MIN_MANTISSA_DIGITS:
+            continue  # 변별력이 있어 number_variants가 이미 맨 문자열로 내보냈다
+        out.append(re.compile(rf"(?<!\d){re.escape(text)}(?:\.0+)?\s*(?:{words})\b", re.IGNORECASE))
+    return tuple(out)
+
+
+@lru_cache(maxsize=4096)
+def _variant_patterns(token: str) -> tuple[re.Pattern[str], ...]:
+    """표기 후보를 **자릿수 경계와 함께** 찾는 패턴.
+
+    맨 `in` 대조는 수를 토막으로 만난다: "4,610만"의 가수 46.1이 "46.15 million"에,
+    "1,623억"의 162.3이 "2162.3"에 걸린다(2026-08-27 실측). 앞뒤로 숫자가 붙으면
+    다른 수다. 소수 뒤의 0은 같은 수라 받는다("46.1"↔"46.10").
+    """
+    out: list[re.Pattern[str]] = []
+    for v in number_variants(token):
+        if not v:
+            continue
+        tail = r"0*(?!\d)" if "." in v else r"(?!\d)"
+        out.append(re.compile(rf"(?<!\d){re.escape(v)}{tail}"))
+    return tuple(out)
+
+
 def number_in_text(token: str, haystack_norm: str) -> bool:
     """수치가 근거(정규화 문자열)에 있는가 — 자릿수 환산 표기까지 본다."""
-    return any(v and v in haystack_norm for v in number_variants(token))
+    if any(p.search(haystack_norm) for p in _variant_patterns(token)):
+        return True
+    return any(p.search(haystack_norm) for p in _short_mantissa_patterns(token))
 
 
 def normalize_haystack(text: str) -> str:

@@ -33,6 +33,8 @@ from src.services.qa.gate import (
     korean_magnitude,
     leftover_artifacts,
     misattributed_numbers,
+    normalize_haystack,
+    number_in_text,
     number_variants,
     numeric_mentions,
     run_section_gate,
@@ -615,6 +617,45 @@ class TestCrossLingualNumbers:
         assert "7.05" in number_variants("70.5억")  # USD 7.05 billion
         assert "46.1" in number_variants("4,610만")  # US$ 46.1 million
         assert "204.5" in number_variants("2억450만")  # US$ 204.5 million
+
+    def test_round_magnitude_needs_scale_word(self):
+        """딱 떨어지는 큰 수의 가수는 한 자리라 아무 글에나 붙었다 (2026-08-27 실측).
+
+        "10억 달러" 주장이 영문 그림 캡션 "Fig. 31 Others market, 2018 - 2030
+        (USD Million)"에 근거 있음으로 판정됐다 - 가수 "1"이 "31"에도 "2018"에도
+        들어 있어서다. 코퍼스 215절에서 이렇게 거짓 통과한 수치가 106건이었고,
+        무근거 경고가 안 뜨니 화면에는 아무 표시도 없었다.
+        """
+        assert "1" not in number_variants("10억")
+        assert "10" not in number_variants("100억")
+        noise = normalize_haystack("Fig. 31 Others market, 2018 - 2030 (USD Million)")
+        assert not number_in_text("10억", noise)
+        assert not number_in_text("1조", normalize_haystack("1 knowledge base entry in 2019"))
+
+    def test_number_needs_digit_boundary(self):
+        """맨 부분문자열 대조는 수를 토막으로 만난다 (2026-08-27 실측).
+
+        주장의 "10"이 근거 URL의 **RE100** 안에 걸렸고, "4,610만"의 가수 46.1이
+        "46.15 million"에, "1,623억"의 162.3이 "2162.3"에 걸렸다. 앞뒤에 숫자가
+        붙으면 다른 수다. 코퍼스 207절에서 이렇게 거짓 통과한 수치가 148건이었다.
+
+        소수 뒤의 0은 같은 수라 받는다 - "46.1"과 "46.10"을 가르면 진짜 근거를 잃는다.
+        """
+        assert not number_in_text("10", normalize_haystack("the global RE100 initiative"))
+        assert not number_in_text("4,610만", normalize_haystack("46.15 million units"))
+        assert not number_in_text("1,623억", normalize_haystack("2162.3"))
+        assert not number_in_text("70.5억", normalize_haystack("USD 170.5 billion"))
+        assert number_in_text("4,610만", normalize_haystack("46.10 million"))
+        assert number_in_text("1,623억", normalize_haystack("162.3 billion by 2030"))
+        assert number_in_text("2,750만", normalize_haystack("2,750만 달러에서"))
+
+    def test_round_magnitude_still_matches_english_scale(self):
+        """낱말이 붙으면 인정한다 - 환산 회수 능력은 그대로 둔다."""
+        for hay in ("approach USD 1 billion by 2030", "US$1.0 billion", "1 trillion won"):
+            token = "1조" if "trillion" in hay else "10억"
+            assert number_in_text(token, normalize_haystack(hay)), hay
+        # 한글 표기는 종전대로 맨 문자열로 잡힌다.
+        assert number_in_text("10억", normalize_haystack("매출은 10억 달러에 달했다"))
 
     def test_english_evidence_grounds_korean_claim(self):
         body = "ㅇ 글로벌 액체생검 시장은 2025년 70.5억 달러 규모로 평가된 것으로 나타났음 (출처 4)"
