@@ -438,6 +438,16 @@ async def run_pm_verify(state: ProjectState, *, model: str | None = None) -> int
     except Exception:
         logger.warning("pm_verify.heading_failed", project_id=str(state.project_id), exc_info=True)
     try:
+        # 시사점 절 두 규칙(결정적) — 새 수치 도입 / 주체 없는 제언.
+        # sections는 목차 순서여야 한다: 규칙 ①은 "앞 절에 있었나"가 전부다.
+        from src.services.qa.implications import implication_findings
+
+        rows.extend(implication_findings([(plan, content) for plan, content in pairs]))
+    except Exception:
+        logger.warning(
+            "pm_verify.implications_failed", project_id=str(state.project_id), exc_info=True
+        )
+    try:
         # 계산 지표에 값이 없는 절(결정적) — 어휘가 아니라 값을 본다. 키포인트 검사는
         # 어휘 겹침이라 "B/C"를 18번 말하면 반영으로 읽어 이 구멍을 통과시킨다
         # (2026-08-27 예타 실측: 보고서 전체에서 B/C 값이 붙은 자리 0건).
