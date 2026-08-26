@@ -55,6 +55,10 @@ const PLACEHOLDER = (id: string, title: string) =>
 const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
   "2.3": {
     locked: false,
+    // 자료를 뺐을 때 근거를 잃은 문단 - 그 블록만 다시 쓰는 경로를 눌러 보게 한다.
+    evidence_lost: [
+      { text: "본 사업의 수요는 수도권 인구 구조의 변화에 직접적인 영향을 받는다.", n_markers: 1 },
+    ],
     content: RICH_2_3,
     source_ids: ["src_kostat_2024", "src_kdi_aging", "src_audit_gtx"],
     qa_status: "passed",
@@ -93,6 +97,7 @@ const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
   },
   "3.3": {
     locked: false,
+    evidence_lost: [],
     content: RICH_3_3,
     source_ids: ["src_moef_preliminary", "src_bok_econ", "src_audit_gtx"],
     qa_status: "passed",
@@ -138,6 +143,7 @@ export function buildSectionContent(
     title,
     content: PLACEHOLDER(sectionId, title),
     locked: false,
+    evidence_lost: [],
     source_ids: [],
     qa_status: "passed",
     level: sectionId.includes(".") ? 2 : 1,

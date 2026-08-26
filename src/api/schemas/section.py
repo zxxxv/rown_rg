@@ -72,6 +72,18 @@ class FigurePlaceholder(BaseModel):
     source_hints: list[str] = Field(default_factory=list)
 
 
+class LostEvidenceBlock(BaseModel):
+    """자료 제외로 근거 표기를 잃은 문단 1개.
+
+    절 전체 재작성은 실측 $0.4~$1.3인데 이 문단만 고치면 블록 재작성 1콜이다 - 십수 배
+    싸다. 어디를 고치면 되는지 짚어 주려면 마커가 지워지는 그 순간 자리를 남겨야 한다
+    (지워진 마커는 흔적이 없다).
+    """
+
+    text: str
+    n_markers: int = 0
+
+
 class SectionContentResponse(BaseModel):
     id: str
     title: str
@@ -84,6 +96,8 @@ class SectionContentResponse(BaseModel):
     figures: list[FigurePlaceholder] = Field(default_factory=list)
     # 잠근 절 - AI 재작성 경로가 막힌다(0048). 사람의 직접 편집은 그대로.
     locked: bool = False
+    # 자료를 빼면서 근거 표기를 잃은 문단들 - 화면이 그 블록만 짚어 다시 쓰게 한다.
+    evidence_lost: list[LostEvidenceBlock] = Field(default_factory=list)
 
 
 class EvidenceChunk(BaseModel):

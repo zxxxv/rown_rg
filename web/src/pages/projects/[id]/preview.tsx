@@ -830,6 +830,23 @@ function ChapterSectionBlock({
 const MARKER_ONLY_BLOCK_RE =
   /^[※*\-–ㅇ○◦\s]*(?:(?:출처|자료|참고)\s*[:：])?(?:\s|\(출처\s*[\d,\s]+\)|\[\d+\])+$/;
 
+// 눌러 담는 재작성 지시. 빈 칸에 대고 무엇을 쓸지 매번 떠올리는 것이 실제 병목이라,
+// 자주 쓰는 지시를 버튼으로 둔다(2026-08-26). 고르면 지시 칸에 쌓이고, 손으로 이어
+// 붙일 수도 있다 - 대체가 아니라 출발점이다.
+// 대상이 절이냐 블록이냐에 따라 쓸모가 갈려 따로 둔다.
+const SECTION_HINTS = [
+  "정책 시사점을 앞세워서",
+  "수치와 출처를 더 촘촘히",
+  "중복 서술을 걷어내고 간결하게",
+  "앞 절과 이어지게",
+] as const;
+const BLOCK_HINTS = [
+  "더 간결하게",
+  "수치를 앞세워서",
+  "근거 표기를 다시 달아서",
+  "문장을 개조식으로",
+] as const;
+
 function splitBlocks(content: string): string[] {
   const lines = content.split("\n");
   const ranges: Array<[number, number]> = [];
@@ -907,6 +924,16 @@ function SectionView({
   const [convertIdx, setConvertIdx] = useState<number | null>(null);
 
   const blocks = useMemo(() => (data ? splitBlocks(data.content) : []), [data]);
+  // 자료를 빼면서 근거 표기를 잃은 블록. 서버가 마커가 지워지는 순간 문단을 기록해 둔다
+  // (지워진 마커는 흔적이 없어 나중에는 알 수 없다). 절 전체 재작성은 실측 $0.4~$1.3인데
+  // 이 블록만 고치면 1콜이라 십수 배 싸다 - 어디를 고치면 되는지 짚어 주는 게 핵심이다.
+  const lostByBlock = useMemo(() => {
+    const marks = (data?.evidence_lost ?? []).filter((m) => m.text.trim());
+    if (marks.length === 0) return blocks.map(() => 0);
+    return blocks.map((b) =>
+      marks.reduce((n, m) => (b.includes(m.text) ? n + (m.n_markers || 1) : n), 0),
+    );
+  }, [blocks, data]);
   // 문서 순서로 정렬 - 재작성은 위에서 아래로 처리해야 결과가 예측 가능하다.
   const selectedBlocks = useMemo(
     () =>
@@ -1421,6 +1448,23 @@ function SectionView({
                           근거 0건 블록에서 빈 패널이 뜨는 불편을 없앤다(2026-08-12).
                           강한 경고(못 찾음·근거 없는 수치)가 있는 블록은 배지를 경고색으로 -
                           블록을 열지 않고도 어디를 볼지 훑을 수 있게(2026-08-14 지적). */}
+                      {(lostByBlock[idx] ?? 0) > 0 ? (
+                        // 눌러 그 블록을 고른다 - 아래 재작성 바가 그대로 대상이 된다.
+                        // 새 버튼을 또 만들지 않는 이유: 고르기→지시→실행이 이미 한 줄이다.
+                        <button
+                          type="button"
+                          title="자료를 빼면서 이 블록의 근거 표기가 사라졌습니다 - 눌러 고른 뒤 이 블록만 다시 쓰면 됩니다"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedIdx(new Set([idx]));
+                          }}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          className="absolute -top-2 left-2 z-10 inline-flex items-center gap-1 rounded-full border border-fg-warning/50 bg-bg-warning px-1.5 py-0.5 text-[10px] text-fg hover:border-fg-warning"
+                        >
+                          <AlertTriangle className="h-3 w-3" aria-hidden />
+                          근거 빠짐 {lostByBlock[idx]}
+                        </button>
+                      ) : null}
                       {EVIDENCE_UI_ENABLED && (evidenceCounts[idx]?.count ?? 0) === 0 ? (
                         // 인용이 하나도 없는 블록 - 종전엔 배지를 아예 안 그려서 "근거 없이
                         // 쓰인 블록"이 **부재**로만 나타났다. 규칙을 아는 사람만 읽을 수 있는
@@ -1621,6 +1665,36 @@ function SectionView({
                 ? `선택 ${selectedBlocks.length}개 재작성`
                 : "절 전체 재작성"}
           </Button>
+          {/* 눌러 담는 지시 - 빈 칸을 마주하는 시간을 없앤다. 이미 담긴 말은 다시
+              담지 않는다(같은 지시를 두 번 쓰면 모델이 그 방향으로 과하게 기운다). */}
+          <div className="flex w-full flex-wrap items-center gap-1">
+            {(selectedBlocks.length > 0 ? BLOCK_HINTS : SECTION_HINTS).map((hint) => (
+              <button
+                key={hint}
+                type="button"
+                disabled={busy || instruction.includes(hint)}
+                onClick={() => setInstruction((v) => (v.trim() ? `${v.trim()}, ${hint}` : hint))}
+                className={cn(
+                  "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                  instruction.includes(hint)
+                    ? "border-accent bg-bg-info text-fg-info"
+                    : "border-border text-fg-secondary hover:border-border-strong hover:text-fg",
+                )}
+              >
+                {hint}
+              </button>
+            ))}
+            {instruction.trim() ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setInstruction("")}
+                className="px-1.5 text-[11px] text-fg-tertiary hover:text-fg-secondary"
+              >
+                지우기
+              </button>
+            ) : null}
+          </div>
           {/* 절 전체 재작성은 실측 $0.4~$1.3짜리 버튼이다 - 누르기 전에 값을 안다.
               블록 재작성은 검색 없이 LLM 1콜이라 값이 다르므로 붙이지 않는다. */}
           {selectedBlocks.length === 0 && !busy && estimateLabel(costBasis.data, 1) ? (

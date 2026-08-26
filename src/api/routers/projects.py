@@ -54,6 +54,7 @@ from src.api.schemas.section import (
     EvidenceInfo,
     FigurePlaceholder,
     GroundedNumberRead,
+    LostEvidenceBlock,
     SectionBlockRewriteRequest,
     SectionCitation,
     SectionContentResponse,
@@ -1212,6 +1213,9 @@ async def _apply_section_rewrite(
     # 근거 추적 기록 — 재작성은 작성 루프 밖 경로라 그냥 두면 이 절만 추적이 반쪽이 된다
     # (실린 근거 수를 모르고, 마커→청크 대응도 복원할 수 없다).
     meta = {**(row.meta or {}), "pool_chunk_ids": [str(c) for c in draft.pool_chunk_ids]}
+    # 절을 통째로 다시 썼으면 "근거를 잃은 문단" 자국은 의미를 잃는다 — 그 문단 자체가
+    # 사라졌다. 안 지우면 없는 자리를 계속 짚어 배지가 거짓말이 된다.
+    meta.pop("evidence_lost", None)
     meta["plan_failed"] = draft.split_fallback
     # 재작성이 새 근거로 목표를 채웠으면 '자료 부족' 배지를 내린다 — 안 갱신하면
     # 자료를 추가해 다시 써도 배지가 남는다(재업로드 워크플로우의 마감 신호).
@@ -3311,6 +3315,11 @@ def _section_content(
         evidence=_evidence_info(row),
         figures=_section_figures(row, cites),
         locked=row.locked,
+        evidence_lost=[
+            LostEvidenceBlock(text=str(p.get("text") or ""), n_markers=int(p.get("n_markers") or 0))
+            for p in ((row.meta or {}).get("evidence_lost") or [])
+            if isinstance(p, dict) and str(p.get("text") or "").strip()
+        ],
     )
 
 
@@ -3824,6 +3833,13 @@ async def rewrite_section_block(
     # 첫 번째 일치만 치환 — 프론트가 보낸 블록은 화면의 특정 위치지만 동일 문단이
     # 중복될 수 있어, 원문 전체가 아니라 한 곳만 바꾼다.
     row.content = row.content.replace(data.block, new_block, 1)
+    # 고친 블록이 "근거를 잃은 문단"이었다면 그 자국을 지운다 — 고쳐 놓고도 배지가
+    # 남으면 사람은 무엇을 더 해야 하는지 알 수 없다(미반영 지문과 같은 이유로 한 세트).
+    lost = [p for p in ((row.meta or {}).get("evidence_lost") or []) if isinstance(p, dict)]
+    if lost:
+        kept = [p for p in lost if str(p.get("text") or "") not in data.block]
+        if len(kept) != len(lost):
+            row.meta = {**(row.meta or {}), "evidence_lost": kept}
     project.updated_at = clock_now()
     await session.flush()
     # 블록 재작성도 덮어쓰기다 — 절 재작성과 같은 이유로 성공 직후를 얼린다.

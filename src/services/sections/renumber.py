@@ -178,6 +178,32 @@ async def renumber_state(state: ProjectState) -> ProjectState:
     return state.model_copy(update={"section_candidates": new_sets}).with_section_meta(meta)
 
 
+def lost_evidence_paragraphs(before: str, after: str) -> list[dict[str, object]]:
+    """마커가 지워진 문단들 — [{"text": 새 문단, "n_markers": 잃은 개수}].
+
+    **왜 문단인가**: 자료를 빼면 그 자료를 가리키던 마커가 본문에서 사라진다(위 계약).
+    그 자리의 문장은 주장을 그대로 하면서 근거만 잃는다. 절 전체를 다시 쓰면 실측
+    $0.4~$1.3인데, 근거를 잃은 문단만 고치면 블록 재작성 1콜로 끝난다 — 십수 배 싸다.
+    화면이 "어디를 고치면 되는지" 짚어 주려면 그 자리를 지금 기록해 둬야 한다. 나중에는
+    알 수 없다: 지워진 마커는 흔적을 남기지 않는다.
+
+    문단은 화면의 블록 나눔(빈 줄 기준)과 같은 단위다. 마커만 빠지므로 문단 수와 순서는
+    그대로라 자리끼리 맞대면 된다 — 어긋나면(다른 편집이 겹쳤다) 아무것도 기록하지
+    않는다. 틀린 자리를 짚느니 안 짚는 게 낫다.
+    """
+    sep = "\n\n"  # 빈 줄 = 화면의 블록 경계
+    old_paras = before.split(sep)
+    new_paras = after.split(sep)
+    if len(old_paras) != len(new_paras):
+        return []
+    out: list[dict[str, object]] = []
+    for old, new in zip(old_paras, new_paras, strict=True):
+        lost = len(numbers_in_order(old)) - len(numbers_in_order(new))
+        if lost > 0 and new.strip():
+            out.append({"text": new.strip(), "n_markers": lost})
+    return out
+
+
 async def rebase_global_numbers(session, project_id: UUID) -> int:
     """저장된 본문의 전역 인용 번호를 **현재 채택 순서**에 다시 맞춘다.
 
@@ -256,8 +282,15 @@ async def rebase_global_numbers(session, project_id: UUID) -> int:
         content = renumber_marks(row.content or "", old_to_new)
         if content == (row.content or ""):
             continue
+        lost = lost_evidence_paragraphs(row.content or "", content)
+        meta = {**(row.meta or {}), "citation_chunks": new_cmap}
+        if lost:
+            # 앞서 잃은 자리와 합친다 — 두 번째 제외가 첫 번째 기록을 지우면 안 된다.
+            prev = [p for p in (meta.get("evidence_lost") or []) if isinstance(p, dict)]
+            seen = {str(p.get("text")) for p in prev}
+            meta["evidence_lost"] = prev + [p for p in lost if str(p["text"]) not in seen]
         row.content = content
-        row.meta = {**(row.meta or {}), "citation_chunks": new_cmap}
+        row.meta = meta
         changed += 1
     if changed:
         logger.info("citations.rebased", project_id=str(project_id), n_sections=changed)

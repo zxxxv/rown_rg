@@ -295,6 +295,10 @@ export const SectionContentResponseSchema = z.object({
   figures: z.array(FigurePlaceholderSchema).default([]),
   /** 잠근 절 - AI 재작성(절·블록·묶음)이 막힌다. 사람의 직접 편집은 그대로 */
   locked: z.boolean().default(false),
+  /** 자료를 빼면서 근거 표기를 잃은 문단들 - 그 블록만 고치면 되므로 값이 십수 배 싸다 */
+  evidence_lost: z
+    .array(z.object({ text: z.string(), n_markers: z.number().int().default(0) }))
+    .default([]),
 });
 export type SectionContentResponse = z.infer<typeof SectionContentResponseSchema>;
 
