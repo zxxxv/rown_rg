@@ -18,7 +18,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.report_version import ReportVersion
@@ -53,6 +53,47 @@ def _content_hash(sections: list[dict[str, Any]]) -> str:
         h.update(s["content"].encode("utf-8"))
         h.update(b"\x00")
     return h.hexdigest()
+
+
+# 버전 보존 — 스냅샷 한 벌이 **보고서 전체**라 잦은 수정이 그대로 쌓인다.
+# 실측(2026-08-27) 한 벌 최대 415 kB(예타 35절 377,865자). 블록 수정 100번이면
+# 그 프로젝트 하나가 41 MB다.
+#
+# 그래서 둘로 가른다. **이정표**(조립·확정·다시열기·목차·자료·수동·원본)는 문서의
+# 마디라 전부 남기고, **잦은 수정**(절·블록 재작성, 손편집, 되돌리기)은 최근 것만
+# 남긴다. 되돌릴 대상은 거의 언제나 직전 몇 개이고, 더 옛것으로 가려는 사람은
+# 이정표를 짚는다.
+_CHURN_PREFIXES = ("rewrite:", "block:", "edit:", "restore:")
+KEEP_RECENT_CHURN = 20
+
+
+async def prune_versions(
+    session: AsyncSession, project_id: UUID, *, keep: int = KEEP_RECENT_CHURN
+) -> int:
+    """잦은 수정 버전을 최근 `keep`개만 남기고 지운다 → 지운 개수.
+
+    이정표는 몇 개든 손대지 않는다. 번호(version_no)는 최대값+1로 매기므로 지워도
+    다시 쓰이지 않는다 - 남은 번호가 듬성해질 뿐 가리키는 대상은 안 바뀐다.
+    """
+    rows = (
+        await session.execute(
+            select(ReportVersion.id, ReportVersion.reason)
+            .where(ReportVersion.project_id == project_id)
+            .order_by(ReportVersion.version_no.desc())
+        )
+    ).all()
+    churn = [r for r in rows if str(r.reason or "").startswith(_CHURN_PREFIXES)]
+    doomed = [r.id for r in churn[keep:]]
+    if not doomed:
+        return 0
+    await session.execute(delete(ReportVersion).where(ReportVersion.id.in_(doomed)))
+    logger.info(
+        "report_version.pruned",
+        project_id=str(project_id),
+        n_pruned=len(doomed),
+        kept_churn=keep,
+    )
+    return len(doomed)
 
 
 async def snapshot_report(
@@ -105,6 +146,9 @@ async def snapshot_report(
         reason=reason,
         n_sections=len(sections),
     )
+    # 새 벌을 담은 **직후**에 정리한다 - 방금 것이 최근 목록에 들어간 상태로 세야
+    # "최근 20개"가 늘 방금 것을 포함한다.
+    await prune_versions(session, project_id)
     return next_no
 
 
