@@ -14,6 +14,7 @@ import {
 import { ExternalLink } from "lucide-react";
 import { useState } from "react";
 import type { EvidenceChunk, SectionCitation } from "@/api/types";
+import { SourceMarkdown } from "./SourceMarkdown";
 
 const RELIABILITY_LABEL: Record<string, string> = {
   high: "신뢰도 높음",
@@ -86,9 +87,10 @@ export function CitationHoverCard({ number, citation, evidence }: CitationHoverC
                       {evidence.header_path.join(" > ")}
                     </p>
                   ) : null}
-                  <p className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded bg-bg-secondary px-2 py-1.5 text-xs leading-relaxed text-fg-secondary">
-                    {evidence.content}
-                  </p>
+                  {/* 발췌도 렌더한다 - 표가 파이프 줄로 보이면 숫자를 대조할 수 없다. */}
+                  <div className="max-h-48 overflow-y-auto rounded bg-bg-secondary px-2 py-1.5">
+                    <SourceMarkdown content={evidence.content} />
+                  </div>
                 </div>
               ) : null}
               {citation.url ? (

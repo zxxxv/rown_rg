@@ -1,15 +1,20 @@
 import { ExternalLink, FileText } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiUrl } from "@/api/client";
 import { useSourceDocument } from "@/api/sections";
 import { cn } from "@/lib/utils";
+import { markSpan, SourceMarkdown } from "./SourceMarkdown";
 
 // ─── 원문 뷰어 ───
 // 근거 카드가 보여주는 것은 모델이 받은 청크 하나다. 그 대목이 문서 전체 흐름의
 // 어디에 있는지(앞뒤 문맥, 어느 소제목 아래인지)는 원문을 열어야 보인다. 색인
 // 청크를 원문 순서로 이어 붙여 문서로 보여주고, 지목된 청크(와 그 안의 대목)로
-// 스크롤해 강조한다. 마크다운 렌더는 일부러 하지 않는다 - 근거 대조는 "원문
-// 그대로"가 원칙이고, 렌더가 글자를 재배치하면 오프셋 강조가 어긋난다.
+// 스크롤해 강조한다. 파싱된 원문은 마크다운이라 날것으로 두면 표가 파이프 문자
+// 줄로 보여 숫자를 대조할 수 없다 - 렌더해서 보여준다(2026-08-27 지시).
+// 한때 "렌더가 글자를 재배치하면 오프셋 강조가 어긋난다"를 이유로 안 했는데,
+// 강조를 **파싱 전에 오프셋 자리에 표식을 끼우는 방식**으로 옮겨 그 문제를 없앴다
+// (SourceMarkdown.markSpan). 글자 하나까지 원문과 맞춰 봐야 할 때를 위해
+// "원문 그대로" 토글은 남긴다 - 근거 대조가 이 패널의 본업이다.
 
 export type SourceLocation = {
   sourceId: string;
@@ -55,6 +60,7 @@ export function SourceViewer({
 }) {
   const query = useSourceDocument(projectId, location.sourceId);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const [raw, setRaw] = useState(false);
 
   // 문서가 준비되면 지목 청크를 가운데로 - 렌더 직후라 한 프레임 늦춘다
   useEffect(() => {
@@ -97,6 +103,18 @@ export function SourceViewer({
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg">
           {doc.title ?? "(제목 없음)"}
         </span>
+        <button
+          type="button"
+          onClick={() => setRaw((v) => !v)}
+          title={
+            raw
+              ? "표·제목을 정리해 읽기 좋게 보여줍니다"
+              : "마크다운 기호까지 원문 글자 그대로 보여줍니다"
+          }
+          className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[11px] text-fg-secondary hover:bg-bg-secondary"
+        >
+          {raw ? "정리해 보기" : "원문 그대로"}
+        </button>
         {hasPages ? (
           <a
             href={pdfHref(focusedPage)}
@@ -151,14 +169,20 @@ export function SourceViewer({
                   {header}
                 </p>
               ) : null}
-              <p className="whitespace-pre-wrap text-xs leading-relaxed text-fg-secondary">
-                <ChunkBody
-                  content={c.content}
-                  focused={focused}
-                  start={location.start}
-                  end={location.end}
+              {raw ? (
+                <p className="whitespace-pre-wrap text-xs leading-relaxed text-fg-secondary">
+                  <ChunkBody
+                    content={c.content}
+                    focused={focused}
+                    start={location.start}
+                    end={location.end}
+                  />
+                </p>
+              ) : (
+                <SourceMarkdown
+                  content={focused ? markSpan(c.content, location.start, location.end) : c.content}
                 />
-              </p>
+              )}
             </div>
           );
         })}
