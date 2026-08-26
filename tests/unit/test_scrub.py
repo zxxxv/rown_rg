@@ -70,3 +70,36 @@ class TestInternalTermSwap:
         body = "ㅇ 국내 기업의 대응 수준은 개선되는 흐름을 보이고 있음 (출처 3)"
         cleaned, notes = scrub_leftovers(body)
         assert cleaned == body and notes == []
+
+
+class TestTableForbiddenCells:
+    """표 금지 셀(2026-08-21 v6 결함 세대교체 3번) - 생성단 세정.
+
+    렌더 층('-' 치환)만 있으면 웹 미리보기·검사가 금지값을 그대로 본다. 조립 세정이
+    정본이고 렌더는 세정 밖 경로용 이중 방어로 남는다(값 집합은 EMPTY_CELL_VALUES 공유).
+    """
+
+    def test_cells_normalized_prose_untouched(self) -> None:
+        body = (
+            "| 항목 | 2024 | 비고 |\n"
+            "| --- | --- | --- |\n"
+            "| 매출 | 120억 | 자료 없음 |\n"
+            "| 수출 | N/A | 상동 |\n\n"
+            "산문에서 자료 없음이라는 표현은 문장의 일부라 남아야 한다.\n"
+        )
+        out, notes = scrub_leftovers(body)
+        assert "| 매출 | 120억 | - |" in out
+        assert "자료 없음이라는 표현" in out  # 산문은 안 건드린다
+        assert any("표 금지 셀 정리 3건" in n for n in notes)
+
+    def test_partial_match_cell_kept(self) -> None:
+        # 셀 전체가 금지값일 때만 - "자료 없음(추정치 활용)"은 정보가 있는 셀이다.
+        body = "| 지표 | 자료 없음(추정치 활용) |\n"
+        out, notes = scrub_leftovers(body)
+        assert out == body
+        assert not any("표 금지 셀" in n for n in notes)
+
+    def test_trailing_newline_preserved(self) -> None:
+        body = "| a | N/A |\n"
+        out, _ = scrub_leftovers(body)
+        assert out.endswith("\n") and "| - |" in out

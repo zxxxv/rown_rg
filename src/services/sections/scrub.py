@@ -41,6 +41,41 @@ _BON_PART_SWAPS = (
 )
 
 
+# 표 셀 값으로는 무의미한 회피 문구 — 작성 규칙이 금지하는데도 잔존한다(2026-08-21
+# v6 정독, 결함 세대교체 3번). 실납품 관례인 "-"로 통일한다. 여기(조립 세정)가 정본이고
+# HWPX 렌더(_clean_cell)는 세정 밖 경로(수동 편집·구버전)용 이중 방어로 남는다 —
+# 생성단에서 걷어야 웹 미리보기·검사·내보내기가 같은 것을 본다.
+EMPTY_CELL_VALUES = frozenset(
+    {"자료 없음", "자료상 미제시", "상동", "해당 없음", "해당사항 없음", "N/A", "n/a"}
+)
+# 표 행 판별 - 셀 단위로만 치환한다. 산문의 "자료 없음"은 문장의 일부라 안 건드린다.
+_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+
+
+def _scrub_table_cells(content: str) -> tuple[str, int]:
+    lines = content.splitlines()
+    n = 0
+    for i, line in enumerate(lines):
+        if not _TABLE_ROW_RE.match(line):
+            continue
+        cells = line.split("|")
+        changed = False
+        for j, cell in enumerate(cells):
+            if cell.strip() in EMPTY_CELL_VALUES:
+                # 원래 폭을 흉내 내 파이프 정렬을 덜 흔든다(렌더에는 무영향, diff 가독용).
+                cells[j] = cell.replace(cell.strip(), "-")
+                changed = True
+                n += 1
+        if changed:
+            lines[i] = "|".join(cells)
+    if not n:
+        return content, 0
+    joined = chr(10).join(lines)
+    if content.endswith(chr(10)):
+        joined += chr(10)
+    return joined, n
+
+
 def scrub_leftovers(content: str) -> tuple[str, list[str]]:
     """(세정된 본문, 세정 내역). 내역이 비면 손대지 않은 것."""
     notes: list[str] = []
@@ -74,4 +109,8 @@ def scrub_leftovers(content: str) -> tuple[str, list[str]]:
             out = out.replace(old, new_s)
     if swapped:
         notes.append(f"'본 파트' 용어 치환 {swapped}건")
+
+    out, n_cells = _scrub_table_cells(out)
+    if n_cells:
+        notes.append(f"표 금지 셀 정리 {n_cells}건")
     return out, notes

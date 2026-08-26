@@ -458,11 +458,9 @@ _BARE_SOURCE_LABEL_RE = re.compile(r"^[□ㅇ○◦\-*※\s]*(?:출처|자료|�
 _TABLE_SOURCE_NUM_RE = re.compile(r"\((?:출처|근거)\s*(?P<nums>\d+(?:\s*,\s*\d+)*)\s*\)")
 
 
-# 표 셀 값으로는 무의미한 회피 문구 — 작성 규칙이 금지하는데도 잔존한다(2026-08-21
-# v6 정독). 실납품 관례인 "-"로 통일한다.
-_EMPTY_CELL_VALUES = frozenset(
-    {"자료 없음", "자료상 미제시", "상동", "해당 없음", "해당사항 없음", "N/A", "n/a"}
-)
+# 표 금지 셀 정의는 조립 세정(sections/scrub)이 정본 — 여기는 세정 밖 경로
+# (수동 편집·구버전 본문)용 이중 방어라 같은 집합을 가져다 쓴다.
+from src.services.sections.scrub import EMPTY_CELL_VALUES as _EMPTY_CELL_VALUES  # noqa: E402
 
 
 def _clean_cell(value: str) -> str:

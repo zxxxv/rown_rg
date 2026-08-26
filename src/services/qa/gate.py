@@ -965,6 +965,13 @@ def check_citation_markers(draft: SectionDraft) -> GateResult:
 # 대량 실측: "(출처 17 제외)"류 배정 메모 13건+·오염 마커 "(출превод처 25)"·기형
 # <callout> 태그). 문장 자체는 유효할 수 있어 SOFT — 조립 세정(sections/scrub)이
 # 같은 패턴을 결정적으로 걷어내고, 여기는 세정 밖 경로(재작성·옛 절)의 가시화 몫이다.
+def _forbidden_cell_pattern() -> re.Pattern[str]:
+    from src.services.sections.scrub import EMPTY_CELL_VALUES
+
+    joined = "|".join(re.escape(v) for v in sorted(EMPTY_CELL_VALUES))
+    return re.compile(r"\|\s*(?:" + joined + r")\s*\|")
+
+
 _LEFTOVER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"[-—–]\s*삭제\s*\)"), "편집 메모 잔재(… — 삭제)"),
     (re.compile(r"본 파트"), "내부 작성 단위 용어('본 파트')"),
@@ -983,6 +990,10 @@ _LEFTOVER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (re.compile(r"\(출[^\s처()]{1,12}처(?=\s*\d)"), "오염된 출처 마커"),
     (re.compile(r"<callout[^>]*>|</callout\s*>"), "기형 callout 태그(정식은 ::: 펜스)"),
+    # 표 금지 셀 - 조립 세정(sections/scrub)이 걷지만, 수동 편집·구버전 본문은 세정을
+    # 안 지나므로 여기서 가시화한다(2026-08-21 v6 결함 세대교체 3번). 값 집합은 세정과
+    # 같은 단일 진실(EMPTY_CELL_VALUES)이다.
+    (_forbidden_cell_pattern(), "표 금지 셀(자료 없음류 - '-'로 통일할 것)"),
 )
 
 # 절단 의심 꼬리 — 수량 표현 뒤 단위 없이 끝나거나("GDP가 약 2"), 접속사로 끝나는 줄.
