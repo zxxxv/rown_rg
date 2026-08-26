@@ -67,3 +67,18 @@ export function markerNumbers(text: string): number[] {
 export function stripSourceMarks(text: string): string {
   return text.replace(SOURCE_MARK_RE, "");
 }
+
+/** 문장의 출처 표기에 번호 하나를 덧붙인다 - 오귀속 교정("출처 n 추가")의 실체.
+
+ *  교체가 아니라 추가다: 문장의 다른 수치는 기존 출처가 받칠 수 있다. 첫 번째
+ *  엄격 마커에만 덧붙이고, 이미 그 번호가 있거나 마커가 없으면 null(교정 불가). */
+export function appendSourceNumber(sentence: string, n: number): string | null {
+  const re = new RegExp(SOURCE_MARK_RE.source); // /g 상태 공유를 피해 새로 만든다
+  const m = re.exec(sentence);
+  if (!m) return null;
+  const numbers = m[1].split(",").map((x) => Number.parseInt(x.trim(), 10));
+  if (numbers.includes(n)) return null;
+  const closing = m[0].search(/[)）][^)）]*$/);
+  const fixed = `${m[0].slice(0, closing)}, ${n}${m[0].slice(closing)}`;
+  return sentence.slice(0, m.index) + fixed + sentence.slice(m.index + m[0].length);
+}

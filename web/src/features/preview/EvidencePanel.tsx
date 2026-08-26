@@ -2,7 +2,7 @@ import { ExternalLink, FileSearch } from "lucide-react";
 import { useSectionEvidence } from "@/api/sections";
 import type { ClaimAlignment, EvidenceChunk, SectionEvidence } from "@/api/types";
 import { confirmedSpan } from "./ClaimHoverCard";
-import { markerNumbers as markerNumbersOf } from "./markers";
+import { appendSourceNumber, markerNumbers as markerNumbersOf } from "./markers";
 import type { SourceLocation } from "./SourceViewer";
 import { textFragmentUrl } from "./sourceLink";
 
@@ -36,10 +36,13 @@ function ClaimRow({
   claim,
   chunks,
   onLocate,
+  onFixCitation,
 }: {
   claim: ClaimAlignment;
   chunks: EvidenceChunk[];
   onLocate?: (loc: SourceLocation) => void;
+  /** 오귀속 교정 - 이 문장에 출처 번호 하나를 덧붙인다(문장, 추가할 번호) */
+  onFixCitation?: (claim: string, number: number) => void;
 }) {
   const chunk = claim.chunk_id ? chunks.find((c) => c.chunk_id === claim.chunk_id) : undefined;
   // 대목을 못 집었으면 인용 번호로라도 자료를 찾아 준다 - 자료 이름조차 없으면
@@ -128,6 +131,49 @@ function ClaimRow({
         </p>
       ) : null}
 
+      {(claim.relocations ?? []).map((r) => {
+        // 오귀속 제안 - 그 수치가 절의 **다른** 근거에 있다. 자동으로 안 바꾼다:
+        // 같은 수치가 우연히 딴 자료에 있을 수 있어, 원문 확인과 적용은 사람 몫이다.
+        // 적용은 교체가 아니라 추가다 - 문장의 다른 수치는 기존 출처가 받칠 수 있다.
+        const rSource = chunks.find((x) => x.chunk_id === r.chunk_id);
+        return (
+          <div
+            key={`reloc-${r.token}`}
+            className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]"
+          >
+            <span className="text-fg-secondary">
+              {r.token}은(는) <span className="font-mono text-fg-info">[{r.number}]</span>{" "}
+              {rSource?.source_title ?? "다른 근거"}에 있습니다
+            </span>
+            {onLocate && rSource?.source_id ? (
+              <button
+                type="button"
+                onClick={() =>
+                  onLocate({
+                    sourceId: rSource.source_id as string,
+                    chunkId: r.chunk_id,
+                    start: null,
+                    end: null,
+                  })
+                }
+                className="text-fg-info hover:underline"
+              >
+                원문 확인
+              </button>
+            ) : null}
+            {onFixCitation && appendSourceNumber(claim.claim, r.number) !== null ? (
+              <button
+                type="button"
+                onClick={() => onFixCitation(claim.claim, r.number)}
+                className="rounded border border-border-info px-1.5 py-0.5 text-fg-info hover:bg-bg-info"
+              >
+                출처 {r.number} 추가
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+
       {locate || webUrl ? (
         <div className="mt-2 flex flex-wrap items-center gap-3">
           {locate ? (
@@ -194,6 +240,7 @@ export function BlockEvidence({
   sectionId,
   blocks,
   onLocate,
+  onFixCitation,
 }: {
   projectId: string;
   sectionId: string;
@@ -201,6 +248,8 @@ export function BlockEvidence({
   blocks: string[];
   /** 근거 대목을 원문 문서 안에서 보여달라는 요청 - 드로어가 원문 뷰어로 전환한다 */
   onLocate?: (loc: SourceLocation) => void;
+  /** 오귀속 교정 - 문장에 출처 번호를 덧붙여 저장한다 */
+  onFixCitation?: (claim: string, number: number) => void;
 }) {
   const query = useSectionEvidence(projectId, sectionId);
   const data = query.data;
@@ -228,6 +277,7 @@ export function BlockEvidence({
             claim={c}
             chunks={data.items}
             onLocate={onLocate}
+            onFixCitation={onFixCitation}
           />
         ))}
       </ul>

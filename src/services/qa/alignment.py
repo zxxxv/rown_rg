@@ -273,6 +273,23 @@ class NumberSpan:
 
 
 @dataclass
+class NumberRelocation:
+    """무근거 판정된 수치가 실은 절 풀의 **다른** 근거에 있는 경우 — 오귀속 제안.
+
+    misattributed_numbers(gate)가 절 단위 경고("오귀속 N건")로 이미 세던 것을 문장
+    옆으로 가져온다 — 경고는 "어딘가 틀렸다"까지만 말해서 사람이 못 고친다. 어느
+    수치가 어느 출처 번호에 있는지 가리키면 표기 교정이 클릭 하나가 된다.
+
+    제안이지 판정이 아니다 — 같은 수치가 우연히 딴 자료에 있을 수 있다. 그래서
+    자동 교체는 안 하고, 화면이 "출처 n에 있음"을 보이면 사람이 원문을 보고 누른다.
+    """
+
+    token: str  # 본문 표기 그대로
+    number: int  # 그 수치가 실재하는 근거의 인용 번호
+    chunk_id: UUID
+
+
+@dataclass
 class ClaimAlignment:
     """본문 문장 하나의 근거 대조 결과."""
 
@@ -285,6 +302,8 @@ class ClaimAlignment:
     # 7건 전부 판정 경로였고 어휘 경로는 0건).
     cited_chunk_ids: list[UUID] = field(default_factory=list)
     ungrounded: list[str] = field(default_factory=list)
+    # 무근거 수치 중 절의 다른 근거에는 있는 것 - 오귀속 교정 제안.
+    relocations: list[NumberRelocation] = field(default_factory=list)
     # 근거에서 발견된 수치의 위치. ungrounded와 합치면 이 문장의 수치 전수가 된다.
     grounded: list[NumberSpan] = field(default_factory=list)
     # 인용 근거에 한글 대목이 하나라도 있는가. 전부 외국어면 겹침 0이어도 '불일치'가
@@ -374,6 +393,9 @@ def align_section(
         # 수치는 대목이 아니라 인용 근거 전체를 상대로 본다(같은 자료의 다른
         # 줄에 있을 수 있다) — 게이트와 같은 판정을 쓴다.
         ungrounded = ungrounded_numbers(bare, "\n".join(cited_text)) if numbers else []
+        relocations = (
+            _relocations(ungrounded, seen_cids, chunk_texts, marker_chunks) if ungrounded else []
+        )
         joined_evidence = "\n".join(cited_text)
         scored.sort(key=lambda x: x.score, reverse=True)
         candidates = [
@@ -389,6 +411,7 @@ def align_section(
                 candidates=candidates,
                 cited_chunk_ids=[cid for cid, _text in cited_chunks],
                 ungrounded=ungrounded,
+                relocations=relocations,
                 grounded=_grounded_spans(bare, cited_chunks, ungrounded),
                 # 인용 근거가 **하나라도** 외국어면 겹침으로 '불일치'를 단정할 수 없다.
                 # 종전에는 합친 글에 한글이 있기만 하면 잴 수 있다고 봤는데, 한글 청크와
@@ -402,6 +425,39 @@ def align_section(
                 ),
             )
         )
+    return out
+
+
+def _relocations(
+    ungrounded: list[str],
+    cited_ids: set[UUID],
+    chunk_texts: dict[UUID, str],
+    marker_chunks: dict[int, Sequence[UUID]],
+) -> list[NumberRelocation]:
+    """무근거 수치를 절 풀의 비인용 청크에서 찾는다 — misattributed_numbers(gate)와
+    같은 자(number_in_text·환산 포함)로, 문장 옆에 놓을 수 있게 번호까지 되짚는다.
+
+    같은 수치가 여러 근거에 있으면 첫 번호 하나만 제안한다 — 나열은 고르는 사람을
+    다시 검색으로 돌려보내는 것이고, 하나를 눌러 원문을 보면 맞는지 바로 안다.
+    """
+    by_chunk: dict[UUID, int] = {}
+    for number, ids in marker_chunks.items():
+        for cid in ids:
+            by_chunk.setdefault(cid, number)
+    out: list[NumberRelocation] = []
+    for token in ungrounded:
+        found = next(
+            (
+                (cid, by_chunk[cid])
+                for cid, text in chunk_texts.items()
+                if cid not in cited_ids
+                and cid in by_chunk
+                and number_in_text(token, normalize_haystack(text or ""))
+            ),
+            None,
+        )
+        if found is not None:
+            out.append(NumberRelocation(token=token, number=found[1], chunk_id=found[0]))
     return out
 
 

@@ -340,8 +340,11 @@ def _significant_numbers(text: str) -> list[str]:
             continue
         # '년'이 바로 붙는 숫자는 기간·연차 표기(10년차·30년간) — 연도류와 같은 이유.
         nxt = text[m.end()] if m.end() < len(text) else ""
-        if nxt == "년" and not token.endswith("%"):
-            excluded.append((token, "year_suffix"))
+        if nxt in ("년", "월", "일") and not token.endswith("%"):
+            # 월·일도 같은 이유다 - "2025년 12월 22일"의 12·22는 날짜지 수치 주장이
+            # 아닌데, 무근거 경고와 오귀속 제안("12 → 출처 3")에 날짜 조각이 섞여
+            # 진짜를 가렸다(2026-08-27 오귀속 표본). 기간 표기(30일간·3개월)도 날짜류.
+            excluded.append((token, "date_suffix"))
             continue
         # ── 서지·식별자 — 문헌을 가리키는 숫자는 수치 주장이 아니다(2026-08-27 실측:
         # 무근거 경고 표본 8건 중 3건이 과제번호·권호였다. 경고가 헛돌면 진짜가 묻힌다).

@@ -62,8 +62,9 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
-import { chartFallbackTable } from "@/features/preview/chartSpec";
 import { claimTone } from "@/features/preview/ClaimHoverCard";
+import { appendSourceNumber } from "@/features/preview/markers";
+import { chartFallbackTable } from "@/features/preview/chartSpec";
 import { BlockEvidence, partitionBlockEvidence } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
 import { SectionVariantsPanel, SectionVariantsTrigger } from "@/features/preview/SectionVariants";
@@ -1032,8 +1033,7 @@ function SectionView({
   // 70~90%가 비확정(검증런 실측)이라 모든 블록이 경고색이 되고 신호가 죽는다.
   const evidenceCounts = useMemo(() => {
     const data = evidenceQuery.data;
-    if (!data)
-      return [] as { count: number; alert: number; needsCheck: number; defect: number }[];
+    if (!data) return [] as { count: number; alert: number; needsCheck: number; defect: number }[];
     return blocks.map((block) => {
       const { primary, claims } = partitionBlockEvidence([block], data);
       const alert = claims.filter(
@@ -1141,6 +1141,24 @@ function SectionView({
     setDraft(data.content);
     setEditing(true);
     clearBlockSelection();
+  };
+
+  // 오귀속 교정 - 근거 패널의 "출처 n 추가"가 문장의 출처 표기에 번호를 덧붙여 저장한다.
+  // 검증은 사람이 원문을 보고 눌렀다는 것 - 자동 교체가 아니라 사람이 승인한 편집이다.
+  const onFixCitation = async (claimText: string, number: number) => {
+    const content = data?.content ?? "";
+    const fixedClaim = appendSourceNumber(claimText, number);
+    if (!fixedClaim || !content.includes(claimText)) {
+      toast.error("문장을 본문에서 찾지 못했습니다 - 본문이 수정됐을 수 있습니다.");
+      return;
+    }
+    try {
+      await save.mutateAsync(content.replace(claimText, fixedClaim));
+      toast.success(`출처 ${number}을(를) 추가했습니다.`);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "저장에 실패했습니다.";
+      toast.error("출처 추가 실패", { description: msg });
+    }
   };
 
   const onSave = async () => {
@@ -1469,8 +1487,8 @@ function SectionView({
                     </p>
                     <p>
                       <b>무근거 수치</b> (빨강 물결) - 인용한 자료에서 못 찾은 수치가 든 문장.
-                      지어냈거나 다른 자료에서 왔을 수 있습니다. 없는 게 아니라 <b>검사에서 걸린
-                      것</b>이라 표시 스위치와 무관하게 늘 보입니다.
+                      지어냈거나 다른 자료에서 왔을 수 있습니다. 없는 게 아니라{" "}
+                      <b>검사에서 걸린 것</b>이라 표시 스위치와 무관하게 늘 보입니다.
                     </p>
                     <p>
                       <b>표기 없음</b> (주황 점선) - 인용 표기 없이 쓰인 문장. AI가 자료 없이 쓴
@@ -1592,7 +1610,11 @@ function SectionView({
             ) : null}
             {/* 뽑아 둔 안 - 바로 아래가 현재 본문이라 그 자리에서 견준다. 스크롤을 함께
                 타므로 얼마든 길어져도 되고, 하단 고정 바를 부풀리지 않는다. */}
-            <SectionVariantsPanel projectId={projectId} sectionId={sectionId} />
+            <SectionVariantsPanel
+              projectId={projectId}
+              sectionId={sectionId}
+              currentContent={data?.content ?? ""}
+            />
             <div className="flex flex-col gap-1">
               {blocks.map((block, idx) => (
                 // biome-ignore lint/a11y/useSemanticElements: 블록 안에 인용 링크(<a>)가 렌더돼 <button> 중첩은 invalid HTML - div+role/키핸들러로 대체
@@ -1842,6 +1864,7 @@ function SectionView({
                     sectionId={sectionId}
                     blocks={[evidenceBlock]}
                     onLocate={setSourceView}
+                    onFixCitation={canEdit ? onFixCitation : undefined}
                   />
                 )}
               </div>
@@ -1894,7 +1917,9 @@ function SectionView({
           {selectedBlocks.length === 0 && !busy
             ? (() => {
                 const one = estimateLabel(costBasis.data, 1, { compact: true });
-                return one ? <span className="text-[11px] text-fg-tertiary">{one}</span> : null;
+                return one ? (
+                  <span className="text-[11px] text-fg-tertiary">{one} · 절 1개</span>
+                ) : null;
               })()
             : null}
           {/* 눌러 담는 지시 - 빈 칸을 마주하는 시간을 없앤다. 이미 담긴 말은 다시

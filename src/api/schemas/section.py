@@ -147,6 +147,14 @@ class SpanCandidateRead(BaseModel):
     dense_score: float | None = None
 
 
+class NumberRelocationRead(BaseModel):
+    """무근거 수치의 실제 소재 제안 - 판정이 아니라 사람이 확인할 후보 하나."""
+
+    token: str
+    number: int  # 그 수치가 실재하는 근거의 인용 번호
+    chunk_id: str
+
+
 class ClaimAlignmentRead(BaseModel):
     """본문 문장 하나 ↔ 그 문장이 나온 근거 대목.
 
@@ -165,6 +173,9 @@ class ClaimAlignmentRead(BaseModel):
     span_text: str | None = None
     score: float = 0.0
     ungrounded: list[str] = Field(default_factory=list)  # 이 문장에서 근거에 없는 수치
+    # 무근거 수치 중 절의 **다른** 근거에는 있는 것 - 오귀속 교정 제안. 화면이
+    # "이 수치는 출처 n에 있습니다"를 보여주면 표기 고치기가 클릭 하나가 된다.
+    relocations: list[NumberRelocationRead] = Field(default_factory=list)
     grounded: list[GroundedNumberRead] = Field(default_factory=list)  # 근거에서 찾은 수치 위치
     # 확정하지 못했을 때 사람이 고를 후보 대목(순위 내림차순). 대목을 단정하면 거짓
     # 확신이 되지만 후보로 내놓으면 기계가 좁히고 사람이 고르는 것이 된다.

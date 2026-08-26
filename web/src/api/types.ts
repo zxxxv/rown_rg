@@ -355,6 +355,10 @@ export const ClaimAlignmentSchema = z.object({
   span_text: z.string().nullable().default(null),
   score: z.number().default(0),
   ungrounded: z.array(z.string()).default([]),
+  /** 무근거 수치 중 절의 다른 근거에는 있는 것 - "출처 n에 있음" 오귀속 교정 제안 */
+  relocations: z
+    .array(z.object({ token: z.string(), number: z.number().int(), chunk_id: z.string() }))
+    .default([]),
   grounded: z.array(GroundedNumberSchema).default([]),
   candidates: z.array(SpanCandidateSchema).default([]),
 });

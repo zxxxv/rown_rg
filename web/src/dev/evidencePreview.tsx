@@ -59,6 +59,7 @@ const EVIDENCE: SectionEvidence = {
       score: 0.82,
       ungrounded: [],
       grounded: [],
+      relocations: [],
       candidates: [],
     },
     {
@@ -72,10 +73,11 @@ const EVIDENCE: SectionEvidence = {
       score: 0.11,
       ungrounded: [],
       grounded: [],
+      relocations: [],
       candidates: [],
     },
     {
-      claim: "국내 철강업계의 대EU 수출 물량은 연간 320만 톤으로 추정된다",
+      claim: "국내 철강업계의 대EU 수출 물량은 연간 320만 톤으로 추정된다 (출처 3)",
       numbers: [3],
       status: "weak",
       chunk_id: "c-1",
@@ -84,6 +86,8 @@ const EVIDENCE: SectionEvidence = {
       span_text: "대EU 철강 수출은 최근 3년간 증가세를 보이고 있다.",
       score: 0.31,
       ungrounded: ["320만"],
+      // 오귀속 표본 - 수치가 인용한 [3]엔 없고 [7]엔 있다. "출처 7 추가" 버튼 확인용.
+      relocations: [{ token: "320만", number: 7, chunk_id: "c-2" }],
       grounded: [],
       candidates: [],
     },
@@ -98,6 +102,7 @@ const EVIDENCE: SectionEvidence = {
       score: 0,
       ungrounded: [],
       grounded: [],
+      relocations: [],
       candidates: [],
     },
   ] as SectionEvidence["claims"],
@@ -179,6 +184,7 @@ function App() {
                 sectionId={SECTION}
                 blocks={[BLOCK]}
                 onLocate={(loc) => console.log("locate", loc)}
+                onFixCitation={(claim, n) => console.log("fix", n, claim)}
               />
             </div>
           </div>

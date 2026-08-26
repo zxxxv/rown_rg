@@ -57,6 +57,7 @@ from src.api.schemas.section import (
     FigurePlaceholder,
     GroundedNumberRead,
     LostEvidenceBlock,
+    NumberRelocationRead,
     SectionBlockRewriteRequest,
     SectionCitation,
     SectionContentResponse,
@@ -1269,6 +1270,11 @@ async def _apply_section_rewrite(
         content = renumber_content(draft.content, cited, mapping)
     except Exception:
         logger.warning("rewrite.renumber_failed", project_id=str(project.id), exc_info=True)
+    # 덮어쓰기 전에 원본을 한 번 얼린다 - 버전이 없는 문서는 이 수정이 원본을 지운다
+    # (2026-08-27 실측 18건 중 10건이 본문은 있는데 버전이 0이었다).
+    from src.services.sections.versions import ensure_baseline_version
+
+    await ensure_baseline_version(session, project.id, created_by=created_by)
     row.content = content
     row.meta = meta
     row.source_ids = list(draft.cited_chunk_ids)
@@ -3824,6 +3830,10 @@ async def _claim_rows(
                     for c in a.candidates
                 ],
                 ungrounded=a.ungrounded,
+                relocations=[
+                    NumberRelocationRead(token=r.token, number=r.number, chunk_id=str(r.chunk_id))
+                    for r in a.relocations
+                ],
                 grounded=[
                     GroundedNumberRead(
                         token=g.token,
@@ -3943,6 +3953,11 @@ async def update_section_content(
     """수동 편집 저장 — 본문 교체. 상태를 completed로 확정한다."""
     project = await _get_authorized_project(project_id, session, current_user)
     row = await _get_section(session, project.id, section_id)
+    # 덮어쓰기 전에 원본을 한 번 얼린다 - 버전이 없는 문서는 이 수정이 원본을 지운다
+    # (2026-08-27 실측 18건 중 10건이 본문은 있는데 버전이 0이었다).
+    from src.services.sections.versions import ensure_baseline_version
+
+    await ensure_baseline_version(session, project.id, created_by=current_user.id)
     row.content = data.content
     row.status = "completed"
     # 본문 편집도 '최근 수정'에 반영 — 다운로드 재렌더(HWPX)와 함께 편집의
@@ -4059,7 +4074,9 @@ _MAX_VARIANTS = 4
 class SectionVariantsRequest(BaseModel):
     """한 절을 서로 다른 안으로 여러 벌 뽑는다 - 골라 쓰기 위해."""
 
-    n: int = Field(3, ge=2, le=_MAX_VARIANTS)
+    # 기본 2 - 견줄 것은 셋이다(지금 본문 + 새 안 2). 3을 새로 뽑으면 넷이 되는데,
+    # 넷을 한 화면에서 견주는 사람은 없다는 지적(2026-08-27). 값도 안 수에 곱해진다.
+    n: int = Field(2, ge=1, le=_MAX_VARIANTS)
     instruction: str = Field(default="", max_length=2000)
 
 
@@ -4176,7 +4193,10 @@ async def start_section_variants(
     그러면 방금 것은 사라진다 - 둘을 나란히 놓고 고를 수가 없었다. 실제로 사람이 하는
     일은 "이게 나은가 저게 나은가"인데 화면이 그걸 못 하게 막고 있었다.
 
-    값은 안 개수에 곱해진다(절당 실측 $0.4~$1.3). 그래서 기본 3, 최대 4로 묶고
+    **지금 본문은 그대로 둔다** - 새로 뽑은 안과 나란히 놓고 그중 하나를 고른다.
+    그래서 기본 2벌이면 견줄 것이 셋이 된다(지금 본문 + 새 안 2).
+
+    값은 안 개수에 곱해진다(절당 실측 $0.4~$1.3). 그래서 기본 2, 최대 4로 묶고
     화면이 누르기 전에 예상 비용을 보여 준다.
     """
     from src.clients.llm.quota_gate import check_user_quota
@@ -4415,6 +4435,11 @@ async def rewrite_section_block(
         raise ValidationError(message="재작성 결과가 비어 있습니다", code="BLOCK_REWRITE_EMPTY")
     # 첫 번째 일치만 치환 — 프론트가 보낸 블록은 화면의 특정 위치지만 동일 문단이
     # 중복될 수 있어, 원문 전체가 아니라 한 곳만 바꾼다.
+    # 덮어쓰기 전에 원본을 한 번 얼린다 - 버전이 없는 문서는 이 수정이 원본을 지운다
+    # (2026-08-27 실측 18건 중 10건이 본문은 있는데 버전이 0이었다).
+    from src.services.sections.versions import ensure_baseline_version
+
+    await ensure_baseline_version(session, project.id, created_by=current_user.id)
     row.content = row.content.replace(data.block, new_block, 1)
     # 고친 블록이 "근거를 잃은 문단"이었다면 그 자국을 지운다 — 고쳐 놓고도 배지가
     # 남으면 사람은 무엇을 더 해야 하는지 알 수 없다(미반영 지문과 같은 이유로 한 세트).

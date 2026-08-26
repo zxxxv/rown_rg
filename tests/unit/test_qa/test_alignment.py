@@ -230,3 +230,39 @@ class TestCrossLingual:
         claim = "The market will reach 135 billion dollars by 2026, growing at 25.6% CAGR [1]"
         chunks = {cid: "The short-form market reaches 135 billion dollars by 2026."}
         assert align_section(claim, chunks, {1: [cid]}) == []
+
+
+class TestRelocations:
+    """오귀속 교정 제안(2026-08-27) - 무근거 수치가 절의 다른 근거에 있으면 그 번호를
+    문장 옆에 놓는다. gate의 절 단위 경고("오귀속 N건")로는 사람이 못 고쳤다."""
+
+    def test_suggests_the_source_that_actually_has_the_number(self) -> None:
+        cited, other = uuid4(), uuid4()
+        claim = "코덱 반도체는 연중무휴 24시간 연속 실행되어야 함 (출처 22)"
+        chunks = {
+            cited: "출처 22의 본문에는 45라는 숫자만 있다.",
+            other: "코덱 ASIC은 비디오 처리를 연중무휴 24시간 실행하며 5년 수명이 요구된다.",
+        }
+        (result,) = align_section(claim, chunks, {22: [cited], 17: [other]})
+        assert result.ungrounded == ["24"]
+        (r,) = result.relocations
+        assert (r.token, r.number, r.chunk_id) == ("24", 17, other)
+
+    def test_no_suggestion_when_number_is_nowhere(self) -> None:
+        """어디에도 없으면 무근거일 뿐이다 - 없는 소재를 지어내면 오귀속 교정이
+        새 거짓 확신이 된다."""
+        cited, other = uuid4(), uuid4()
+        claim = "설비 용량은 500메가와트로 계획됨 (출처 3)"
+        chunks = {cited: "근거에는 용량 얘기가 없다.", other: "다른 근거에도 그 수치는 없다."}
+        (result,) = align_section(claim, chunks, {3: [cited], 4: [other]})
+        assert result.ungrounded == ["500"]
+        assert result.relocations == []
+
+    def test_grounded_number_gets_no_relocation(self) -> None:
+        """인용한 근거에 있으면 제안할 게 없다 - 제안은 무근거 수치에만 붙는다."""
+        cited = uuid4()
+        claim = "수출 물량은 연간 320만 톤으로 추정됨 (출처 3)"
+        chunks = {cited: "대EU 수출 물량은 연간 320만 톤 규모다."}
+        (result,) = align_section(claim, chunks, {3: [cited]})
+        assert result.ungrounded == []
+        assert result.relocations == []
