@@ -38,6 +38,7 @@ from src.services.qa.gate import (
     number_variants,
     numeric_mentions,
     run_section_gate,
+    significant_numbers,
     truncated_lines,
     uncited_units,
     uncovered_units,
@@ -699,6 +700,35 @@ class TestSectionRefsAndDerived:
         body = "ㅇ 참여 기업 비중은 24.12%와 6.16%이며 별도 지표는 77.7%로 집계됐음 (출처 1)"
         evidence = "shares were 24.12% and 6.16% respectively"
         assert ungrounded_numbers(body, evidence) == ["77.7%"]
+
+
+class TestBibliographicIdentifiers:
+    """문헌을 가리키는 숫자는 수치 주장이 아니다(2026-08-27 실측: 무근거 경고
+    표본 8건 중 3건이 과제번호·권호였다 - 경고가 헛돌면 진짜가 묻힌다).
+
+    코퍼스 220절 재측정: 경고 23건 소거·신규 0건, 소거분 전수가 식별자·모델명
+    (COVID-19, MI-100, PAM-16, 출원번호, 권·호)이었다."""
+
+    def test_hyphenated_identifier_fragments_excluded(self):
+        # 과제·출원 번호의 토막 - 하이픈으로 앞 글자·숫자에 붙은 숫자.
+        body = "ㅇ 'AI 반도체 기술 개발(No.RS-2025-02263167)' 과제가 성과로 이어짐 (출처 25)"
+        assert ungrounded_numbers(body, "관련 없는 근거") == []
+        body2 = "ㅇ COVID-19 이후 원격근무 채택이 가속화되었음 (출처 3)"
+        assert ungrounded_numbers(body2, "관련 없는 근거") == []
+
+    def test_volume_issue_excluded(self):
+        body = "ㅇ 해당 서베이는 IEEE 회보 105권 12호에 게재되어 학술 기반을 형성함 (출처 30)"
+        assert ungrounded_numbers(body, "관련 없는 근거") == []
+
+    def test_leading_zero_is_identifier(self):
+        # 수량은 0으로 시작해 적지 않는다 - 소수(0.3%)는 수치다.
+        assert significant_numbers("출원번호 0085973에 따른 특허") == []
+        assert significant_numbers("비중은 0.3% 수준") == ["0.3%"]
+
+    def test_real_quantities_still_checked(self):
+        # 같은 문장 안이라도 진짜 수량은 남는다 - "512 Gbps"·범위 뒤쪽 %.
+        got = significant_numbers("2037년 512 Gbps PAM-16 방식, 점유율 10-20% 수준")
+        assert "512" in got and "20%" in got and "16" not in got
 
 
 class TestMisattributedNumbers:

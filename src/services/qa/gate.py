@@ -343,6 +343,26 @@ def _significant_numbers(text: str) -> list[str]:
         if nxt == "년" and not token.endswith("%"):
             excluded.append((token, "year_suffix"))
             continue
+        # ── 서지·식별자 — 문헌을 가리키는 숫자는 수치 주장이 아니다(2026-08-27 실측:
+        # 무근거 경고 표본 8건 중 3건이 과제번호·권호였다. 경고가 헛돌면 진짜가 묻힌다).
+        # 하이픈으로 앞 글자·숫자에 붙은 토막 — "No.RS-2025-02263167"의 02263167.
+        # %가 붙었으면 수치다("10-20%"의 20%). "2018 - 2030"은 공백이라 안 걸린다.
+        if (
+            prev in "-–"
+            and m.start() > 1
+            and text[m.start() - 2].isalnum()
+            and not token.endswith("%")
+        ):
+            excluded.append((token, "identifier_fragment"))
+            continue
+        # 앞자리 0 — 수량은 0으로 시작해 적지 않는다("02263167"). 소수(0.3)는 수치다.
+        if token[0] == "0" and len(token) > 1 and token[1] not in ".,":
+            excluded.append((token, "leading_zero"))
+            continue
+        # 권·호가 바로 붙는 숫자는 서지 좌표다("IEEE 회보 105권 12호").
+        if nxt in ("권", "호") and not token.endswith("%"):
+            excluded.append((token, "volume_issue"))
+            continue
         if "." in token or "%" in token or len(digits) >= 2:
             out.append(token)
     if excluded:
