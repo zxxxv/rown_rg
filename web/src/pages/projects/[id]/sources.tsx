@@ -7,6 +7,7 @@ import { decideSourcePool, parseSourcePoolPayload } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
 import { progressKeys, useProgressSnapshot } from "@/api/progress";
 import {
+  fetchSourceImpact,
   useCollectMore,
   useDeleteSource,
   usePatchSource,
@@ -21,6 +22,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ExcludeImpactDialog } from "@/features/source-review/ExcludeImpactDialog";
 import { LibraryTreePanel } from "@/features/source-review/LibraryTreePanel";
 import { SourceDetailDialog } from "@/features/source-review/SourceDetailDialog";
 import { UploadDropzone, type UploadingFile } from "@/features/source-review/UploadDropzone";
@@ -206,6 +208,28 @@ export default function SourcesPage() {
         },
       },
     );
+  };
+
+  // 제외를 누르면 **먼저 무엇이 걸려 있는지 확인한다**. 걸린 절이 없으면 창 없이 그냥
+  // 뺀다 - 아무것도 안 걸린 제외까지 확인을 받으면 창이 소음이 되고, 소음이 된 확인창은
+  // 읽지 않고 눌린다.
+  const [excludeTarget, setExcludeTarget] = useState<Source | null>(null);
+  const [checkingImpact, setCheckingImpact] = useState<string | null>(null);
+  const requestExclude = async (s: Source) => {
+    setCheckingImpact(s.id);
+    try {
+      const impact = await fetchSourceImpact(queryClient, projectId, s.id);
+      if (impact.n_sections === 0) {
+        setIncluded(s.id, false);
+        return;
+      }
+      setExcludeTarget(s);
+    } catch {
+      // 영향을 못 재도 제외 자체는 사람의 권한이다 - 막지 않고 그대로 진행한다.
+      setIncluded(s.id, false);
+    } finally {
+      setCheckingImpact(null);
+    }
   };
 
   // 확정 = 진행 게이트의 decide(approve). 제외 선택은 PATCH로 이미 반영돼 있어
@@ -451,9 +475,13 @@ export default function SourcesPage() {
                           size="sm"
                           variant={s.is_included === false ? "secondary" : "outline"}
                           disabled={s.is_included === false}
-                          onClick={() => setIncluded(s.id, false)}
+                          onClick={() => void requestExclude(s)}
                         >
-                          {s.is_included === false ? "제외됨" : "제외"}
+                          {s.is_included === false
+                            ? "제외됨"
+                            : checkingImpact === s.id
+                              ? "확인 중…"
+                              : "제외"}
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => setActiveSource(s)}>
                           상세보기
@@ -510,7 +538,22 @@ export default function SourcesPage() {
         }}
         readOnly={!canCurate}
         onInclude={(sid) => setIncluded(sid, true)}
-        onExclude={(sid) => setIncluded(sid, false)}
+        onExclude={(sid) => {
+          // 상세창의 제외도 같은 문을 지난다 - 한쪽만 확인을 받으면 사람은 확인이
+          // 없는 쪽으로 몰린다.
+          const target = items.find((x) => x.id === sid);
+          if (target) void requestExclude(target);
+        }}
+      />
+      <ExcludeImpactDialog
+        projectId={projectId}
+        source={excludeTarget}
+        pending={patchSource.isPending}
+        onCancel={() => setExcludeTarget(null)}
+        onConfirm={() => {
+          if (excludeTarget) setIncluded(excludeTarget.id, false);
+          setExcludeTarget(null);
+        }}
       />
     </AppShell>
   );

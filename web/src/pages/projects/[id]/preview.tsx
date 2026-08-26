@@ -28,6 +28,7 @@ import {
   useDecideQaSelect,
 } from "@/api/checkpoints";
 import { ApiError } from "@/api/client";
+import { estimateLabel, useCostBasis } from "@/api/cost";
 import { progressKeys, useConfirmedStalled, useProgressSnapshot } from "@/api/progress";
 import { useProject } from "@/api/projects";
 import {
@@ -888,6 +889,7 @@ function SectionView({
   const save = useSaveSection(projectId, sectionId);
   const rewrite = useRewriteSection(projectId, sectionId);
   const setLock = useSetSectionLock(projectId, sectionId);
+  const costBasis = useCostBasis(projectId);
   const rewriteBlock = useRewriteBlock(projectId, sectionId);
 
   // 절 전체 직접 편집(기존 동작)
@@ -1619,6 +1621,11 @@ function SectionView({
                 ? `선택 ${selectedBlocks.length}개 재작성`
                 : "절 전체 재작성"}
           </Button>
+          {/* 절 전체 재작성은 실측 $0.4~$1.3짜리 버튼이다 - 누르기 전에 값을 안다.
+              블록 재작성은 검색 없이 LLM 1콜이라 값이 다르므로 붙이지 않는다. */}
+          {selectedBlocks.length === 0 && !busy && estimateLabel(costBasis.data, 1) ? (
+            <span className="text-[11px] text-fg-tertiary">{estimateLabel(costBasis.data, 1)}</span>
+          ) : null}
           {/* 설명은 버튼이 스스로 말하게 하고 걷어냈다(2026-08-14 사용자 결정: 입력칸만).
               그래프 차단 안내만 남긴다 - 버튼이 비활성인 이유는 말해줘야 한다. */}
           {chartSelected ? (

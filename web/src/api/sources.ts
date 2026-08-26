@@ -207,3 +207,53 @@ export function useCollectMore(projectId: string) {
     },
   });
 }
+
+// ─── 제외 영향 미리보기 ───
+// 자료 제외는 조용한 파괴다. 누르는 순간 인용이 다시 매겨지고 그 자료를 근거로 쓴 절은
+// 근거를 잃는다. 되돌리려면 다시 채택하고 그 절들을 다시 써야 하는데, 절당 실측
+// $0.4~$1.3짜리 되돌리기다. 그래서 누르기 전에 무엇이 걸려 있는지 보여준다.
+
+export const ImpactedSectionSchema = z.object({
+  section_id: z.string(),
+  label: z.string(),
+  n_citations: z.number().int().default(0),
+  /** 이 자료를 빼면 이 절의 근거가 0이 된다 - 가장 아픈 경우 */
+  sole: z.boolean().default(false),
+  locked: z.boolean().default(false),
+});
+
+export const SourceImpactSchema = z.object({
+  n_sections: z.number().int().default(0),
+  n_citations: z.number().int().default(0),
+  n_sole: z.number().int().default(0),
+  sections: z.array(ImpactedSectionSchema).default([]),
+});
+export type SourceImpact = z.infer<typeof SourceImpactSchema>;
+
+const impactQuery = (projectId: string, sourceId: string) => ({
+  queryKey: [...sourceKeys.list(projectId), "impact", sourceId],
+  queryFn: async () => {
+    const data = await apiClient.get<unknown>(`projects/${projectId}/sources/${sourceId}/impact`);
+    return SourceImpactSchema.parse(data);
+  },
+  staleTime: 30_000,
+});
+
+export function useSourceImpact(projectId: string, sourceId: string | null) {
+  return useQuery({
+    ...impactQuery(projectId, sourceId ?? ""),
+    enabled: Boolean(projectId) && Boolean(sourceId),
+  });
+}
+
+/** 제외를 누른 **순간** 영향을 확인한다 - 걸린 절이 없으면 확인창 없이 그냥 뺀다.
+ *
+ *  아무것도 안 걸린 제외까지 창을 띄우면 창이 소음이 되고, 소음이 된 확인창은 읽지 않고
+ *  눌린다. 같은 쿼리 키를 쓰므로 이어 열리는 창은 캐시를 그대로 읽는다. */
+export function fetchSourceImpact(
+  qc: ReturnType<typeof useQueryClient>,
+  projectId: string,
+  sourceId: string,
+): Promise<SourceImpact> {
+  return qc.fetchQuery(impactQuery(projectId, sourceId));
+}

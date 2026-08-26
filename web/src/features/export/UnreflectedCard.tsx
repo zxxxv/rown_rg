@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
+import { estimateLabel, useCostBasis } from "@/api/cost";
 import {
   DRIFT_REASON_LABEL,
   invalidateAfterRewrite,
@@ -31,6 +32,7 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
   const rewrite = useRewriteBatch(projectId);
   const cancel = useCancelRewriteBatch(projectId);
   const dismiss = useDismissDrift(projectId);
+  const costBasis = useCostBasis(projectId);
   const [picked, setPicked] = useState<Set<string>>(new Set());
 
   const sections = data?.sections ?? [];
@@ -143,6 +145,14 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
           </Button>
         </div>
       </div>
+
+      {/* 예상 비용 - 고른 개수 x 이 보고서 절당 실측. 근거(자기 실측인지 남의 평균인지)
+          까지 밝힌다: 추정의 출처를 숨기면 숫자를 믿을 수도, 의심할 수도 없다. */}
+      {!running && chosen.length > 0 && estimateLabel(costBasis.data, chosen.length) ? (
+        <p className="text-xs font-medium text-fg">
+          {estimateLabel(costBasis.data, chosen.length)}
+        </p>
+      ) : null}
 
       {running ? (
         <p className="flex flex-wrap items-center gap-2 text-xs text-fg-secondary">

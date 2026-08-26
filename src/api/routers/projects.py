@@ -1026,6 +1026,95 @@ async def get_drift(
     )
 
 
+class CostBasisRead(BaseModel):
+    """절 하나에 얼마나 드는가 — 이 보고서 실측이 정본.
+
+    per_section_usd=None은 "아직 모른다"다(한 번도 안 쓴 보고서). 화면은 지어낸 숫자
+    대신 모른다고 말한다 — 예상 $2가 실제 $7이 되는 화면은 없느니만 못하다.
+    """
+
+    per_section_usd: float | None = None
+    n_sections_measured: int = 0
+    # project(이 보고서 실측) | model(같은 등급 다른 보고서 평균) | none(표본 없음)
+    basis: str = "none"
+    spent_usd: float = 0.0
+
+
+@router.get("/{project_id}/cost-basis", response_model=CostBasisRead)
+async def get_cost_basis(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> CostBasisRead:
+    """절당 비용 실측 — 화면이 "선택 3개 다시 쓰기 · 예상 $2.1"을 만들 재료.
+
+    개수를 곱하는 것은 화면이 한다. 서버가 단가만 주면 고르는 절이 바뀔 때마다 요청을
+    다시 보낼 필요가 없다.
+    """
+    from src.services.stats.cost_basis import measure_cost_basis
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    basis = await measure_cost_basis(session, project)
+    return CostBasisRead(
+        per_section_usd=basis.per_section_usd,
+        n_sections_measured=basis.n_sections_measured,
+        basis=basis.basis,
+        spent_usd=basis.spent_usd,
+    )
+
+
+class ImpactedSectionRead(BaseModel):
+    section_id: str
+    label: str
+    n_citations: int
+    # 이 자료를 빼면 이 절의 근거가 0이 된다 — 가장 아픈 경우.
+    sole: bool = False
+    locked: bool = False
+
+
+class SourceImpactRead(BaseModel):
+    """이 자료를 빼면 무엇이 무너지나 — 누르기 전에 답한다."""
+
+    n_sections: int = 0
+    n_citations: int = 0
+    n_sole: int = 0
+    sections: list[ImpactedSectionRead] = []
+
+
+@router.get("/{project_id}/sources/{source_id}/impact", response_model=SourceImpactRead)
+async def get_source_impact(
+    project_id: UUID,
+    source_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> SourceImpactRead:
+    """자료 제외의 영향 미리보기.
+
+    제외는 조용한 파괴다 — 누르는 순간 인용이 다시 매겨지고 그 자료를 근거로 쓴 절은
+    근거를 잃는다. 되돌리려면 다시 채택하고 그 절들을 다시 써야 하는데, 절당 실측
+    $0.4~$1.3짜리 되돌리기다. 그래서 누르기 전에 보여 준다.
+    """
+    from src.services.stats.source_impact import measure_source_impact
+
+    project = await _get_authorized_project(project_id, session, current_user)
+    impact = await measure_source_impact(session, project.id, source_id)
+    return SourceImpactRead(
+        n_sections=impact.n_sections,
+        n_citations=impact.n_citations,
+        n_sole=impact.n_sole,
+        sections=[
+            ImpactedSectionRead(
+                section_id=str(s.section_id),
+                label=s.label,
+                n_citations=s.n_citations,
+                sole=s.sole,
+                locked=s.locked,
+            )
+            for s in impact.sections
+        ],
+    )
+
+
 class DriftDismissRequest(BaseModel):
     """미반영 무시 - "이 절은 이대로 둔다"는 사람의 선언."""
 

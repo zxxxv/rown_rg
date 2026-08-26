@@ -280,6 +280,82 @@ export const projectsHandlers = [
     return HttpResponse.json({ data: { dismissed: labels, skipped: [] } }, { status: 200 });
   }),
 
+  // GET /projects/{id}/cost-basis - 절당 비용 실측(이 보고서 자기 것).
+  // 값이 프로젝트마다 3배 넘게 벌어져서 일반 단가를 못 쓴다 - 목도 그 사실을 흉내낸다.
+  http.get(url("projects/:id/cost-basis"), () => {
+    return HttpResponse.json(
+      {
+        data: {
+          per_section_usd: 0.702,
+          n_sections_measured: 20,
+          basis: "project",
+          spent_usd: 14.05,
+        },
+      },
+      { status: 200 },
+    );
+  }),
+
+  // GET /projects/{id}/sources/{sid}/impact - 이 자료를 빼면 무엇이 무너지나.
+  // 자료 id로 갈라 준다: 걸린 절이 없어 확인창 없이 그냥 빠지는 경로도 눌러 봐야 한다.
+  http.get(url("projects/:id/sources/:sid/impact"), ({ params }) => {
+    const sid = String(params.sid);
+    if (sid.endsWith("001")) {
+      // 가장 아픈 경우 - 유일한 근거인 절이 섞여 있다.
+      return HttpResponse.json(
+        {
+          data: {
+            n_sections: 2,
+            n_citations: 5,
+            n_sole: 1,
+            sections: [
+              {
+                section_id: "2.3",
+                label: "2.3 인구·고령화 영향",
+                n_citations: 3,
+                sole: true,
+                locked: false,
+              },
+              {
+                section_id: "3.3",
+                label: "3.3 비용편익비 (B/C)",
+                n_citations: 2,
+                sole: false,
+                locked: false,
+              },
+            ],
+          },
+        },
+        { status: 200 },
+      );
+    }
+    if (sid.endsWith("002")) {
+      return HttpResponse.json(
+        {
+          data: {
+            n_sections: 1,
+            n_citations: 2,
+            n_sole: 0,
+            sections: [
+              {
+                section_id: "3.3",
+                label: "3.3 비용편익비 (B/C)",
+                n_citations: 2,
+                sole: false,
+                locked: false,
+              },
+            ],
+          },
+        },
+        { status: 200 },
+      );
+    }
+    return HttpResponse.json(
+      { data: { n_sections: 0, n_citations: 0, n_sole: 0, sections: [] } },
+      { status: 200 },
+    );
+  }),
+
   // GET /projects/{id}/drift - 미반영 절(설계를 고쳤는데 본문이 아직 안 담은 절)
   http.get(url("projects/:id/drift"), () => {
     const sections = [...DRIFT_ROWS.values()].map((row) => ({
