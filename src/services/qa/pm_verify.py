@@ -438,6 +438,15 @@ async def run_pm_verify(state: ProjectState, *, model: str | None = None) -> int
     except Exception:
         logger.warning("pm_verify.heading_failed", project_id=str(state.project_id), exc_info=True)
     try:
+        # 계산 지표에 값이 없는 절(결정적) — 어휘가 아니라 값을 본다. 키포인트 검사는
+        # 어휘 겹침이라 "B/C"를 18번 말하면 반영으로 읽어 이 구멍을 통과시킨다
+        # (2026-08-27 예타 실측: 보고서 전체에서 B/C 값이 붙은 자리 0건).
+        from src.services.qa.metric_values import metric_findings
+
+        rows.extend(metric_findings([(plan, content) for plan, content in pairs]))
+    except Exception:
+        logger.warning("pm_verify.metrics_failed", project_id=str(state.project_id), exc_info=True)
+    try:
         # 키포인트 미반영(결정적, 웹 전용) — 자료 보강/재작성 신호(사용자 결정 8/20).
         from src.services.qa.keypoints import keypoint_findings
 
