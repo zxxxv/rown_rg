@@ -178,3 +178,86 @@ class TestWebNoise:
         assert (
             boilerplate_kind("## 글자 크기 설정 * 가 보통 * 가 크게 - 기사 공유") == "사이트 메뉴"
         )
+
+
+class TestNumberedToc:
+    """점선 없는 번호 목차(2026-08-27) - "32.5 TOPS/W" 수치 주장의 근거 풀이 통째로
+    KDI 페이지 목차였던 실사례의 마감. 위험 지점은 개조식 본문 오탐이다 - 이 코퍼스는
+    짧은 글머리 줄이 곧 본문이라, 번호 표제 과반 + 종결형 전무를 같이 요구한다."""
+
+    def test_market_report_toc(self) -> None:
+        content = "\n".join(
+            [
+                "5.3. Impact of COVID-19",
+                "5.4. Market Forecast",
+                "6. **Market Breakup by Product Type**",
+                "6.1. On-premise",
+                "6.2. Cloud-based",
+                "7. Market Breakup by Region",
+                "7.1. North America",
+                "7.2. Europe",
+                "8. SWOT Analysis",
+            ]
+        )
+        assert boilerplate_kind(content) == "문서 목차"
+
+    def test_korean_chapter_toc(self) -> None:
+        content = "\n".join(
+            [
+                "1장. 연구의 배경",
+                "1. AI의 발전 및 수요",
+                "2. AI반도체 수요의 급성장",
+                "2장. AI 반도체",
+                "1. 기존 반도체",
+                "2. 반도체와 AI 반도체의 차이점",
+                "3장. 생태계 분석",
+                "4장. 주요 시장 현황",
+            ]
+        )
+        assert boilerplate_kind(content) == "문서 목차"
+
+    def test_개조식_본문은_안_잡는다(self) -> None:
+        """실측 표본 - 짧은 줄 비율 1.0이지만 진짜 본문(인용까지 된 설문 개요)."""
+        content = "\n".join(
+            [
+                "## □ 설문조사 개요",
+                "- ㅇ 설문문항 설계 주체",
+                "- 본 연구과제 책임연구원이 선행연구 분석 및 전문가 자문 등을 거쳐 직접 설계함.",
+                "- ㅇ 조사 대상",
+                "- 대구광역시 소속 공무원",
+                "- ㅇ 조사 기간",
+                "- 2025년 3월 한 달간 진행",
+                "- ㅇ 조사 방법",
+                "- 온라인 설문 플랫폼 활용",
+            ]
+        )
+        assert boilerplate_kind(content) is None
+
+    def test_번호_항목이라도_문장을_끝맺으면_본문이다(self) -> None:
+        content = "\n".join(
+            [
+                "1. 정부는 2030년까지 1조원 규모의 R&D 투자를 추진한다.",
+                "2. 민간 투자는 세액공제로 유도한다.",
+                "3. 특화단지를 지정한다.",
+                "4. 인력 양성을 병행한다.",
+                "5. 규제 특례를 준다.",
+                "6. 국제 협력을 확대한다.",
+                "7. 공급망을 점검한다.",
+                "8. 성과를 매년 공표한다.",
+            ]
+        )
+        assert boilerplate_kind(content) is None
+
+    def test_짧은_목차는_과잉판정하지_않는다(self) -> None:
+        # 줄이 적으면 근거 손실 위험 대비 이득이 없다 - 8줄 미만은 그대로 둔다.
+        assert boilerplate_kind("1. 서론\n2. 본론\n3. 결론") is None
+
+
+class TestWidgetTokens2026_08_27:
+    def test_kdi_page_chrome(self) -> None:
+        content = "### 연관 사이트\n전체 닫기\n전체 닫기\n- 경제정책정보\n- 발행물"
+        assert boilerplate_kind(content) == "사이트 메뉴"
+
+    def test_related_articles_short(self) -> None:
+        content = "## Related Articles\n01 July 2026\n30 June 2026\n## Related Articles"
+        assert boilerplate_kind(content) == "사이트 메뉴"

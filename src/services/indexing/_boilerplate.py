@@ -44,6 +44,16 @@ _NAV_TOKENS: tuple[str, ...] = (
     "즐겨찾기",
     "목록보기",
     "로그인 하시겠습니까",
+    # 2026-08-27 실측 보강 — 목차·참고문헌 무늬 조사에서 나온 비인용 위젯들.
+    # 절이 이런 청크를 인용한 사례까지 있었다(수치 주장의 근거가 "많이 본 자료"였다).
+    "전체 닫기",
+    "연관 사이트",
+    "많이 본 자료",
+    "회사소개",
+    "이용안내",
+    "회원서비스",
+    "Related Articles",
+    "shareSNS",
 )
 # 파서가 이미지 자리에 남기는 표식 — 이것만 남은 청크는 근거가 아니다.
 _PICTURE_RE = re.compile(r"\*?\*?==>\s*picture[^<]*<==\*?\*?")
@@ -98,6 +108,35 @@ _SALES_CTA_RE = re.compile(
 )
 
 
+# 번호 표제("1."·"4장."·"5.3.")로 시작하는 줄 — 점선 없는 목차의 재료.
+_NUMBERED_HEAD_RE = re.compile(r"^\s*(?:#+\s*)?\**\s*제?\s*\d+(?:\.\d+)*\s*[장절편부.)]")
+# 서술을 끝맺는 꼬리 — 하나라도 있으면 목차가 아니라 본문이다.
+_SENTENCE_TAIL_RE = re.compile(r"[.다임음됨함침짐옴렀았었][\s*]*$")
+_MIN_TOC_LINES = 8
+_TOC_HEAD_RATIO = 0.6
+
+
+def _is_numbered_toc(content: str) -> bool:
+    """점선 없는 번호 목차 — "1. AI의 발전 및 수요 / 2장. AI 반도체 / 5.3. Impact…".
+
+    점선 목차(_TOC_RE)는 걸리는데 웹 문서·시장보고서 목차는 점선이 없어 새어 나왔다
+    (2026-08-27 실측: "32.5 TOPS/W" 수치 주장의 근거 풀이 통째로 KDI 페이지 목차였다).
+
+    개조식 본문 오탐이 위험 지점이다 — 이 코퍼스는 짧은 글머리 줄이 곧 본문이라
+    "짧은 줄 비율"만으로 가르면 진짜 내용을 버린다(실측: 비율 1.0짜리 표본에 인용된
+    설문 개요 본문이 있었다). 그래서 셋을 다 요구한다: 줄이 충분히 많고(≥8),
+    과반이 번호 표제로 시작하고(개조식은 ㅁ·ㅇ·-로 시작한다), **종결형 줄이 하나도
+    없다**(본문은 어디선가 문장을 끝맺는다).
+    """
+    lines = [x.strip() for x in content.splitlines() if x.strip()]
+    if len(lines) < _MIN_TOC_LINES:
+        return False
+    if any(_SENTENCE_TAIL_RE.search(x) for x in lines):
+        return False
+    heads = sum(1 for x in lines if _NUMBERED_HEAD_RE.match(x))
+    return heads / len(lines) >= _TOC_HEAD_RATIO
+
+
 def boilerplate_kind(content: str) -> str | None:
     """근거로 못 쓰는 청크면 그 이유를, 아니면 None.
 
@@ -131,6 +170,8 @@ def boilerplate_kind(content: str) -> str | None:
     ):
         return "그림 껍데기"
     if len(_TOC_RE.findall(content)) >= _MIN_TOC_DOTS:
+        return "문서 목차"
+    if _is_numbered_toc(content):
         return "문서 목차"
     if len(_REF_RE.findall(content)) >= _MIN_REF_HITS:
         return "참고문헌 목록"
@@ -186,3 +227,44 @@ async def excluded_metadata(
             meta["excluded"] = kind
         out.append(meta)
     return out
+
+
+async def rescan_existing(*, dry_run: bool = False) -> dict[str, int]:
+    """이미 색인된 청크를 새 규칙으로 다시 판정해 표시한다 — 규칙 보강 뒤 1회.
+
+    표시만 더한다(excluded가 이미 있는 청크는 안 건드린다) — 규칙이 좁아졌을 때
+    옛 표시를 걷는 일은 사람이 판단할 일이라 자동으로 안 한다. 중복 판정(내용 중복)은
+    순서 의존이라 여기서 다시 하지 않는다 — 보일러플레이트만 본다.
+    """
+    from collections import Counter
+
+    from sqlalchemy import select
+
+    from src.db.models.chunk import Chunk
+    from src.db.session import async_session_maker
+
+    kinds: Counter[str] = Counter()
+    async with async_session_maker() as session:
+        rows = (
+            await session.execute(select(Chunk).where(Chunk.metadata_["excluded"].astext.is_(None)))
+        ).scalars()
+        for chunk in rows:
+            kind = boilerplate_kind(chunk.content or "")
+            if not kind:
+                continue
+            kinds[kind] += 1
+            if not dry_run:
+                chunk.metadata_ = {**(chunk.metadata_ or {}), "excluded": kind}
+        if not dry_run:
+            await session.commit()
+    return dict(kinds)
+
+
+if __name__ == "__main__":  # python -m src.services.indexing._boilerplate [--dry-run]
+    import asyncio
+    import sys
+
+    result = asyncio.run(rescan_existing(dry_run="--dry-run" in sys.argv))
+    for kind, n in sorted(result.items(), key=lambda x: -x[1]):
+        print(f"{kind}\t{n}")
+    print(f"total\t{sum(result.values())}")
