@@ -32,6 +32,9 @@ from src.services.generation.planner import _parse_manifest
 logger = structlog.get_logger(__name__)
 
 DEFAULT_MAX_TOKENS = 6000
+# 토큰 사용 기록에 남는 이름 — 이 호출 기록이 곧 "요약을 언제 만들었나"의 답이라
+# 조회 쪽(projects 라우터)이 같은 상수를 본다(문자열 두 벌이면 조용히 어긋난다).
+INSIGHTS_OPERATION = "assemble.insights"
 # 입력 상한 — 시사점 절만 모아도 프리셋상 최대 2~3절 × 7,500자다. 여유를 두되
 # 무한정 밀어 넣지 않는다(pm_verify가 24,000자 상한에 조용히 잘려 본문 47.6%만
 # 보고 판정하던 전례가 있다 — 여기선 넘치면 로그를 남긴다).
@@ -132,7 +135,7 @@ async def build_insights(
         cache_key=None,
     )
     with token_context(
-        user_id=state.user_id, project_id=state.project_id, operation="assemble.insights"
+        user_id=state.user_id, project_id=state.project_id, operation=INSIGHTS_OPERATION
     ):
         response = await client.complete(request)
 

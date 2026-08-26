@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
 from urllib.parse import unquote
 
 from httpx import AsyncClient
@@ -17,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.config import settings
 from src.db.models.project import Project
 from src.db.models.section import Section
+from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 
 _SUMMARY = "## 핵심 요약\n\n□ 배출권 격차가 비용으로 전가된다\nㅇ 실측 산정 전환이 부담을 낮춘다"
@@ -108,3 +111,43 @@ class TestInsightsExport:
 
         assert resp.status_code == 404
         assert resp.json()["error"]["code"] == "INSIGHTS_NOT_READY"
+
+
+class TestInsightsBuiltAt:
+    async def test_falls_back_to_token_usage_time_for_old_summaries(
+        self,
+        test_session: AsyncSession,
+        test_client: AsyncClient,
+        worker_token: str,
+        worker_user: User,
+    ):
+        """built_at을 남기기 전 만든 요약도 생성 시각이 떠야 한다.
+
+        온도 0이라 다시 만들어도 내용이 같아 화면이 안 바뀐다 - 시각이 빈칸이면
+        사용자는 계속 "돌긴 도는 건가"를 묻게 된다. 그 호출의 토큰 기록이 답이다.
+        """
+        pid = await _project_with_summary(
+            test_session, worker_user.id, {"content": _SUMMARY, "source_sections": []}
+        )
+        made = datetime(2026, 8, 26, 19, 28, 25, tzinfo=UTC)
+        test_session.add(
+            TokenUsage(
+                user_id=worker_user.id,
+                project_id=pid,
+                model="claude-sonnet-4-6",
+                operation="assemble.insights",
+                input_tokens=19_324,
+                output_tokens=5_986,
+                cost_usd=Decimal("0.147762"),
+                mode="live",
+                created_at=made,
+            )
+        )
+        await test_session.commit()
+
+        resp = await test_client.get(
+            f"/api/v1/projects/{pid}/insights", headers=_auth(worker_token)
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["built_at"] == made.isoformat()

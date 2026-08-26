@@ -1510,6 +1510,24 @@ class InsightsRead(BaseModel):
     running: bool
 
 
+async def _last_insights_built_at(session: AsyncSession, project_id: UUID) -> str | None:
+    """요약을 마지막으로 만든 시각 — token_usage의 assemble.insights 호출 기록에서.
+
+    요약 JSON에 built_at을 넣기 시작한 건 2026-08-27이라, 그전 요약은 값이 없다.
+    호출 기록은 처음부터 남고 있어 그때가 곧 생성 시각이다(근사가 아니라 같은 호출).
+    """
+    from src.services.export.insights import INSIGHTS_OPERATION
+
+    row = await session.execute(
+        select(func.max(TokenUsage.created_at)).where(
+            TokenUsage.project_id == project_id,
+            TokenUsage.operation == INSIGHTS_OPERATION,
+        )
+    )
+    made = row.scalar_one_or_none()
+    return made.isoformat() if made else None
+
+
 @router.get("/{project_id}/insights", response_model=InsightsRead)
 async def get_insights(
     project_id: UUID,
@@ -1519,11 +1537,17 @@ async def get_insights(
     """조립 시 만든 시사점 요약 — 본문 한글 파일엔 없고, 별도 파일로 내려받는다."""
     project = await _get_authorized_project(project_id, session, current_user)
     data = project.insights or {}
+    built_at = data.get("built_at")
+    if data.get("content") and not built_at:
+        # built_at을 남기기 전에 만들어진 요약 — 그 호출의 토큰 사용 기록이 만든
+        # 시각을 알고 있다. 이 폴백이 없으면 옛 요약은 다시 만들기 전까지 시각이
+        # 빈칸이라, 정작 "돌았는지 모르겠다"는 화면이 그대로 남는다(2026-08-27).
+        built_at = await _last_insights_built_at(session, project.id)
     return InsightsRead(
         content=data.get("content"),
         source_sections=list(data.get("source_sections") or []),
         model=data.get("model"),
-        built_at=data.get("built_at"),
+        built_at=built_at,
         running=job_running(project.id, INSIGHTS_JOB),
     )
 
