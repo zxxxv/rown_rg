@@ -37,10 +37,11 @@ from src.services.qa.gate import (
     claim_coverage,
     claim_years,
     leftover_artifacts,
+    locate_probes,
+    match_patterns,
     misattributed_numbers,
     normalize_haystack,
     normalize_number,
-    number_variants,
     truncated_lines,
 )
 from src.services.qa.table_check import (
@@ -533,20 +534,37 @@ async def _locate_tokens(
                 # "USD 7.05 billion"으로 적힌다(2026-08-24 COMPA 실측: 이 한 겹이
                 # 없어 영문 코퍼스에서 2단 판정이 통째로 뚫렸다).
                 haystack = func.replace(Chunk.content, ",", "")
-                found = (
+                rows = (
                     await session.execute(
-                        select(Chunk.source_id, ProjectSource.title, ProjectSource.url)
+                        select(
+                            Chunk.content, Chunk.source_id, ProjectSource.title, ProjectSource.url
+                        )
                         .select_from(Chunk)
                         .join(ProjectSource, Chunk.source_id == ProjectSource.id, isouter=True)
                         .where(
                             Chunk.project_id == project_id,
-                            or_(*[haystack.like(f"%{v}%") for v in number_variants(by_norm[norm])]),
+                            or_(*[haystack.like(f"%{v}%") for v in locate_probes(by_norm[norm])]),
                         )
-                        .limit(1)
+                        .limit(20)
                     )
-                ).first()
+                ).all()
+                # LIKE는 후보 선별까지만 - '실재' 선언은 자릿수 경계로 확인한다.
+                # 부분문자열이면 "21"이 "2021" 안에, "0.3"이 "10.3" 안에 걸려
+                # 없는 수치가 '오귀속'으로 실렸다(2026-08-27 v6 near_miss 라벨링:
+                # 노이즈 4건 중 2건이 이 꼴). number_in_text와 같은 자다.
+                patterns = match_patterns(by_norm[norm])
+                confirmed = next(
+                    (
+                        row
+                        for row in rows
+                        if any(pt.search(normalize_haystack(row[0] or "")) for pt in patterns)
+                    ),
+                    None,
+                )
                 cache[norm] = (
-                    (found[0], found[1] or found[2] or "제목 없는 자료") if found else None
+                    (confirmed[1], confirmed[2] or confirmed[3] or "제목 없는 자료")
+                    if confirmed
+                    else None
                 )
     # 세 갈래로 가른다. 그 절이 인용한 **자료 자신**에서 나왔으면 오귀속이 아니라
     # 그냥 근거 있음이다 — 청크 단위 인용이라 같은 자료의 다른 대목에 수치가 있는 건
@@ -566,7 +584,14 @@ async def _locate_tokens(
 
 # 주입 가드 근접 창 — 수치 발견 지점 양옆에서 연도를 찾는 반경(문자).
 # 청크 전체 동시출현은 연도가 흔해 헐겁고, 같은 문장이라기엔 표 행이 길다.
-_YEAR_WINDOW = 80
+#
+# 80→240 (2026-08-27, v6 near_miss 전수 라벨링): 진짜 실재 2건(0.75%=CCA 문서
+# 산문, 289TWh=RE100 표)이 모두 연도에서 80~240자 거리였다 — 표는 연도가 머리행에,
+# 산문은 기준연도가 문단 앞에 온다. 좁은 창이 실재를 '주입 의심'으로 만들었고,
+# v6 채점의 "주입 가족"(424·428·545·289)은 전수가 코퍼스 실재로 판명됐다(진짜
+# 병리는 자료 시점 병존+오귀속). 넓혀도 안전한 근거: 매칭이 자릿수 경계를 갖게
+# 되어(아래) 우연 일치 자체가 급감했다.
+_YEAR_WINDOW = 240
 
 
 def _year_beside(
@@ -579,13 +604,21 @@ def _year_beside(
     실재하는 수치가 주입 의심으로 샜다).
     """
     text = normalize_haystack(content)
-    for variant in number_variants(norm):
-        start = 0
-        while (i := text.find(variant, start)) != -1:
-            chunk = text[max(0, i - window) : i + len(variant) + window]
-            if any(y in chunk for y in years):
+    # 자료는 연도를 축약해 적는다 - "'21년 말 74개사"의 '21이 "2021" 문자열 대조를
+    # 비켜 실재 수치가 주입 의심으로 샜다(2026-08-27 v6: K-RE100 74). 뒤 두 자리에
+    # 아포스트로피·년을 붙인 표기까지 같은 연도로 본다.
+    year_forms = [
+        form
+        for y in years
+        for form in (y, f"'{y[2:]}년", f"’{y[2:]}년", f"`{y[2:]}년")
+        if len(y) == 4
+    ]
+    # find()는 "21"을 "2021" 안에서 찾는다 - 자릿수 경계 패턴으로 진짜 등장만 본다.
+    for pattern in match_patterns(norm):
+        for m in pattern.finditer(text):
+            chunk = text[max(0, m.start() - window) : m.end() + window]
+            if any(y in chunk for y in year_forms):
                 return True
-            start = i + 1
     return False
 
 
@@ -611,13 +644,20 @@ async def _injection_suspects(
         async with async_session_maker() as session:
             for norm, years in todo:
                 haystack = func.replace(Chunk.content, ",", "")
+                # 연도도 사전 선별에 건다 - 묻는 것이 "수치가 연도 곁에 있는 청크가
+                # 존재하는가"라서, 연도 없는 청크는 볼 이유가 없다. 두 자리 토큰(74·
+                # 10·30)은 LIKE가 수백 청크를 쏟아 50개 캡 안에 진짜 자리가 못 들고
+                # 실재가 주입 의심으로 샜다(2026-08-27 v6 라벨링). 축약 표기('21년)는
+                # 뒤 두 자리가 어차피 연도의 부분문자열이라 LIKE %21%로 같이 걸린다.
+                year_like = [f"%{y}%" for y in years] + [f"%{y[2:]}년%" for y in years]
                 texts = (
                     (
                         await session.execute(
                             select(Chunk.content)
                             .where(
                                 Chunk.project_id == project_id,
-                                or_(*[haystack.like(f"%{v}%") for v in number_variants(norm)]),
+                                or_(*[haystack.like(f"%{v}%") for v in locate_probes(norm)]),
+                                or_(*[Chunk.content.like(y) for y in year_like]),
                             )
                             .limit(50)
                         )

@@ -226,6 +226,31 @@ def _variant_patterns(token: str) -> tuple[re.Pattern[str], ...]:
     return tuple(out)
 
 
+def match_patterns(token: str) -> tuple[re.Pattern[str], ...]:
+    """이 수치의 모든 표기를 찾는 패턴 전부 — 경계 있는 변형 + 낱말 요구 짧은 가수.
+
+    number_in_text와 같은 눈금의 **위치 탐색용**. 코퍼스 재검색(_locate_tokens)이
+    _variant_patterns만 쓰면 "91억"의 가수 9.1이 목록에 없어(짧은 가수 규칙)
+    "USD 9.1 billion"을 영영 못 찾고, 실재하는 수치가 critical 창작으로 부활한다
+    (2026-08-27 v6 실측: 91억·72억 2건이 정확히 이 회귀였다).
+    """
+    return _variant_patterns(token) + _short_mantissa_patterns(token)
+
+
+def locate_probes(token: str) -> list[str]:
+    """SQL LIKE 사전 선별용 문자열 — 짧은 가수도 포함한다(넓게 긁고 패턴으로 좁힌다)."""
+    out = list(number_variants(token))
+    value = korean_magnitude(token)
+    if value is not None:
+        for scale in _EN_SCALES:
+            mantissa = value / scale
+            if 0.1 <= mantissa < 1000:
+                text = _trim(mantissa)
+                if text not in out:
+                    out.append(text)
+    return out
+
+
 def number_in_text(token: str, haystack_norm: str) -> bool:
     """수치가 근거(정규화 문자열)에 있는가 — 자릿수 환산 표기까지 본다."""
     if any(p.search(haystack_norm) for p in _variant_patterns(token)):
