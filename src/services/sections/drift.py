@@ -89,6 +89,13 @@ def detect_drift(
     plan_changed로 보면 기존 보고서가 통째로 미반영으로 뜬다 — 판정하지 않는다
     (다음 재작성 때 지문이 채워지며 자연히 편입된다).
     """
+    # 한 번도 안 쓴 프로젝트는 미반영이 아니라 미작성이다 - 본문이 하나도 없는데
+    # "설계를 고친 뒤 본문이 아직 그 내용을 담지 않았습니다"가 12절 전부에 뜨면
+    # 자료 검토 단계의 사용자가 없는 문제를 읽게 된다(2026-08-27 실물 지적: 신규
+    # 프로젝트의 검토 대기 화면에 미반영 12). 본문이 하나라도 생긴 뒤부터 "새로
+    # 넣었는데 안 쓴 절"(missing)이 의미를 갖는다.
+    if not any(snap.has_content for snap in snapshots.values()):
+        return []
     out: list[SectionDrift] = []
     for plan in plans:
         snap = snapshots.get(plan.section_id)

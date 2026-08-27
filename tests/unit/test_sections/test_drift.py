@@ -87,14 +87,32 @@ class TestDetectDrift:
         assert drift[0].label == "2.3 인구·고령화 영향"
 
     def test_missing_content_is_flagged(self):
+        # 본문이 있는 절이 하나는 있어야 판정이 선다 - 없으면 미작성 프로젝트다.
+        written = _plan(chapter_number=9, section_number=9, title="이미 쓴 절")
         plan = _plan()
-        drift = detect_drift([plan], {plan.section_id: _snap(plan, has_content=False)})
+        drift = detect_drift(
+            [plan, written],
+            {
+                plan.section_id: _snap(plan, has_content=False),
+                written.section_id: _snap(written),
+            },
+        )
         assert drift[0].reasons == ("missing",)
 
     def test_section_absent_from_rows_is_missing(self):
-        """목차에 새로 넣은 절 — 행 자체가 없다."""
+        """목차에 새로 넣은 절 — 행 자체가 없다(쓰인 절이 있는 프로젝트에서)."""
+        written = _plan(chapter_number=9, section_number=9, title="이미 쓴 절")
         plan = _plan()
-        assert detect_drift([plan], {})[0].reasons == ("missing",)
+        drift = detect_drift([plan, written], {written.section_id: _snap(written)})
+        assert drift[0].reasons == ("missing",)
+
+    def test_never_written_project_has_no_drift(self):
+        """한 번도 안 쓴 프로젝트는 미반영이 아니라 미작성이다 - 신규 프로젝트의
+        자료 검토 화면에 '미반영 12'가 떴던 실물 사고(2026-08-27)."""
+        a = _plan(chapter_number=1, section_number=1)
+        b = _plan(chapter_number=1, section_number=2)
+        assert detect_drift([a, b], {}) == []
+        assert detect_drift([a], {a.section_id: _snap(a, has_content=False)}) == []
 
     def test_excluded_source_is_flagged_with_ids(self):
         plan = _plan()
@@ -126,5 +144,6 @@ class TestDetectDrift:
     def test_order_follows_outline(self):
         a = _plan(chapter_number=1, section_number=1, title="가")
         b = _plan(chapter_number=2, section_number=1, title="나")
-        drift = detect_drift([a, b], {})
+        written = _plan(chapter_number=3, section_number=1, title="이미 쓴 절")
+        drift = detect_drift([a, b, written], {written.section_id: _snap(written)})
         assert [d.label for d in drift] == ["1.1 가", "2.1 나"]
