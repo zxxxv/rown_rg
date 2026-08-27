@@ -61,6 +61,7 @@ const EVIDENCE: SectionEvidence = {
       grounded: [],
       relocations: [],
       injections: [],
+      elsewhere: [],
       candidates: [],
     },
     {
@@ -76,6 +77,7 @@ const EVIDENCE: SectionEvidence = {
       grounded: [],
       relocations: [],
       injections: [],
+      elsewhere: [],
       candidates: [],
     },
     {
@@ -92,6 +94,7 @@ const EVIDENCE: SectionEvidence = {
       relocations: [{ token: "320만", number: 7, chunk_id: "c-2" }],
       // 주입 의심 표본 - 연도 명시 수치가 코퍼스 어디에도 없다. "이 문장 고치기" 확인용.
       injections: [{ token: "40%", located_title: null }],
+      elsewhere: [],
       grounded: [],
       candidates: [],
     },
@@ -108,6 +111,7 @@ const EVIDENCE: SectionEvidence = {
       grounded: [],
       relocations: [],
       injections: [],
+      elsewhere: [],
       candidates: [],
     },
   ] as SectionEvidence["claims"],
