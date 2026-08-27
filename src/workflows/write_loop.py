@@ -41,6 +41,7 @@ from src.services.generation.split_writer import (
     generate_section_split,
     plan_part_count,
 )
+from src.services.generation.term_rules import format_term_injection
 from src.services.generation.writer_context import build_writer_context, scale_for_evidence
 from src.services.ledger import extract_entries, format_injection, select_for_refs
 from src.services.qa.gate import (
@@ -131,6 +132,7 @@ async def run_write_loop(
     analyst_catalog: dict[str, Any] | None = None,
     rules: list[str] | None = None,
     chunk_loader: ChunkLoader | None = None,
+    term_entries: list[dict[str, Any]] | None = None,
 ) -> ProjectState:
     """section_plan의 각 섹션을 검색→후보 생성→정적 게이트로 처리해 state에 적재.
 
@@ -262,6 +264,17 @@ async def run_write_loop(
                     ctx,
                     guidance="\n\n".join(x for x in (ctx.guidance, ledger_note) if x),
                 )
+        term_keys: list[str] = []
+        if term_entries:
+            # 용어 규칙 주입 — 근거팩에 등장하는 용어만 골라 정의·표기를 싣는다.
+            # 정의가 있는 자리와 쓰인 자리를 청킹이 갈라놓아 생기는 오역의 처방
+            # (indexing/terms · generation/term_rules 참조).
+            term_note, term_keys = format_term_injection(term_entries, chunks)
+            if term_note:
+                ctx = replace(
+                    ctx,
+                    guidance="\n\n".join(x for x in (ctx.guidance, term_note) if x),
+                )
         # 재료가 목표에 못 미치면 목표를 내린다 — 검색 뒤라야 실제 근거 수를 안다.
         n_evidence = sum(1 for c in chunks if not c.is_summary)
         scaled = scale_for_evidence(ctx, n_evidence)
@@ -283,6 +296,8 @@ async def run_write_loop(
                 if section.section_id in ledger_warns
                 else {}
             ),
+            # 용어 규칙 주입 흔적 — 어떤 용어의 정의·표기가 이 절에 실렸나.
+            **({"term_rules": term_keys} if term_keys else {}),
             # 프롬프트에 실린 인용 가능 청크를 그 순서 그대로 남긴다(작성기의 [n] 번호 = 여기 i+1).
             # 인용된 것만 남기면 "봤는데 안 쓴 근거"와 "안 보고 쓴 주장"을 구분할 수 없다.
             "pool_chunk_ids": [str(c.chunk_id) for c in chunks if not c.is_summary],
