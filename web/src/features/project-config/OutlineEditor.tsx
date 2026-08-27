@@ -27,12 +27,14 @@ import {
   effectiveSearchQuery,
 } from "./searchPreview";
 import {
+  AGENTS_WARN_THRESHOLD,
   chapterIssueCounts,
   collectOutlineIssues,
   type FormIssue,
   formatRefLabel,
   indexOutlineIssues,
   LIMITS,
+  MAX_AGENTS_PER_SECTION,
   type OutlineField,
   parseRefLabel,
 } from "./validation";
@@ -1431,6 +1433,20 @@ function AnalystPicker({
     onChange(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
   };
 
+  // 선택 수의 적정 상태를 칸 안에서 바로 보여준다(2026-08-28 지시) - 검증 경고는
+  // 저장 시점에나 보이니, 고르는 순간에 권장(2~3)·초과·상한을 알 수 있어야 한다.
+  const n = selected.length;
+  const countHint =
+    n > MAX_AGENTS_PER_SECTION
+      ? { text: `상한 ${MAX_AGENTS_PER_SECTION}명 초과 - 저장 불가`, cls: "text-fg-danger" }
+      : n > AGENTS_WARN_THRESHOLD
+        ? { text: `${n}명 - 권장(2~3명) 초과, 비용 증가`, cls: "text-fg-warning" }
+        : n >= 2
+          ? { text: `${n}명 - 적정`, cls: "text-fg-success" }
+          : n === 1
+            ? { text: "1명 - 분량 목표에 근거가 부족합니다, 2~3명 권장", cls: "text-fg-warning" }
+            : { text: "권장 2~3명", cls: "text-fg-tertiary" };
+
   return (
     <details className="group rounded border border-border bg-bg">
       <summary className="cursor-pointer select-none px-3 py-2 text-xs text-fg-secondary">
@@ -1438,17 +1454,11 @@ function AnalystPicker({
         <span className="text-fg-tertiary">고르기</span>{" "}
         {/* 설명은 위 도움말로 옮겼다 - 접힌 줄에는 "무엇을 골랐는지"만 남긴다 */}
         {selected.length > 0 ? (
-          <span className="font-medium text-fg">
-            {selected.join(" · ")}
-            {selected.length > 1 ? (
-              <span className="ml-1 font-normal text-fg-tertiary">
-                {selected.length}개 관점을 모두 반영
-              </span>
-            ) : null}
-          </span>
+          <span className="font-medium text-fg">{selected.join(" · ")}</span>
         ) : (
           <span className="text-fg-tertiary">아직 고르지 않았습니다</span>
-        )}
+        )}{" "}
+        <span className={countHint.cls}>{countHint.text}</span>
       </summary>
       <div className="flex flex-wrap gap-1.5 border-t border-border p-3">
         {analystsQuery.isLoading ? (
