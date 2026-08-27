@@ -1466,6 +1466,7 @@ async def _adopted_source_refs(project_id: UUID) -> list[SourceRef]:
             published_year=(r.metadata_ or {}).get("published_year")
             if isinstance((r.metadata_ or {}).get("published_year"), int)
             else None,
+            collected_at=r.created_at,
         )
         for r in rows
     ]

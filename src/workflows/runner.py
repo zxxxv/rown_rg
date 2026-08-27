@@ -816,6 +816,7 @@ def _source_ref_from_row(row: ProjectSource) -> SourceRef:
         published_year=meta.get("published_year")
         if isinstance(meta.get("published_year"), int)
         else None,
+        collected_at=row.created_at,
         preview=(relevance_excerpt(content_md, matched) or _source_preview(content_md))
         if usable
         else None,

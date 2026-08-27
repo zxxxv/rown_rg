@@ -899,32 +899,36 @@ def _clean_source_title(title: str) -> str:
 
 
 def _bib_label(src: SourceRef) -> str:
-    """출처 표기 한 조각 — "제목, 발행기관, 2024년 17호" 꼴(미상 조각은 생략).
+    """출처 표기 한 조각 — "제목 (발행기관, 2024년 17호)" 꼴(미상 조각은 생략).
 
-    파일명·웹 제목이 그대로 나가던 것의 처방(2026-08-27 지시). 호수에 연도가 들어
-    있으면 연도를 따로 안 단다 — "…, 2024, 2024년 17호"는 표기가 아니라 소음이다.
+    파일명·웹 제목이 그대로 나가던 것의 처방(2026-08-27 지시). 서지 조각은 괄호로
+    묶는다(2026-08-28 지시: "제목 (기관명, 연도, 몇호)" 꼴, 확장자 없이). 호수에
+    연도가 들어 있으면 연도를 따로 안 단다 — "(2024, 2024년 17호)"는 소음이다.
     """
-    parts = [_clean_source_title(src.title) or "(제목 없음)"]
-    if src.publisher:
-        parts.append(src.publisher)
-    if src.issue_label:
-        parts.append(src.issue_label)
-    elif src.published_year:
-        parts.append(str(src.published_year))
-    return ", ".join(parts)
+    title = _clean_source_title(src.title) or "(제목 없음)"
+    bits = [b for b in (src.publisher, src.issue_label or _year_bit(src)) if b]
+    return f"{title} ({', '.join(bits)})" if bits else title
+
+
+def _year_bit(src: SourceRef) -> str | None:
+    return str(src.published_year) if src.published_year else None
 
 
 def _source_entry(index: int, src: SourceRef) -> str:
-    """참고문헌 목록 한 줄 — '[n] 제목 (URL)'.
+    """참고문헌 목록 한 줄 — '[n] 제목 (서지) (URL) (검색 일시)'.
 
     유형 꼬리("(업로드)"·"(웹)"·"(라이브러리)")는 달지 않는다(2026-08-21 사용자 지시 —
     내부 수집 경로는 납품물의 서지 정보가 아니다). URL은 괄호로 감싼다 — 제목에 그냥
     이어 붙이면 어디까지가 제목인지 눈으로 갈리지 않는다(실납품도 "자료: 기관 홈페이지
-    (https://…)" 꼴로 괄호에 넣는다, 2026-08-24 실측).
+    (https://…)" 꼴로 괄호에 넣는다, 2026-08-24 실측). 웹 출처는 수집(검색) 시각을
+    KST로 병기한다(2026-08-28 지시) — 웹 문서는 판이 없어 '언제 본 것인가'가 서지다.
     """
     line = f"[{index}] {_bib_label(src)}"
     if src.url:
         line += f" ({src.url})"
+    if src.source_type == SourceType.WEB_SEARCH and src.collected_at is not None:
+        stamp = src.collected_at.astimezone(_KST).strftime("%Y.%m.%d %H:%M")
+        line += f" ({stamp} 검색)"
     return line
 
 

@@ -88,6 +88,9 @@ class SourceRef(BaseModel):
     publisher: str | None = None  # 발행기관("국제무역통상연구원")
     issue_label: str | None = None  # 호수("2024년 17호")
     published_year: int | None = None  # 발행연도(호수 없을 때의 폴백 표기)
+    # 수집(검색) 시각 - 웹 출처의 참고문헌 표기에 "(YYYY.MM.DD HH:MM 검색)"으로
+    # 실린다(2026-08-28 지시). 저장은 UTC, KST 변환은 표시 계층(export) 몫.
+    collected_at: datetime | None = None
     preview: str | None = None  # 본문 앞부분 미리보기
     has_content: bool = True  # 본문 회수·색인 성공 여부(False면 검색에 안 잡힘)
 
