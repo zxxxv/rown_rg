@@ -53,6 +53,8 @@ if settings.sentry_dsn:
         "dsn",
         "database_url",
         "x509",
+        "target",
+        "email",
     )
 
     # 이벤트에 실리는 문자열 상한. 보고서 본문·출처 발췌가 프레임에 얹히면
@@ -97,6 +99,22 @@ if settings.sentry_dsn:
             return obj[:_SENTRY_MAX_STR] + "…[truncated]"
         return obj
 
+    def _sentry_scrub_exception(exception: Any) -> Any:
+        # 예외 **메시지**만 자른다 — 스택트레이스 구조는 손대지 않는다.
+        if not isinstance(exception, dict):
+            return exception
+        values = exception.get("values")
+        if not isinstance(values, list):
+            return exception
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            for field in ("value", "type"):
+                text = item.get(field)
+                if isinstance(text, str) and len(text) > _SENTRY_MAX_STR:
+                    item[field] = text[:_SENTRY_MAX_STR] + "…[truncated]"
+        return exception
+
     def _sentry_before_send(
         event: dict[str, Any], hint: dict[str, Any] | None
     ) -> dict[str, Any] | None:
@@ -106,6 +124,9 @@ if settings.sentry_dsn:
         for key in ("request", "extra", "contexts", "user", "tags", "breadcrumbs"):
             if key in event:
                 event[key] = _sentry_scrub(event[key])
+        # exception은 구조가 달라(values[].value + stacktrace) 전용 처리로 간다.
+        if "exception" in event:
+            event["exception"] = _sentry_scrub_exception(event["exception"])
         return event
 
     def _sentry_traces_sampler(sampling_context: dict[str, Any]) -> float:
@@ -162,7 +183,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
         await app_settings.refresh_cache()
     except Exception:
-        pass
+        # 조용히 넘어가는 동작은 그대로(env만 사용). 사실만 Sentry에 알린다.
+        import sentry_sdk
+
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "app_settings_cache")
+            sentry_sdk.capture_exception()
     yield
     await async_engine.dispose()
 

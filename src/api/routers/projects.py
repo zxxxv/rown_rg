@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+from collections.abc import Awaitable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -1213,6 +1214,27 @@ async def delete_project_source(
 
 # 색인 백그라운드 태스크 참조 — GC로 사라지지 않게 붙잡아 둔다.
 _INDEX_TASKS: set[asyncio.Task] = set()
+
+
+async def _isolated_bg(kind: str, project_id: UUID, coro: Awaitable[None]) -> None:
+    """요청에서 spawn되는 백그라운드를 Sentry 격리 스코프 안에서 돌린다.
+
+    create_task는 요청의 컨텍스트를 복사한다 — 격리하지 않으면 동시에 도는 업로드
+    색인들이 스코프를 공유하고, 이미 응답이 끝난 요청의 태그(엔드포인트 등)를 계속
+    달고 다닌다. workflows.runner._execute와 같은 패턴이다.
+
+    예산(core.sentry_budget)은 **리셋하지 않는다** — 태스크마다 리셋하면 자료 단위
+    상한이 매번 풀려 무의미해진다. 런 밖 경로는 공용 예산을 그대로 쓴다.
+
+    실행에는 관여하지 않는다: coro를 그대로 await하고 예외도 그대로 전파한다.
+    """
+    with sentry_sdk.isolation_scope() as scope:
+        scope.set_tag("bg_task", kind)
+        scope.set_tag("task_id", str(uuid4()))
+        scope.set_tag("project_id", str(project_id))
+        await coro
+
+
 # 동시 색인 상한. PDF 파싱(docling 레이아웃 모델)은 파일당 수 GB를 쓴다 — 여러 건을
 # 한꺼번에 돌리면 메모리가 터지고 **조용히 저품질 파서로 폴백**한다. 2026-08-20 실측:
 # 13건을 한 번에 올렸더니 9건이 OSError 1455(페이징 파일 부족)로 docling에 실패해
@@ -1436,13 +1458,23 @@ async def upload_project_source(
         # 게이트가 "A38B4BB2CA_….pdf" 대신 실제 문서 제목을 보게. 파스 캐시가 남아
         # 런 색인이 재사용하므로 이중 비용이 없다.
         title_task = asyncio.create_task(
-            _title_in_background(row.id, dest, f"upload-title:{project.id}:{safe_name}")
+            _isolated_bg(
+                "title_extract",
+                project.id,
+                _title_in_background(row.id, dest, f"upload-title:{project.id}:{safe_name}"),
+            )
         )
         _INDEX_TASKS.add(title_task)
         title_task.add_done_callback(_INDEX_TASKS.discard)
         return _to_source_item(row)
     await session.commit()
-    task = asyncio.create_task(_index_in_background(source, f"upload:{project.id}:{safe_name}"))
+    task = asyncio.create_task(
+        _isolated_bg(
+            "index_source",
+            project.id,
+            _index_in_background(source, f"upload:{project.id}:{safe_name}"),
+        )
+    )
     _INDEX_TASKS.add(task)
     task.add_done_callback(_INDEX_TASKS.discard)
     return _to_source_item(row)
@@ -1506,7 +1538,13 @@ async def attach_library_source(
         await session.commit()
         return _to_source_item(row)
     await session.commit()
-    task = asyncio.create_task(_index_in_background(source, f"library:{project.id}:{node.id}"))
+    task = asyncio.create_task(
+        _isolated_bg(
+            "index_source",
+            project.id,
+            _index_in_background(source, f"library:{project.id}:{node.id}"),
+        )
+    )
     _INDEX_TASKS.add(task)
     task.add_done_callback(_INDEX_TASKS.discard)
     return _to_source_item(row)
@@ -1615,7 +1653,9 @@ async def rerun_verify_report(
     if project.id in _VERIFYING:
         return {"started": False, "running": True}
     _VERIFYING.add(project.id)
-    task = asyncio.create_task(_reverify_in_background(project.id))
+    task = asyncio.create_task(
+        _isolated_bg("verify_rerun", project.id, _reverify_in_background(project.id))
+    )
     _VERIFY_TASKS.add(task)
     task.add_done_callback(_VERIFY_TASKS.discard)
     return {"started": True, "running": True}

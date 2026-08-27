@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from decimal import Decimal
 
+import sentry_sdk
 import structlog
 from sqlalchemy import func, select
 
@@ -114,3 +115,21 @@ async def record_usage_safe(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
+        # 과금 원장이 유실되는 지점 — 조용히 실패하면 정산이 틀어진다. 어떤 기록이
+        # 빠졌는지 나중에 재구성할 수 있을 만큼만 싣는다: 모델·모드·토큰 수.
+        # 금액(cost_usd)은 넣지 않는다. 키 이름에 "token"이 들어가면 before_send의
+        # deny-list에 걸려 [Filtered]가 되므로 usage dict로 감싼다.
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "token_usage_record")
+            scope.set_tag("llm_model", model)
+            scope.set_tag("llm_mode", mode)
+            scope.set_extra(
+                "usage",
+                {
+                    "input": input_tokens,
+                    "output": output_tokens,
+                    "cached_input": cached_input_tokens,
+                },
+            )
+            scope.set_extra("project_id", str(project_id) if project_id else None)
+            sentry_sdk.capture_exception()

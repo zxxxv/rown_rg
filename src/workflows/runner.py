@@ -693,21 +693,28 @@ def _spawn_limited(project_id: uuid.UUID, work: Any, *, clear_cancel_on_exit: bo
     _RUNNING.add(project_id)
 
     async def _run() -> None:
-        _WAITING.append(project_id)
-        try:
-            async with _run_slots:
-                _WAITING.remove(project_id)
-                if cancel.is_requested(project_id):
-                    # 대기 중 취소 — 슬롯만 반납하고 실행하지 않는다.
-                    logger.info("run.cancelled_while_queued", project_id=str(project_id))
-                    return
-                await work()
-        finally:
-            if project_id in _WAITING:  # 대기 중 태스크가 죽은 비정상 경로 정리
-                _WAITING.remove(project_id)
-            _RUNNING.discard(project_id)
-            if clear_cancel_on_exit:
-                cancel.clear(project_id)  # 취소 요청이 남아도 다음 실행이 즉시 취소되지 않게
+        # 슬롯 하에 도는 모든 작업(_execute·_replan·_collect_more)을 Sentry에서
+        # 서로 격리한다 — _execute는 안에서 자기 run_id로 한 겹 더 포크한다
+        # (중첩 시 안쪽 스코프가 이긴다). 격리는 보고 귀속만 바꾸고 실행에는
+        # 관여하지 않는다.
+        with sentry_sdk.isolation_scope() as scope:
+            scope.set_tag("project_id", str(project_id))
+            _WAITING.append(project_id)
+            try:
+                async with _run_slots:
+                    _WAITING.remove(project_id)
+                    if cancel.is_requested(project_id):
+                        # 대기 중 취소 — 슬롯만 반납하고 실행하지 않는다.
+                        logger.info("run.cancelled_while_queued", project_id=str(project_id))
+                        return
+                    await work()
+            finally:
+                if project_id in _WAITING:  # 대기 중 태스크가 죽은 비정상 경로 정리
+                    _WAITING.remove(project_id)
+                _RUNNING.discard(project_id)
+                if clear_cancel_on_exit:
+                    # 취소 요청이 남아도 다음 실행이 즉시 취소되지 않게
+                    cancel.clear(project_id)
 
     _spawn(_run())
     return True
