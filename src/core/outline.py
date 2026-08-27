@@ -30,7 +30,10 @@ from src.core.builds_on import MAX_REFS_PER_SECTION, parse_ref
 
 # 절당 에이전트 배정 상한 — 초과는 저장 단계에서 오류로 알린다(조용한 절단 금지).
 # 프론트 project-config/validation.ts의 MAX_AGENTS_PER_SECTION과 거울.
-MAX_AGENTS_PER_SECTION = 5
+# 8인 이유: 철강 런 실측에서 7명 배정 절(4.3)이 근거 75개·분량 목표 99%로 성립했다
+# (비용 +50~70%). 성립하는 배정을 막지 않되 황당 배정만 끊는 선. 권장선(2~3)은
+# 프론트 경고(AGENTS_WARN_THRESHOLD)가 맡는다.
+MAX_AGENTS_PER_SECTION = 8
 
 # id 토큰 표기 — 사람 입력("4.1")과 정규식이 겹칠 수 없게 접두를 붙인다.
 _SECTION_TOKEN_RE = re.compile(

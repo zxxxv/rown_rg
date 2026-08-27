@@ -32,9 +32,10 @@ export const LIMITS = {
   rules: 10,
 } as const;
 
-/** core/outline.MAX_AGENTS_PER_SECTION 거울 - 넘으면 저장이 422로 막힌다. */
-export const MAX_AGENTS_PER_SECTION = 5;
-/** 권장 상한 - 초과는 경고만(에이전트마다 질의·검색이 따로 돌아 비용이 는다). */
+/** core/outline.MAX_AGENTS_PER_SECTION 거울 - 넘으면 저장이 422로 막힌다.
+ *  8인 이유: 7명 배정 절이 실측에서 성립했다(근거 75개·분량 목표 99%, 비용 +50~70%). */
+export const MAX_AGENTS_PER_SECTION = 8;
+/** 권장 상한 - 초과는 경고만(검색이 여러 벌 돌아 비용이 늘고 효율이 꺾이는 지점). */
 export const AGENTS_WARN_THRESHOLD = 3;
 
 /** 목차 편집기 안의 칸 종류 - 이동·빨간 표시의 좌표. */
@@ -342,7 +343,7 @@ export function collectOutlineIssues(chapters: ChapterLike[]): FormIssue[] {
           kind: "sec-many-analysts",
           level: "warning",
           where: label,
-          message: `담당 에이전트 ${s.analysts.length}명 - 관점이 많으면 검색·작성 비용이 늘고 초점이 흐려집니다. 절당 ${AGENTS_WARN_THRESHOLD}명 이하를 권장합니다.`,
+          message: `담당 에이전트 ${s.analysts.length}명 - 검색이 여러 벌 돌아 비용이 늘어납니다(실측 절당 +50~70%). 분량이 특히 중요한 절이 아니면 2~${AGENTS_WARN_THRESHOLD}명을 권장합니다.`,
           target: outlineTarget(ci, si, "analysts"),
         });
       }

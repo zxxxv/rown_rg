@@ -285,13 +285,13 @@ class TestAgentCap:
                 {
                     "title": "1장",
                     "sections": [
-                        {"title": "1.1", "analysts": [f"a{i}" for i in range(6)]},
-                        {"title": "1.2", "analysts": ["a1", "a2", "a3"]},
+                        {"title": "1.1", "analysts": [f"a{i}" for i in range(9)]},
+                        {"title": "1.2", "analysts": [f"b{i}" for i in range(7)]},
                     ],
                 }
             ]
         }
         _, errors = normalize_outline(outline)
         assert any(f"상한({MAX_AGENTS_PER_SECTION}명)" in e for e in errors)
-        # 상한 이하는 조용히 통과한다.
+        # 상한 이하는 조용히 통과한다 - 7명은 실측 성립 사례(철강 4.3)라 막지 않는다.
         assert not any("1.2" in e for e in errors)
