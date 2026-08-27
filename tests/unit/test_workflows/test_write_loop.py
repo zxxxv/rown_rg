@@ -689,3 +689,58 @@ class TestNarrativeChain:
         result = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
         assert len(result.section_candidates) == 3
         assert all(cs.survivors for cs in result.section_candidates)
+
+
+# ---------- 용어 규칙 주입 (term_entries → guidance) ----------
+
+
+class TestTermInjection:
+    def _entry(self, source_id) -> dict:
+        return {
+            "ko": None,
+            "en": "operational commencement",
+            "abbr": None,
+            "definition": "Supply arrangement start year - equivalent to operational commencement",
+            "source_title": "RE100 reporting guidance",
+            "source_id": str(source_id),
+        }
+
+    async def test_matching_term_reaches_prompt_and_meta(self):
+        s1 = SectionPlan(chapter_number=1, section_number=1, title="개요")
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[s1])
+        sid = uuid4()
+        chunk = RetrievedChunk(
+            chunk_id=uuid4(),
+            source_id=sid,
+            content="claims with operational commencement before 2024 " * 10,
+            score=0.9,
+        )
+
+        async def retrieve(section):
+            return [chunk]
+
+        client = _StubClient("본문 (출처 1)")
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=client, n=1, term_entries=[self._entry(sid)]
+        )
+        prompts = [r.messages[0].content for r in client.calls]
+        assert any("용어 규칙" in p and "RE100 reporting guidance의 정의" in p for p in prompts)
+        meta = result.section_meta[s1.section_id]
+        assert meta.get("term_rules") == ["operational commencement"]
+
+    async def test_unmatched_term_stays_out(self):
+        s1 = SectionPlan(chapter_number=1, section_number=1, title="개요")
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[s1])
+        chunk = RetrievedChunk(
+            chunk_id=uuid4(), source_id=uuid4(), content="전혀 무관한 근거 본문 " * 20, score=0.9
+        )
+
+        async def retrieve(section):
+            return [chunk]
+
+        client = _StubClient("본문 (출처 1)")
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=client, n=1, term_entries=[self._entry(uuid4())]
+        )
+        assert all("용어 규칙" not in r.messages[0].content for r in client.calls)
+        assert "term_rules" not in result.section_meta[s1.section_id]

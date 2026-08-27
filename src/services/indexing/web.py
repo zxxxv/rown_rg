@@ -29,6 +29,7 @@ from src.db.models.project_source import ProjectSource
 from src.services.indexing._boilerplate import excluded_metadata
 from src.services.indexing.exclusion import AUTO_EXCLUDED_KEY
 from src.services.indexing.published_year import extract_published_year, year_from_page_age
+from src.services.indexing.terms import mine_and_store_quietly
 from src.services.indexing.vector import IndexingResult
 from src.services.qa.span_vectors import store_quietly
 
@@ -243,6 +244,11 @@ class WebSourceIndexer:
         #  self._embedding만 만든다. AttributeError로 웹 색인 런이 통째로 죽던 오타 -
         #  실사용자 런 실패로 발견, project.run_failed 04:45Z.)
         await store_quietly(self._session_maker, span_targets, client=self._embedding)
+
+        # 용어 채굴 - 웹 자료는 패턴만 캔다(자료 수가 많아 문서당 LLM 콜을 얹지 않는다).
+        await mine_and_store_quietly(
+            self._session_maker, source_id, content_md, project_id=project_id, use_llm=False
+        )
 
         elapsed = (time.perf_counter() - t0) * 1000
         logger.info(

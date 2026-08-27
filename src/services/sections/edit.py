@@ -19,6 +19,7 @@ from src.core.types import SectionDraft, SectionPlan
 from src.services.generation.candidates import generate_section_candidates
 from src.services.generation.effort import write_effort
 from src.services.generation.split_writer import generate_section_split, plan_part_count
+from src.services.generation.term_rules import format_term_injection
 from src.services.generation.writer_context import build_writer_context, scale_for_evidence
 from src.services.retrieval.section import SectionRetriever
 
@@ -33,6 +34,7 @@ async def regenerate_section(
     plan_model: str | None = None,
     analyst_catalog: dict[str, Any] | None = None,
     rules: list[str] | None = None,
+    term_entries: list[dict[str, Any]] | None = None,
     user_id: UUID | None = None,
     project_id: UUID | None = None,
 ) -> SectionDraft:
@@ -61,6 +63,12 @@ async def regenerate_section(
         search_plan = section.model_copy(update={"direction": merged})
 
     chunks = await retrieve(search_plan)
+    if term_entries:
+        # 용어 규칙 주입 — 작성 루프와 같은 조건(write_loop 참조). 재작성만 빠지면
+        # 그 절만 용어 표기·정의가 달라진다(페르소나를 잃던 병리와 같은 축).
+        term_note, _ = format_term_injection(term_entries, chunks)
+        if term_note:
+            ctx = replace(ctx, guidance="\n\n".join(x for x in (ctx.guidance, term_note) if x))
     # 재료가 목표에 못 미치면 목표를 내린다 — 검색 뒤라야 실제 근거 수를 안다.
     base_min_chars = ctx.min_chars
     ctx = scale_for_evidence(ctx, sum(1 for c in chunks if not c.is_summary))

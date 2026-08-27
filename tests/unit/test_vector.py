@@ -186,8 +186,10 @@ class TestPipelineOrdering:
             )
         )
 
-        # 세션 3개 사용: upsert+delete 1개, insert 1개, 대목 벡터(store_quietly) 1개.
-        assert maker_call_count["n"] == 3
+        # 세션 4개 사용: upsert+delete 1개, insert 1개, 대목 벡터(store_quietly) 1개,
+        # 용어 채굴(terms.mine_and_store_quietly) 1개 — 모의 세션이라 읽기에서 조기
+        # 종료되지만(비치명 계약) 세션은 연다.
+        assert maker_call_count["n"] == 4
         # 임베딩은 두 세션 사이에 청크 콘텐츠 순서대로 호출된다. 두 번째 호출은
         # 대목 벡터(store_quietly)의 것 - 첫 호출의 인자만 계약이다.
         assert embed.embed_batch.await_args_list[0].args == (["hello world"],)
