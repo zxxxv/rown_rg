@@ -605,16 +605,31 @@ function FigurePlaceholderList({ figures }: { figures: FigurePlaceholder[] }) {
 
 function CitationList({ citations }: { citations: SectionCitation[] }) {
   if (citations.length === 0) return null;
+  // 번호는 대목(청크) 단위라 같은 자료가 여러 번호를 받는다 - 목록은 자료 단위로
+  // 묶어 번호를 나란히 보여준다(같은 제목이 줄줄이 반복되던 문제, 2026-08-27).
+  const grouped: { key: string; numbers: (number | null)[]; first: SectionCitation }[] = [];
+  const byKey = new Map<string, number>();
+  for (const c of citations) {
+    const key = c.url || c.title || "";
+    const at = byKey.get(key);
+    if (at === undefined) {
+      byKey.set(key, grouped.length);
+      grouped.push({ key, numbers: [c.number ?? null], first: c });
+    } else {
+      grouped[at].numbers.push(c.number ?? null);
+    }
+  }
   return (
     <footer className="mt-6 border-t border-border pt-3">
       <h3 className="mb-2 text-xs font-medium text-fg-secondary">
-        이 절의 출처 {citations.length}건
+        이 절의 출처 {grouped.length}건
       </h3>
       <ol className="flex flex-col gap-1">
-        {citations.map((c, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: 위치가 곧 정체성 - source_ids 순서 고정 읽기 전용 목록(재정렬 없음)
-          <li key={`cite-${i}`} className="flex items-start gap-2 text-xs">
-            <span className="shrink-0 font-mono text-fg-tertiary">[{c.number ?? "–"}]</span>
+        {grouped.map(({ key, numbers, first: c }) => (
+          <li key={`cite-${key}`} className="flex items-start gap-2 text-xs">
+            <span className="shrink-0 font-mono text-fg-tertiary">
+              {numbers.map((n) => `[${n ?? "–"}]`).join(" ")}
+            </span>
             {c.url ? (
               <a
                 href={c.url}
