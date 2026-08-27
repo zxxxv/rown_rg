@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 import psutil
+import sentry_sdk
 import structlog
 from pydantic import BaseModel
 
@@ -27,6 +28,11 @@ if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
 logger = structlog.get_logger(__name__)
+
+# 메모리 압박을 Sentry에 이미 올렸는가. 압박은 한 색인 잡 안에서 배치마다 반복되고
+# 그때마다 이벤트를 올리면 한 번의 색인으로 수십 건이 쌓인다. 신호는 "이 프로세스가
+# 임계를 넘었다" 한 번이면 충분하고, 배치별 상세는 logger.warning에 그대로 남는다.
+_MEMORY_PRESSURE_REPORTED = False
 
 
 class EmbeddingResult(BaseModel):
@@ -402,6 +408,24 @@ class BgeM3Client(EmbeddingClient):
                         total_batches=len(batches),
                         mem_percent=mem_percent,
                     )
+                    # 실제 OOM은 SIGKILL이라 Sentry에 아무 흔적도 남지 않는다.
+                    # 이 임계 초과가 유일한 사전 신호라 예외가 없어도 명시적으로 올린다.
+                    # 프로세스당 첫 1회만 — 이후 배치의 압박은 로그로만 남긴다.
+                    global _MEMORY_PRESSURE_REPORTED
+                    if not _MEMORY_PRESSURE_REPORTED:
+                        _MEMORY_PRESSURE_REPORTED = True
+                        with sentry_sdk.new_scope() as scope:
+                            scope.set_tag("degradation", "embedding")
+                            scope.set_tag("embedding_signal", "memory_pressure")
+                            scope.set_extra("mem_percent", mem_percent)
+                            scope.set_extra("threshold_percent", self.MEMORY_PRESSURE_THRESHOLD)
+                            scope.set_extra("batch_idx", batch_idx)
+                            scope.set_extra("total_batches", len(batches))
+                            sentry_sdk.capture_message(
+                                "embedding memory pressure above threshold (pre-OOM signal); "
+                                "further occurrences in this process are logged only",
+                                level="warning",
+                            )
                     gc.collect()
 
                 # 동기 ONNX 추론을 워커 스레드로 — 이벤트 루프에서 직접 돌리면 색인

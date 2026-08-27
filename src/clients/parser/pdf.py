@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import ClassVar
 
+import sentry_sdk
 import structlog
 
 from src.clients.parser.base import (
@@ -84,8 +85,14 @@ def _detach_abandoned_worker(
                 path=str(path),
                 kind=kind,
             )
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # 복귀 경로가 없는 데몬 스레드 — 삼켜진 예외를 알릴 곳이 Sentry뿐이다.
+            # 삼키는 동작 자체는 그대로 둔다(정리 스레드가 죽어도 파싱은 무관).
+            with sentry_sdk.new_scope() as scope:
+                scope.set_tag("degradation", "pdf_parse")
+                scope.set_tag("parse_stage", "abandoned_worker_drain")
+                scope.set_extra("filename", path.name)
+                sentry_sdk.capture_exception(exc)
 
     threading.Thread(target=drain, daemon=True, name="pdf-docling-drain").start()
 
@@ -162,6 +169,18 @@ def _disable_docling(reason: str, detail: str) -> None:
     global _DOCLING_UNAVAILABLE
     _DOCLING_UNAVAILABLE = reason
     logger.warning("pdf.parse.docling_disabled_for_process", reason=reason, error_message=detail)
+    # 한 번의 환경 실패로 **이후 모든 PDF**가 pymupdf로 내려간다. 예외 한 건이 아니라
+    # 프로세스 상태가 바뀌는 사건이라 capture_message로 따로 올린다.
+    with sentry_sdk.new_scope() as scope:
+        scope.set_tag("degradation", "pdf_parse")
+        scope.set_tag("parse_stage", "docling_disabled_for_process")
+        scope.set_tag("disable_reason", reason)
+        scope.set_extra("error_message", detail[:500])
+        sentry_sdk.capture_message(
+            f"docling disabled for this process ({reason}) — "
+            "all further PDFs silently fall back to pymupdf",
+            level="error",
+        )
 
 
 def _is_environment_failure(exc: BaseException) -> bool:
@@ -260,9 +279,7 @@ class PdfParser(ParserClient):
             # 저품질본이 영원히 재사용된다(실사고의 두 번째 층). docling 결과와
             # v3 이전(파서 미기록) 캐시본은 그대로 신뢰한다.
             if cached.parser_name == "pymupdf" and self._docling_would_attempt(size_bytes):
-                logger.info(
-                    "pdf.parse.cache_bypass_pymupdf", path=str(path), size_bytes=size_bytes
-                )
+                logger.info("pdf.parse.cache_bypass_pymupdf", path=str(path), size_bytes=size_bytes)
             else:
                 logger.info("pdf.parse.cache_hit", path=str(path))
                 return cached
@@ -367,6 +384,17 @@ class PdfParser(ParserClient):
                 warnings.append(
                     "remote_parse_busy" if busy else f"remote_parse_failed:{type(e).__name__}"
                 )
+                # 폴백은 그대로 — Sentry에는 "품질 사슬이 한 단계 내려갔다"만 알린다.
+                # 단 429(GPU 큐 포화)는 제외한다. 고장이 아니라 "지금 바쁨"이고,
+                # 대량 색인 중 연속으로 터져 quota를 통째로 태운다. 경고는
+                # remote_parse_busy로 색인 메타에 그대로 남는다.
+                if not busy:
+                    with sentry_sdk.new_scope() as scope:
+                        scope.set_tag("degradation", "pdf_parse")
+                        scope.set_tag("parse_stage", "docling_remote")
+                        scope.set_extra("filename", path.name)
+                        scope.set_extra("size_bytes", size_bytes)
+                        sentry_sdk.capture_exception(e)
 
         # 2단계: 로컬 docling(기존 경로 그대로 - 데몬 스레드 + 타임아웃).
         if self._local_docling_eligible(size_bytes):
@@ -395,6 +423,13 @@ class PdfParser(ParserClient):
                     error_type=type(e).__name__,
                     error_message=str(e),
                 )
+                with sentry_sdk.new_scope() as scope:
+                    scope.set_tag("degradation", "pdf_parse")
+                    scope.set_tag("parse_stage", "docling_local")
+                    scope.set_extra("filename", path.name)
+                    scope.set_extra("size_bytes", size_bytes)
+                    scope.set_extra("timeout_s", timeout_s)
+                    sentry_sdk.capture_exception(e)
                 if _is_environment_failure(e):
                     # 환경 문제는 다음 파일에서도 똑같이 난다 — 프로세스 내내 건너뛴다.
                     _disable_docling(type(e).__name__, str(e))
