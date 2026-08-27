@@ -861,6 +861,7 @@ async def _index_pending_file_sources(project_id: UUID) -> None:
     from sqlalchemy import select
 
     from src.db.models.chunk import Chunk
+    from src.db.models.library_node import LibraryNode
     from src.db.models.project_source import ProjectSource
     from src.db.session import async_session_maker
     from src.services.indexing.exclusion import apply_index_outcome
@@ -872,9 +873,11 @@ async def _index_pending_file_sources(project_id: UUID) -> None:
                 await session.execute(
                     select(ProjectSource).where(
                         ProjectSource.project_id == project_id,
-                        # 업로드만 — 라이브러리 참조는 붙일 때 색인되고(attach 경로 유지)
-                        # 원본 파일 경로 해소가 라이브러리 소유라 여기서 다루지 않는다.
-                        ProjectSource.source_type == "upload",
+                        # 라이브러리도 받는다 — 실행 전 첨부는 attach 경로가 색인을
+                        # "런의 색인 단계로" 미루는데(index_deferred), 이 단계가 업로드만
+                        # 보면 그 유예를 아무도 안 받아 채택 자료가 0청크로 남는다
+                        # (2026-08-27 철강 런 실사고: 핵심 PDF가 통째로 빠졌다).
+                        ProjectSource.source_type.in_(("upload", "library")),
                         ProjectSource.is_included.is_(True),
                         ~ProjectSource.id.in_(
                             select(Chunk.source_id).where(Chunk.project_id == project_id)
@@ -885,13 +888,32 @@ async def _index_pending_file_sources(project_id: UUID) -> None:
             .scalars()
             .all()
         )
-        todo = [r for r in rows if r.upload_path and Path(r.upload_path).is_file()]
+        node_ids = [r.library_node_id for r in rows if r.library_node_id is not None]
+        node_paths: dict[UUID, str] = (
+            dict(
+                (
+                    await session.execute(
+                        select(LibraryNode.id, LibraryNode.file_path).where(
+                            LibraryNode.id.in_(node_ids), LibraryNode.file_path.is_not(None)
+                        )
+                    )
+                ).all()
+            )
+            if node_ids
+            else {}
+        )
+
+    def _file_of(r: ProjectSource) -> Path | None:
+        raw = r.upload_path if r.source_type == "upload" else node_paths.get(r.library_node_id)
+        return Path(raw) if raw else None
+
+    todo = [(r, p) for r in rows if (p := _file_of(r)) is not None and p.is_file()]
     if not todo:
         return
     service = build_vector_indexing_service()
-    for i, row in enumerate(todo, start=1):
+    for i, (row, file_path) in enumerate(todo, start=1):
         title = (row.title or "파일")[:24]
-        emit_step(project_id, "indexing", f"업로드 색인 {i}/{len(todo)} · {title}", "started")
+        emit_step(project_id, "indexing", f"파일 색인 {i}/{len(todo)} · {title}", "started")
         error: str | None = None
         result = None
         try:
@@ -899,8 +921,9 @@ async def _index_pending_file_sources(project_id: UUID) -> None:
                 SourceInput(
                     project_id=project_id,
                     source_type=row.source_type,
-                    file_path=Path(row.upload_path),
+                    file_path=file_path,
                     upload_path=row.upload_path,
+                    library_node_id=row.library_node_id,
                     title=row.title,
                 )
             )
@@ -939,7 +962,7 @@ async def _index_pending_file_sources(project_id: UUID) -> None:
         emit_step(
             project_id,
             "indexing",
-            f"업로드 색인 {i}/{len(todo)} · {title}",
+            f"파일 색인 {i}/{len(todo)} · {title}",
             "completed" if result is not None else "failed",
         )
 
