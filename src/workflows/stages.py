@@ -1788,8 +1788,21 @@ async def assemble(state: ProjectState) -> ProjectState:
         state = overlay_working_copy(state, await _working_copy(pid))
     except Exception:
         logger.warning("assemble.working_copy_failed", project_id=str(pid), exc_info=True)
+    # 인용 전역 번호화 — 절-로컬 [n]을 출처장 번호로 재작성(저장·검증·렌더 전부
+    # 전역 번호 기준). 반드시 **dedup보다 먼저** — 로컬 번호↔청크 매핑은 "본문 고유
+    # 번호의 첫 등장 순서 = cited_chunk_ids 순서"라는 위치 규약인데, dedup이 중복
+    # 문단을 지우면(마커 가드는 유입만 막고 삭제는 ⊆로 허용) 등장 순서가 밀려 뒤쪽
+    # 번호가 전부 옆 자료로 붙는다(2026-08-27 철강 6.2 실사고: 오귀속 25건 무더기,
+    # 본문 (출처 17)의 실제 원천이 전역 16). 전역 번호는 자료 절대 번호라 이후
+    # 삭제·재작성에 흔들리지 않는다. 실패는 비치명 — 로컬 번호로 계속한다.
+    try:
+        from src.services.sections.renumber import renumber_state
+
+        state = await renumber_state(state)
+    except Exception:
+        logger.warning("assemble.renumber_failed", project_id=str(pid), exc_info=True)
     # 3층 국소 재작성(로드맵 2026-08-20) — 절 간 중복 문단을 참조 전환으로 압축.
-    # renumber 전(본문 확정의 단일 지점 통일). 실패·거부는 원문 유지라 비치명.
+    # renumber 뒤(위 규약). 실패·거부는 원문 유지라 비치명.
     if settings.write_dedup_rewrite:
         try:
             from src.services.qa.dedup_rewrite import dedup_rewrite_state
@@ -1800,14 +1813,6 @@ async def assemble(state: ProjectState) -> ProjectState:
             logger.info("assemble.dedup_rewrite", project_id=str(pid), n_rewritten=n_rw)
         except Exception:
             logger.warning("assemble.dedup_rewrite_failed", project_id=str(pid), exc_info=True)
-    # 인용 전역 번호화 — 절-로컬 [n]을 출처장 번호로 재작성(저장·검증·렌더 전부
-    # 전역 번호 기준이 되도록 가장 먼저). 실패는 비치명 — 로컬 번호로 계속한다.
-    try:
-        from src.services.sections.renumber import renumber_state
-
-        state = await renumber_state(state)
-    except Exception:
-        logger.warning("assemble.renumber_failed", project_id=str(pid), exc_info=True)
     drafts, result = check_assembled(state)
     logger.info(
         "assemble.done",

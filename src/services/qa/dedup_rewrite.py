@@ -193,9 +193,10 @@ async def dedup_rewrite_state(
 ) -> tuple[ProjectState, int]:
     """조립 진입점 — 선택 확정 초안들의 중복 문단을 참조 전환으로 압축한 state.
 
-    renumber 전에 돈다(마커는 그대로 보존되므로 순서 제약은 없지만, 본문 확정의
-    단일 지점을 renumber 앞으로 통일). 실패·거부 문단은 원문 유지 — 재작성이 조립을
-    막는 일은 없다.
+    renumber **뒤에** 돈다 — 마커 가드는 유입만 막고 삭제는 허용(⊆)하는데, renumber의
+    로컬 번호 매핑은 첫 등장 순서 규약이라 삭제에 깨진다(2026-08-27 철강 6.2 실사고:
+    지워진 문단 하나로 뒤쪽 번호 전부가 옆 자료로 오귀속). 전역 번호는 삭제에 안전하다.
+    실패·거부 문단은 원문 유지 — 재작성이 조립을 막는 일은 없다.
     """
     plan_by_id = {s.section_id: s for s in state.section_plan}
     labeled: list[tuple[str, str]] = []
