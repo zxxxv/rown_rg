@@ -20,7 +20,7 @@ _ISSUE_RE = re.compile(r"(?:19|20)\d{2}년\s*제?\s*\d{1,3}\s*호")
 # 기관명으로만 이루어진 줄 — 안전한 접미사 화이트리스트.
 _PUBLISHER_SUFFIX = "연구원|연구소|협회|공단|공사|진흥원|재단|학회|중앙회|위원회|연구센터"
 _PUBLISHER_LINE_RE = re.compile(rf"^[가-힣A-Za-z·()\s]{{1,26}}(?:{_PUBLISHER_SUFFIX})$")
-_PUBLISHER_LABEL_RE = re.compile(r"(?:발행처|발행기관)\**\s*[:：]?\s*([가-힣A-Za-z·()\s]{2,30})")
+_PUBLISHER_LABEL_RE = re.compile(r"(?:발행처|발행기관)\**\s*[:：]?\s*([가-힣A-Za-z·() \t]{2,30})")
 # 마크다운 장식 걷기 — 표제 추출과 같은 이유(머리 기호가 줄 판정을 흐린다).
 _MD_NOISE_RE = re.compile(r"^[#>*\-\s]+|[*_`]+")
 
