@@ -164,7 +164,7 @@ if settings.sentry_dsn:
             StarletteIntegration(transaction_style="endpoint"),
             FastApiIntegration(transaction_style="endpoint"),
             AsyncioIntegration(),
-            LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
+            LoggingIntegration(level=logging.INFO, event_level=logging.CRITICAL),
         ],
         # 스택 트레이스에서 우리 코드만 in-app으로 강조한다.
         in_app_include=["src"],
