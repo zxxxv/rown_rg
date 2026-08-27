@@ -239,7 +239,10 @@ class WebSourceIndexer:
 
         # 대목 벡터 - 근거 대조가 볼 때마다 다시 만들던 것을 여기서 한 번 만든다.
         # 실패해도 색인은 성공이다(services/qa/span_vectors).
-        await store_quietly(self._session_maker, span_targets, client=self._embedding_client)
+        # (2026-08-27: self._embedding_client는 존재하지 않는 속성이었다 - 생성자는
+        #  self._embedding만 만든다. AttributeError로 웹 색인 런이 통째로 죽던 오타 -
+        #  실사용자 런 실패로 발견, project.run_failed 04:45Z.)
+        await store_quietly(self._session_maker, span_targets, client=self._embedding)
 
         elapsed = (time.perf_counter() - t0) * 1000
         logger.info(
