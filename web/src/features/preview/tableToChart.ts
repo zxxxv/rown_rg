@@ -9,6 +9,8 @@ import { type ChartSpec, type ChartType, MAX_SERIES, tryNumber } from "./chartSp
 export interface MarkdownTable {
   /** 표 위의 제목 줄 - 번호를 뗀 문구. 없으면 빈 문자열. */
   caption: string;
+  /** 제목 꼬리·단위 줄에서 뗀 단위("%", "억 원") - 변환 기본 단위의 재료. */
+  captionUnit: string;
   headers: string[];
   rows: string[][];
   /** 블록에 붙어 있던 (출처 n) 번호 - 표를 그래프로 바꿔도 근거는 따라간다. */
@@ -21,6 +23,11 @@ const SOURCE_MARK_RE = /\(출처\s*(\d{1,3}(?:\s*,\s*\d{1,3})*)\s*\)/g;
 const SEPARATOR_RE = /^\|?[\s:|-]+\|?$/;
 // 머리글 끝의 "(억 원)" 같은 괄호 - 계열 이름에서 떼어 단위 기본값으로 올린다.
 const TRAILING_PAREN_RE = /[（(]\s*(?:단위\s*[:：]\s*)?([^）)]+)\s*[）)]\s*$/;
+// 제목 꼬리의 단위 - "제목 (단위: %)"에서 떼어 단위 칸으로 옮긴다(HWPX 조립의
+// _CAPTION_TRAILING_UNIT_RE와 같은 규칙). 표 앞의 "(단위: …)" 단독 줄이 제목에
+// 합쳐져 들어오므로, 안 떼면 그림 캡션에 단위가 박혀 표 관례(제목/단위 분리)와
+// 어긋난다(2026-08-27 v6 실측).
+const CAPTION_UNIT_RE = /\s*[（(]\s*단위\s*[:：]\s*([^)）]*?)\s*[）)]\s*$/;
 
 /** 이 블록이 표 제목 줄 하나인가 - 표 앞 문단으로 따로 사는 "표: 제목"을 알아본다. */
 export function isTableCaption(block: string): boolean {
@@ -63,7 +70,14 @@ export function findTable(block: string): MarkdownTable | null {
   const [headers, ...rows] = table;
   // 머리행보다 짧은 행은 빈 칸으로 채운다 - 열 인덱스가 어긋나면 엉뚱한 값을 그린다.
   const padded = rows.map((r) => headers.map((_, i) => r[i] ?? ""));
-  return { caption: captionMatch ? captionMatch[1].trim() : "", headers, rows: padded, source };
+  let caption = captionMatch ? captionMatch[1].trim() : "";
+  let captionUnit = "";
+  const unitTail = CAPTION_UNIT_RE.exec(caption);
+  if (unitTail !== null) {
+    captionUnit = unitTail[1];
+    caption = caption.slice(0, unitTail.index).trim();
+  }
+  return { caption, captionUnit, headers, rows: padded, source };
 }
 
 /** 값 열로 쓸 수 있는 열 번호 - 데이터 칸이 **전부** 숫자로 읽히는 열.
@@ -106,15 +120,17 @@ export function defaultChoice(table: MarkdownTable): ConvertChoice {
   const firstNonNumeric = table.headers.findIndex((_, i) => !numeric.includes(i));
   const xCol = firstNonNumeric < 0 ? 0 : firstNonNumeric;
   const candidates = numeric.filter((c) => c !== xCol);
-  const unit = candidates.length > 0 ? splitUnit(table.headers[candidates[0]])[1] : "";
+  // 값 열 필터는 머리글 단위끼리 비교한다 - 제목에서 뗀 단위는 표 전체의 것이라
+  // 열 선별에는 못 쓰고, 머리글에 단위가 없을 때 표시용 기본값으로만 올린다.
+  const headerUnit = candidates.length > 0 ? splitUnit(table.headers[candidates[0]])[1] : "";
   return {
     type: "bar",
     xCol,
     seriesCols: candidates
-      .filter((c) => splitUnit(table.headers[c])[1] === unit)
+      .filter((c) => splitUnit(table.headers[c])[1] === headerUnit)
       .slice(0, MAX_SERIES),
     title: table.caption,
-    unit,
+    unit: headerUnit || table.captionUnit,
   };
 }
 
