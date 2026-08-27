@@ -3104,7 +3104,7 @@ async def get_sections(
                 level=row.level,
                 status=row.status,
                 parent_id=ch_id,
-                evidence_scarce=bool((row.meta or {}).get("volume_scaled")),
+                evidence_scarce=_is_evidence_scarce(row.meta),
             )
         )
         chapter_statuses[row.chapter_number].append(row.status)
@@ -3342,13 +3342,30 @@ async def _section_citations(
     return _citations_from_numbers(numbers, list(sources_ordered))
 
 
+def _is_evidence_scarce(meta: dict | None) -> bool:
+    """'자료 부족' 배지 판정 — 분량이 깎였고(volume_scaled) 근거가 캡 미만일 때만.
+
+    근거수가 검색 캡(retrieval_top_k)에 닿은 절은 자료가 부족한 게 아니라 상한에
+    막힌 것이다 — 절당 근거 상한(24)×750자=18,000자보다 분량 목표가 크면 만점
+    검색에도 기계적으로 깎여, 1~4장 전부에 배지가 떴다(2026-08-27 철강 런 실측:
+    근거 24/24 절이 '자료 부족'으로 표시). 캡 도달은 배지 없이 지나간다.
+    """
+    m = meta or {}
+    if not m.get("volume_scaled"):
+        return False
+    count = m.get("evidence_count")
+    if isinstance(count, int) and count >= settings.retrieval_top_k:
+        return False
+    return True
+
+
 def _evidence_info(row: Section) -> EvidenceInfo:
     """작성 시 기록한 절 지표(sections.meta) → 화면용 플래그. 옛 절은 기록이 없어 빈 값."""
     meta = row.meta or {}
     count = meta.get("evidence_count")
     return EvidenceInfo(
         count=count if isinstance(count, int) else None,
-        scarce=bool(meta.get("volume_scaled")),
+        scarce=_is_evidence_scarce(meta),
         plan_failed=bool(meta.get("plan_failed")),
     )
 
@@ -3846,6 +3863,7 @@ async def _default_section_rewriter(
         _models_for,
         _rule_texts,
         _selected_rule_ids,
+        _term_entries,
     )
 
     state = ProjectState(
@@ -3867,6 +3885,7 @@ async def _default_section_rewriter(
         # 고쳤다고 이미 쓴 절과 다른 목소리가 나오면 안 된다.
         analyst_catalog=await _analyst_catalog(project.owner_id, state.options),
         rules=await _rule_texts(project.owner_id, _selected_rule_ids(state)),
+        term_entries=await _term_entries(project.id),
         user_id=project.owner_id,
         project_id=project.id,
     )

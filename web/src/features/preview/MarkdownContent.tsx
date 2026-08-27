@@ -731,10 +731,15 @@ export function MarkdownContent({
   );
   return (
     <div className="prose-doc">
+      {/* singleTilde 차단 - "1~4조, 2~5명"처럼 물결이 두 번 나오면 사이가 취소선으로 그어진다.
+          GFM 원 규격대로 ~~만 취소선으로 받는다(본문 수치 구간은 ~ 하나를 쓴다). */}
+      <ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }]]} components={components}>
+        {prepared}
+      </ReactMarkdown>
       {badgeNumbers.length > 0 ? (
-        // float 금지 - 배지가 많으면 첫 문단이 좁은 왼쪽 기둥으로 밀린다(2026-08-27 보고).
-        // 본문 위 오른쪽 정렬 블록이면 글이 항상 전폭에서 시작한다.
-        <div className="mb-2 flex flex-wrap items-center justify-end gap-1">
+        // 블록 오른쪽 아래 - 위에 두면 문단 우상단의 근거 배지(근거 n·확인 필요)와
+        // 겹치고(2026-08-27 보고), float면 첫 문단이 좁은 왼쪽 기둥으로 밀린다.
+        <div className="mt-1 flex flex-wrap items-center justify-end gap-1">
           {badgeNumbers.map((n) => (
             <CitationHoverCard
               key={`src-${n}`}
@@ -745,11 +750,6 @@ export function MarkdownContent({
           ))}
         </div>
       ) : null}
-      {/* singleTilde 차단 - "1~4조, 2~5명"처럼 물결이 두 번 나오면 사이가 취소선으로 그어진다.
-          GFM 원 규격대로 ~~만 취소선으로 받는다(본문 수치 구간은 ~ 하나를 쓴다). */}
-      <ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }]]} components={components}>
-        {prepared}
-      </ReactMarkdown>
     </div>
   );
 }

@@ -1328,6 +1328,16 @@ function SectionView({
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4">
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-semibold text-fg">{data.title}</h2>
+          {/* 장 화면(SectionBlock)과 같은 배지 - 절 상세만 안 보이던 불일치 수리(2026-08-27) */}
+          {data.evidence.scarce ? (
+            <Badge
+              variant="secondary"
+              className="bg-bg-warning text-fg-warning"
+              title="확보된 근거가 적어 분량을 줄여 작성한 절입니다"
+            >
+              자료 부족
+            </Badge>
+          ) : null}
           {data.qa_status === "passed" ? (
             <Badge variant="default" className="bg-bg-success text-fg-success">
               QA 통과
