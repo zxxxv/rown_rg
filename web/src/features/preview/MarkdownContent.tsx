@@ -154,6 +154,8 @@ function synthesizeClaim(unit: string): ClaimAlignment {
     // 정렬이 없으면 오귀속 교정 제안도 없다 - 그건 절 풀에서 찾아낸 결과라
     // 이 합성 경로에는 재료가 없다.
     relocations: [],
+    injections: [],
+    elsewhere: [],
     grounded: [],
     candidates: [],
   };
