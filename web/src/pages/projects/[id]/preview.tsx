@@ -1609,12 +1609,6 @@ function SectionView({
                       <span className="text-fg-tertiary">대상 아님 {notCandidate}</span>
                     </>
                   ) : null}
-                  {claimStats && claimStats.ungrounded > 0 ? (
-                    <>
-                      <span aria-hidden>·</span>
-                      <span className="text-fg-danger">무근거 수치 {claimStats.ungrounded}</span>
-                    </>
-                  ) : null}
                   {evidenceQuery.data?.traceable === false ? (
                     // 근거 기록 도입(8/11) 전에 작성된 절 - 번호와 청크의 대응이 없어
                     // 블록 배지·드로어를 못 연다. 그 사실을 알려야 "왜 배지가 없지"가 안 된다.

@@ -176,10 +176,19 @@ function ClaimRow({
         </details>
       ) : null}
 
-      {claim.ungrounded.length > 0 ? (
-        // 근거에서 못 찾은 수치 - "어디를 참고했나"의 답이 '아무 데도'인 경우라 남긴다.
-        <p className="mt-1 flex items-center gap-1 text-[11px] text-fg-danger">
-          <span>원문에서 못 찾은 수치: {claim.ungrounded.join(", ")}</span>
+      {(() => {
+        // 아래에 소재 제안(오귀속·주입·절 밖)이 붙는 수치는 빨간 목록에서 뺀다 -
+        // "못 찾음"과 "[7]에 있습니다"가 같은 수치를 반대로 말하면 사람이 어느 쪽을
+        // 믿을지 모른다(2026-08-27 지적). 제안 줄이 그 수치의 정확한 문장이다.
+        const suggested = new Set([
+          ...(claim.relocations ?? []).map((r) => r.token),
+          ...(claim.injections ?? []).map((x) => x.token),
+          ...(claim.elsewhere ?? []).map((x) => x.token),
+        ]);
+        const plain = claim.ungrounded.filter((t) => !suggested.has(t));
+        return plain.length > 0 ? (
+          <p className="mt-1 flex items-center gap-1 text-[11px] text-fg-danger">
+            <span>원문에서 못 찾은 수치: {plain.join(", ")}</span>
           <HelpTip title="원문에서 못 찾은 수치">
             <p>
               이 문장이 인용한 자료 안에서 해당 수치를 찾지 못했습니다. 지어냈거나, 다른
@@ -187,8 +196,9 @@ function ClaimRow({
             </p>
             <p>아래에 "출처 n에 있습니다" 제안이 함께 뜨면 표기만 틀렸을 가능성이 큽니다.</p>
           </HelpTip>
-        </p>
-      ) : null}
+          </p>
+        ) : null;
+      })()}
 
       {(claim.injections ?? []).map((inj) => (
         // 주입 의심 - 연도를 명시한 수치가 (a) 코퍼스 어디에도 없거나(소재 불명)
