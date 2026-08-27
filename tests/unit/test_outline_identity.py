@@ -274,3 +274,24 @@ class TestPlanFingerprint:
         assert plan_fingerprint(retitled) != base
         requeried = p.model_copy(update={"search_queries": ["새 질의"]})
         assert plan_fingerprint(requeried) != base
+
+
+class TestAgentCap:
+    def test_over_cap_reports_error(self) -> None:
+        from src.core.outline import MAX_AGENTS_PER_SECTION, normalize_outline
+
+        outline = {
+            "chapters": [
+                {
+                    "title": "1장",
+                    "sections": [
+                        {"title": "1.1", "analysts": [f"a{i}" for i in range(6)]},
+                        {"title": "1.2", "analysts": ["a1", "a2", "a3"]},
+                    ],
+                }
+            ]
+        }
+        _, errors = normalize_outline(outline)
+        assert any(f"상한({MAX_AGENTS_PER_SECTION}명)" in e for e in errors)
+        # 상한 이하는 조용히 통과한다.
+        assert not any("1.2" in e for e in errors)

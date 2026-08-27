@@ -28,6 +28,10 @@ from uuid import UUID, uuid4
 
 from src.core.builds_on import MAX_REFS_PER_SECTION, parse_ref
 
+# 절당 에이전트 배정 상한 — 초과는 저장 단계에서 오류로 알린다(조용한 절단 금지).
+# 프론트 project-config/validation.ts의 MAX_AGENTS_PER_SECTION과 거울.
+MAX_AGENTS_PER_SECTION = 5
+
 # id 토큰 표기 — 사람 입력("4.1")과 정규식이 겹칠 수 없게 접두를 붙인다.
 _SECTION_TOKEN_RE = re.compile(
     r"""^\s*s:(?P<id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})
@@ -158,6 +162,16 @@ def normalize_outline(
 
     for chapter in normalized["chapters"]:
         for sec in chapter["sections"]:
+            # 에이전트 과다 배정 가드 — 에이전트마다 검색 질의가 따로 돌아 절 비용과
+            # 근거팩이 배로 늘고, 사용자는 그 비용 구조를 모른 채 막 배정할 수 있다
+            # (2026-08-28 지시). 프론트 validation.ts가 같은 상한을 미리 보여준다.
+            agents = sec.get("analysts")
+            if isinstance(agents, list) and len(agents) > MAX_AGENTS_PER_SECTION:
+                label = label_by_sec.get(sec.get("id", ""), "?")
+                errors.append(
+                    f"{label}절 담당 에이전트({len(agents)}명)가 절당 상한"
+                    f"({MAX_AGENTS_PER_SECTION}명)을 넘습니다"
+                )
             raw_refs = sec.get("builds_on")
             if not raw_refs:
                 continue
