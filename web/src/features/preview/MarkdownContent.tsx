@@ -732,8 +732,9 @@ export function MarkdownContent({
   return (
     <div className="prose-doc">
       {badgeNumbers.length > 0 ? (
-        // float로 띄워 본문이 배지 아래로 흐르게 한다 - 블록 우상단에 얹힌 모양이 된다.
-        <div className="float-right ml-3 flex flex-wrap items-center gap-1">
+        // float 금지 - 배지가 많으면 첫 문단이 좁은 왼쪽 기둥으로 밀린다(2026-08-27 보고).
+        // 본문 위 오른쪽 정렬 블록이면 글이 항상 전폭에서 시작한다.
+        <div className="mb-2 flex flex-wrap items-center justify-end gap-1">
           {badgeNumbers.map((n) => (
             <CitationHoverCard
               key={`src-${n}`}
