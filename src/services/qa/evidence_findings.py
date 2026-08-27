@@ -23,6 +23,7 @@ from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.section import Section
 from src.db.session import async_session_maker
+from src.services.generation.term_rules import load_project_terms
 from src.services.qa.alignment import ClaimAlignment, align_section
 from src.services.qa.claim_verify import verify_claims
 from src.services.qa.cross_section import (
@@ -52,6 +53,7 @@ from src.services.qa.table_check import (
     table_share_sum_mismatches,
     table_ungrounded_numbers,
 )
+from src.services.qa.term_notation import term_notation_findings
 from src.services.sections.evidence import marker_chunk_ids
 
 logger = structlog.get_logger(__name__)
@@ -1065,6 +1067,23 @@ async def evidence_findings(
     out.extend(
         cross_section_findings(
             [(f"{r.chapter_number}.{r.section_number}", r.content or "") for r in rows]
+        )
+    )
+    # 용어 병기 대조 — 색인이 캔 용어표와 본문의 "한글(원어)" 쌍을 결정적으로 대조한다.
+    # 주입(generation/term_rules)이 예방, 이것이 탐지다. 용어표 로드가 실패해도
+    # 보고서 내부 표기 요동 검사는 성립하므로 빈 목록으로 진행한다.
+    try:
+        term_entries = await load_project_terms(project_id)
+    except Exception:
+        logger.warning("evidence_findings.term_load_failed", project_id=str(project_id))
+        term_entries = []
+    out.extend(
+        term_notation_findings(
+            [
+                (r.chapter_number, f"{r.chapter_number}.{r.section_number}", r.content or "")
+                for r in rows
+            ],
+            term_entries,
         )
     )
     logger.info(
