@@ -925,7 +925,6 @@ async def get_design_brief(
 
 
 # 부분 작업 종류 — services/jobs의 공용 실행대가 (프로젝트, 종류)로 하나만 돌게 한다.
-INSIGHTS_JOB = "insights"
 PM_VERIFY_JOB = "pm_verify"
 
 
@@ -1501,229 +1500,6 @@ async def rewrite_batch_status(
     return job.as_dict()
 
 
-class InsightsSectionOption(BaseModel):
-    """요약 근거로 고를 수 있는 절 하나."""
-
-    section_id: str
-    label: str  # "3.7 역량분석 시사점"
-    chars: int
-
-
-class InsightsRead(BaseModel):
-    """시사점 2~3쪽 요약 — 본문 보고서와 별개 산출물(본문 HWPX에는 안 실린다).
-
-    content=None은 오류가 아니라 "아직 없음"이다(조립 전이거나 생성 실패). 화면은
-    빈 상태와 다시 만들기 버튼을 보여주면 되므로 404로 만들지 않는다.
-    """
-
-    content: str | None
-    source_sections: list[str]
-    model: str | None
-    # 만든 시각(UTC ISO) — 같은 본문이면 같은 요약이 나와 '다시 만들기'가 돌아도
-    # 화면이 안 바뀐다. 이 값이 화면에서 유일하게 "방금 새로 만들었다"를 증명한다.
-    built_at: str | None
-    running: bool
-    # 근거로 고른 절(절 안정 id) — 화면이 체크 상태를 되살리는 정본. 비었으면 자동 선택.
-    selected_section_ids: list[str] = []
-    # 고를 수 있는 절 전부 — 본문이 있는 절만. 화면이 목록을 따로 부르지 않게 함께 싣는다.
-    selectable: list[InsightsSectionOption] = []
-    # 골랐지만 길이 상한에 밀려 요약이 못 본 절. 비어 있는 게 정상이다.
-    dropped_sections: list[str] = []
-    # 한 번에 넣을 수 있는 근거 분량. 고르는 자리에서 미리 알리라고 화면에 함께 준다 —
-    # 넘친 사실을 만든 뒤에 알려 주면 값은 이미 나갔다.
-    max_input_chars: int = 0
-
-
-class InsightsRebuildRequest(BaseModel):
-    """시사점 요약 다시 만들기.
-
-    section_ids=None이면 저장된 선택을 그대로 쓴다(선택도 안 건드린다).
-    빈 배열이면 선택을 지우고 자동 선택으로 되돌린다.
-    """
-
-    section_ids: list[UUID] | None = None
-
-
-async def _last_insights_built_at(session: AsyncSession, project_id: UUID) -> str | None:
-    """요약을 마지막으로 만든 시각 — token_usage의 assemble.insights 호출 기록에서.
-
-    요약 JSON에 built_at을 넣기 시작한 건 2026-08-27이라, 그전 요약은 값이 없다.
-    호출 기록은 처음부터 남고 있어 그때가 곧 생성 시각이다(근사가 아니라 같은 호출).
-    """
-    from src.services.export.insights import INSIGHTS_OPERATION
-
-    row = await session.execute(
-        select(func.max(TokenUsage.created_at)).where(
-            TokenUsage.project_id == project_id,
-            TokenUsage.operation == INSIGHTS_OPERATION,
-        )
-    )
-    made = row.scalar_one_or_none()
-    return made.isoformat() if made else None
-
-
-@router.get("/{project_id}/insights", response_model=InsightsRead)
-async def get_insights(
-    project_id: UUID,
-    session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
-) -> InsightsRead:
-    """조립 시 만든 시사점 요약 — 본문 한글 파일엔 없고, 별도 파일로 내려받는다."""
-    project = await _get_authorized_project(project_id, session, current_user)
-    data = project.insights or {}
-    built_at = data.get("built_at")
-    if data.get("content") and not built_at:
-        # built_at을 남기기 전에 만들어진 요약 — 그 호출의 토큰 사용 기록이 만든
-        # 시각을 알고 있다. 이 폴백이 없으면 옛 요약은 다시 만들기 전까지 시각이
-        # 빈칸이라, 정작 "돌았는지 모르겠다"는 화면이 그대로 남는다(2026-08-27).
-        built_at = await _last_insights_built_at(session, project.id)
-    # 고를 수 있는 절과 지금 선택을 함께 싣는다 - 화면이 목록을 따로 부르지 않게.
-    from src.services.export.insights import MAX_INPUT_CHARS
-
-    rows = await _load_sections(session, project.id)
-    selectable = [
-        InsightsSectionOption(
-            section_id=str(r.id),
-            label=f"{r.chapter_number}.{r.section_number} {r.title}",
-            chars=len(r.content or ""),
-        )
-        for r in rows
-        if (r.content or "").strip()
-    ]
-    # 정본은 config의 사람 선택. 없으면 지난 요약이 실제로 쓴 절을 되살려 보여준다
-    # (자동 선택으로 돌았더라도 "무엇을 근거로 삼았나"는 체크로 보이는 게 맞다).
-    picked = _insights_selection(project)
-    selected = (
-        [str(x) for x in picked]
-        if picked
-        else [str(x) for x in (data.get("source_section_ids") or [])]
-    )
-    return InsightsRead(
-        content=data.get("content"),
-        source_sections=list(data.get("source_sections") or []),
-        model=data.get("model"),
-        built_at=built_at,
-        running=job_running(project.id, INSIGHTS_JOB),
-        selected_section_ids=selected,
-        selectable=selectable,
-        dropped_sections=list(data.get("dropped_sections") or []),
-        max_input_chars=MAX_INPUT_CHARS,
-    )
-
-
-async def _resummarize_in_background(project_id: UUID) -> None:
-    """저장된 본문으로 시사점 요약을 다시 만든다(요청 밖).
-
-    입력이 최대 6만 자라 요청 안에서 처리하면 프론트가 타임아웃으로 읽는다
-    — PM 재검증과 같은 이유로 백그라운드 태스크로 뺀다.
-
-    근거로 삼을 절은 config에 저장된 사람의 선택을 쓴다(_insights_sections).
-    선택이 없으면 자동 선택으로 되돌아간다 — 옛 프로젝트가 그대로 돈다.
-    """
-    from src.services.export.insights import build_insights, persist_insights
-
-    async with open_session() as session:
-        project = await session.get(Project, project_id)
-        if project is None:
-            return
-        rows = await _load_sections(session, project_id)
-        picked = _insights_selection(project)
-    if not rows:
-        return
-    state = _state_for_export(project, rows)
-    await persist_insights(project_id, await build_insights(state, section_ids=picked))
-
-
-def _insights_selection(project: Project) -> list[UUID] | None:
-    """config에 저장된 '요약 근거 절' 선택 — 없거나 망가졌으면 None(자동 선택)."""
-    raw = (project.config or {}).get("_insights_sections")
-    if not isinstance(raw, list) or not raw:
-        return None
-    out: list[UUID] = []
-    for x in raw:
-        try:
-            out.append(UUID(str(x)))
-        except (ValueError, TypeError):
-            continue
-    return out or None
-
-
-@router.post("/{project_id}/insights", status_code=status.HTTP_202_ACCEPTED)
-async def rebuild_insights(
-    project_id: UUID,
-    data: InsightsRebuildRequest,
-    session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(require_writer)],
-) -> dict[str, bool]:
-    """시사점 요약 다시 만들기 — 본문을 고친 뒤 요약이 옛것으로 남는 걸 막는다.
-
-    section_ids를 주면 **그 절만** 근거로 삼고, 그 선택을 저장한다 — 다음 재생성과
-    조립 때도 같은 선택으로 돈다. 자동 선택은 제목 규칙에 기대는 추측이라 장별
-    시사점이 여러 개인 보고서에서 엉뚱한 절을 물어 왔다(2026-08-27).
-    빈 배열을 주면 선택을 지우고 자동으로 되돌린다.
-    """
-    from src.services.jobs import start_job
-
-    project = await _get_authorized_project(project_id, session, current_user)
-    if data.section_ids is not None:
-        known = {r.id for r in await _load_sections(session, project.id)}
-        unknown = [str(x) for x in data.section_ids if x not in known]
-        if unknown:
-            raise ValidationError(
-                message=f"이 보고서에 없는 절입니다: {', '.join(unknown)}",
-                code="UNKNOWN_SECTION",
-            )
-        project.config = {
-            **(project.config or {}),
-            "_insights_sections": [str(x) for x in data.section_ids],
-        }
-        await session.flush()
-    started = start_job(
-        project.id, INSIGHTS_JOB, lambda _job: _resummarize_in_background(project.id)
-    )
-    return {"started": started is not None, "running": True}
-
-
-@router.get("/{project_id}/insights/export")
-async def download_insights(
-    project_id: UUID,
-    session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
-) -> FileResponse:
-    """시사점 요약을 **별도 한글 파일**로 다운로드 — 본문 보고서 파일은 그대로.
-
-    요약은 본문 HWPX에 싣지 않기로 한 산출물이라(2026-08-25), 받아 보려면 자기
-    파일이 있어야 한다(2026-08-27 결정). 저장된 요약에서 그때그때 렌더하므로
-    '다시 만들기' 결과가 곧바로 파일에 반영된다.
-    """
-    project = await _get_authorized_project(project_id, session, current_user)
-    content = str((project.insights or {}).get("content") or "").strip()
-    if not content:
-        raise NotFoundError(
-            message="시사점 요약이 아직 없습니다 - 요약을 먼저 만들어 주세요",
-            code="INSIGHTS_NOT_READY",
-        )
-    from src.services.export.insights import export_insights
-
-    owner = await session.get(User, project.owner_id)
-    rows = await _load_sections(session, project.id)
-    state = _state_for_export(project, rows, author=owner.name if owner else "")
-    try:
-        path = export_insights(state, content)
-    except PermissionError:
-        # 표준 경로가 잠겼다(사용자가 한컴에서 그 파일을 열어둔 경우) — 본문
-        # 다운로드와 같은 처방으로 임시 경로에 렌더해 내준다.
-        path = export_insights(
-            state, content, output_dir=Path(settings.export_dir) / "_insights" / "_locked"
-        )
-        logger.warning("insights.export_to_temp", project_id=str(project.id), path=str(path))
-    return FileResponse(
-        path,
-        filename=f"{project.title} 시사점 요약.hwpx",
-        media_type="application/octet-stream",
-    )
-
-
 @router.get("/{project_id}/progress", response_model=ProgressResponse)
 async def get_progress(
     project_id: UUID,
@@ -1904,7 +1680,7 @@ async def delete_project(
     # 안 된다. 돌고 있던 작업은 프로젝트를 못 찾고 스스로 빠져나온다.
     from src.services.jobs import cancel_job, clear_job
 
-    for kind in (REWRITE_JOB, INSIGHTS_JOB, PM_VERIFY_JOB):
+    for kind in (REWRITE_JOB, PM_VERIFY_JOB):
         cancel_job(project.id, kind)
         clear_job(project.id, kind)
     # ORM 관계는 lazy="raise"라 session.delete()의 관계 로딩을 피하고
@@ -1913,9 +1689,8 @@ async def delete_project(
     # 렌더 버전이 파일명에 붙으므로 남은 버전을 전부 훑어 지운다(옛 버전 잔재 포함).
     try:
         export_dir = Path(settings.export_dir)
-        for base in (export_dir, export_dir / "_insights"):
-            for stale in base.glob(export_file_pattern(project.id)):
-                stale.unlink(missing_ok=True)
+        for stale in export_dir.glob(export_file_pattern(project.id)):
+            stale.unlink(missing_ok=True)
     except OSError:
         # 파일 잠금 등으로 못 지워도 삭제 자체는 성공 처리(다음 삭제/정리 때 재시도)
         logger.warning("project.export_cleanup_failed", project_id=str(project.id))
@@ -3393,8 +3168,6 @@ _INTERNAL_CONFIG_KEYS = (
     # _verify_stamp = PM 검증이 판정한 본문의 지문·시각(pm_verify.persist_findings).
     # 폼이 config를 통째로 되돌려 보낼 때 지워지면 "낡은 경고" 표시가 조용히 꺼진다.
     "_verify_stamp",
-    # 요약 근거로 고른 절 - 폼 round-trip에 지워지면 자동 선택으로 조용히 되돌아간다.
-    "_insights_sections",
     "models",
     # analysts = 런 시작 시점 DB 출신 에이전트 스냅샷(러너 기록) - 그 런이 실제로 쓴 페르소나.
     "analysts",
@@ -3812,8 +3585,11 @@ async def _claim_rows(
     from src.services.qa.dense_align import refine_crosslingual
 
     await refine_crosslingual(aligned, chunk_texts, session=session)
-    from src.services.qa.evidence_findings import claim_injections
+    from src.services.qa.evidence_findings import absorb_same_source_numbers, claim_injections
 
+    # 순서가 계약이다: 같은 자료 흡수가 먼저다 - 자료 표에 있는 수치가 무근거로
+    # 남은 채 주입 검사로 가면 "코퍼스에 있으나 연도 곁 아님" 같은 헛경고가 붙는다.
+    await absorb_same_source_numbers(row.project_id, aligned)
     injections = await claim_injections(row.project_id, aligned)
     out: list[ClaimAlignmentRead] = []
     for i, a in enumerate(aligned):

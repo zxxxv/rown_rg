@@ -42,6 +42,7 @@ from src.services.qa.gate import (
     misattributed_numbers,
     normalize_haystack,
     normalize_number,
+    number_in_text,
     truncated_lines,
 )
 from src.services.qa.table_check import (
@@ -706,6 +707,95 @@ def injection_rows(
         elif norm not in located:
             out.append((token, None))
     return out
+
+
+async def absorb_same_source_numbers(
+    project_id: UUID,
+    claims: list,
+) -> int:
+    """무근거 수치를 **인용한 자료의 다른 청크**에서 찾아 근거 있음으로 옮긴다.
+
+    사람에게 (출처 13)은 "이 자료"지 "이 청크"가 아니다 - 청크 단위 인용의 구현
+    사정이 화면에서 "무근거"로 새어 나오면, 자료 표에 버젓이 있는 수치(실측
+    2026-08-27: 610개사 설문 표의 19.8%·17.0%…)가 빨간 경고를 받는다. PM 경로는
+    같은 판단을 이미 한다(_locate_tokens의 own_grounded) - 화면 경로에 같은
+    계단을 놓는 것이다.
+
+    옮길 때 위치(NumberSpan)까지 만든다 - "원문에서 보기"가 그 대목으로 점프한다.
+    매칭은 오귀속 재검색과 같은 자(locate_probes LIKE 선별 + match_patterns 경계
+    확인)라 부분문자열 우연이 근거로 승격되지 않는다. 옮긴 수치 수를 돌려준다.
+    """
+    from src.services.qa.alignment import NumberSpan, _narrow_to_sentence, _number_lines
+
+    moved = 0
+    cache: dict[tuple[str, str], tuple[UUID, int, int, str] | None] = {}
+    async with async_session_maker() as session:
+        for claim in claims:
+            if not claim.ungrounded or not claim.cited_chunk_ids:
+                continue
+            source_ids = (
+                (
+                    await session.execute(
+                        select(Chunk.source_id)
+                        .where(Chunk.id.in_(list(claim.cited_chunk_ids)))
+                        .distinct()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            source_ids = [x for x in source_ids if x]
+            if not source_ids:
+                continue
+            src_key = ",".join(sorted(str(x) for x in source_ids))
+            remaining: list[str] = []
+            for token in claim.ungrounded:
+                key = (src_key, normalize_number(token))
+                if key not in cache:
+                    haystack = func.replace(Chunk.content, ",", "")
+                    rows = (
+                        await session.execute(
+                            select(Chunk.id, Chunk.content)
+                            .where(
+                                Chunk.source_id.in_(source_ids),
+                                Chunk.id.notin_(list(claim.cited_chunk_ids)),
+                                or_(*[haystack.like(f"%{v}%") for v in locate_probes(token)]),
+                            )
+                            .limit(20)
+                        )
+                    ).all()
+                    # 오프셋은 **원문 청크 기준**이어야 뷰어가 그 자리로 점프한다 -
+                    # 정규화 텍스트(콤마 제거) 오프셋을 쓰면 자리가 밀린다. 그래서
+                    # _grounded_spans와 같은 방식: 원문 줄을 돌며 정규화는 대조에만 쓴다.
+                    found = None
+                    for cid, content in rows:
+                        for st, _en, line in _number_lines(content or ""):
+                            if not number_in_text(token, normalize_haystack(line)):
+                                continue
+                            ns, ne, seg = _narrow_to_sentence(line, st, normalize_number(token))
+                            found = (cid, ns, ne, seg)
+                            break
+                        if found:
+                            break
+                    cache[key] = found
+                found = cache[key]
+                if found is None:
+                    remaining.append(token)
+                    continue
+                cid, st, en, seg = found
+                claim.grounded.append(
+                    NumberSpan(token=token, chunk_id=cid, start=st, end=en, text=seg.strip()[:300])
+                )
+                moved += 1
+            claim.ungrounded[:] = remaining
+            # 이 수치를 겨냥했던 오귀속 제안은 철회한다 - 자료 안에서 찾았으니
+            # "딴 출처에 있다"는 제안이 오히려 틀린 길로 이끈다.
+            if moved and getattr(claim, "relocations", None):
+                kept_norms = {normalize_number(t) for t in claim.ungrounded}
+                claim.relocations[:] = [
+                    r for r in claim.relocations if normalize_number(r.token) in kept_norms
+                ]
+    return moved
 
 
 async def claim_injections(
