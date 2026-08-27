@@ -62,3 +62,47 @@ export function useSourceUsage(projectId: string, enabled: boolean) {
     retry: false,
   });
 }
+
+// 서술 구성 통계 - 본문 문장이 어디까지 근거로 받쳐지는지(전체/장).
+// 백엔드 source_stats.EvidenceCompositionResponse와 짝. 판정 칸은 근거 패널의
+// claimTone과 같은 기준이라 패널 숫자와 일치한다.
+
+export const EvidenceTallySchema = z.object({
+  claims: z.number(),
+  confirmed: z.number(),
+  unconfirmed: z.number(),
+  uncited: z.number(),
+  defect: z.number(),
+  uncovered: z.number(),
+});
+export type EvidenceTally = z.infer<typeof EvidenceTallySchema>;
+
+export const ChapterEvidenceCompositionSchema = EvidenceTallySchema.extend({
+  chapter_number: z.number(),
+  title: z.string(),
+});
+export type ChapterEvidenceComposition = z.infer<typeof ChapterEvidenceCompositionSchema>;
+
+export const EvidenceCompositionResponseSchema = z.object({
+  total: EvidenceTallySchema,
+  chapters: z.array(ChapterEvidenceCompositionSchema),
+});
+export type EvidenceCompositionResponse = z.infer<typeof EvidenceCompositionResponseSchema>;
+
+export async function getEvidenceComposition(
+  projectId: string,
+): Promise<EvidenceCompositionResponse> {
+  const data = await apiClient.get<unknown>(`projects/${projectId}/stats/evidence-composition`);
+  return EvidenceCompositionResponseSchema.parse(data);
+}
+
+export function useEvidenceComposition(projectId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["evidence-composition", projectId],
+    queryFn: () => getEvidenceComposition(projectId),
+    enabled: Boolean(projectId) && enabled,
+    // 첫 계산이 절당 1~2초라 서버가 캐시한다 - 클라이언트도 흔들 이유가 없다.
+    staleTime: 300_000,
+    retry: false,
+  });
+}

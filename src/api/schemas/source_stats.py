@@ -47,3 +47,35 @@ class SourceUsageResponse(BaseModel):
     # 채택(is_included)됐지만 한 번도 참조되지 않은 자료 — "다음 런에서 빼거나
     # 바꿀 후보"라는 행동 유도가 이 통계의 존재 이유 중 하나다.
     unused: list[SourceUsageItem] = Field(default_factory=list)
+
+
+class EvidenceTally(BaseModel):
+    """문장 판정 집계 — 근거 패널의 접기 기준(claimTone)과 같은 칸.
+
+    confirmed=대목까지 확인, unconfirmed=인용은 했으나 대목 미특정(추정·외국어 포함),
+    uncited=표기 없음(AI 서술), defect=검사에 걸림(무근거 수치), uncovered=주장 단위로
+    안 잡혀 대조하지 않음(명사 종결 개조식 등). claims는 uncovered를 뺀 대조 분모다.
+    """
+
+    claims: int = 0
+    confirmed: int = 0
+    unconfirmed: int = 0
+    uncited: int = 0
+    defect: int = 0
+    uncovered: int = 0
+
+
+class ChapterEvidenceComposition(EvidenceTally):
+    chapter_number: int
+    title: str
+
+
+class EvidenceCompositionResponse(BaseModel):
+    """서술 구성 통계 — '이 보고서의 몇 %가 근거 확인된 서술인가'를 전체/장으로.
+
+    절 근거 패널과 같은 판정 파이프라인을 그대로 합산하므로 숫자가 패널과 일치한다.
+    계산이 절당 1~2초라 캐시를 두고, 본문이 바뀌면(지문 변경) 다시 센다.
+    """
+
+    total: EvidenceTally
+    chapters: list[ChapterEvidenceComposition]

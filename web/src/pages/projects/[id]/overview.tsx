@@ -57,6 +57,7 @@ import { StatePanel } from "@/features/progress/StatePanel";
 import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
 import { presetLabel } from "@/features/project-config/presets";
 import type { ProjectFormValues } from "@/features/project-config/schema";
+import { EvidenceCompositionCard } from "@/features/stats/EvidenceCompositionCard";
 import { SourceUsageCard } from "@/features/stats/SourceUsageCard";
 import { ReopenDialog } from "@/features/versions/ReopenDialog";
 import { useAuth } from "@/hooks/useAuth";
@@ -407,6 +408,24 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
                 </AccordionTrigger>
                 <AccordionContent className="px-4 pb-4">
                   <SourceUsageCard projectId={project.id} />
+                </AccordionContent>
+              </AccordionItem>
+            ) : null}
+            {/* 서술 구성 통계 - AI 서술과 인용 문장의 비율을 전체/장 같은 파이로.
+                판정이 절 근거 패널과 같은 파이프라인이라 완성 후에만 연다(위와 동일). */}
+            {project.status === "completed" || project.status === "archived" ? (
+              <AccordionItem
+                value="evidence-composition"
+                className="mt-3 rounded-lg border border-border bg-bg"
+              >
+                <AccordionTrigger className="px-4 py-3 hover:no-underline">
+                  <span className="flex items-center gap-2 text-sm font-semibold text-fg">
+                    <PieChart className="h-4 w-4 text-fg-secondary" aria-hidden />
+                    서술 구성 통계
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="px-4 pb-4">
+                  <EvidenceCompositionCard projectId={project.id} />
                 </AccordionContent>
               </AccordionItem>
             ) : null}

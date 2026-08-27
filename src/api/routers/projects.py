@@ -72,7 +72,12 @@ from src.api.schemas.section import (
     SourceDocumentResponse,
     SpanCandidateRead,
 )
-from src.api.schemas.source_stats import SourceUsageResponse
+from src.api.schemas.source_stats import (
+    ChapterEvidenceComposition,
+    EvidenceCompositionResponse,
+    EvidenceTally,
+    SourceUsageResponse,
+)
 from src.api.uploads import read_validated_upload
 from src.core.charts import has_chart_fence
 from src.core.citations import numbers_in_order
@@ -3148,6 +3153,71 @@ async def get_source_usage(
         .all()
     )
     return build_source_usage(rows, list(sources_ordered))
+
+
+# 서술 구성 캐시 — 판정이 절당 1~2초라(정렬+대목 벡터+무근거 사다리) 매 조회 계산은
+# 첫 로드를 수십 초로 만든다. 본문 지문(절 수·최종 수정시각)이 같으면 재사용한다.
+# 단일 워커 전제(인메모리) — events.py와 같은 제약.
+_EVIDENCE_COMP_CACHE: dict[UUID, tuple[str, EvidenceCompositionResponse]] = {}
+
+
+def _claim_tone(claim: "ClaimAlignmentRead") -> str:
+    """근거 패널의 접기(claimTone, ClaimHoverCard.tsx)와 같은 기준 — 숫자가 화면과
+    어긋나면 통계가 신뢰를 잃는다: 표기 없음 → 검사 걸림 → 대목 확인 → 나머지 순."""
+    if claim.status == "uncited":
+        return "uncited"
+    if claim.ungrounded:
+        return "defect"
+    if claim.status == "aligned" and claim.span_text:
+        return "confirmed"
+    return "unconfirmed"
+
+
+@router.get("/{project_id}/stats/evidence-composition", response_model=EvidenceCompositionResponse)
+async def get_evidence_composition(
+    project_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> EvidenceCompositionResponse:
+    """서술 구성 통계 — 본문 문장이 어디까지 근거로 받쳐지는지 전체/장 단위 집계.
+
+    절 근거 패널과 **같은 판정 파이프라인**(get_section_evidence)을 절마다 돌려
+    합산한다 — 별도 약식 판정을 쓰면 패널 숫자와 어긋나 어느 쪽도 못 믿게 된다.
+    자료 사용 통계와 같은 이유로 완성 보고서에서만 제공한다(번호 규약·본문 확정).
+    """
+    project = await _get_authorized_project(project_id, session, current_user)
+    if not _is_renumbered(project):
+        raise ValidationError(
+            message="서술 구성 통계는 보고서가 완성된 뒤에 제공됩니다",
+            code="REPORT_NOT_ASSEMBLED",
+        )
+    rows = [r for r in await _load_sections(session, project.id) if (r.content or "").strip()]
+    fingerprint = f"{len(rows)}:{max((r.updated_at.isoformat() for r in rows), default='')}"
+    cached = _EVIDENCE_COMP_CACHE.get(project.id)
+    if cached is not None and cached[0] == fingerprint:
+        return cached[1]
+
+    total = EvidenceTally()
+    by_chapter: dict[int, ChapterEvidenceComposition] = {}
+    for row in rows:
+        ev = await get_section_evidence(project.id, row.id, session, current_user)
+        ch = by_chapter.setdefault(
+            row.chapter_number,
+            ChapterEvidenceComposition(chapter_number=row.chapter_number, title=row.chapter_title),
+        )
+        for bucket in (total, ch):
+            bucket.claims += len(ev.claims)
+            bucket.uncovered += len(ev.uncovered)
+        for claim in ev.claims:
+            tone = _claim_tone(claim)
+            for bucket in (total, ch):
+                setattr(bucket, tone, getattr(bucket, tone) + 1)
+
+    result = EvidenceCompositionResponse(
+        total=total, chapters=[by_chapter[n] for n in sorted(by_chapter)]
+    )
+    _EVIDENCE_COMP_CACHE[project.id] = (fingerprint, result)
+    return result
 
 
 async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID) -> Section:
