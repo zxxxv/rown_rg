@@ -395,12 +395,22 @@ function addTableCaptions(md: string): string {
     if (/^\s*```/.test(line)) inFence = !inFence;
     const startsTable = !inFence && /^\s*\|/.test(line) && !/^\s*\|/.test(lines[i - 1] ?? "");
     if (startsTable) {
-      const prev = [...out].reverse().find((l) => l.trim() !== "") ?? "";
+      // 제목 탐색은 단위 줄을 건너뛴다 - 작성 규칙(표 3종 세트)상 "(단위: …)" 줄이
+      // 제목과 표 사이에 끼므로, 바로 윗줄만 보면 제목이 있는데도 머리행 폴백이
+      // 이중 제목을 끼워 넣는다(2026-08-27 v6 실측: "국가별 EU 판재류 수입 비중").
+      // HWPX 조립(_pop_table_caption)은 단위 줄을 이미 흡수한다 - 화면만 어긋났었다.
+      const prior = [...out].reverse().filter((l) => l.trim() !== "");
+      const hasUnitLine = TABLE_UNIT_RE.test(prior[0]?.trim() ?? "");
+      const prev = (hasUnitLine ? prior[1] : prior[0]) ?? "";
       if (!TABLE_CAPTION_RE.test(prev.trim())) {
         const caption = captionFromHeaders(tableCells(line));
         if (caption !== null) {
-          if (out.length > 0 && out[out.length - 1].trim() !== "") out.push("");
-          out.push(`표: ${caption}`, "");
+          // 단위 줄이 있으면 그 위에 끼워 제목-단위-표 순서를 지킨다.
+          let at = out.length;
+          while (at > 0 && out[at - 1].trim() === "") at--;
+          if (hasUnitLine) at--;
+          const blank = at > 0 && out[at - 1].trim() !== "" ? [""] : [];
+          out.splice(at, 0, ...blank, `표: ${caption}`, "");
         }
       }
     }
