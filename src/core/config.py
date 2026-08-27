@@ -339,11 +339,13 @@ class Settings(BaseSettings):
     raptor_model: str = "gemini-3.1-flash-lite"  # 실작동 최저가(2026-08-04 실측 승계)
     # 약어 사전 설명 생성(assemble 1콜) — 배경 지원 기능이라 최저가 모델
     glossary_model: str = "gemini-3.1-flash-lite"
-    # 시사점 2~3쪽 요약(assemble 1콜, 웹 /insights 전용 — HWPX에는 안 실림).
-    # 약어 설명과 달리 사람이 읽는 판단 요약이라 최저가 모델을 쓰지 않는다.
-    # 입력 최대 6만 자 × $2/M + 출력 4.5천 자 → 런당 약 $0.17.
-    insights_enabled: bool = True
-    insights_model: str = "claude-sonnet-4-6"
+
+    # 자료 용어 채굴·주입 — 색인 때 문서가 정의한 용어·한영 병기를 자료 행에 적립하고
+    # (indexing/terms), 작성 시 근거팩에 등장하는 것만 프롬프트에 싣는다(generation/
+    # term_rules). 청킹이 정의와 사용처를 갈라놓아 생기는 오역의 처방(2026-08-27).
+    term_mining_llm: bool = True  # 패턴 채굴에 LLM 보강 1콜(문서당·해시 멱등)을 얹을지
+    term_mining_model: str = "gemini-3.1-flash-lite"  # 실작동 최저가 계보 승계
+    term_injection: bool = True  # 작성·재작성 프롬프트에 용어 규칙 블록 주입
     # 클러스터 요약 동시 실행 수 — 순차로 돌리면 224콜(예타 런 L1 192+L2 32)을 줄
     # 세워 기다려 인덱싱에 10~15분이 쌓인다(2026-08-10 실측). DB 커넥션 풀(기본
     # 5+10)과 API 한도를 고려해 8.
