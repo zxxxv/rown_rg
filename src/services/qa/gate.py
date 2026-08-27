@@ -295,6 +295,9 @@ def numeric_mentions(text: str) -> list[str]:
         # 무근거 '21조'로 남았다). '제'가 바로 앞에 붙은 큰 수 표기는 조문·회차라
         # 수치 주장이 아니다 - 절·장·항 번호 제외와 같은 계열.
         if m.start() > 0 and text[m.start() - 1] == "제":
+            # 자리도 덮는다 - 안 덮으면 아래 맨 숫자 추출이 '21'을 도로 줍는다.
+            for i in range(m.start(), m.end()):
+                masked[i] = " "
             continue
         token = m.group().strip()
         if token not in out:
