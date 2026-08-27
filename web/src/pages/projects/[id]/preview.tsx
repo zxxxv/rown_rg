@@ -1161,6 +1161,29 @@ function SectionView({
     }
   };
 
+  // 주입 의심 조치 - 문제 수치가 든 문장을 그 블록 안에서 국소 재작성한다.
+  // 표기 교정(출처 추가)과 달리 값 자체가 의심이라 모델이 근거를 다시 보고 고쳐야 한다.
+  const onRewriteSentence = async (claimText: string, token: string) => {
+    const block = blocks.find((b) => b.includes(claimText));
+    if (!block) {
+      toast.error("문장을 본문에서 찾지 못했습니다 - 본문이 수정됐을 수 있습니다.");
+      return;
+    }
+    try {
+      await rewriteBlock.mutateAsync({
+        block,
+        instruction:
+          `이 블록에서 "${token}" 수치는 인용한 자료에서 확인되지 않는다. ` +
+          `해당 수치를 근거 자료에 실재하는 값으로 교체하고 출처를 표기하라. ` +
+          `근거에 대응하는 값이 없으면 그 수치 주장 문장을 제거하되 나머지 서술은 유지하라.`,
+      });
+      toast.success("문장을 다시 썼습니다 - 결과를 확인하세요.");
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "재작성에 실패했습니다.";
+      toast.error("재작성 실패", { description: msg });
+    }
+  };
+
   const onSave = async () => {
     try {
       await save.mutateAsync(draft);
@@ -1865,6 +1888,7 @@ function SectionView({
                     blocks={[evidenceBlock]}
                     onLocate={setSourceView}
                     onFixCitation={canEdit ? onFixCitation : undefined}
+                    onRewriteSentence={canEdit ? onRewriteSentence : undefined}
                   />
                 )}
               </div>

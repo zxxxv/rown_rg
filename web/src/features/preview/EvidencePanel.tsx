@@ -37,12 +37,15 @@ function ClaimRow({
   chunks,
   onLocate,
   onFixCitation,
+  onRewriteSentence,
 }: {
   claim: ClaimAlignment;
   chunks: EvidenceChunk[];
   onLocate?: (loc: SourceLocation) => void;
   /** 오귀속 교정 - 이 문장에 출처 번호 하나를 덧붙인다(문장, 추가할 번호) */
   onFixCitation?: (claim: string, number: number) => void;
+  /** 주입 의심 조치 - 이 문장을 국소 재작성한다(문장, 문제 수치) */
+  onRewriteSentence?: (claim: string, token: string) => void;
 }) {
   const chunk = claim.chunk_id ? chunks.find((c) => c.chunk_id === claim.chunk_id) : undefined;
   // 대목을 못 집었으면 인용 번호로라도 자료를 찾아 준다 - 자료 이름조차 없으면
@@ -130,6 +133,31 @@ function ClaimRow({
           원문에서 못 찾은 수치: {claim.ungrounded.join(", ")}
         </p>
       ) : null}
+
+      {(claim.injections ?? []).map((inj) => (
+        // 주입 의심 - 연도를 명시한 수치가 (a) 코퍼스 어디에도 없거나(소재 불명)
+        // (b) 있긴 한데 그 연도 곁엔 없다(시점 불일치). 조치는 표기 교정이 아니라
+        // 문장 자체의 국소 재작성이다 - 수치를 근거의 값으로 바꾸거나 문장을 뺀다.
+        <div
+          key={`inj-${inj.token}`}
+          className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]"
+        >
+          <span className="text-fg-danger">
+            {inj.located_title
+              ? `${inj.token}은(는) "${inj.located_title}"에 있지만 본문이 말한 연도 곁에는 없습니다 - 시점이 다른 값일 수 있습니다`
+              : `${inj.token}은(는) 수집한 자료 어디에도 없습니다 - 지어냈거나 옛 지식일 수 있습니다`}
+          </span>
+          {onRewriteSentence ? (
+            <button
+              type="button"
+              onClick={() => onRewriteSentence(claim.claim, inj.token)}
+              className="rounded border border-fg-danger/40 px-1.5 py-0.5 text-fg-danger hover:bg-bg-danger"
+            >
+              이 문장 고치기
+            </button>
+          ) : null}
+        </div>
+      ))}
 
       {(claim.relocations ?? []).map((r) => {
         // 오귀속 제안 - 그 수치가 절의 **다른** 근거에 있다. 자동으로 안 바꾼다:
@@ -241,6 +269,7 @@ export function BlockEvidence({
   blocks,
   onLocate,
   onFixCitation,
+  onRewriteSentence,
 }: {
   projectId: string;
   sectionId: string;
@@ -250,6 +279,8 @@ export function BlockEvidence({
   onLocate?: (loc: SourceLocation) => void;
   /** 오귀속 교정 - 문장에 출처 번호를 덧붙여 저장한다 */
   onFixCitation?: (claim: string, number: number) => void;
+  /** 주입 의심 조치 - 문장을 국소 재작성한다 */
+  onRewriteSentence?: (claim: string, token: string) => void;
 }) {
   const query = useSectionEvidence(projectId, sectionId);
   const data = query.data;
@@ -278,6 +309,7 @@ export function BlockEvidence({
             chunks={data.items}
             onLocate={onLocate}
             onFixCitation={onFixCitation}
+            onRewriteSentence={onRewriteSentence}
           />
         ))}
       </ul>

@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from src.services.qa.evidence_findings import _YEAR_WINDOW, _year_beside
+from src.services.qa.evidence_findings import _YEAR_WINDOW, _year_beside, injection_rows
 from src.services.qa.gate import locate_probes, match_patterns, normalize_haystack
 
 
@@ -60,3 +60,43 @@ class TestLocateMatching:
     def test_plain_korean_form_matches(self) -> None:
         hay = normalize_haystack("사업비는 총 91억 원 규모다")
         assert any(p.search(hay) for p in match_patterns("91억"))
+
+
+class TestInjectionRows:
+    """문장 옆 주입 의심 행 - 근거 화면이 "지어냈거나 옛 지식"을 그 자리에서 말하게."""
+
+    def test_located_elsewhere_reports_title(self) -> None:
+        rows = injection_rows(
+            ["428"],
+            ("2023",),
+            located={"428": "제조 수출기업 실태"},
+            injected={"428"},
+            relocated_norms=set(),
+        )
+        assert rows == [("428", "제조 수출기업 실태")]
+
+    def test_nowhere_reports_none(self) -> None:
+        rows = injection_rows(["777"], ("2023",), located={}, injected=set(), relocated_norms=set())
+        assert rows == [("777", None)]
+
+    def test_relocated_token_skipped(self) -> None:
+        # 절 풀에서 이미 소재를 찾은 수치는 "출처 n에 있습니다"가 말한다 - 이중 경고 금지.
+        rows = injection_rows(
+            ["428"], ("2023",), located={"428": "x"}, injected={"428"}, relocated_norms={"428"}
+        )
+        assert rows == []
+
+    def test_no_year_no_rows(self) -> None:
+        # 연도 명시가 주입 서명의 축 - 연도 없는 무근거는 다른 경고(빨간 줄) 몫.
+        assert injection_rows(["777"], (), located={}, injected=set(), relocated_norms=set()) == []
+
+    def test_grounded_in_corpus_near_year_not_flagged(self) -> None:
+        # 소재도 있고 injected도 아니면(연도 곁 확인됨) 의심이 아니다.
+        rows = injection_rows(
+            ["289"],
+            ("2023",),
+            located={"289": "신재생 해외이슈"},
+            injected=set(),
+            relocated_norms=set(),
+        )
+        assert rows == []

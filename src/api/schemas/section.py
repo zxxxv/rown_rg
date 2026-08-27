@@ -164,6 +164,13 @@ class NumberRelocationRead(BaseModel):
     chunk_id: str
 
 
+class InjectionSuspectRead(BaseModel):
+    """연도를 명시한 수치의 주입 의심 - 제목이 있으면 시점 불일치, 없으면 소재 불명."""
+
+    token: str
+    located_title: str | None = None
+
+
 class ClaimAlignmentRead(BaseModel):
     """본문 문장 하나 ↔ 그 문장이 나온 근거 대목.
 
@@ -185,6 +192,9 @@ class ClaimAlignmentRead(BaseModel):
     # 무근거 수치 중 절의 **다른** 근거에는 있는 것 - 오귀속 교정 제안. 화면이
     # "이 수치는 출처 n에 있습니다"를 보여주면 표기 고치기가 클릭 하나가 된다.
     relocations: list[NumberRelocationRead] = Field(default_factory=list)
+    # 연도 명시 수치의 주입 의심(3단 판정의 결정적 부분만) - "지어냈거나 옛 지식"을
+    # 문장 옆에서 말하고, 조치는 국소 재작성(rewrite-block)으로 잇는다.
+    injections: list[InjectionSuspectRead] = Field(default_factory=list)
     grounded: list[GroundedNumberRead] = Field(default_factory=list)  # 근거에서 찾은 수치 위치
     # 확정하지 못했을 때 사람이 고를 후보 대목(순위 내림차순). 대목을 단정하면 거짓
     # 확신이 되지만 후보로 내놓으면 기계가 좁히고 사람이 고르는 것이 된다.

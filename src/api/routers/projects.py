@@ -56,6 +56,7 @@ from src.api.schemas.section import (
     EvidenceInfo,
     FigurePlaceholder,
     GroundedNumberRead,
+    InjectionSuspectRead,
     LostEvidenceBlock,
     NumberRelocationRead,
     SectionBlockRewriteRequest,
@@ -3811,8 +3812,11 @@ async def _claim_rows(
     from src.services.qa.dense_align import refine_crosslingual
 
     await refine_crosslingual(aligned, chunk_texts, session=session)
+    from src.services.qa.evidence_findings import claim_injections
+
+    injections = await claim_injections(row.project_id, aligned)
     out: list[ClaimAlignmentRead] = []
-    for a in aligned:
+    for i, a in enumerate(aligned):
         span = a.span
         out.append(
             ClaimAlignmentRead(
@@ -3842,6 +3846,10 @@ async def _claim_rows(
                 relocations=[
                     NumberRelocationRead(token=r.token, number=r.number, chunk_id=str(r.chunk_id))
                     for r in a.relocations
+                ],
+                injections=[
+                    InjectionSuspectRead(token=t, located_title=title)
+                    for t, title in injections.get(i, [])
                 ],
                 grounded=[
                     GroundedNumberRead(

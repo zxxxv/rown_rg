@@ -359,6 +359,10 @@ export const ClaimAlignmentSchema = z.object({
   relocations: z
     .array(z.object({ token: z.string(), number: z.number().int(), chunk_id: z.string() }))
     .default([]),
+  /** 연도 명시 수치의 주입 의심 - located_title 있으면 시점 불일치, null이면 소재 불명 */
+  injections: z
+    .array(z.object({ token: z.string(), located_title: z.string().nullable().default(null) }))
+    .default([]),
   grounded: z.array(GroundedNumberSchema).default([]),
   candidates: z.array(SpanCandidateSchema).default([]),
 });

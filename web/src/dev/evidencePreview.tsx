@@ -60,6 +60,7 @@ const EVIDENCE: SectionEvidence = {
       ungrounded: [],
       grounded: [],
       relocations: [],
+      injections: [],
       candidates: [],
     },
     {
@@ -74,6 +75,7 @@ const EVIDENCE: SectionEvidence = {
       ungrounded: [],
       grounded: [],
       relocations: [],
+      injections: [],
       candidates: [],
     },
     {
@@ -85,9 +87,11 @@ const EVIDENCE: SectionEvidence = {
       span_end: 260,
       span_text: "대EU 철강 수출은 최근 3년간 증가세를 보이고 있다.",
       score: 0.31,
-      ungrounded: ["320만"],
+      ungrounded: ["320만", "40%"],
       // 오귀속 표본 - 수치가 인용한 [3]엔 없고 [7]엔 있다. "출처 7 추가" 버튼 확인용.
       relocations: [{ token: "320만", number: 7, chunk_id: "c-2" }],
+      // 주입 의심 표본 - 연도 명시 수치가 코퍼스 어디에도 없다. "이 문장 고치기" 확인용.
+      injections: [{ token: "40%", located_title: null }],
       grounded: [],
       candidates: [],
     },
@@ -103,6 +107,7 @@ const EVIDENCE: SectionEvidence = {
       ungrounded: [],
       grounded: [],
       relocations: [],
+      injections: [],
       candidates: [],
     },
   ] as SectionEvidence["claims"],
@@ -185,6 +190,7 @@ function App() {
                 blocks={[BLOCK]}
                 onLocate={(loc) => console.log("locate", loc)}
                 onFixCitation={(claim, n) => console.log("fix", n, claim)}
+                onRewriteSentence={(claim, t) => console.log("rewrite", t, claim)}
               />
             </div>
           </div>

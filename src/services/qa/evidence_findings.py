@@ -680,6 +680,64 @@ async def _injection_suspects(
     }
 
 
+def injection_rows(
+    ungrounded: list[str],
+    years: tuple[str, ...],
+    located: dict[str, str],
+    injected: set[str],
+    relocated_norms: set[str],
+) -> list[tuple[str, str | None]]:
+    """문장 하나의 주입 의심 행 - (수치, 소재 자료 제목 또는 None).
+
+    제목이 있으면 "코퍼스엔 있으나 명시 연도 곁엔 없음"(시점 불일치 의심)이고,
+    None이면 "연도를 명시했는데 코퍼스 어디에도 없음"(창작·옛 지식 의심)이다.
+    절 풀 안에서 이미 소재를 찾은 수치(relocations)는 뺀다 - 그 줄은 "출처 n에
+    있습니다"가 이미 말하고 있고, 같은 수치에 두 경고가 붙으면 사람이 헷갈린다.
+    """
+    if not years:
+        return []
+    out: list[tuple[str, str | None]] = []
+    for token in ungrounded:
+        norm = normalize_number(token)
+        if not norm or norm in relocated_norms:
+            continue
+        if norm in injected:
+            out.append((token, located.get(norm)))
+        elif norm not in located:
+            out.append((token, None))
+    return out
+
+
+async def claim_injections(
+    project_id: UUID,
+    claims: list,
+) -> dict[int, list[tuple[str, str | None]]]:
+    """근거 화면용 문장 단위 주입 의심 - 인덱스 → [(수치, 소재 제목|None)].
+
+    PM 리포트(evidence_findings)의 3단 판정과 같은 자(locate_probes·match_patterns·
+    _year_beside)를 쓰되, LLM 판정 관문 없이 결정적으로만 돈다 - 화면은 요청마다
+    그리므로 LLM을 못 태우고, 연도 명시 수치라는 표적이 이미 좁다. 절당 무근거
+    수치가 0~3개라 요청당 SQL 몇 개 수준이다(프로젝트 캐시 공유 없음 - 요청 단명).
+    """
+    locate_cache: dict[str, tuple[UUID | None, str] | None] = {}
+    year_cache: dict[tuple[str, tuple[str, ...]], bool] = {}
+    out: dict[int, list[tuple[str, str | None]]] = {}
+    for i, a in enumerate(claims):
+        if not a.ungrounded:
+            continue
+        years = claim_years(a.claim)
+        if not years:
+            continue
+        located, _own = await _locate_tokens(project_id, list(a.ungrounded), locate_cache, None)
+        token_years = {norm: years for t in a.ungrounded if (norm := normalize_number(t))}
+        injected = await _injection_suspects(project_id, token_years, located, year_cache)
+        relocated = {normalize_number(r.token) for r in getattr(a, "relocations", [])}
+        rows = injection_rows(list(a.ungrounded), years, located, injected, relocated)
+        if rows:
+            out[i] = rows
+    return out
+
+
 async def evidence_findings(
     project_id: UUID,
     *,
