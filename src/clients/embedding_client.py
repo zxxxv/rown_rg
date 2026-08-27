@@ -35,6 +35,17 @@ logger = structlog.get_logger(__name__)
 _MEMORY_PRESSURE_REPORTED = False
 
 
+def reset_memory_pressure_report() -> None:
+    """새 잡 시작 시 메모리 압박 보고 억제를 푼다 — 런마다 최초 1회씩 보고하게.
+
+    이 모듈은 잡 경계를 모른다(배치 루프만 안다). 경계를 아는 쪽(workflows.runner의
+    런 진입부)이 여기를 호출한다. **보고 억제만** 되돌린다 — 임계 판정도 gc.collect()도
+    건드리지 않으므로 OOM 안전망 동작은 그대로다.
+    """
+    global _MEMORY_PRESSURE_REPORTED
+    _MEMORY_PRESSURE_REPORTED = False
+
+
 class EmbeddingResult(BaseModel):
     """One embedded text plus its provenance.
 

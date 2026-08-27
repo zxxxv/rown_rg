@@ -22,6 +22,7 @@ from src.core.builds_on import batches as builds_on_batches
 from src.core.builds_on import parse_ref
 from src.core.config import settings
 from src.core.section_plan import dump_section_plan, load_section_plan
+from src.core.sentry_budget import capture_budgeted
 from src.core.state import ProjectState
 from src.core.types import (
     CheckSeverity,
@@ -218,6 +219,7 @@ async def run_write_loop(
                 logger.warning(
                     "write_loop.ledger_chunks_failed", project_id=str(pid), section=label
                 )
+                capture_budgeted("ledger_chunks", tags={"project_id": str(pid)})
                 extra = []
             chunks = [*chunks, *extra]
         citable = [c for c in chunks if not c.is_summary]
@@ -481,6 +483,18 @@ async def run_write_loop(
                     error=str(exc),
                 )
                 consecutive_failures += 1
+                # 절 하나가 실패로 기록되고 나머지는 계속 간다 — 보고서에 구멍이
+                # 나는 지점이라 이벤트로 올린다. 초안·출처 발췌는 싣지 않는다.
+                # 35절이 띄엄띄엄 죽으면 절 수만큼 쌓이므로 런당 상한을 건다.
+                capture_budgeted(
+                    "section_llm_error",
+                    exc,
+                    tags={"project_id": str(pid)},
+                    extras={
+                        "section": f"{section.chapter_number}.{section.section_number}",
+                        "consecutive_failures": consecutive_failures,
+                    },
+                )
                 return await _fail_section(section, exc, "LLM 호출 실패")
             except cancel.RunCancelled:
                 raise
@@ -495,6 +509,15 @@ async def run_write_loop(
                     section=f"{section.chapter_number}.{section.section_number}",
                 )
                 consecutive_failures += 1
+                capture_budgeted(
+                    "section_error",
+                    exc,
+                    tags={"project_id": str(pid)},
+                    extras={
+                        "section": f"{section.chapter_number}.{section.section_number}",
+                        "consecutive_failures": consecutive_failures,
+                    },
+                )
                 if consecutive_failures >= 4:
                     # 성공 없이 4절 연속 실패 — 절 문제가 아니라 환경 문제다.
                     raise

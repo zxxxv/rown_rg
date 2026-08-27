@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import UUID
 
+import sentry_sdk
 import structlog
 
 from src.clients.llm.base import LLMClient
@@ -26,6 +27,7 @@ from src.clients.parser.base import strip_replacement_chars
 from src.core import app_settings
 from src.core.config import settings
 from src.core.exceptions import IncompleteReportError
+from src.core.sentry_budget import capture_budgeted
 from src.core.state import ProjectState
 from src.core.types import SectionPlan, SourceRef, SourceType
 from src.services.generation.planner import plan_from_outline, plan_sections
@@ -844,6 +846,11 @@ async def index(state: ProjectState) -> ProjectState:
         except Exception:
             # RAPTOR는 품질 부스터지 필수 경로가 아니다 — 실패해도 파이프라인은 계속 간다.
             logger.warning("raptor.build_failed", project_id=str(state.project_id), exc_info=True)
+            # 파이프라인은 계속 간다 — 다만 배경 요약 트리 없이 검색 품질이 내려간다.
+            with sentry_sdk.new_scope() as scope:
+                scope.set_tag("bg_failure", "raptor_build")
+                scope.set_tag("project_id", str(state.project_id))
+                sentry_sdk.capture_exception()
             emit_step(pid, "indexing", "배경 요약 트리(RAPTOR)", "failed")
     state = await _rehearser(state)
     emit_phase(pid, "indexing", "completed")
@@ -911,6 +918,13 @@ async def _index_pending_file_sources(project_id: UUID) -> None:
                 project_id=str(project_id),
                 title=title,
                 exc_info=True,
+            )
+            # 자료 단위 격리는 그대로 — 행 메타의 index_error로만 보이던 실패를
+            # 이벤트로도 올린다. 문서 제목·본문은 싣지 않는다.
+            capture_budgeted(
+                "index_file_source",
+                tags={"project_id": str(project_id)},
+                extras={"source_index": f"{i}/{len(todo)}"},
             )
         async with async_session_maker() as session:
             fresh = await session.get(ProjectSource, row.id)

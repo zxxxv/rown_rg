@@ -18,6 +18,7 @@ import asyncio
 import uuid
 from typing import Any
 
+import sentry_sdk
 import structlog
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -388,6 +389,32 @@ async def _rehydrate_qa_selection(
 
 
 async def _execute(project_id: uuid.UUID) -> None:
+    """런 하나를 Sentry 격리 스코프 안에서 돌린다(본체는 _execute_run).
+
+    asyncio.create_task는 부모의 contextvars를 **복사**한다. 격리하지 않으면 동시에
+    도는 여러 런이 사실상 같은 스코프를 공유해 A 런에서 붙인 태그가 B 런의 이벤트에
+    실린다. isolation_scope()는 이 태스크의 컨텍스트에서 스코프를 포크하므로, 여기서
+    붙인 run_id/project_id는 이 런에서 난 이벤트에만 실린다 — 하위 단계(stages,
+    write_loop, 색인)에서 capture한 것까지 포함해서.
+
+    DSN이 없으면 스코프 조작과 capture가 전부 no-op이다.
+    """
+    with sentry_sdk.isolation_scope() as scope:
+        # run_id는 이 실행에만 있는 값이다(재개하면 새 런 = 새 id). 프로젝트 단위로
+        # 묶어 보려면 project_id 태그를 쓴다.
+        scope.set_tag("run_id", str(uuid.uuid4()))
+        scope.set_tag("project_id", str(project_id))
+        # 잡 경계를 아는 곳이 여기뿐이라 런 시작마다 보고 예산을 새로 연다.
+        # 억제하는 건 **보고**뿐 — gc.collect·자료 격리·폴백은 그대로 돈다.
+        from src.clients.embedding_client import reset_memory_pressure_report
+        from src.core.sentry_budget import reset_capture_budgets
+
+        reset_memory_pressure_report()
+        reset_capture_budgets()
+        await _execute_run(project_id)
+
+
+async def _execute_run(project_id: uuid.UUID) -> None:
     """척추를 현재 단계부터 게이트 또는 완료까지 한 구간 전진시키고 영속화한다."""
     owner_id: uuid.UUID | None = None
     entered_from_created = False
@@ -398,6 +425,9 @@ async def _execute(project_id: uuid.UUID) -> None:
                 logger.warning("project.missing", project_id=str(project_id))
                 return
             owner_id = project.owner_id
+            # 귀속은 owner_id(데이터)로만 — 실행은 인증 세션을 들고 다니지 않는다.
+            # send_default_pii=False라 이메일 등은 안 실린다. id만 태그로 둔다.
+            sentry_sdk.set_tag("owner_id", str(owner_id))
 
             state = _state_from_project(project)
             # 죽은 런 재개 가드 — 게이트가 resolved로 없으면 그 단계를 다시 돈다.
@@ -442,6 +472,12 @@ async def _execute(project_id: uuid.UUID) -> None:
                         await display_session.commit()
                 except Exception:
                     logger.warning("project.stage_display_failed", project_id=str(project_id))
+                    # 표시용 전이 실패 — 실행은 그대로 계속된다(스테퍼만 안 따라옴).
+                    # new_scope로 감싸 bg_failure가 이 이벤트에만 붙게 한다(격리
+                    # 스코프에 직접 쓰면 런의 남은 이벤트에까지 딱지가 남는다).
+                    with sentry_sdk.new_scope() as scope:
+                        scope.set_tag("bg_failure", "stage_display")
+                        sentry_sdk.capture_exception()
 
             state = await _rehydrate_section_plan(session, project.id, state)
             state = await _rehydrate_qa_selection(session, project.id, state)
@@ -542,9 +578,19 @@ async def _execute(project_id: uuid.UUID) -> None:
                 await recovery.commit()
         except Exception:
             logger.warning("project.cancel_persist_failed", project_id=str(project_id))
+            # 취소는 그대로 진행 — 다만 재개 지점(cancelled_from)이 유실됐을 수 있다.
+            with sentry_sdk.new_scope() as scope:
+                scope.set_tag("bg_failure", "cancel_persist")
+                sentry_sdk.capture_exception()
         emit_error(project_id, "cancelled", "실행을 취소했습니다")
     except Exception as exc:
         logger.exception("project.run_failed", project_id=str(project_id))
+        # LoggingIntegration이 이미 ERROR를 이벤트로 올리지만 컨텍스트가 없다.
+        # 여기서 명시적으로 올려 위 isolation_scope의 run_id/project_id를 붙인다.
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "run_failed")
+            scope.set_tag("entered_from_created", entered_from_created)
+            sentry_sdk.capture_exception(exc)
         if entered_from_created:
             # 첫 구간(research)에서 죽은 실행은 created로 복귀 — 사용자가
             # '작성 시작'으로 재시도할 수 있어야 한다(researching 고착 방지).
@@ -561,6 +607,10 @@ async def _execute(project_id: uuid.UUID) -> None:
                     await recovery.commit()
             except Exception:
                 logger.warning("project.status_rollback_failed", project_id=str(project_id))
+                # 복귀 실패 = 프로젝트가 researching에 고착 — 사용자가 재시도할 수 없다.
+                with sentry_sdk.new_scope() as scope:
+                    scope.set_tag("bg_failure", "status_rollback")
+                    sentry_sdk.capture_exception()
         # 한도 초과는 원인이 명확한 실패 — 일반 오류로 뭉개지 말고 그대로 알린다
         # (진행 중 도달 케이스: 사전 검사는 통과했지만 실행 도중 한도에 닿음).
         from src.core.exceptions import IncompleteReportError, QuotaExceededError
@@ -819,6 +869,10 @@ async def _replan(project_id: uuid.UUID) -> None:
             await _notify_safe(owner_id, project_id, "partial", page="brief")
     except Exception:
         logger.exception("design_brief.replan_failed", project_id=str(project_id))
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "replan")
+            scope.set_tag("project_id", str(project_id))
+            sentry_sdk.capture_exception()
         if owner_id is not None:
             await _notify_safe(owner_id, project_id, "failed", page="brief")
 
@@ -910,4 +964,8 @@ async def _collect_more(project_id: uuid.UUID) -> None:
             await _notify_safe(owner_id, project_id, "partial", page="sources")
     except Exception:
         logger.exception("source_pool.collect_more_failed", project_id=str(project_id))
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "collect_more")
+            scope.set_tag("project_id", str(project_id))
+            sentry_sdk.capture_exception()
         emit_error(project_id, "collect_more_failed", "추가 조사 중 오류가 발생했습니다")

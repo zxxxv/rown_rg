@@ -6,6 +6,7 @@ from typing import Annotated, Any
 from uuid import UUID, uuid4
 from zipfile import BadZipFile
 
+import sentry_sdk
 import structlog
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from fastapi.responses import FileResponse
@@ -75,6 +76,7 @@ from src.core.section_plan import (
     load_section_plan,
     plan_from_config,
 )
+from src.core.sentry_budget import capture_budgeted
 from src.core.state import ProjectState
 from src.core.types import (
     ProjectStage,
@@ -1239,6 +1241,13 @@ async def _title_in_background(source_id: UUID, file_path: Path, error_context: 
             await extract_and_apply_doc_title(source_id, file_path)
     except Exception:
         logger.warning("source.title_extract_failed_bg", context=error_context, exc_info=True)
+        # 파일명 표시로 남을 뿐 흐름은 그대로 — 다만 자료 검토 게이트가 실제 문서
+        # 제목 대신 파일명을 보게 된다. 문서 내용·경로는 싣지 않는다.
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "title_extract")
+            scope.set_tag("source_id", str(source_id))
+            scope.set_extra("filename", file_path.name)
+            sentry_sdk.capture_exception()
 
 
 async def _index_in_background(source: SourceInput, error_context: str) -> None:
@@ -1260,6 +1269,16 @@ async def _index_in_background(source: SourceInput, error_context: str) -> None:
     except Exception as exc:
         error = _index_error_message(exc)
         logger.warning("source.index_failed_bg", context=error_context, exc_info=True)
+        # 수백 페이지 PDF가 조용히 색인에 실패하는 지점 — 화면엔 index_error로만
+        # 남는다. 자료 본문은 싣지 않고 프로젝트·자료 종류 메타만 붙인다.
+        capture_budgeted(
+            "index_source",
+            exc,
+            tags={
+                "project_id": str(source.project_id),
+                "source_type": source.source_type,
+            },
+        )
     async with async_session_maker() as session:
         row = (
             await session.execute(
@@ -1573,6 +1592,11 @@ async def _reverify_in_background(project_id: UUID) -> None:
         await run_pm_verify(state, model=_models_for(state)["verify"])
     except Exception:
         logger.warning("verify.rerun_failed", project_id=str(project_id), exc_info=True)
+        # 재검증 실패 — 사용자는 옛 경고를 계속 보게 된다(고친 게 반영 안 됨).
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "verify_rerun")
+            scope.set_tag("project_id", str(project_id))
+            sentry_sdk.capture_exception()
     finally:
         _VERIFYING.discard(project_id)
 
