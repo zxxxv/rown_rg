@@ -415,6 +415,14 @@ async def _execute(project_id: uuid.UUID) -> None:
                 cfg = dict(project.config or {})
                 cfg.pop("resume_from", None)
                 project.config = cfg
+                # 즉시 커밋 — 커밋 없이 두면 다음 쿼리의 autoflush가 미커밋 UPDATE로
+                # projects 행 잠금을 문 채 페이즈에 들어가고, 진행 표시용 별도 세션
+                # (_persist_running_stage)의 status UPDATE가 그 잠금을 기다리며
+                # **자기교착**이 된다(2026-08-27 운영 3연속 실측: 러너 무한 정지 +
+                # 폴링이 뒤에 쌓여 커넥션 풀 고갈로 API 전면 500). 소비의 영속도
+                # 이 커밋이 보장한다 — 안 그러면 행이 잠긴 채 죽은 런이 resume_from을
+                # 남겨 다음 재개가 또 되감긴다.
+                await session.commit()
             # 죽은 런 재개 가드 — 게이트가 resolved로 없으면 그 단계를 다시 돈다.
             state = await _normalize_resume_stage(session, project.id, state)
             if project.status == ProjectStage.CREATED.value:
