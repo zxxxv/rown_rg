@@ -15,7 +15,7 @@ QaStatus = str  # passed | failed | pending
 #
 # 왜 막는가: 파일 업로드는 50MB로 막아 뒀는데 JSON 본문은 아무 제한이 없었다. 거대한
 # 본문이 한 번 저장되면 그 뒤 **모든 버전 스냅샷이 그것을 통째로 복사**하고(스냅샷은
-# 보고서 전체를 담는다), HWPX 렌더와 시사점 빌더가 함께 막힌다.
+# 보고서 전체를 담는다), HWPX 렌더가 막힌다.
 MAX_SECTION_CHARS = 200_000
 
 
@@ -164,6 +164,20 @@ class NumberRelocationRead(BaseModel):
     chunk_id: str
 
 
+class ElsewhereNumberRead(BaseModel):
+    """무근거 수치가 절이 인용하지 않은 자료에 실재 - 제목·원문 위치로 사람이 판단.
+
+    출처 번호가 없어(그 절의 참고문헌에 없는 자료) 클릭 교정은 없다. PM의
+    "출처 오귀속(자료 제목 동봉)" 경고와 같은 판단의 문장 옆 판이다."""
+
+    token: str
+    source_id: str
+    source_title: str
+    chunk_id: str
+    start: int
+    end: int
+
+
 class InjectionSuspectRead(BaseModel):
     """연도를 명시한 수치의 주입 의심 - 제목이 있으면 시점 불일치, 없으면 소재 불명."""
 
@@ -195,6 +209,8 @@ class ClaimAlignmentRead(BaseModel):
     # 연도 명시 수치의 주입 의심(3단 판정의 결정적 부분만) - "지어냈거나 옛 지식"을
     # 문장 옆에서 말하고, 조치는 국소 재작성(rewrite-block)으로 잇는다.
     injections: list[InjectionSuspectRead] = Field(default_factory=list)
+    # 절 밖 자료에서 발견된 무근거 수치 - 사다리의 마지막 칸(2026-08-27).
+    elsewhere: list[ElsewhereNumberRead] = Field(default_factory=list)
     grounded: list[GroundedNumberRead] = Field(default_factory=list)  # 근거에서 찾은 수치 위치
     # 확정하지 못했을 때 사람이 고를 후보 대목(순위 내림차순). 대목을 단정하면 거짓
     # 확신이 되지만 후보로 내놓으면 기계가 좁히고 사람이 고르는 것이 된다.

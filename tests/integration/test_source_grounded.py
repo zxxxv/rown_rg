@@ -19,7 +19,7 @@ from src.db.models.chunk import Chunk
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.services.qa.alignment import align_section
-from src.services.qa.evidence_findings import absorb_same_source_numbers
+from src.services.qa.evidence_findings import absorb_same_source_numbers, elsewhere_numbers
 
 
 @pytest.fixture(autouse=True)
@@ -100,9 +100,14 @@ class TestAbsorbSameSource:
         (result,) = align_section(claim, {cited.id: cited.content}, {1: [cited.id]})
         assert result.ungrounded == ["37.4%"]
         moved = await absorb_same_source_numbers(project.id, [result])
-        # 같은 자료가 아니면 흡수하지 않는다 - 오귀속 제안(relocations)의 영역이다.
+        # 같은 자료가 아니면 흡수하지 않는다 - 무근거는 유지하되, 절 밖 탐색이
+        # 자료 제목·원문 위치를 사람에게 준다(사다리의 마지막 칸).
         assert moved == 0
         assert result.ungrounded == ["37.4%"]
+        found = await elsewhere_numbers(project.id, [result])
+        ((token, sid, title, cid, st, en),) = found[0]
+        assert (token, sid, title, cid) == ("37.4%", other.id, "딴 자료.pdf", elsewhere.id)
+        assert "37.4" in elsewhere.content[st : en + 10]
 
     async def test_digit_boundary_no_false_absorption(
         self, super_admin_user, test_session: AsyncSession

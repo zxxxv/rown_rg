@@ -363,6 +363,19 @@ export const ClaimAlignmentSchema = z.object({
   injections: z
     .array(z.object({ token: z.string(), located_title: z.string().nullable().default(null) }))
     .default([]),
+  /** 절이 인용하지 않은 자료에서 발견된 무근거 수치 - 제목·원문 위치로 사람이 판단 */
+  elsewhere: z
+    .array(
+      z.object({
+        token: z.string(),
+        source_id: z.string(),
+        source_title: z.string(),
+        chunk_id: z.string(),
+        start: z.number().int(),
+        end: z.number().int(),
+      }),
+    )
+    .default([]),
   grounded: z.array(GroundedNumberSchema).default([]),
   candidates: z.array(SpanCandidateSchema).default([]),
 });

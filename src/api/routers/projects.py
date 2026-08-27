@@ -52,6 +52,7 @@ from src.api.schemas.project import (
 from src.api.schemas.section import (
     ChapterNode,
     ClaimAlignmentRead,
+    ElsewhereNumberRead,
     EvidenceChunk,
     EvidenceInfo,
     FigurePlaceholder,
@@ -3585,12 +3586,22 @@ async def _claim_rows(
     from src.services.qa.dense_align import refine_crosslingual
 
     await refine_crosslingual(aligned, chunk_texts, session=session)
-    from src.services.qa.evidence_findings import absorb_same_source_numbers, claim_injections
+    from src.services.qa.evidence_findings import (
+        absorb_same_source_numbers,
+        claim_injections,
+        elsewhere_numbers,
+    )
 
     # 순서가 계약이다: 같은 자료 흡수가 먼저다 - 자료 표에 있는 수치가 무근거로
     # 남은 채 주입 검사로 가면 "코퍼스에 있으나 연도 곁 아님" 같은 헛경고가 붙는다.
     await absorb_same_source_numbers(row.project_id, aligned)
     injections = await claim_injections(row.project_id, aligned)
+    # 주입 의심으로 이미 말한 수치는 절 밖 탐색에서 뺀다 - 같은 수치에 두 줄이 붙으면
+    # 사람이 어느 쪽을 믿을지 헷갈린다(주입 줄이 연도 맥락까지 더 말해준다).
+    from src.services.qa.gate import normalize_number as _norm
+
+    injected_norms = {i: {_norm(t) for t, _title in rows} for i, rows in injections.items()}
+    elsewhere = await elsewhere_numbers(row.project_id, aligned, skip=injected_norms)
     out: list[ClaimAlignmentRead] = []
     for i, a in enumerate(aligned):
         span = a.span
@@ -3626,6 +3637,17 @@ async def _claim_rows(
                 injections=[
                     InjectionSuspectRead(token=t, located_title=title)
                     for t, title in injections.get(i, [])
+                ],
+                elsewhere=[
+                    ElsewhereNumberRead(
+                        token=t,
+                        source_id=str(sid),
+                        source_title=title,
+                        chunk_id=str(cid),
+                        start=st,
+                        end=en,
+                    )
+                    for t, sid, title, cid, st, en in elsewhere.get(i, [])
                 ],
                 grounded=[
                     GroundedNumberRead(

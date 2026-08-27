@@ -798,6 +798,88 @@ async def absorb_same_source_numbers(
     return moved
 
 
+async def elsewhere_numbers(
+    project_id: UUID,
+    claims: list,
+    skip: dict[int, set[str]] | None = None,
+) -> dict[int, list[tuple[str, UUID, str, UUID, int, int]]]:
+    """남은 무근거 수치를 **절이 인용하지 않은 자료**에서 찾는다 — 사다리의 마지막 칸.
+
+    같은 자료 흡수(absorb)·절 풀 오귀속(relocations)이 지나간 뒤에도 남는 실재가
+    있다 — 코퍼스에는 있는데 그 절이 그 자료를 아예 인용 안 한 경우(v6 실측: '74'
+    2021년 K-RE100, 전기저널 자료). PM 2단은 이걸 "출처 오귀속(자료 제목 동봉)"으로
+    이미 알리는데 화면은 빨간 무근거만 보여줬다.
+
+    출처 번호가 없어 클릭 교정은 못 만든다 — 제목과 원문 위치를 줘서 사람이 보고
+    판단하게 한다. 반환: 문장 인덱스 → [(수치, source_id, 제목, chunk_id, 시작, 끝)].
+    """
+    from src.services.qa.alignment import _narrow_to_sentence, _number_lines
+
+    skip = skip or {}
+    out: dict[int, list[tuple[str, UUID, str, UUID, int, int]]] = {}
+    cache: dict[str, tuple[UUID, str, UUID, int, int] | None] = {}
+    async with async_session_maker() as session:
+        for i, claim in enumerate(claims):
+            if not claim.ungrounded:
+                continue
+            reloc = {normalize_number(r.token) for r in getattr(claim, "relocations", [])}
+            todo = [
+                t
+                for t in claim.ungrounded
+                if normalize_number(t) not in reloc
+                and normalize_number(t) not in skip.get(i, set())
+            ]
+            if not todo:
+                continue
+            cited_sources = set(
+                (
+                    await session.execute(
+                        select(Chunk.source_id)
+                        .where(Chunk.id.in_(list(claim.cited_chunk_ids or [])))
+                        .distinct()
+                    )
+                )
+                .scalars()
+                .all()
+            ) - {None}
+            for token in todo:
+                norm = normalize_number(token)
+                if norm not in cache:
+                    haystack = func.replace(Chunk.content, ",", "")
+                    rows = (
+                        await session.execute(
+                            select(Chunk.id, Chunk.content, Chunk.source_id, ProjectSource.title)
+                            .join(ProjectSource, Chunk.source_id == ProjectSource.id, isouter=True)
+                            .where(
+                                Chunk.project_id == project_id,
+                                or_(*[haystack.like(f"%{v}%") for v in locate_probes(token)]),
+                            )
+                            .limit(30)
+                        )
+                    ).all()
+                    found = None
+                    for cid, content, sid, title in rows:
+                        if sid is None:
+                            continue
+                        for st, _en, line in _number_lines(content or ""):
+                            if not number_in_text(token, normalize_haystack(line)):
+                                continue
+                            ns, ne, _seg = _narrow_to_sentence(line, st, norm)
+                            found = (sid, title or "제목 없는 자료", cid, ns, ne)
+                            break
+                        if found:
+                            break
+                    cache[norm] = found
+                found = cache[norm]
+                # 인용한 자료에서 나온 발견이면 여기 소관이 아니다(흡수가 이미 봤고
+                # 못 찾은 것) - 절 밖 자료의 발견만 알린다.
+                if found is None or found[0] in cited_sources:
+                    continue
+                sid, title, cid, ns, ne = found
+                out.setdefault(i, []).append((token, sid, title, cid, ns, ne))
+    return out
+
+
 async def claim_injections(
     project_id: UUID,
     claims: list,

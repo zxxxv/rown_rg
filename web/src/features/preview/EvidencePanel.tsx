@@ -223,6 +223,41 @@ function ClaimRow({
         </div>
       ))}
 
+      {(claim.elsewhere ?? []).map((e) => (
+        // 절 밖 자료 실재 - 이 절이 인용하지 않은 자료에 그 수치가 있다. 출처 번호가
+        // 없어 클릭 교정은 못 만들고, 제목과 원문 점프를 줘서 사람이 판단한다.
+        <div
+          key={`else-${e.token}`}
+          className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]"
+        >
+          <span className="text-fg-secondary">
+            {e.token}은(는) 이 절이 인용하지 않은 「{e.source_title}」에 있습니다 - 출처
+            표기가 잘못됐을 수 있습니다
+          </span>
+          <HelpTip title="절 밖 자료에서 발견">
+            <p>
+              이 수치가 문장이 인용한 자료에는 없지만, 이 프로젝트가 수집한 다른 자료에는
+              있습니다. 그 자료가 이 절의 참고문헌에 없어 번호를 붙여 드릴 수는 없습니다.
+            </p>
+            <p>
+              원문을 확인한 뒤 맞으면 본문 편집으로 출처를 바로잡거나, "이 문장 고치기"로
+              재작성하세요.
+            </p>
+          </HelpTip>
+          {onLocate ? (
+            <button
+              type="button"
+              onClick={() =>
+                onLocate({ sourceId: e.source_id, chunkId: e.chunk_id, start: e.start, end: e.end })
+              }
+              className="text-fg-info hover:underline"
+            >
+              원문 확인
+            </button>
+          ) : null}
+        </div>
+      ))}
+
       {(claim.relocations ?? []).map((r) => {
         // 오귀속 제안 - 그 수치가 절의 **다른** 근거에 있다. 자동으로 안 바꾼다:
         // 같은 수치가 우연히 딴 자료에 있을 수 있어, 원문 확인과 적용은 사람 몫이다.
