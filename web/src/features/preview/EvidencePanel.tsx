@@ -1,8 +1,9 @@
 import { ExternalLink, FileSearch } from "lucide-react";
 import { useSectionEvidence } from "@/api/sections";
+import { HelpTip } from "@/components/ui/help-tip";
 import type { ClaimAlignment, EvidenceChunk, SectionEvidence } from "@/api/types";
 import { confirmedSpan } from "./ClaimHoverCard";
-import { appendSourceNumber, markerNumbers as markerNumbersOf } from "./markers";
+import { appendSourceNumber, markerNumbers as markerNumbersOf, removeSourceNumber } from "./markers";
 import type { SourceLocation } from "./SourceViewer";
 import { textFragmentUrl } from "./sourceLink";
 
@@ -38,6 +39,7 @@ function ClaimRow({
   onLocate,
   onFixCitation,
   onRewriteSentence,
+  onRemoveCitation,
 }: {
   claim: ClaimAlignment;
   chunks: EvidenceChunk[];
@@ -46,6 +48,8 @@ function ClaimRow({
   onFixCitation?: (claim: string, number: number) => void;
   /** 주입 의심 조치 - 이 문장을 국소 재작성한다(문장, 문제 수치) */
   onRewriteSentence?: (claim: string, token: string) => void;
+  /** 출처 표기 제거 - 잘못 단(또는 잘못 추가한) 번호를 문장에서 뺀다 */
+  onRemoveCitation?: (claim: string, number: number) => void;
 }) {
   const chunk = claim.chunk_id ? chunks.find((c) => c.chunk_id === claim.chunk_id) : undefined;
   // 대목을 못 집었으면 인용 번호로라도 자료를 찾아 준다 - 자료 이름조차 없으면
@@ -74,22 +78,67 @@ function ClaimRow({
 
       {source ? (
         <p className="mt-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[11px]">
-          {source.number !== null ? (
-            <span className="rounded-sm bg-bg-info px-1 font-mono text-fg-info">
-              [{source.number}]
-            </span>
-          ) : null}
+          {claim.numbers.map((n) => {
+            // 문장이 단 번호 전부를 배지로 - 추가만 있고 제거가 없으면 잘못 누른
+            // 교정을 되돌릴 손잡이가 없다(2026-08-27 지적). ×는 편집 가능일 때만.
+            const removable = onRemoveCitation && removeSourceNumber(claim.claim, n) !== null;
+            return (
+              <span
+                key={n}
+                className="inline-flex items-center gap-0.5 rounded-sm bg-bg-info px-1 font-mono text-fg-info"
+              >
+                [{n}]
+                {removable ? (
+                  <button
+                    type="button"
+                    title={`이 문장에서 출처 ${n} 표기를 뺍니다`}
+                    onClick={() => onRemoveCitation(claim.claim, n)}
+                    className="text-fg-tertiary hover:text-fg-danger"
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </span>
+            );
+          })}
           <span className="min-w-0 text-fg-secondary">{source.source_title ?? "(제목 없음)"}</span>
         </p>
       ) : null}
 
       {confirmedSpan(claim) ? (
-        <blockquote className="mt-1.5 border-l-2 border-border-info pl-2 text-xs leading-relaxed text-fg-secondary">
-          {confirmedSpan(claim)}
-        </blockquote>
+        <div className="mt-1.5 flex items-start gap-1">
+          <blockquote className="min-w-0 flex-1 border-l-2 border-border-info pl-2 text-xs leading-relaxed text-fg-secondary">
+            {confirmedSpan(claim)}
+          </blockquote>
+          <HelpTip title="참고한 대목">
+            <p>
+              자동 대조가 인용한 자료 안에서 찾아낸, 이 문장을 받치는 원문 대목입니다. 어휘
+              겹침 또는 의미 유사도가 확정 기준을 넘은 것만 여기 실립니다.
+            </p>
+            <p>기준을 못 넘으면 단정하지 않고 "추정 후보"나 확인 안내로 갈립니다.</p>
+          </HelpTip>
+        </div>
       ) : null}
 
-      {note ? <p className="mt-1.5 text-[11px] text-fg-tertiary">{note}</p> : null}
+      {note ? (
+        <p className="mt-1.5 flex items-center gap-1 text-[11px] text-fg-tertiary">
+          <span className="min-w-0">{note}</span>
+          <HelpTip title="이 안내의 뜻">
+            <p>
+              <b>인용 표기가 없는 문장</b> - AI가 자료 없이 쓴 서술일 수 있어 원문 확인을
+              권합니다.
+            </p>
+            <p>
+              <b>근거가 외국어</b> - 한글 문장과 외국어 원문은 글자 겹침으로 잴 수 없어 자동
+              확정이 어렵습니다. 틀렸다는 뜻이 아니라 사람이 봐야 한다는 뜻입니다.
+            </p>
+            <p>
+              <b>대목을 특정하지 못함</b> - 인용한 자료까지는 아는데 그 안의 어느 대목인지
+              자동으로 못 좁힌 경우입니다.
+            </p>
+          </HelpTip>
+        </p>
+      ) : null}
 
       {claim.candidates.length > 0 ? (
         // 확정은 못 했지만 "여기서 가져왔을 것 같다"를 몇 개 내놓는다 - 대목을 단정하면
@@ -129,8 +178,15 @@ function ClaimRow({
 
       {claim.ungrounded.length > 0 ? (
         // 근거에서 못 찾은 수치 - "어디를 참고했나"의 답이 '아무 데도'인 경우라 남긴다.
-        <p className="mt-1 text-[11px] text-fg-danger">
-          원문에서 못 찾은 수치: {claim.ungrounded.join(", ")}
+        <p className="mt-1 flex items-center gap-1 text-[11px] text-fg-danger">
+          <span>원문에서 못 찾은 수치: {claim.ungrounded.join(", ")}</span>
+          <HelpTip title="원문에서 못 찾은 수치">
+            <p>
+              이 문장이 인용한 자료 안에서 해당 수치를 찾지 못했습니다. 지어냈거나, 다른
+              자료에서 왔거나, 자료가 다른 표기(단위 환산 등)로 적었을 수 있습니다.
+            </p>
+            <p>아래에 "출처 n에 있습니다" 제안이 함께 뜨면 표기만 틀렸을 가능성이 큽니다.</p>
+          </HelpTip>
         </p>
       ) : null}
 
@@ -147,6 +203,14 @@ function ClaimRow({
               ? `${inj.token}은(는) "${inj.located_title}"에 있지만 본문이 말한 연도 곁에는 없습니다 - 시점이 다른 값일 수 있습니다`
               : `${inj.token}은(는) 수집한 자료 어디에도 없습니다 - 지어냈거나 옛 지식일 수 있습니다`}
           </span>
+          <HelpTip title="연도가 있는 수치의 추가 검사">
+            <p>
+              문장이 연도를 명시한 수치는 수집한 자료 전체에서 한 번 더 찾아봅니다. 자료
+              어디에도 없으면 모델이 지어냈거나 학습 시점의 옛 지식을 썼을 수 있고, 있어도
+              그 연도 곁이 아니면 다른 시점의 값을 가져왔을 수 있습니다.
+            </p>
+            <p>"이 문장 고치기"는 AI에게 근거에 실재하는 값으로 다시 쓰게 합니다.</p>
+          </HelpTip>
           {onRewriteSentence ? (
             <button
               type="button"
@@ -173,6 +237,16 @@ function ClaimRow({
               {r.token}은(는) <span className="font-mono text-fg-info">[{r.number}]</span>{" "}
               {rSource?.source_title ?? "다른 근거"}에 있습니다
             </span>
+            <HelpTip title="출처 표기 교정 제안">
+              <p>
+                이 수치가 문장이 인용한 자료에는 없지만 이 절의 다른 근거에는 있습니다 -
+                내용은 맞는데 출처 번호가 틀렸을 가능성이 큽니다.
+              </p>
+              <p>
+                "원문 확인"으로 실제 자료를 본 뒤 "출처 n 추가"를 누르면 표기에 그 번호가
+                덧붙습니다. 잘못 눌렀으면 위 출처 배지의 ×로 뺄 수 있습니다.
+              </p>
+            </HelpTip>
             {onLocate && rSource?.source_id ? (
               <button
                 type="button"
@@ -270,6 +344,7 @@ export function BlockEvidence({
   onLocate,
   onFixCitation,
   onRewriteSentence,
+  onRemoveCitation,
 }: {
   projectId: string;
   sectionId: string;
@@ -281,6 +356,8 @@ export function BlockEvidence({
   onFixCitation?: (claim: string, number: number) => void;
   /** 주입 의심 조치 - 문장을 국소 재작성한다 */
   onRewriteSentence?: (claim: string, token: string) => void;
+  /** 출처 표기 제거 */
+  onRemoveCitation?: (claim: string, number: number) => void;
 }) {
   const query = useSectionEvidence(projectId, sectionId);
   const data = query.data;
@@ -310,6 +387,7 @@ export function BlockEvidence({
             onLocate={onLocate}
             onFixCitation={onFixCitation}
             onRewriteSentence={onRewriteSentence}
+            onRemoveCitation={onRemoveCitation}
           />
         ))}
       </ul>

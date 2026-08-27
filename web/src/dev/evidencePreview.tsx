@@ -190,6 +190,7 @@ function App() {
                 blocks={[BLOCK]}
                 onLocate={(loc) => console.log("locate", loc)}
                 onFixCitation={(claim, n) => console.log("fix", n, claim)}
+                onRemoveCitation={(claim, n) => console.log("remove", n, claim)}
                 onRewriteSentence={(claim, t) => console.log("rewrite", t, claim)}
               />
             </div>

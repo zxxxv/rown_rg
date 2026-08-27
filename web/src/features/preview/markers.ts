@@ -82,3 +82,25 @@ export function appendSourceNumber(sentence: string, n: number): string | null {
   const fixed = `${m[0].slice(0, closing)}, ${n}${m[0].slice(closing)}`;
   return sentence.slice(0, m.index) + fixed + sentence.slice(m.index + m[0].length);
 }
+
+/** 문장의 출처 표기에서 번호 하나를 뺀다 - appendSourceNumber의 역방향.
+
+ *  잘못 누른 추가를 되돌리고, 후보가 틀렸을 때도 뺄 수 있어야 한다(2026-08-27 지적).
+ *  마지막 남은 번호를 빼면 마커째 걷는다 - 빈 "(출처 )"를 남기면 파서가 헛돈다.
+ *  그 번호가 없거나 마커가 없으면 null(뺄 것이 없음). */
+export function removeSourceNumber(sentence: string, n: number): string | null {
+  const re = new RegExp(SOURCE_MARK_RE.source, "g");
+  for (const m of sentence.matchAll(re)) {
+    const numbers = m[1].split(",").map((x) => Number.parseInt(x.trim(), 10));
+    if (!numbers.includes(n)) continue;
+    const rest = numbers.filter((x) => x !== n);
+    const start = m.index ?? 0;
+    if (rest.length === 0) {
+      // 마커째 - 앞 공백까지 패턴이 물고 있어 이중 공백이 안 남는다.
+      return sentence.slice(0, start) + sentence.slice(start + m[0].length);
+    }
+    const rebuilt = m[0].replace(m[1], rest.join(", "));
+    return sentence.slice(0, start) + rebuilt + sentence.slice(start + m[0].length);
+  }
+  return null;
+}

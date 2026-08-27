@@ -63,7 +63,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
 import { claimTone } from "@/features/preview/ClaimHoverCard";
-import { appendSourceNumber } from "@/features/preview/markers";
+import { appendSourceNumber, removeSourceNumber } from "@/features/preview/markers";
 import { chartFallbackTable } from "@/features/preview/chartSpec";
 import { BlockEvidence, partitionBlockEvidence } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
@@ -1145,20 +1145,50 @@ function SectionView({
 
   // 오귀속 교정 - 근거 패널의 "출처 n 추가"가 문장의 출처 표기에 번호를 덧붙여 저장한다.
   // 검증은 사람이 원문을 보고 눌렀다는 것 - 자동 교체가 아니라 사람이 승인한 편집이다.
-  const onFixCitation = async (claimText: string, number: number) => {
+  // 추가·제거 공용 - 문장 치환 저장 + "되돌리기" 토스트. 표기 교정은 한 번에 한
+  // 문장이라, 직전 본문을 통째로 쥐고 있으면 되돌리기가 클릭 하나가 된다
+  // (2026-08-27 지적: 추가만 있고 제거가 없어 잘못 누른 교정을 못 뺐다).
+  const swapClaimAndSave = async (claimText: string, fixedClaim: string, done: string) => {
     const content = data?.content ?? "";
-    const fixedClaim = appendSourceNumber(claimText, number);
-    if (!fixedClaim || !content.includes(claimText)) {
+    if (!content.includes(claimText)) {
       toast.error("문장을 본문에서 찾지 못했습니다 - 본문이 수정됐을 수 있습니다.");
       return;
     }
     try {
       await save.mutateAsync(content.replace(claimText, fixedClaim));
-      toast.success(`출처 ${number}을(를) 추가했습니다.`);
+      toast.success(done, {
+        action: {
+          label: "되돌리기",
+          onClick: () => {
+            save
+              .mutateAsync(content)
+              .then(() => toast.success("되돌렸습니다."))
+              .catch(() => toast.error("되돌리기 실패 - 버전 기록에서 복원하세요."));
+          },
+        },
+      });
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "저장에 실패했습니다.";
-      toast.error("출처 추가 실패", { description: msg });
+      toast.error("저장 실패", { description: msg });
     }
+  };
+
+  const onFixCitation = async (claimText: string, number: number) => {
+    const fixedClaim = appendSourceNumber(claimText, number);
+    if (!fixedClaim) {
+      toast.error("이 문장에는 출처 표기가 없거나 이미 그 번호가 있습니다.");
+      return;
+    }
+    await swapClaimAndSave(claimText, fixedClaim, `출처 ${number}을(를) 추가했습니다.`);
+  };
+
+  const onRemoveCitation = async (claimText: string, number: number) => {
+    const fixedClaim = removeSourceNumber(claimText, number);
+    if (fixedClaim === null) {
+      toast.error("이 문장의 출처 표기에서 그 번호를 찾지 못했습니다.");
+      return;
+    }
+    await swapClaimAndSave(claimText, fixedClaim, `출처 ${number} 표기를 뺐습니다.`);
   };
 
   // 주입 의심 조치 - 문제 수치가 든 문장을 그 블록 안에서 국소 재작성한다.
@@ -1889,6 +1919,7 @@ function SectionView({
                     onLocate={setSourceView}
                     onFixCitation={canEdit ? onFixCitation : undefined}
                     onRewriteSentence={canEdit ? onRewriteSentence : undefined}
+                    onRemoveCitation={canEdit ? onRemoveCitation : undefined}
                   />
                 )}
               </div>
