@@ -117,8 +117,19 @@ def _normalize_number(token: str) -> str:
 # 영문 코퍼스에서 수치 검출기가 통째로 무력해진 원인(2026-08-24 COMPA 실측:
 # 정밀도 14.8%). 본문은 "70.5억 달러"라고 쓰고 근거는 "USD 7.05 billion"이라 적는다.
 # 콤마만 지우는 부분문자열 대조로는 영영 만나지 못해 전부 '무근거'로 떨어졌다.
-_KOR_SCALE: dict[str, int] = {"조": 10**12, "억": 10**8, "만": 10**4, "천": 10**3}
-_KOR_NUM_PART = r"\d[\d,]*(?:\.\d+)?\s*[조억만천]"
+_KOR_SCALE: dict[str, int] = {
+    "조": 10**12,
+    "억": 10**8,
+    # 합성 단위 — "9천만"을 "9천"으로 읽으면 1,826억대 수가 1,826.500009억이 되어
+    # 코퍼스의 "1,826.59 Billion"과 영영 못 만난다(2026-08-27 철강 런 실측 3건).
+    "천만": 10**7,
+    "백만": 10**6,
+    "십만": 10**5,
+    "만": 10**4,
+    "천": 10**3,
+}
+_KOR_UNIT_ALT = r"천만|백만|십만|[조억만천]"
+_KOR_NUM_PART = rf"\d[\d,]*(?:\.\d+)?\s*(?:{_KOR_UNIT_ALT})"
 # 자리 단위를 이어 쓴 합성 표기("2억 450만")까지 한 토큰으로 본다 — 쪼개 읽으면
 # 2와 450이 되어 코퍼스의 "204.5 million"과 절대 안 맞고, 450은 주입 의심으로 샌다.
 _KOR_NUMBER_RE = re.compile(rf"{_KOR_NUM_PART}(?:\s*{_KOR_NUM_PART})*")
@@ -134,13 +145,17 @@ _SCALE_WORDS: dict[float, str] = {
 # 가수가 이보다 짧으면 그 자체로는 변별력이 없다 — "10억"의 가수는 "1"이라
 # 숫자가 하나라도 든 아무 글에나 붙는다(2026-08-27 실측, 아래 number_in_text 참조).
 _MIN_MANTISSA_DIGITS = 3
+# 가수 상한 — 시장 보고서는 "$ 1,826.59 Billion"처럼 4자리 billion을 그대로 쓴다.
+# 1000에서 끊으면 조 단위 한국어 표기("1조 8,265억…")가 그 원문과 못 만난다
+# (2026-08-27 철강 런 실측 5건: 1,004.9·1,308.7·1,826.59·1,890.01·2,658.85).
+_MAX_MANTISSA = 10**4
 
 
 def korean_magnitude(token: str) -> float | None:
     """한국어 큰 수 표기의 값 — "2억 450만" → 204500000.0. 아니면 None."""
     text = token.replace(",", "")
     total, last, found = 0.0, None, False
-    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*([조억만천])", text):
+    for m in re.finditer(rf"(\d+(?:\.\d+)?)\s*({_KOR_UNIT_ALT})", text):
         scale = _KOR_SCALE[m.group(2)]
         if last is not None and scale >= last:
             return None  # 자리 단위가 내림차순이 아니면 한 수가 아니다
@@ -171,8 +186,21 @@ def number_variants(token: str) -> list[str]:
         mantissa = value / scale
         # 짧은 가수는 맨 문자열로 내보내지 않는다 — 낱말을 요구하는 쪽은
         # number_in_text가 맡는다(SQL LIKE 선별은 좁게 가는 편이 안전하다).
-        if 0.1 <= mantissa < 1000 and len(_trim(mantissa).replace(".", "")) >= _MIN_MANTISSA_DIGITS:
+        if (
+            0.1 <= mantissa < _MAX_MANTISSA
+            and len(_trim(mantissa).replace(".", "")) >= _MIN_MANTISSA_DIGITS
+        ):
             out.append(_trim(mantissa))
+    # 조·억 합성을 한 단위로 편 표기 — 원문(특히 PDF 표)은 "1조 6,901억"을
+    # "16,901 억원"으로 적는다(2026-08-27 철강 R&D 실측). 콤마는 대조 눈금이
+    # 걷어내므로 맨 숫자+단위만 만든다. 소수 한 자리(18,265.9억)까지 허용.
+    for unit, unit_scale in (("억", 10**8), ("만", 10**4)):
+        flat = round(value / unit_scale, 1)
+        if 1 <= flat < 10**8 and abs(value / unit_scale - flat) < 1e-6:
+            text = _trim(flat)
+            if f"{text}{unit}" != norm:
+                out.append(f"{text}{unit}")
+                out.append(f"{text} {unit}")
     # 공백을 넣어 쓴 한국어 표기도 근거에 있을 수 있다("2억 450만").
     spaced = re.sub(r"([조억만천])(\d)", r"\1 \2", norm)
     if spaced != norm:
@@ -256,7 +284,7 @@ def locate_probes(token: str) -> list[str]:
     if value is not None:
         for scale, words in _SCALE_WORDS.items():
             mantissa = value / scale
-            if not 0.1 <= mantissa < 1000:
+            if not 0.1 <= mantissa < _MAX_MANTISSA:
                 continue
             text = _trim(mantissa)
             if len(text.replace(".", "")) >= _MIN_MANTISSA_DIGITS:

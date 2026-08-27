@@ -32,6 +32,7 @@ from src.services.qa.gate import (
     gate_candidates,
     korean_magnitude,
     leftover_artifacts,
+    locate_probes,
     misattributed_numbers,
     normalize_haystack,
     number_in_text,
@@ -959,3 +960,35 @@ class TestShortMantissaSameSource:
         assert p.search("| 14 | 5.2 | 18.3 |")
         assert not p.search("value 5.23 rises")  # 소수 연장은 다른 수
         assert short_mantissas("610") == []  # 자리 단위 없는 수는 대상 아님
+
+
+class TestTrillionCompositeVariants:
+    """조 단위 합성 수사 - 2026-08-27 철강 런 실측 6건(전수 실재)이 전부 무근거로 남았다.
+
+    구멍 셋: ① "9천만"을 "9천"으로 읽는 합성 단위(천만=10^7) 미지원, ② 가수 상한
+    1000 - 시장 보고서는 "$ 1,826.59 Billion"처럼 4자리 billion을 그대로 쓴다,
+    ③ 조·억 합성을 한 단위로 편 표기("1조 6,901억" ↔ 원문 PDF "총 16,901 억원").
+    """
+
+    def test_composite_units_parse(self) -> None:
+        assert korean_magnitude("1조 8,265억 9천만") == 1_826_590_000_000
+        assert korean_magnitude("2천만") == 20_000_000
+        assert korean_magnitude("3백만") == 3_000_000
+
+    def test_four_digit_billion_mantissa(self) -> None:
+        # "1조 8,265억 9천만 달러" ↔ "2024 Market Size$ 1,826.59 Billion"
+        assert "1826.59" in number_variants("1조 8,265억 9천만")
+        assert number_in_text(
+            "1조 8,265억 9천만", normalize_haystack("2024 Market Size$ 1,826.59 Billion")
+        )
+        # "1조 49억 달러" ↔ "USD 1,004.9 Billion"
+        assert number_in_text("1조 49억", normalize_haystack("valued at USD 1,004.9 Billion in"))
+        # 경계 유지 - 다른 수의 토막이면 안 된다.
+        assert not number_in_text("1조 49억", normalize_haystack("index 21,004.9 points"))
+
+    def test_flattened_eok_form(self) -> None:
+        # "1조 6,901억 원" ↔ 원문 "총 16,901 억원('28~'34, 7년)"
+        assert "16901 억" in number_variants("1조 6,901억")
+        assert number_in_text("1조 6,901억", normalize_haystack("총 16,901 억원('28~'34)"))
+        # LIKE 사전 선별도 같은 눈금이어야 후보에 든다.
+        assert any("16901" in p for p in locate_probes("1조 6,901억"))
