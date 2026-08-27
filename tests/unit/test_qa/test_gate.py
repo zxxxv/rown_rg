@@ -38,6 +38,8 @@ from src.services.qa.gate import (
     number_variants,
     numeric_mentions,
     run_section_gate,
+    short_mantissa_bare_patterns,
+    short_mantissas,
     significant_numbers,
     truncated_lines,
     uncited_units,
@@ -936,3 +938,24 @@ class TestArticleNumbers:
         assert ungrounded_numbers("규정 제21조에 따라 판매됨 (출처 4)", "무관한 근거") == []
         # 진짜 큰 수는 그대로 - '제'가 없으면 수치 주장이다.
         assert "21조" in numeric_mentions("예산은 21조 원 규모다")
+
+
+class TestUnitSpacedVariant:
+    def test_pdf_조판_공백을_받는다(self) -> None:
+        """v6 최종 3건 정독(2026-08-27): 원문 "환식탄화수소(974 억원)"의 숫자-단위
+        공백 하나로 실재하는 974억이 무근거에 남았다."""
+        assert "974 억" in number_variants("974억")
+        assert number_in_text("974억", normalize_haystack("환식탄화수소(974 억원)에 부과"))
+        # 경계는 유지 - 1974의 토막이 아니다.
+        assert not number_in_text("974억", normalize_haystack("연도 1974 억측이 있었다"))
+
+
+class TestShortMantissaSameSource:
+    def test_같은_자료_전용_맨_가수(self) -> None:
+        """원문 표가 "$5.2 billion"을 맨 셀 "5.2"로 적는다(v6 관세수입 표 실측).
+        코퍼스 전체면 홍수라 금지지만, 인용 자료 한 권 스코프는 안전하다."""
+        assert short_mantissas("52억") == ["5.2"]
+        (p,) = short_mantissa_bare_patterns("52억")
+        assert p.search("| 14 | 5.2 | 18.3 |")
+        assert not p.search("value 5.23 rises")  # 소수 연장은 다른 수
+        assert short_mantissas("610") == []  # 자리 단위 없는 수는 대상 아님

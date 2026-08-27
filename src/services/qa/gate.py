@@ -177,6 +177,11 @@ def number_variants(token: str) -> list[str]:
     spaced = re.sub(r"([조억만천])(\d)", r"\1 \2", norm)
     if spaced != norm:
         out.append(spaced)
+    # 숫자와 자리 단위 사이 공백 - PDF 조판이 "974 억원"처럼 갈라 놓는다(2026-08-27
+    # v6 최종 3건 정독: 실재하는 974억이 이 공백 하나로 무근거에 남았다).
+    unit_spaced = re.sub(r"(\d)\s*([조억만천])", r"\1 \2", norm)
+    if unit_spaced != norm:
+        out.append(unit_spaced)
     return list(dict.fromkeys(out))
 
 
@@ -264,6 +269,36 @@ def locate_probes(token: str) -> list[str]:
                         if probe not in out:
                             out.append(probe)
     return out
+
+
+def short_mantissas(token: str) -> list[str]:
+    """자릿수 낱말 없이는 안 쓰는 짧은 가수 텍스트 — 같은 자료 스코프 전용.
+
+    코퍼스 전체에서 맨 "5.2"를 허용하면 홍수가 나지만, **인용한 자료 한 권 안**은
+    후보가 몇십 청크라 안전하다. 원문 표가 "$5.2 billion"을 맨 셀 "5.2"로 적는
+    것이 실측 무늬다(2026-08-27 v6 최후 1건: 관세수입 표의 5.2·5.7·18.3).
+    """
+    value = korean_magnitude(token)
+    if value is None:
+        return []
+    out: list[str] = []
+    for scale in _EN_SCALES:
+        mantissa = value / scale
+        if 0.1 <= mantissa < 1000:
+            text = _trim(mantissa)
+            if len(text.replace(".", "")) < _MIN_MANTISSA_DIGITS:
+                out.append(text)
+    return out
+
+
+@lru_cache(maxsize=2048)
+def short_mantissa_bare_patterns(token: str) -> tuple[re.Pattern[str], ...]:
+    """짧은 가수의 경계 패턴(낱말 요구 없음) — short_mantissas와 짝, 같은 자료 전용."""
+    out = []
+    for text in short_mantissas(token):
+        tail = r"0*(?!\d)" if "." in text else r"(?!\d)"
+        out.append(re.compile(r"(?<!\d)" + re.escape(text) + tail))
+    return tuple(out)
 
 
 def number_in_text(token: str, haystack_norm: str) -> bool:

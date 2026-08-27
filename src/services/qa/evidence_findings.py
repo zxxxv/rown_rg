@@ -43,6 +43,8 @@ from src.services.qa.gate import (
     normalize_haystack,
     normalize_number,
     number_in_text,
+    short_mantissa_bare_patterns,
+    short_mantissas,
     truncated_lines,
 )
 from src.services.qa.table_check import (
@@ -753,24 +755,32 @@ async def absorb_same_source_numbers(
                 key = (src_key, normalize_number(token))
                 if key not in cache:
                     haystack = func.replace(Chunk.content, ",", "")
+                    # 같은 자료 한정이라 맨 짧은 가수(5.2)도 선별에 넣는다 - 원문 표가
+                    # "$5.2 billion"을 맨 셀로 적는 무늬(gate.short_mantissas 참조).
+                    probes = locate_probes(token) + short_mantissas(token)
                     rows = (
                         await session.execute(
                             select(Chunk.id, Chunk.content)
                             .where(
                                 Chunk.source_id.in_(source_ids),
                                 Chunk.id.notin_(list(claim.cited_chunk_ids)),
-                                or_(*[haystack.like(f"%{v}%") for v in locate_probes(token)]),
+                                or_(*[haystack.like(f"%{v}%") for v in probes]),
                             )
-                            .limit(20)
+                            .limit(30)
                         )
                     ).all()
                     # 오프셋은 **원문 청크 기준**이어야 뷰어가 그 자리로 점프한다 -
                     # 정규화 텍스트(콤마 제거) 오프셋을 쓰면 자리가 밀린다. 그래서
                     # _grounded_spans와 같은 방식: 원문 줄을 돌며 정규화는 대조에만 쓴다.
                     found = None
+                    bare = short_mantissa_bare_patterns(token)
                     for cid, content in rows:
                         for st, _en, line in _number_lines(content or ""):
-                            if not number_in_text(token, normalize_haystack(line)):
+                            line_norm = normalize_haystack(line)
+                            if not (
+                                number_in_text(token, line_norm)
+                                or any(p.search(line_norm) for p in bare)
+                            ):
                                 continue
                             ns, ne, seg = _narrow_to_sentence(line, st, normalize_number(token))
                             found = (cid, ns, ne, seg)
