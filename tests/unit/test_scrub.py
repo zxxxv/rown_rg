@@ -103,3 +103,15 @@ class TestTableForbiddenCells:
         body = "| a | N/A |\n"
         out, _ = scrub_leftovers(body)
         assert out.endswith("\n") and "| - |" in out
+
+
+def test_해당없음_배정메모_신형(self=None) -> None:
+    """v6 이관본 4.2 실측(2026-08-27): "(출처 26에 해당 없음 — 아래 항목 참조)"가
+    본문에 그대로 실려 있었다 - 제외/사용불가/생략만 알던 패턴의 사각."""
+    body = "ㅇ 자산 연한 기준은 최소 85%가 공급되어야 함(출처 26에 해당 없음 — 아래 항목 참조)\n"
+    out, notes = scrub_leftovers(body)
+    assert "해당 없음" not in out
+    assert any("배정 메모" in n for n in notes)
+    # 산문의 '해당 없음'은 문장의 일부다 - 괄호 밖이면 안 걷는다.
+    prose = "분석 결과 해당 없음으로 판정된 항목(출처 12)은 제외했다.\n"
+    assert scrub_leftovers(prose)[0] == prose

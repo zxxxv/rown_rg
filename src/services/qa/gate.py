@@ -1013,6 +1013,10 @@ _LEFTOVER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"\(출처\s*[\d,\s]+\s*(?:은|는)?[^()]{0,25}생략[^()]{0,10}\)"),
         "출처 배정 메모(생략)",
     ),
+    (
+        re.compile(r"\(출처\s*[\d,\s]+\s*(?:에|은|는)?\s*해당\s*없음[^()]{0,40}\)"),
+        "출처 배정 메모(해당 없음)",
+    ),
     (re.compile(r"\(출[^\s처()]{1,12}처(?=\s*\d)"), "오염된 출처 마커"),
     (re.compile(r"<callout[^>]*>|</callout\s*>"), "기형 callout 태그(정식은 ::: 펜스)"),
     # 표 금지 셀 - 조립 세정(sections/scrub)이 걷지만, 수동 편집·구버전 본문은 세정을
