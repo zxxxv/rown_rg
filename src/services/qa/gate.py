@@ -119,6 +119,9 @@ def _normalize_number(token: str) -> str:
 # 콤마만 지우는 부분문자열 대조로는 영영 만나지 못해 전부 '무근거'로 떨어졌다.
 _KOR_SCALE: dict[str, int] = {
     "조": 10**12,
+    # 기계번역 페이지는 billion을 "십억"으로 직역한다("USD 252.5 십억" — 2026-08-27
+    # 철강 런 특수강 자료 실측). 이 단위가 어휘에 없으면 억 단위 본문과 영영 못 만난다.
+    "십억": 10**9,
     "억": 10**8,
     # 합성 단위 — "9천만"을 "9천"으로 읽으면 1,826억대 수가 1,826.500009억이 되어
     # 코퍼스의 "1,826.59 Billion"과 영영 못 만난다(2026-08-27 철강 런 실측 3건).
@@ -128,7 +131,7 @@ _KOR_SCALE: dict[str, int] = {
     "만": 10**4,
     "천": 10**3,
 }
-_KOR_UNIT_ALT = r"천만|백만|십만|[조억만천]"
+_KOR_UNIT_ALT = r"천만|백만|십만|십억|[조억만천]"
 _KOR_NUM_PART = rf"\d[\d,]*(?:\.\d+)?\s*(?:{_KOR_UNIT_ALT})"
 # 자리 단위를 이어 쓴 합성 표기("2억 450만")까지 한 토큰으로 본다 — 쪼개 읽으면
 # 2와 450이 되어 코퍼스의 "204.5 million"과 절대 안 맞고, 450은 주입 의심으로 샌다.
@@ -191,11 +194,19 @@ def number_variants(token: str) -> list[str]:
             and len(_trim(mantissa).replace(".", "")) >= _MIN_MANTISSA_DIGITS
         ):
             out.append(_trim(mantissa))
-    # 조·억 합성을 한 단위로 편 표기 — 원문(특히 PDF 표)은 "1조 6,901억"을
-    # "16,901 억원"으로 적는다(2026-08-27 철강 R&D 실측). 콤마는 대조 눈금이
-    # 걷어내므로 맨 숫자+단위만 만든다. 소수 한 자리(18,265.9억)까지 허용.
-    for unit, unit_scale in (("억", 10**8), ("만", 10**4)):
-        flat = round(value / unit_scale, 1)
+    # 자리 단위 재표기 — 원문은 "1조 6,901억"을 "16,901 억원"으로(PDF 표),
+    # "6,700만"을 "67백만톤"으로(통계 자료), "2,443.2억"을 "USD 244.32 십억"으로
+    # (기계번역 페이지) 적는다(2026-08-27 철강 런 전수 실측). 콤마는 대조 눈금이
+    # 걷어내므로 맨 숫자+단위만 만든다. 소수는 두 자리까지(십억 환산은 억의 소수
+    # 한 자리가 두 자리가 된다: 2,443.2억 → 244.32십억).
+    for unit, unit_scale in (
+        ("조", 10**12),
+        ("십억", 10**9),
+        ("억", 10**8),
+        ("백만", 10**6),
+        ("만", 10**4),
+    ):
+        flat = round(value / unit_scale, 2)
         if 1 <= flat < 10**8 and abs(value / unit_scale - flat) < 1e-6:
             text = _trim(flat)
             if f"{text}{unit}" != norm:
@@ -558,11 +569,18 @@ def ungrounded_numbers(content: str, cited_content: str) -> list[str]:
     # 파생치는 주장 단위 안에서만 성립한다 — 절 전체를 섞으면 무관한 두 수의 우연한
     # 비율이 실수치를 덮는다.
     derived = {d for unit in units for d in derived_numbers(unit)}
+    joined = normalize_haystack("\n".join(units))
     for token in numeric_mentions("\n".join(units)):
         norm = _normalize_number(token)
         if norm in seen:
             continue
         seen.add(norm)
+        # 계산식이 명시된 산출값은 창작이 아니다 — "16,901억 ÷ 7년 = 2,414억"의
+        # 2,414는 근거에 없어도 본문이 셈을 보여준다(2026-08-27 철강 실측: 피연산자
+        # '7년'이 기간이라 수치 토큰에서 빠져 derived_numbers가 못 잡았다). 등호
+        # 바로 뒤의 그 수만 좁게 면제한다 — 셈이 맞는지는 산술 검증 몫.
+        if norm and re.search(rf"=\s*약?\s*{re.escape(norm)}(?!\d)", joined):
+            continue
         if norm and norm not in derived and not number_in_text(token, haystack):
             out.append(token)
     return out

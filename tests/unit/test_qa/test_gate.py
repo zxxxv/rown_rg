@@ -33,6 +33,7 @@ from src.services.qa.gate import (
     korean_magnitude,
     leftover_artifacts,
     locate_probes,
+    match_patterns,
     misattributed_numbers,
     normalize_haystack,
     number_in_text,
@@ -992,3 +993,45 @@ class TestTrillionCompositeVariants:
         assert number_in_text("1조 6,901억", normalize_haystack("총 16,901 억원('28~'34)"))
         # LIKE 사전 선별도 같은 눈금이어야 후보에 든다.
         assert any("16901" in p for p in locate_probes("1조 6,901억"))
+
+
+class TestScaleRewriteVariants:
+    """자리 단위 재표기 - 2026-08-27 철강 런 '어디에도 없음' 전수 정독의 잔여 구멍.
+
+    실측 원문 셋: ①통계 자료 "조강생산량67백만톤"(백만 단위), ②기계번역 페이지
+    "USD 252.5 십억"(billion 직역), ③"= 2,414억"(계산식 명시 산출값 - 피연산자
+    '7년'이 기간이라 derived_numbers가 못 잡음).
+    """
+
+    def test_million_rewrite(self) -> None:
+        assert "67백만" in number_variants("6,700만")
+        assert number_in_text("6,700만", normalize_haystack("조강생산량67백만톤으로세계6위"))
+        assert number_in_text("6,800만", normalize_haystack("’22년총68백만톤의조강생산량"))
+        # 경계 유지 - 167백만의 토막이 아니다.
+        assert not number_in_text("6,700만", normalize_haystack("수출 167백만 톤 규모"))
+
+    def test_sip_eok_translationese(self) -> None:
+        # 파싱: "252.5 십억" = 2,525억.
+        assert korean_magnitude("252.5 십억") == 252_500_000_000
+        # 평탄화: "2,443.2억" → "244.32 십억"(소수 두 자리).
+        assert "244.32 십억" in number_variants("2,443.2억")
+        assert number_in_text(
+            "2,525억", normalize_haystack("| 시장 규모(2026년) | USD 252.5 십억 |")
+        )
+        assert number_in_text("2,443.2억", normalize_haystack("USD 244.32 십억 규모로"))
+
+    def test_short_mantissa_word_link_text(self) -> None:
+        # "350만" ↔ 링크 문안 "by up to 3.5 million metric tons"(실측: 티센 CO2).
+        hay = normalize_haystack(
+            "aiming to cut annual CO2 emissions by up to 3.5 million metric tons"
+        )
+        assert any(p.search(hay) for p in match_patterns("350만"))
+
+    def test_explicit_formula_result_exempt(self) -> None:
+        claim = "연평균 규모는 약 2,414억 원임(총사업비 1조 6,901억 원 ÷ 사업기간 7년 = 2,414억 원)"
+        # 근거에 1조 6,901억만 있고 2,414는 없어도 - 셈이 명시돼 있으면 창작이 아니다.
+        out = ungrounded_numbers(claim, "총 16,901 억원('28~'34, 7년) 규모")
+        assert "2,414억" not in out
+        # 등호 없는 맨 무근거 수치는 그대로 잡힌다.
+        out2 = ungrounded_numbers("사업비는 약 2,414억 원임", "무관한 근거 본문 3,000억")
+        assert any("2,414" in t for t in out2)
