@@ -291,6 +291,11 @@ def numeric_mentions(text: str) -> list[str]:
     # 평소 규칙대로 뽑되(앞뒤 문맥 규칙이 그대로 산다) 큰 수의 조각은 빠진다.
     masked = list(text)
     for m in _KOR_NUMBER_RE.finditer(text):
+        # "제21조"는 21조 원이 아니라 법조문이다(2026-08-27 실측: CBAM 규정 제21조가
+        # 무근거 '21조'로 남았다). '제'가 바로 앞에 붙은 큰 수 표기는 조문·회차라
+        # 수치 주장이 아니다 - 절·장·항 번호 제외와 같은 계열.
+        if m.start() > 0 and text[m.start() - 1] == "제":
+            continue
         token = m.group().strip()
         if token not in out:
             out.append(token)

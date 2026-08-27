@@ -926,3 +926,13 @@ class TestDateNotationSplit:
     def test_normal_sentence_breaks_survive(self, line: str, n: int) -> None:
         """날짜만 예외다 - 평범한 문장 경계·원문자 항목은 그대로 쪼개져야 한다."""
         assert len(claim_units(line)) == n
+
+
+class TestArticleNumbers:
+    def test_제N조는_법조문이지_수치가_아니다(self) -> None:
+        """v6 실측(2026-08-27): 'CBAM 규정 제21조'의 21조가 21조 원으로 오인돼
+        무근거 수치로 남았다 - 절·장·항 번호 제외와 같은 계열."""
+        assert numeric_mentions("규정 제21조에 따라 산정된 가격") == []
+        assert ungrounded_numbers("규정 제21조에 따라 판매됨 (출처 4)", "무관한 근거") == []
+        # 진짜 큰 수는 그대로 - '제'가 없으면 수치 주장이다.
+        assert "21조" in numeric_mentions("예산은 21조 원 규모다")
