@@ -5,7 +5,6 @@ import {
   Download,
   FileSearch,
   FolderSync,
-  Lightbulb,
   PieChart,
   PlayCircle,
   Settings2,
@@ -29,7 +28,7 @@ import {
   useUpdateProjectConfig,
 } from "@/api/projects";
 import type { Project, ProjectStatus } from "@/api/types";
-import { useFinalizeProject, useReportVersions, useUnfinalizeProject } from "@/api/versions";
+import { useFinalizeProject, useReportVersions } from "@/api/versions";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageLoading } from "@/components/feedback/PageLoading";
 import { AppShell } from "@/components/layout/AppShell";
@@ -196,7 +195,6 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
   const costUsed = usageQuery.data?.cost_usd ?? 0;
   const deleteProject = useDeleteProject();
   const finalize = useFinalizeProject(project.id);
-  const unfinalize = useUnfinalizeProject(project.id);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 아코디언을 제어형으로 - 상태 패널의 "목차 편집"이 여기를 펴야 한다.
   const [openPanel, setOpenPanel] = useState<string | undefined>(undefined);
@@ -310,42 +308,29 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
               stalled={stalled}
               liveStatus={usageQuery.data?.status}
             />
-            {project.status === "completed" ? (
-              project.finalized_at ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={unfinalize.isPending}
-                  onClick={() => {
-                    unfinalize.mutate(undefined, {
-                      onSuccess: () => toast("확정을 해제했습니다 - 다시 검토 중입니다."),
-                      onError: () => toast.error("확정 해제에 실패했습니다."),
-                    });
-                  }}
-                  title="본문과 버전은 그대로 두고 확정 표식만 내립니다"
-                >
-                  확정 해제
-                </Button>
-              ) : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={finalize.isPending}
-                  onClick={() => {
-                    finalize.mutate(undefined, {
-                      onSuccess: () =>
-                        toast.success("최종 확정됨", {
-                          description: "확정 시점의 본문이 버전으로 보존됩니다.",
-                        }),
-                      onError: () => toast.error("확정에 실패했습니다."),
-                    });
-                  }}
-                  title="이 내용을 납품 확정본으로 선언하고 버전으로 보존합니다"
-                >
-                  <BadgeCheck className="mr-1 h-4 w-4" aria-hidden />
-                  최종 확정
-                </Button>
-              )
+            {/* 확정 뒤에는 '다시 열기'(주 CTA 줄)가 확정 해제를 포함한다 - 별도
+                '확정 해제' 버튼을 같이 두면 같은 일이 두 곳에 있는 것으로 읽힌다
+                (2026-08-27 지적). 표식만 내리는 가벼운 길이 필요해지면 다시 열기
+                대화상자 안에 선택지로 넣는다. */}
+            {project.status === "completed" && !project.finalized_at ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={finalize.isPending}
+                onClick={() => {
+                  finalize.mutate(undefined, {
+                    onSuccess: () =>
+                      toast.success("최종 확정됨", {
+                        description: "확정 시점의 본문이 버전으로 보존됩니다.",
+                      }),
+                    onError: () => toast.error("확정에 실패했습니다."),
+                  });
+                }}
+                title="이 내용을 납품 확정본으로 선언하고 버전으로 보존합니다"
+              >
+                <BadgeCheck className="mr-1 h-4 w-4" aria-hidden />
+                최종 확정
+              </Button>
             ) : null}
             {canDelete ? (
               <Button
@@ -592,15 +577,6 @@ function PrimaryAction({
         >
           <Download className="mr-1 h-4 w-4" />
           {downloading ? "준비 중…" : "HWPX 다운로드"}
-        </Button>
-        <Button
-          size="lg"
-          variant="outline"
-          onClick={() => navigate(`/projects/${project.id}/insights`)}
-          title="시사점·제언을 2~3쪽으로 압축한 요약 - 본문 파일과 별개의 한글 파일로 받습니다"
-        >
-          <Lightbulb className="mr-1 h-4 w-4" />
-          시사점 요약
         </Button>
         {/* '다시 열기'는 **확정된 보고서**에만 뜬다. 확정 전에는 이미 열려 있는
             문서라(절 편집·재작성·목차 수정이 다 되는 "검토 중"), 버튼이 있으면
