@@ -84,6 +84,10 @@ class SourceRef(BaseModel):
     reliability: str | None = None  # high | medium | low
     matched_sections: list[str] = Field(default_factory=list)  # 이 출처가 뒷받침하는 목차 섹션
     page_age: str | None = None  # 콘텐츠 최신성(원문 게시 시점)
+    # 서지 조각(출처 표기용, 2026-08-27) - 미상이면 None으로 두고 표기에서 생략한다.
+    publisher: str | None = None  # 발행기관("국제무역통상연구원")
+    issue_label: str | None = None  # 호수("2024년 17호")
+    published_year: int | None = None  # 발행연도(호수 없을 때의 폴백 표기)
     preview: str | None = None  # 본문 앞부분 미리보기
     has_content: bool = True  # 본문 회수·색인 성공 여부(False면 검색에 안 잡힘)
 

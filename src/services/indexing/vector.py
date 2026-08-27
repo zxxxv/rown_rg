@@ -33,7 +33,9 @@ from src.db.models.chunk import Chunk as ChunkModel
 from src.db.models.project_source import ProjectSource
 from src.services.indexing._boilerplate import excluded_metadata
 from src.services.indexing._pages import assign_chunk_pages, strip_page_markers
+from src.services.indexing.bibliography import extract_bibliography
 from src.services.indexing.published_year import extract_published_year
+from src.services.indexing.terms import mine_and_store_quietly
 from src.services.qa.span_vectors import store_quietly
 
 if TYPE_CHECKING:
@@ -160,11 +162,12 @@ class VectorIndexingService:
         )
 
         doc_title = _extract_doc_title(parse_result.markdown)
+        bib = extract_bibliography(parse_result.markdown)
         # 세션 #1: source UPSERT + 기존 chunks 청소. 임베딩 호출 전에 commit하고 닫는다.
         async with self._session_maker() as session:
             source_id = await self._upsert_source(session, source)
             if doc_title:
-                await self._apply_doc_title(session, source_id, doc_title)
+                await self._apply_doc_title(session, source_id, doc_title, bib)
             deleted = await self._delete_existing_chunks(session, source_id)
             await session.commit()
         logger.info(
@@ -214,6 +217,12 @@ class VectorIndexingService:
         if year is not None:
             for chunk in chunks:
                 chunk.metadata["published_year"] = year
+            # 자료 단위에도 실어 출처 표기("제목, 기관, 연도")가 쓰게 한다.
+            async with self._session_maker() as meta_session:
+                src_row = await meta_session.get(ProjectSource, source_id)
+                if src_row is not None and (src_row.metadata_ or {}).get("published_year") != year:
+                    src_row.metadata_ = {**(src_row.metadata_ or {}), "published_year": year}
+                    await meta_session.commit()
 
         # 본문 임베딩은 외부 I/O — DB 세션 밖에서. BGE-M3 자체 캐시가 재실행 시 비용을 흡수.
         # 배치를 끊어 넣는다: 한 번에 넣으면 배치 안 최장 청크에 맞춰 전부 패딩돼
@@ -260,6 +269,13 @@ class VectorIndexingService:
         # 자료 한 건당 ~2.6초. 실패해도 색인은 성공이다(services/qa/span_vectors).
         await store_quietly(self._session_maker, span_targets, client=self._embedding_client)
 
+        # 용어 채굴 - 문서 전체에서 정의·한영 병기를 캐 자료 행에 적립한다(작성 주입 재료,
+        # indexing/terms). 청크 단위가 아니라 문서 단위여야 한다 - 정의가 있는 자리와
+        # 용어가 쓰인 자리를 청킹이 갈라놓는 것이 이 기능이 막는 병리다. 실패 비치명.
+        await mine_and_store_quietly(
+            self._session_maker, source_id, clean_md, project_id=source.project_id
+        )
+
         elapsed = (time.perf_counter() - t0) * 1000
         logger.info(
             "indexing.complete",
@@ -278,7 +294,9 @@ class VectorIndexingService:
             parse_warnings=parse_result.warnings,
         )
 
-    async def _apply_doc_title(self, session, source_id: UUID, doc_title: str) -> None:
+    async def _apply_doc_title(
+        self, session, source_id: UUID, doc_title: str, bib: dict[str, str] | None = None
+    ) -> None:
         """파싱된 본문에서 뽑은 문서 제목을 자료 행에 반영한다(2026-08-21 사용자 요청).
 
         참고문헌·화면에 "63_16609_file_pdf_1646878149.pdf" 같은 ID형 파일명이 그대로
@@ -290,8 +308,14 @@ class VectorIndexingService:
         if row is None:
             return
         meta = dict(row.metadata_ or {})
-        if meta.get("doc_title") != doc_title:
-            meta["doc_title"] = doc_title
+        changed = meta.get("doc_title") != doc_title
+        meta["doc_title"] = doc_title
+        # 서지 조각(발행기관·호수) - 출처 표기가 파일명이 아니라 서지로 나가게(2026-08-27).
+        for key, value in (bib or {}).items():
+            if meta.get(key) != value:
+                meta[key] = value
+                changed = True
+        if changed:
             row.metadata_ = meta  # JSONB는 재할당해야 dirty로 잡힌다
         if _looks_like_id_filename(row.title or ""):
             logger.info(

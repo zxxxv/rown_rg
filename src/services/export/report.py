@@ -898,6 +898,22 @@ def _clean_source_title(title: str) -> str:
     return re.sub(r"\s{2,}", " ", text).strip(" -–—")
 
 
+def _bib_label(src: SourceRef) -> str:
+    """출처 표기 한 조각 — "제목, 발행기관, 2024년 17호" 꼴(미상 조각은 생략).
+
+    파일명·웹 제목이 그대로 나가던 것의 처방(2026-08-27 지시). 호수에 연도가 들어
+    있으면 연도를 따로 안 단다 — "…, 2024, 2024년 17호"는 표기가 아니라 소음이다.
+    """
+    parts = [_clean_source_title(src.title) or "(제목 없음)"]
+    if src.publisher:
+        parts.append(src.publisher)
+    if src.issue_label:
+        parts.append(src.issue_label)
+    elif src.published_year:
+        parts.append(str(src.published_year))
+    return ", ".join(parts)
+
+
 def _source_entry(index: int, src: SourceRef) -> str:
     """참고문헌 목록 한 줄 — '[n] 제목 (URL)'.
 
@@ -906,7 +922,7 @@ def _source_entry(index: int, src: SourceRef) -> str:
     이어 붙이면 어디까지가 제목인지 눈으로 갈리지 않는다(실납품도 "자료: 기관 홈페이지
     (https://…)" 꼴로 괄호에 넣는다, 2026-08-24 실측).
     """
-    line = f"[{index}] {_clean_source_title(src.title) or '(제목 없음)'}"
+    line = f"[{index}] {_bib_label(src)}"
     if src.url:
         line += f" ({src.url})"
     return line
@@ -941,9 +957,9 @@ def report_blocks(
     # 표기가 아니라 걷어내지만(2026-08-11), 표 아래 출처 줄로 살릴 것을 먼저 골라내야
     # 하므로 블록 단계(_attach_table_sources → _strip_citation_blocks)에서 처리한다.
     contents = {plan.section_id: drafts[plan.section_id].content for plan in rendered}
-    source_titles = {
-        i: (src.title.strip() or "(제목 없음)") for i, src in enumerate(state.sources, start=1)
-    }
+    # 표 밑 출처 줄도 참고문헌과 같은 서지 표기를 쓴다 - "제목.pdf; About RE100 - RE100"
+    # 이 아니라 "제목, 발행기관, 2024년 17호"(2026-08-27 지시).
+    source_titles = {i: _bib_label(src) for i, src in enumerate(state.sources, start=1)}
 
     # 본문을 먼저 조립한다 — 표·그림 목차는 번호 매겨진 캡션을 알아야 만들 수 있다.
     body: list[Block] = []

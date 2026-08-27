@@ -1438,6 +1438,11 @@ async def _adopted_source_refs(project_id: UUID) -> list[SourceRef]:
             title=r.title or r.url or "(제목 없음)",
             url=r.url,
             reliability=r.reliability,
+            publisher=(r.metadata_ or {}).get("publisher"),
+            issue_label=(r.metadata_ or {}).get("issue_label"),
+            published_year=(r.metadata_ or {}).get("published_year")
+            if isinstance((r.metadata_ or {}).get("published_year"), int)
+            else None,
         )
         for r in rows
     ]
@@ -1468,6 +1473,22 @@ async def _default_rule_texts(owner_id, selected: list) -> list[str]:
 
     async with async_session_maker() as session:
         return await resolve_rules(session, owner_id, selected)
+
+
+async def _default_term_entries(project_id) -> list[dict] | None:
+    """색인이 적립한 프로젝트 용어표 — 작성 루프 주입용(generation/term_rules).
+
+    끄여 있거나(설정) 비었거나 로드가 실패하면 None — 용어 없이도 작성은 성립한다.
+    """
+    if not settings.term_injection:
+        return None
+    from src.services.generation.term_rules import load_project_terms
+
+    try:
+        return await load_project_terms(project_id) or None
+    except Exception:
+        logger.warning("write.term_load_failed", project_id=str(project_id), exc_info=True)
+        return None
 
 
 async def _default_analyst_catalog(owner_id, options: dict | None = None) -> dict:
@@ -1595,6 +1616,7 @@ _analyst_catalog = _default_analyst_catalog
 # builds_on 주입용 청크 로더 — 인메모리 척추 테스트는 빈 목록 반환으로 교체한다.
 _chunk_loader = _default_chunk_loader
 _rule_texts = _default_rule_texts
+_term_entries = _default_term_entries
 _pm_verifier: Callable[[ProjectState], Awaitable[int]] = _default_pm_verifier
 
 
@@ -1713,6 +1735,7 @@ async def write(state: ProjectState) -> ProjectState:
         analyst_catalog=catalog,
         rules=rules,
         chunk_loader=_chunk_loader,
+        term_entries=await _term_entries(state.project_id),
     )
     if done_ids:
         # 전체 계획 복원 + 보존 절 meta 병합 — 이후 단계(조립·저장)는 전체 절 기준.
@@ -1823,35 +1846,6 @@ async def assemble(state: ProjectState) -> ProjectState:
         # 설명은 장식 — 실패해도 풀네임만으로 렌더를 계속한다.
         logger.warning("assemble.glossary_failed", project_id=str(pid), exc_info=True)
     # (표지 뒤 요약문 생성·렌더는 r6에서 제거 — 최종 산출물에 싣지 않기로 함, 2026-08-13.)
-    # 시사점 2~3쪽 요약 — 본문에 싣지 않는 별도 산출물이라 아래 렌더에는 넘기지 않는다
-    # (받아 볼 땐 /insights/export가 요약만 담은 한글 파일을 따로 렌더한다).
-    # 원본 보고서는 그대로 두고 별도 산출물만 만든다(2026-08-25 결정).
-    if settings.insights_enabled:
-        try:
-            from src.services.export.insights import build_insights, persist_insights
-
-            # 근거로 삼을 절은 사람이 고른 것이 정본이다(config._insights_sections).
-            # 재개해서 다시 조립할 때도 그 선택이 유지돼야 화면과 산출이 어긋나지 않는다.
-            picked_raw = (state.options or {}).get("_insights_sections") or None
-            picked = None
-            if isinstance(picked_raw, list) and picked_raw:
-                from uuid import UUID as _UUID
-
-                picked = []
-                for x in picked_raw:
-                    try:
-                        picked.append(_UUID(str(x)))
-                    except (ValueError, TypeError):
-                        continue
-                picked = picked or None
-            # 용어집과 같은 코루틴 상한 벨트 — 조립이 LLM 무응답에 물리면 안 된다.
-            insights = await asyncio.wait_for(
-                build_insights(state, section_ids=picked), timeout=240
-            )
-            await persist_insights(state.project_id, insights)
-        except Exception:
-            # 요약은 보조 산출물 — 실패해도 렌더·완료를 막지 않는다(화면이 빈 상태).
-            logger.warning("assemble.insights_failed", project_id=str(pid), exc_info=True)
     # 표지 작성자 — 소유자 이름. 실패해도 작성자 줄만 빠진다(렌더는 계속).
     if not state.author:
         try:

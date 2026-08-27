@@ -803,6 +803,11 @@ def _source_ref_from_row(row: ProjectSource) -> SourceRef:
         reliability=row.reliability,
         matched_sections=list(meta.get("matched_sections") or []),
         page_age=meta.get("page_age"),
+        publisher=meta.get("publisher"),
+        issue_label=meta.get("issue_label"),
+        published_year=meta.get("published_year")
+        if isinstance(meta.get("published_year"), int)
+        else None,
         preview=(relevance_excerpt(content_md, matched) or _source_preview(content_md))
         if usable
         else None,
