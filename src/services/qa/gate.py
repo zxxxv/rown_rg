@@ -238,16 +238,31 @@ def match_patterns(token: str) -> tuple[re.Pattern[str], ...]:
 
 
 def locate_probes(token: str) -> list[str]:
-    """SQL LIKE 사전 선별용 문자열 — 짧은 가수도 포함한다(넓게 긁고 패턴으로 좁힌다)."""
+    """SQL LIKE 사전 선별용 문자열 — 자릿수 환산 표기를 포함한다.
+
+    짧은 가수를 맨 문자열로 내보내면 안 된다 — "100만"의 가수 "1"은 LIKE %1%가
+    되어 사실상 모든 청크에 맞고, 후보 상한(limit)이 쓰레기로 차서 진짜 "100만"
+    청크가 밀려난다(2026-08-27 실측: 같은 문장의 610·19.8%는 흡수되는데 100만만
+    무근거로 남았다). 짧은 가수는 자릿수 낱말과 붙인 결합 프로브("1 million")로
+    내보낸다 — 확인 쪽(_short_mantissa_patterns)과 같은 눈금이다.
+    """
     out = list(number_variants(token))
     value = korean_magnitude(token)
     if value is not None:
-        for scale in _EN_SCALES:
+        for scale, words in _SCALE_WORDS.items():
             mantissa = value / scale
-            if 0.1 <= mantissa < 1000:
-                text = _trim(mantissa)
+            if not 0.1 <= mantissa < 1000:
+                continue
+            text = _trim(mantissa)
+            if len(text.replace(".", "")) >= _MIN_MANTISSA_DIGITS:
                 if text not in out:
                     out.append(text)
+            else:
+                for word in words.split("|"):
+                    for w in (word, word.capitalize()):
+                        probe = f"{text} {w}"
+                        if probe not in out:
+                            out.append(probe)
     return out
 
 

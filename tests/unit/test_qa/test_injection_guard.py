@@ -48,7 +48,10 @@ class TestLocateMatching:
     def test_short_mantissa_found_by_scale_word(self) -> None:
         """ "91억"은 코퍼스에 "USD 9.1 billion"으로 적힌다 - 낱말 패턴까지 있어야
         재검색이 찾고, 못 찾으면 실재 수치가 critical 창작이 된다."""
-        assert "9.1" in locate_probes("91억")
+        # 맨 "9.1"이 아니라 낱말 결합 프로브다 - 맨 짧은 문자열은 LIKE 홍수를 만든다
+        # ("100만"의 "1"이 모든 청크에 맞아 진짜 청크가 후보 캡에서 밀렸다).
+        assert "9.1 billion" in locate_probes("91억")
+        assert "1" not in locate_probes("100만")
         hay = normalize_haystack("total revenues reached USD 9.1 billion in 2024")
         assert any(p.search(hay) for p in match_patterns("91억"))
 
