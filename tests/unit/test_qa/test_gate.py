@@ -956,7 +956,8 @@ class TestShortMantissaSameSource:
     def test_같은_자료_전용_맨_가수(self) -> None:
         """원문 표가 "$5.2 billion"을 맨 셀 "5.2"로 적는다(v6 관세수입 표 실측).
         코퍼스 전체면 홍수라 금지지만, 인용 자료 한 권 스코프는 안전하다."""
-        assert short_mantissas("52억") == ["5.2"]
+        # "52"도 함께 - 표 머리 "(억원)"+맨 셀 표기(2026-08-28 확장, 같은 자료 한정).
+        assert short_mantissas("52억") == ["5.2", "52"]
         (p,) = short_mantissa_bare_patterns("52억")
         assert p.search("| 14 | 5.2 | 18.3 |")
         assert not p.search("value 5.23 rises")  # 소수 연장은 다른 수
@@ -1065,3 +1066,15 @@ class TestDecimalTailEquivalence:
 
         assert not number_in_text("50.0", normalize_haystack("값은 50.5 수준"))
         assert not number_in_text("50.0%", normalize_haystack("2050년 목표"))
+
+
+class TestKoreanFlatBareSameSource:
+    def test_table_head_unit_bare_cell(self) -> None:
+        """원문 표가 머리에 "(백만톤)"을 적고 셀엔 맨 수만 두는 표기(철강 실측):
+        "89백만"의 맨 "89"는 같은 자료 스코프에서만 잇는다 - 전역이면 홍수."""
+        assert "89" in short_mantissas("89백만")
+        pats = short_mantissa_bare_patterns("89백만")
+        hay = normalize_haystack("조강생산국순위(백만톤) : 중국(1 018) 인도(125) 일본(89) 미국(81)")
+        assert any(p.search(hay) for p in pats)
+        # 경계 유지 - 890이나 189의 토막이 아니다.
+        assert not any(p.search(normalize_haystack("총 1890억 규모")) for p in pats)

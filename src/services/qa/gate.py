@@ -342,7 +342,16 @@ def short_mantissas(token: str) -> list[str]:
             text = _trim(mantissa)
             if len(text.replace(".", "")) < _MIN_MANTISSA_DIGITS:
                 out.append(text)
-    return out
+    # 한국어 자리 단위의 짧은 평탄값도 같은 자료 스코프에서는 잇는다 - 원문 표가
+    # 머리에 "(백만톤)"을 한 번 적고 셀엔 맨 수("일본(89)")만 두는 표기 실측
+    # (2026-08-28 철강 6.2: 89백만·81백만·72백만 3건이 이 무늬로 무근거 잔존).
+    for unit_scale in (10**8, 10**6, 10**4):
+        flat = value / unit_scale
+        if 1 <= flat < 100 and abs(flat - round(flat)) < 1e-9:
+            text = _trim(round(flat))
+            if text not in out:
+                out.append(text)
+    return list(dict.fromkeys(out))
 
 
 @lru_cache(maxsize=2048)
