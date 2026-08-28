@@ -540,6 +540,11 @@ async def _execute(project_id: uuid.UUID) -> None:
                 logger.info("project.completed", project_id=str(project_id))
                 # 완료 알림 — 다운로드는 개요 헤더에 있다
                 await _notify_safe(owner_id, project_id, "success", page="overview")
+                # 서술 구성 통계 선계산 — 조회 시점 계산은 첫 클릭이 수십 초라
+                # 완성 직후 백그라운드로 채워 둔다(fire-and-forget, 실패해도 무관).
+                from src.api.routers.projects import precompute_evidence_composition
+
+                _spawn(precompute_evidence_composition(project_id))
     except cancel.RunCancelled:
         # 사용자 취소 — 실패가 아니라 깨끗한 중단으로 CANCELLED 확정(created 복귀 로직 회피).
         logger.info("project.cancelled", project_id=str(project_id))

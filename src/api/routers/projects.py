@@ -3181,9 +3181,9 @@ async def get_evidence_composition(
 ) -> EvidenceCompositionResponse:
     """서술 구성 통계 — 본문 문장이 어디까지 근거로 받쳐지는지 전체/장 단위 집계.
 
-    절 근거 패널과 **같은 판정 파이프라인**(get_section_evidence)을 절마다 돌려
-    합산한다 — 별도 약식 판정을 쓰면 패널 숫자와 어긋나 어느 쪽도 못 믿게 된다.
     자료 사용 통계와 같은 이유로 완성 보고서에서만 제공한다(번호 규약·본문 확정).
+    완성 시 선계산분(config 영속)이 있으면 그대로 읽고, 지문이 어긋난 경우
+    (사후 편집)에만 재계산한다.
     """
     project = await _get_authorized_project(project_id, session, current_user)
     if not _is_renumbered(project):
@@ -3191,16 +3191,41 @@ async def get_evidence_composition(
             message="서술 구성 통계는 보고서가 완성된 뒤에 제공됩니다",
             code="REPORT_NOT_ASSEMBLED",
         )
+    return await _compute_evidence_composition(session, project)
+
+
+# config 영속 키 — 프로세스 재시작에도 남고, 완성 시 선계산(runner)이 미리 채워
+# 첫 조회가 즉시 뜬다(2026-08-28 지시: "미리 연산시켜서 띄울 수 없나"). 사후 편집로
+# 지문이 어긋나면 그때만 재계산한다.
+_EVIDENCE_COMP_KEY = "_evidence_composition"
+
+
+async def _compute_evidence_composition(
+    session: AsyncSession, project: Project
+) -> EvidenceCompositionResponse:
+    """서술 구성 집계 본체 — 지문 검사(메모리→config 영속)와 계산을 한 자리에서.
+
+    절 근거 패널과 **같은 판정 파이프라인**(_section_evidence_payload)을 절마다 돌려
+    합산한다 — 별도 약식 판정을 쓰면 패널 숫자와 어긋나 어느 쪽도 못 믿게 된다.
+    """
     rows = [r for r in await _load_sections(session, project.id) if (r.content or "").strip()]
     fingerprint = f"{len(rows)}:{max((r.updated_at.isoformat() for r in rows), default='')}"
     cached = _EVIDENCE_COMP_CACHE.get(project.id)
     if cached is not None and cached[0] == fingerprint:
         return cached[1]
+    stored = (project.config or {}).get(_EVIDENCE_COMP_KEY)
+    if isinstance(stored, dict) and stored.get("fingerprint") == fingerprint:
+        try:
+            result = EvidenceCompositionResponse.model_validate(stored.get("payload"))
+            _EVIDENCE_COMP_CACHE[project.id] = (fingerprint, result)
+            return result
+        except Exception:
+            logger.warning("evidence_composition.stored_invalid", project_id=str(project.id))
 
     total = EvidenceTally()
     by_chapter: dict[int, ChapterEvidenceComposition] = {}
     for row in rows:
-        ev = await get_section_evidence(project.id, row.id, session, current_user)
+        ev = await _section_evidence_payload(session, project, row)
         ch = by_chapter.setdefault(
             row.chapter_number,
             ChapterEvidenceComposition(chapter_number=row.chapter_number, title=row.chapter_title),
@@ -3217,7 +3242,34 @@ async def get_evidence_composition(
         total=total, chapters=[by_chapter[n] for n in sorted(by_chapter)]
     )
     _EVIDENCE_COMP_CACHE[project.id] = (fingerprint, result)
+    # 영속 — 다음 프로세스(재배포·재시작)도 계산 없이 읽는다.
+    project.config = {
+        **(project.config or {}),
+        _EVIDENCE_COMP_KEY: {"fingerprint": fingerprint, "payload": result.model_dump()},
+    }
+    await session.commit()
     return result
+
+
+async def precompute_evidence_composition(project_id: UUID) -> None:
+    """완성 직후 선계산 훅 — 러너가 fire-and-forget으로 부른다(실패해도 런과 무관).
+
+    조회 시점 계산은 절당 1~2초 × 절 수라 첫 클릭이 수십 초 걸렸다. 완성 시점에
+    한 번 계산해 config에 심으면 화면은 저장분을 읽기만 한다.
+    """
+    from src.db.session import async_session_maker
+
+    try:
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None or not _is_renumbered(project):
+                return
+            await _compute_evidence_composition(session, project)
+        logger.info("evidence_composition.precomputed", project_id=str(project_id))
+    except Exception:
+        logger.warning(
+            "evidence_composition.precompute_failed", project_id=str(project_id), exc_info=True
+        )
 
 
 async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID) -> Section:
@@ -3236,6 +3288,8 @@ async def _get_section(session: AsyncSession, project_id: UUID, section_id: UUID
 _INTERNAL_CONFIG_KEYS = (
     "cancelled_from",
     "verify_resolved",
+    # 서술 구성 통계의 완성 시 선계산분 — 폼이 지우면 첫 조회가 다시 수십 초가 된다.
+    "_evidence_composition",
     # _verify_stamp = PM 검증이 판정한 본문의 지문·시각(pm_verify.persist_findings).
     # 폼이 config를 통째로 되돌려 보낼 때 지워지면 "낡은 경고" 표시가 조용히 꺼진다.
     "_verify_stamp",
@@ -3551,7 +3605,13 @@ async def get_section_evidence(
     """
     project = await _get_authorized_project(project_id, session, current_user)
     row = await _get_section(session, project.id, section_id)
+    return await _section_evidence_payload(session, project, row)
 
+
+async def _section_evidence_payload(
+    session: AsyncSession, project: Project, row: Section
+) -> SectionEvidenceResponse:
+    """근거 판정 본체 — 인증 없는 내부 진입점(통계 합산·완성 시 선계산이 공유)."""
     mapping, traceable = marker_chunk_ids(
         row.content or "", list(row.source_ids or []), row.meta, renumbered=_is_renumbered(project)
     )
