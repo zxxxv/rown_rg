@@ -63,13 +63,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { VerifyReportCard } from "@/features/export/VerifyReportCard";
 import { ChartConvertDialog } from "@/features/preview/ChartConvertDialog";
 import { claimTone } from "@/features/preview/ClaimHoverCard";
-import { appendSourceNumber, removeSourceNumber } from "@/features/preview/markers";
 import { chartFallbackTable } from "@/features/preview/chartSpec";
 import { BlockEvidence, partitionBlockEvidence } from "@/features/preview/EvidencePanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
+import { appendSourceNumber, removeSourceNumber } from "@/features/preview/markers";
 import { SectionVariantsPanel, SectionVariantsTrigger } from "@/features/preview/SectionVariants";
 import { type SourceLocation, SourceViewer } from "@/features/preview/SourceViewer";
-import { findTable, isTableCaption, type MarkdownTable } from "@/features/preview/tableToChart";
+import {
+  defaultChoice,
+  findTable,
+  isTableCaption,
+  type MarkdownTable,
+} from "@/features/preview/tableToChart";
 import { SectionHistoryPanel } from "@/features/versions/SectionHistoryPanel";
 import { VersionDiffView } from "@/features/versions/VersionDiffView";
 import { useAuth } from "@/hooks/useAuth";
@@ -952,6 +957,17 @@ function splitBlocks(content: string): string[] {
   return merged.map(text);
 }
 
+/** 이 블록이 "그래프로 바꿀 만한" 표인가 - 표를 담았고, 값으로 쓸 열이 실제로 있는가.
+ *
+ * 변환 버튼보다 조건이 좁다. 버튼은 표이기만 하면 열어 주고 왜 안 되는지는 대화상자가
+ * 설명하지만, **먼저 말을 거는 쪽**은 되는 것만 권해야 한다. 서술뿐인 표에 "그래프로"를
+ * 띄우면 눌러 보고 안 된다는 말만 듣게 된다. */
+function chartableTable(block: string): MarkdownTable | null {
+  const table = findTable(block);
+  if (table === null) return null;
+  return defaultChoice(table).seriesCols.length > 0 ? table : null;
+}
+
 function SectionView({
   projectId,
   sectionId,
@@ -1579,8 +1595,8 @@ function SectionView({
                     <p>
                       <b>대상 아님</b> - 애초에 대조 대상으로 안 잡는 줄입니다. 표 안의 행, 표·그림
                       제목, "(단위: 억 원)" 같은 표기 줄, 장·절 제목이 여기 해당합니다. 서술이
-                      아니라 구조물이라 근거 대조가 성립하지 않습니다. 본문 줄 수에서 대조한 줄
-                      수를 뺀 나머지가 이 숫자입니다.
+                      아니라 구조물이라 근거 대조가 성립하지 않습니다. 본문 줄 수에서 대조한 줄 수를
+                      뺀 나머지가 이 숫자입니다.
                     </p>
                   </HelpTip>
                   {claimStats ? (
@@ -1711,7 +1727,7 @@ function SectionView({
                     }
                   }}
                   className={cn(
-                    "relative cursor-pointer rounded border px-3 py-1.5 transition-colors",
+                    "group relative cursor-pointer rounded border px-3 py-1.5 transition-colors",
                     // 선택 블록은 강조 배경 + 좌측 굵은 띠로 한눈에 구분(다중 선택 전제)
                     selectedIdx.has(idx)
                       ? "border-accent bg-bg-info ring-1 ring-accent/40 pl-4 before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:rounded-l before:bg-accent"
@@ -1745,6 +1761,30 @@ function SectionView({
                     </div>
                   ) : (
                     <>
+                      {/* 그래프로 바꿀 수 있는 표라고 먼저 알린다. 변환 버튼은 블록을 하나만
+                          고른 뒤에야 나와서, 표가 그래프가 될 수 있다는 걸 알 방법이 없었다
+                          (2026-08-28). 작성 직후 자동 변환은 확신할 때만 바꾸므로 남은 표
+                          중에도 사람이 보면 바꿀 만한 것이 있다. 마우스를 얹거나 키보드로
+                          닿을 때만 떠 본문을 어지르지 않는다. */}
+                      {editable && chartableTable(block) !== null ? (
+                        <button
+                          type="button"
+                          title="이 표를 그래프로 바꿉니다 - 표의 수치를 그대로 쓰고 원본 표는 안에 보관됩니다"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedIdx(new Set([idx]));
+                            setConvertIdx(idx);
+                          }}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          // 자리는 블록 왼쪽 아래다. 오른쪽 위에는 근거 배지가 이미 둘
+                          // 있고(근거 수·근거 없음), 같은 자리에 두면 뒤에 깔려 안 보인다 -
+                          // opacity는 1인데 화면에는 없었다(2026-08-28 CDP 확인).
+                          className="absolute -bottom-2 left-2 z-10 inline-flex items-center gap-1 rounded-full border border-border bg-bg px-1.5 py-0.5 text-[10px] text-fg-secondary opacity-0 transition-opacity hover:border-border-strong hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+                        >
+                          <BarChart3 className="h-3 w-3" aria-hidden />
+                          그래프로
+                        </button>
+                      ) : null}
                       {/* 근거 있는 블록에만 표시를 달고, 눌렀을 때만 드로어를 연다 -
                           근거 0건 블록에서 빈 패널이 뜨는 불편을 없앤다(2026-08-12).
                           강한 경고(못 찾음·근거 없는 수치)가 있는 블록은 배지를 경고색으로 -

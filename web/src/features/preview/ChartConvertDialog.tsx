@@ -30,6 +30,7 @@ import {
   buildSpec,
   type ConvertChoice,
   defaultChoice,
+  hasMixedRowUnits,
   hasMixedUnits,
   type MarkdownTable,
   numericColumns,
@@ -210,6 +211,12 @@ export function ChartConvertDialog({
           {hasMixedUnits(table, choice.seriesCols) ? (
             <p className="text-xs text-fg-warning">
               단위가 다른 열을 함께 골랐습니다 - 한 축에 얹히므로 작은 값이 눌려 보입니다.
+            </p>
+          ) : null}
+          {hasMixedRowUnits(table, choice.xCol) ? (
+            <p className="text-xs text-fg-warning">
+              x축 항목마다 단위가 다릅니다 - 개수와 비율을 한 축에 얹으면 큰 값이 작은 값을 눌러
+              뜻이 흐려집니다.
             </p>
           ) : null}
           {ambiguous ? <p className="text-xs text-fg-warning">{ambiguous}</p> : null}

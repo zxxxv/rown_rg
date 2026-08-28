@@ -159,6 +159,24 @@ export function defaultChoice(table: MarkdownTable): ConvertChoice {
   };
 }
 
+/** 라벨 꼬리 괄호가 '단위'로 읽히면 그 단위 - 아니면 빈 문자열.
+ *
+ * 괄호 꼬리는 단위이기도 하고 한정어이기도 하다("(TWh)" vs "(아시아 지역 기준)").
+ * 짧고 공백이 없는 것만 단위로 본다(백엔드 table_to_chart._unit_tail와 같은 규칙). */
+function unitTail(label: string): string {
+  const tail = splitUnit(label)[1];
+  return tail.length > 0 && tail.length <= 6 && !/\s/.test(tail) ? tail : "";
+}
+
+/** x축 항목마다 단위가 다른가 - 전치된 표의 함정.
+ *
+ * "참여기업 수(개) 424"와 "이행률(%) 53"을 한 축에 얹으면 424가 53을 눌러 뜻이 없다.
+ * 값 열 단위만 보던 검사는 이 꼴을 통과시킨다 - 단위가 **행**에 있기 때문이다. */
+export function hasMixedRowUnits(table: MarkdownTable, xCol: number): boolean {
+  const units = new Set(table.rows.map((r) => unitTail(r[xCol] ?? "")));
+  return units.size > 1 && [...units].some(Boolean);
+}
+
 /** 고른 값 열들의 단위가 섞여 있는가 - 한 축에 얹으면 작은 값이 눌린다는 경고용. */
 export function hasMixedUnits(table: MarkdownTable, seriesCols: number[]): boolean {
   const units = seriesCols.map((c) => splitUnit(table.headers[c])[1]);
