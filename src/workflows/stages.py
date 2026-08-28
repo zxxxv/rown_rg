@@ -34,6 +34,7 @@ from src.services.indexing.web import WebSourceIndexer, build_web_source_indexer
 from src.services.research import ResearchResult, ResearchSpec, WebResearchService
 from src.services.research.web_research import collection_topic
 from src.services.retrieval.section import SectionRetriever
+from src.workflows import cancel
 from src.workflows.events import emit_phase, emit_step
 from src.workflows.write_loop import (
     auto_select_survivors,
@@ -797,6 +798,7 @@ async def index(state: ProjectState) -> ProjectState:
         )
     indexed: list[UUID] = [s.source_id for s in usable if s.source_id in already]
     for i, src in enumerate(todo, start=1):
+        cancel.raise_if_cancelled(pid)  # 자료 단위 취소 지점(파일 색인 루프와 같은 이유)
         title = f" · {src.title[:24]}" if src.title else ""
         emit_step(pid, "indexing", f"청킹·임베딩 {i}/{len(todo)}{title}", "started")
         result = await indexer.index_existing(
@@ -912,6 +914,10 @@ async def _index_pending_file_sources(project_id: UUID) -> None:
         return
     service = build_vector_indexing_service()
     for i, (row, file_path) in enumerate(todo, start=1):
+        # 자료 단위 취소 지점 — 색인 단계에 체크포인트가 없어 취소가 2연속 무시됐다
+        # (2026-08-28 v7 실측: cancelling 상태로 4/13→5/13 계속 진행, 백엔드 킬로만
+        # 멈춤). 파일 하나가 끝날 때마다 관측한다.
+        cancel.raise_if_cancelled(project_id)
         title = (row.title or "파일")[:24]
         emit_step(project_id, "indexing", f"파일 색인 {i}/{len(todo)} · {title}", "started")
         error: str | None = None
