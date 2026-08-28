@@ -307,6 +307,13 @@ def _state_from_project(project: Project) -> ProjectState:
             status = ProjectStage.CREATED.value
     if status == ProjectStage.WRITING.value:
         status = ProjectStage.INDEXING.value
+    elif status == ProjectStage.INDEXING.value:
+        # 색인 도중 죽은 런(표시 status=INDEXING)은 '색인 완료'가 아니다 — stage 값은
+        # "그 단계까지 완료" 마커라 그대로 두면 재개가 작성으로 직행한다(2026-08-28
+        # v7 실측 2회: 업로드 4/13 코퍼스로 Opus 작성 시작, 반쪽 보고서 ~$2 손실).
+        # 수집 완료 마커로 되감아 색인부터 다시 돈다 — 색인은 증분·멱등(청크 있는
+        # 자료 스킵)이고 GPU 원격이면 수 분이라, 완료 직후 재개가 겹쳐도 값싸다.
+        status = ProjectStage.RESEARCHING.value
     return ProjectState.from_db(
         {
             "id": project.id,

@@ -48,3 +48,20 @@ class TestCancelledResumePoint:
     def test_garbage_record_falls_back_to_created(self):
         row = _Row(ProjectStage.CANCELLED.value, {"cancelled_from": "존재하지않는단계"})
         assert _state_from_project(row).current_stage is ProjectStage.CREATED
+
+
+class TestInterruptedIndexingResume:
+    def test_indexing_display_status_rewinds_to_researching(self):
+        # 색인 도중 죽은 런 - stage 값은 "그 단계까지 완료" 마커라 INDEXING을 그대로
+        # 두면 재개가 작성으로 직행한다(2026-08-28 v7 실측 2회, 반쪽 코퍼스 작성).
+        row = _Row(ProjectStage.INDEXING.value)
+        assert _state_from_project(row).current_stage is ProjectStage.RESEARCHING
+
+    def test_cancelled_during_indexing_also_rewinds(self):
+        row = _Row(ProjectStage.CANCELLED.value, {"cancelled_from": ProjectStage.INDEXING.value})
+        assert _state_from_project(row).current_stage is ProjectStage.RESEARCHING
+
+    def test_writing_still_maps_to_indexing_not_researching(self):
+        # 작성 중 죽음은 색인 완료가 확실하다 - 되감기는 색인까지만(작성 증분 재개 유지).
+        row = _Row(ProjectStage.WRITING.value)
+        assert _state_from_project(row).current_stage is ProjectStage.INDEXING
