@@ -21,7 +21,17 @@ _MIN_YEAR = 1990
 _LABELED_RE = re.compile(
     r"(?:발행일|발행|발간|출판|발표|Published)[^\n\d]{0,12}(?<!\d)((?:19|20)\d{2})(?!\d)"
 )
-_KOREAN_DATE_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})\s*[.년]\s*\d{1,2}\s*[월.]")
+# 년.월.일 — 일까지 있어야 본문 서술과 갈린다(2026-08-28 v7 실측: "RE100은 …
+# 2014년 9월 UN 기후정상회의에서 도입"의 캠페인 출범연도가 발간연도로 저장돼
+# 연도 병존 판정 재료를 오염시켰다). 월 1~12·일 1~31 범위 검사는 DOI 조각
+# ("KSCCR.2025.16.2.267")이 날짜로 보이는 것을 막는다.
+_KOREAN_FULL_DATE_RE = re.compile(
+    r"(?<!\d)((?:19|20)\d{2})\s*[.년]\s*(?:1[0-2]|0?[1-9])\s*[월.]\s*(?:3[01]|[12]\d|0?[1-9])(?!\d)"
+)
+# 년.월뿐인 표기("2024. 8. 발간사")는 표지 서두에서만 믿는다 — 본문 프로즈의
+# "○○년 ○월"과 무늬가 같아 위치로만 가를 수 있다.
+_KOREAN_YM_HEAD_CHARS = 300
+_KOREAN_DATE_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})\s*[.년]\s*(?:1[0-2]|0?[1-9])\s*[월.]")
 _MONTH_DATE_RE = re.compile(
     r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(?<!\d)((?:19|20)\d{2})(?!\d)"
 )
@@ -60,11 +70,11 @@ def extract_published_year(title: str | None, text_head: str) -> int | None:
     ]
     if title_years:
         return max(title_years)
-    for pattern in (_KOREAN_DATE_RE, _MONTH_DATE_RE, _FY_RE):
+    for pattern in (_KOREAN_FULL_DATE_RE, _MONTH_DATE_RE, _FY_RE):
         year = _first(pattern, head)
         if year:
             return year
-    return None
+    return _first(_KOREAN_DATE_RE, head[:_KOREAN_YM_HEAD_CHARS])
 
 
 def year_from_page_age(page_age: str | None) -> int | None:

@@ -49,3 +49,26 @@ class TestPageAge:
         assert year_from_page_age("August 1, 2024") == 2024
         assert year_from_page_age(None) is None
         assert year_from_page_age("3 days ago") is None
+
+
+class TestProseDateGuard:
+    """본문 서술의 연도+월은 발간연도가 아니다(2026-08-28 v7 실측: RE100 출범 2014 오인)."""
+
+    def test_campaign_founding_year_in_prose_not_used(self):
+        head = (
+            "K-RE100 제도를 다룬다. " * 40
+            + "The Climate Group과 CDP의 파트너십으로 2014년 9월 UN 기후정상회의에서 도입."
+        )
+        assert extract_published_year("한국형(K)-RE100 제도 시행 1년, 성과와 시사점", head) is None
+
+    def test_full_date_deep_in_head_still_counts(self):
+        head = "머리말. " * 60 + "포스코경영연구원 2022.03.14 포스코경영연구소가 발간"
+        assert extract_published_year(None, head) == 2022
+
+    def test_year_month_only_trusted_near_cover(self):
+        head = "KEA 에너지 이슈 브리핑 제269호 2025. 6. 30. 본문"
+        assert extract_published_year(None, head) == 2025
+        assert extract_published_year(None, "2024. 8. 발간사 서두") == 2024
+
+    def test_doi_fragment_not_a_date(self):
+        assert extract_published_year(None, "DOI: 10.15531/KSCCR.2025.16.2.267 논문") is None
