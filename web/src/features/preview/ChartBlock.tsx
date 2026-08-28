@@ -147,6 +147,12 @@ function BarMarks({
           const y = Math.min(scale.y(v), scale.zeroY);
           const barH = Math.max(Math.abs(scale.y(v) - scale.zeroY), 1);
           const color = SERIES_COLORS[si];
+          // 값 라벨은 막대 바깥이 기본이되, 그림 영역을 벗어날 자리면 막대 안으로 넣는다.
+          // 축 끝까지 닿은 막대(-966)의 라벨이 밖으로 나가면 x축 항목명 위에 겹쳐 앉아
+          // 둘 다 못 읽는다(2026-08-28 렌더 확인).
+          const outsideY = v < 0 ? y + barH + 12 : y - 5;
+          const fitsOutside = v < 0 ? outsideY <= PAD.top + PLOT_H : outsideY >= PAD.top + 10;
+          const labelY = fitsOutside ? outsideY : v < 0 ? y + barH - 5 : y + 13;
           return (
             <g key={`${s.name}-${spec.x[i]}`}>
               {/* biome-ignore lint/a11y/noStaticElementInteractions: 값은 라벨·범례로 읽힌다 */}
@@ -165,10 +171,10 @@ function BarMarks({
               {showValues && (
                 <text
                   x={x + barW / 2}
-                  y={v < 0 ? y + barH + 12 : y - 5}
+                  y={labelY}
                   textAnchor="middle"
                   fontSize={10}
-                  fill={INK}
+                  fill={fitsOutside ? INK : labelInk(color)}
                 >
                   {formatValue(v)}
                 </text>
