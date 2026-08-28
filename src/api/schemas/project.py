@@ -80,10 +80,10 @@ class UserPresetSectionIn(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     direction: str = Field("", max_length=1000)
     key_points: list[str] = Field(default_factory=list, max_length=30)
-    # 목차 편집기의 상한(core/outline.MAX_AGENTS_PER_SECTION=8)과 정렬 — 5로 어긋나
-    # 있던 동안 편집기에서 6~8명 배정한 목차가 프리셋 저장에서만 422로 튕겼다
-    # (2026-08-28 실사용 보고: 5장 11절 전 절이 6~8명, 저장 6연속 거부).
-    agents: list[str] = Field(default_factory=list, max_length=8)
+    # 목차 편집기의 상한(core/outline.MAX_AGENTS_PER_SECTION=5)과 거울 — 어긋나면
+    # 편집기에선 되는 목차가 프리셋 저장에서만 튕긴다(2026-08-28 실사용: 6~8명 배정
+    # 목차의 프리셋 저장 6연속 422). 이제 목차 쪽도 5에서 막아 두 화면이 같은 상한.
+    agents: list[str] = Field(default_factory=list, max_length=5)
     builds_on: list[str] = Field(default_factory=list, max_length=4)
 
 

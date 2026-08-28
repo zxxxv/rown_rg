@@ -33,8 +33,9 @@ export const LIMITS = {
 } as const;
 
 /** core/outline.MAX_AGENTS_PER_SECTION 거울 - 넘으면 저장이 422로 막힌다.
- *  8인 이유: 7명 배정 절이 실측에서 성립했다(근거 75개·분량 목표 99%, 비용 +50~70%). */
-export const MAX_AGENTS_PER_SECTION = 8;
+ *  5인 이유(2026-08-28 결정): 절 분량이 최대 2만자대로 고정이라 관점이 많으면
+ *  관점당 지면이 얕아져 내용이 뭉개진다(7명 실측: 근거 잉여 + 비용 +50~70%). */
+export const MAX_AGENTS_PER_SECTION = 5;
 /** 권장 상한 - 초과는 경고만(검색이 여러 벌 돌아 비용이 늘고 효율이 꺾이는 지점). */
 export const AGENTS_WARN_THRESHOLD = 3;
 
@@ -321,7 +322,8 @@ export function collectOutlineIssues(chapters: ChapterLike[]): FormIssue[] {
           kind: "sec-no-analyst",
           level: "warning",
           where: label,
-          message: "담당 에이전트가 없어 관점·분량 목표 없이 기본 규칙만 적용됩니다.",
+          message:
+            "담당 에이전트가 없습니다. 관점과 목표 분량 없이 기본 규칙만 적용되어 절이 짧아집니다.",
           target: outlineTarget(ci, si, "analysts"),
         });
       }
@@ -334,7 +336,7 @@ export function collectOutlineIssues(chapters: ChapterLike[]): FormIssue[] {
           kind: "sec-too-many-analysts",
           level: "blocker",
           where: label,
-          message: `담당 에이전트가 절당 상한(${MAX_AGENTS_PER_SECTION}명)을 넘습니다 - 줄여야 저장됩니다.`,
+          message: `담당 에이전트를 ${s.analysts.length}명 골랐습니다. 절당 ${MAX_AGENTS_PER_SECTION}명까지만 저장되니 줄여 주세요.`,
           target: outlineTarget(ci, si, "analysts"),
         });
       } else if (s.analysts.length > AGENTS_WARN_THRESHOLD) {
@@ -343,7 +345,7 @@ export function collectOutlineIssues(chapters: ChapterLike[]): FormIssue[] {
           kind: "sec-many-analysts",
           level: "warning",
           where: label,
-          message: `담당 에이전트 ${s.analysts.length}명 - 검색이 여러 벌 돌아 비용이 늘어납니다(실측 절당 +50~70%). 분량이 특히 중요한 절이 아니면 2~${AGENTS_WARN_THRESHOLD}명을 권장합니다.`,
+          message: `담당 에이전트 ${s.analysts.length}명 - 검색을 여러 번 하게 되어 이 절의 비용이 늘어납니다(1명 늘 때마다 50~70%). 분량이 특히 중요한 절이 아니면 2~${AGENTS_WARN_THRESHOLD}명을 권장합니다.`,
           target: outlineTarget(ci, si, "analysts"),
         });
       }
