@@ -15,6 +15,7 @@ status는 척추 위치(work 단계: created→researching→…→completed)를
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from typing import Any
 
@@ -516,6 +517,14 @@ async def _execute(project_id: uuid.UUID) -> None:
                 except Exception:
                     logger.warning("project.stage_display_failed", project_id=str(project_id))
 
+            # 퇴장 도장 가드용 지문 - 런 도중 사용자가 목차를 저장하면 병합된
+            # plan이 config의 정본이 된다. 그때 in-memory plan을 무조건 재도장하면
+            # "저장 → 재개 → 옛 목차 회귀" 루프가 된다(2026-08-28 실사고: 11절 저장을
+            # 실패 런 퇴장이 8절로 세 번 되돌림). 시작 시점 지문을 기억해 두고,
+            # 퇴장 때 달라져 있으면 도장을 건너뛴다.
+            plan_stamp_before = json.dumps(
+                (project.config or {}).get(SECTION_PLAN_KEY), sort_keys=True, ensure_ascii=False
+            )
             state = await _rehydrate_section_plan(session, project.id, state)
             state = await _rehydrate_qa_selection(session, project.id, state)
             # 수집을 앞둔 재개(CREATED·PLANNING)면 스테이징돼 있던 출처를 상태로 복원 —
@@ -544,7 +553,22 @@ async def _execute(project_id: uuid.UUID) -> None:
             # 뒤지지 않고 그대로 이어받는다. **재할당이어야 한다**: JSONB를 in-place로
             # 고치면 SQLAlchemy가 dirty로 안 잡아 커밋해도 안 써진다(config_with_plan이
             # 항상 새 dict를 돌려주는 이유).
-            updated_config = config_with_plan(project.config, outcome.state.section_plan)
+            # 런 도중 목차가 저장됐으면(지문 변화) config의 병합 plan이 정본 -
+            # in-memory plan 도장을 건너뛴다. 같으면 종전대로 새겨 다음 구간이
+            # 게이트 payload를 뒤지지 않게 한다.
+            await session.refresh(project, ["config"])
+            plan_stamp_now = json.dumps(
+                (project.config or {}).get(SECTION_PLAN_KEY), sort_keys=True, ensure_ascii=False
+            )
+            if plan_stamp_now != plan_stamp_before:
+                logger.info(
+                    "run.plan_stamp_skipped",
+                    project_id=str(project_id),
+                    reason="run 도중 목차 저장 감지 - config 병합 plan 보존",
+                )
+                updated_config = dict(project.config or {})
+            else:
+                updated_config = config_with_plan(project.config, outcome.state.section_plan)
             # 리허설 재개방 카운터 — state.options는 영속 경로가 없어(config 재할당이
             # DB의 config 기준) 단계가 올린 값을 여기서 실어 나른다. 2회 상한의 진실.
             reopens = (
