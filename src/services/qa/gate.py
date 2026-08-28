@@ -275,6 +275,13 @@ def _variant_patterns(token: str) -> tuple[re.Pattern[str], ...]:
             continue
         tail = r"0*(?!\d)" if "." in v else r"(?!\d)"
         out.append(re.compile(rf"(?<!\d){re.escape(v)}{tail}"))
+        # 소수 꼬리가 전부 0인 표기("50.0")는 근거의 정수 표기("50%")와 같은 수다
+        # (2026-08-28 v7 심판 실측 3건: 석유화학 50.0%가 근거 50%를 못 만나 무근거로
+        # 남았다). 정수형도 후보에 넣되, "50.5"를 50으로 오인하지 않게 소수점+숫자
+        # 연속은 경계에서 금지한다("50.0" 자체는 위 원 패턴이 이미 받는다).
+        head, dot, frac = v.partition(".")
+        if dot and frac and set(frac) == {"0"} and head.lstrip("-").isdigit():
+            out.append(re.compile(rf"(?<!\d){re.escape(head)}(?!\d|\.\d)"))
     return tuple(out)
 
 

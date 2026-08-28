@@ -1049,3 +1049,19 @@ class TestDecimalToCompositeVariant:
         assert number_in_text("1.5조", normalize_haystack("총사업비는 1조 5천억 원 규모"))
         # 소수 0은 합성이 성립하지 않는다.
         assert all("천만" not in v for v in number_variants("244.0억"))
+
+
+class TestDecimalTailEquivalence:
+    """소수 꼬리 동치(2026-08-28 v7 심판 실측) - 본문 50.0%는 근거 50%와 같은 수다."""
+
+    def test_all_zero_fraction_matches_integer_evidence(self):
+        from src.services.qa.gate import normalize_haystack, number_in_text
+
+        assert number_in_text("50.0%", normalize_haystack("석유화학 50%, 전기전자 49.6%"))
+        assert number_in_text("7.00", normalize_haystack("약 7년 소요"))
+
+    def test_integer_form_does_not_absorb_different_decimal(self):
+        from src.services.qa.gate import normalize_haystack, number_in_text
+
+        assert not number_in_text("50.0", normalize_haystack("값은 50.5 수준"))
+        assert not number_in_text("50.0%", normalize_haystack("2050년 목표"))
