@@ -958,9 +958,9 @@ class TestShortMantissaSameSource:
         코퍼스 전체면 홍수라 금지지만, 인용 자료 한 권 스코프는 안전하다."""
         # "52"도 함께 - 표 머리 "(억원)"+맨 셀 표기(2026-08-28 확장, 같은 자료 한정).
         assert short_mantissas("52억") == ["5.2", "52"]
-        (p,) = short_mantissa_bare_patterns("52억")
-        assert p.search("| 14 | 5.2 | 18.3 |")
-        assert not p.search("value 5.23 rises")  # 소수 연장은 다른 수
+        pats = short_mantissa_bare_patterns("52억")
+        assert any(q.search("| 14 | 5.2 | 18.3 |") for q in pats)
+        assert not any(q.search("value 5.23 rises") for q in pats)  # 소수 연장은 다른 수
         assert short_mantissas("610") == []  # 자리 단위 없는 수는 대상 아님
 
 
