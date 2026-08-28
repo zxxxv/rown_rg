@@ -36,10 +36,19 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
 
   const sections = data?.sections ?? [];
+  // 미반영 절을 이어받는 절 - 미반영은 아니지만 전제가 바뀔 수 있어 후보로만 보인다.
+  const related = data?.related ?? [];
   // 잠긴 절은 고를 수 없다 - 골라 봐야 서버가 덜어낸다. 목록에는 남긴다:
   // 잠갔다고 설계와 어긋난 사실이 사라지지는 않는다.
-  const pickable = new Set(sections.filter((s) => !s.locked).map((s) => s.section_id));
+  const pickable = new Set([
+    ...sections.filter((s) => !s.locked).map((s) => s.section_id),
+    ...related.filter((r) => !r.locked).map((r) => r.section_id),
+  ]);
   const chosen = [...picked].filter((id) => pickable.has(id));
+  // '이대로 두기'는 미반영 표시를 지우는 동작이라 미반영 절에만 뜻이 있다 -
+  // 이어받는 절은 표시할 어긋남 자체가 없으니 걸러 보낸다.
+  const drifted = new Set(sections.map((s) => s.section_id));
+  const chosenDrifted = chosen.filter((id) => drifted.has(id));
   const running = status.data?.running ?? false;
   const failures = Object.entries(status.data?.failures ?? {});
 
@@ -64,7 +73,7 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
     });
 
   const onDismiss = () => {
-    dismiss.mutate(chosen, {
+    dismiss.mutate(chosenDrifted, {
       onSuccess: (res) => {
         setPicked(new Set());
         if (res.dismissed.length > 0) {
@@ -129,7 +138,7 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
           <Button
             variant="outline"
             size="sm"
-            disabled={chosen.length === 0 || running || dismiss.isPending}
+            disabled={chosenDrifted.length === 0 || running || dismiss.isPending}
             onClick={onDismiss}
           >
             <EyeOff className="mr-1 h-4 w-4" />
@@ -214,6 +223,42 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
           </li>
         ))}
       </ul>
+
+      {related.length > 0 ? (
+        <div className="flex flex-col gap-1.5 border-t border-fg-warning/20 pt-2">
+          <p className="text-xs text-fg-secondary">
+            아래는 위 절을 <b className="text-fg">이어받는</b> 절입니다. 설계가 바뀐 것은 아니지만,
+            위 절을 다시 쓰면 이어받는 내용의 전제가 바뀔 수 있습니다. 함께 다시 쓸지는 직접
+            고르세요 - 자동으로 선택하지 않습니다.
+          </p>
+          <ul className="flex flex-col gap-1.5">
+            {related.map((r) => (
+              <li key={r.section_id} className="flex flex-wrap items-center gap-1.5 text-xs">
+                <Checkbox
+                  id={`drift-rel-${r.section_id}`}
+                  checked={picked.has(r.section_id) && !r.locked}
+                  onCheckedChange={() => toggle(r.section_id)}
+                  disabled={running || r.locked}
+                  aria-label={`${r.label} 함께 다시 쓰기 선택`}
+                />
+                <label
+                  htmlFor={`drift-rel-${r.section_id}`}
+                  className="cursor-pointer font-medium text-fg"
+                >
+                  {r.label}
+                </label>
+                {r.locked ? (
+                  <Badge variant="outline" className="gap-1 font-normal text-fg-tertiary">
+                    <Lock className="h-3 w-3" aria-hidden />
+                    잠김
+                  </Badge>
+                ) : null}
+                <span className="text-fg-tertiary">{r.via.join(", ")}을(를) 이어받음</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {failures.length > 0 ? (
         <ul className="flex flex-col gap-1 border-t border-fg-warning/20 pt-2 text-xs text-fg-danger">

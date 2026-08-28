@@ -26,8 +26,20 @@ export const DriftSectionSchema = z.object({
 });
 export type DriftSection = z.infer<typeof DriftSectionSchema>;
 
+export const DriftRelatedSchema = z.object({
+  section_id: z.string(),
+  label: z.string(),
+  /** 어느 미반영 절을 이어받는가 - "왜 여기 떴는지"의 이유 */
+  via: z.array(z.string()).default([]),
+  locked: z.boolean().default(false),
+});
+export type DriftRelated = z.infer<typeof DriftRelatedSchema>;
+
 export const DriftSchema = z.object({
   sections: z.array(DriftSectionSchema).default([]),
+  /** 미반영 절을 이어받는(builds_on) 절 - 미반영은 아니지만 전제가 바뀔 수 있어
+   *  후보로만 보인다. 기본 미선택 - 고르는 것은 사람 몫(2026-08-28). */
+  related: z.array(DriftRelatedSchema).default([]),
   n_plan_changed: z.number().int().default(0),
   n_source_excluded: z.number().int().default(0),
   n_missing: z.number().int().default(0),

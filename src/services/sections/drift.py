@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 from uuid import UUID
 
+from src.core.builds_on import parse_ref
 from src.core.types import SectionPlan
 
 # 미반영 사유 — 화면 문구는 이 값에 매핑한다.
@@ -119,3 +120,118 @@ def detect_drift(
                 )
             )
     return out
+
+
+@dataclass(frozen=True)
+class RelatedSection:
+    """미반영 절을 이어받는(builds_on) 절 — 전제가 바뀔 수 있어 함께 보여준다.
+
+    미반영이 아니다: 이 절의 계약은 그대로다. 다만 이어받는 절이 다시 쓰이면
+    받아 오는 내용이 바뀔 수 있으므로, 같이 다시 쓸지는 사람이 고른다(자동 선택
+    금지 — 연쇄 재작성은 비용 사고다, 2026-08-28 지시: "선택은 사람의 몫").
+    """
+
+    section_id: UUID
+    label: str
+    via: tuple[str, ...]  # 어느 미반영 절을 이어받는가(사람이 읽는 이유)
+
+
+def related_sections(
+    plans: list[SectionPlan],
+    drifted: list[SectionDrift],
+) -> list[RelatedSection]:
+    """미반영 절을 builds_on으로 이어받는 절 — 직접(깊이 1) 의존만, 목차 순서.
+
+    깊이 1인 이유: 연쇄를 다 펴면 목차 한 줄에 보고서 절반이 후보로 떠 신호가
+    죽는다. 이어받은 절을 실제로 다시 쓰면 그 절이 새 미반영·연관의 기점이 된다.
+    builds_on은 런타임 plan에서 번호 라벨("4.1"|"4.*"|"4.1(지표)")이다 — planner가
+    id 토큰을 현재 번호로 되돌려 싣는 계약(generation/planner) 그대로 parse_ref로
+    읽는다(id 토큰 파싱은 여기선 성립하지 않는다, 2026-08-28 흐름 추적 실측).
+    """
+    if not drifted:
+        return []
+    pos_of: dict[UUID, tuple[int, int]] = {
+        p.section_id: (p.chapter_number, p.section_number) for p in plans
+    }
+    by_pos: dict[tuple[int, int], str] = {}
+    by_ch: dict[int, list[str]] = {}
+    for d in drifted:
+        pos = pos_of.get(d.section_id)
+        if pos is None:
+            continue
+        by_pos[pos] = d.label
+        by_ch.setdefault(pos[0], []).append(d.label)
+    drifted_ids = {d.section_id for d in drifted}
+    out: list[RelatedSection] = []
+    for plan in plans:
+        if plan.section_id in drifted_ids:
+            continue  # 이미 미반영 목록에 있다 - 두 번 보이면 사람이 헷갈린다
+        via: list[str] = []
+        for token in plan.builds_on:
+            ref = parse_ref(str(token))
+            if ref is None:
+                continue
+            if ref.section is None:
+                via.extend(by_ch.get(ref.chapter, []))
+            else:
+                label = by_pos.get((ref.chapter, ref.section))
+                if label:
+                    via.append(label)
+        if via:
+            out.append(
+                RelatedSection(
+                    section_id=plan.section_id,
+                    label=f"{plan.chapter_number}.{plan.section_number} {plan.title}",
+                    via=tuple(dict.fromkeys(via)),
+                )
+            )
+    return out
+
+
+def rewrite_order(plans: list[SectionPlan], targets: set[UUID]) -> list[UUID]:
+    """배치 재작성 실행 순서 — 이어받는 절은 그 상류가 같은 배치에 있으면 뒤로.
+
+    프론트는 클릭 순서대로 보내는데 그대로 돌리면 하류가 상류보다 먼저 재작성돼
+    옛 전제를 받은 채 끝난다(2026-08-28 흐름 추적). 배치 안 의존만 본다 — 배치 밖
+    상류는 이번에 안 바뀌므로 순서 제약이 없다. 순환은 목차 순으로 무해화한다.
+    """
+    pos_of = {p.section_id: (p.chapter_number, p.section_number) for p in plans}
+    id_by_pos = {v: k for k, v in pos_of.items()}
+    ids_by_ch: dict[int, list[UUID]] = {}
+    for sid, (ch, _sec) in pos_of.items():
+        ids_by_ch.setdefault(ch, []).append(sid)
+    deps: dict[UUID, set[UUID]] = {}
+    base: list[UUID] = []
+    for plan in plans:
+        if plan.section_id not in targets:
+            continue
+        base.append(plan.section_id)
+        d: set[UUID] = set()
+        for token in plan.builds_on:
+            ref = parse_ref(str(token))
+            if ref is None:
+                continue
+            cands = (
+                ids_by_ch.get(ref.chapter, [])
+                if ref.section is None
+                else [id_by_pos.get((ref.chapter, ref.section))]
+            )
+            d.update(c for c in cands if c is not None and c in targets and c != plan.section_id)
+        deps[plan.section_id] = d
+    # plan에 없는 대상(옛 절 등)은 제약 없음 - 원래 자리(마지막)에 둔다.
+    leftovers = [sid for sid in targets if sid not in deps]
+    out: list[UUID] = []
+    placed: set[UUID] = set()
+    remaining = list(base)
+    while remaining:
+        progressed = False
+        for sid in list(remaining):
+            if deps[sid] <= placed:
+                out.append(sid)
+                placed.add(sid)
+                remaining.remove(sid)
+                progressed = True
+        if not progressed:
+            out.extend(remaining)  # 순환 - 막지 말고 목차 순으로
+            break
+    return out + leftovers

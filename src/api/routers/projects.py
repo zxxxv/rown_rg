@@ -946,14 +946,26 @@ class DriftSectionRead(BaseModel):
     locked: bool = False
 
 
+class DriftRelatedRead(BaseModel):
+    """미반영 절을 이어받는 절 — 미반영은 아니지만 전제가 바뀔 수 있어 함께 보인다."""
+
+    section_id: str
+    label: str
+    # 어느 미반영 절을 이어받는가 — 화면이 "왜 여기 떴는지"를 말할 수 있게.
+    via: list[str]
+    locked: bool = False
+
+
 class DriftRead(BaseModel):
     """미반영 현황. 실행은 하지 않는다 — 무엇이 왜 미반영인지만 알려주고 사람이 고른다.
 
     자동 재작성을 안 하는 이유는 값이다: 절 하나 재작성이 실측 $0.67, 전체가 $15.5다.
-    목차 한 줄 고쳤다고 자동으로 돌면 사고다.
+    목차 한 줄 고쳤다고 자동으로 돌면 사고다. related도 같은 철학 — 이어받는 절은
+    후보로만 보이고 기본 미선택이다(2026-08-28 지시: "선택은 사람의 몫").
     """
 
     sections: list[DriftSectionRead]
+    related: list[DriftRelatedRead] = []
     n_plan_changed: int
     n_source_excluded: int
     n_missing: int
@@ -1042,6 +1054,9 @@ async def get_drift(
             snapshots[plan.section_id] = _snap(fallback, plan.section_id, "")
     titles = {sid: title for sid, title in dropped.values()}
     items = detect_drift(plans, snapshots)
+    from src.services.sections.drift import related_sections
+
+    related = related_sections(plans, items)
     return DriftRead(
         sections=[
             DriftSectionRead(
@@ -1055,6 +1070,15 @@ async def get_drift(
                 locked=locked_by_id.get(d.section_id, False),
             )
             for d in items
+        ],
+        related=[
+            DriftRelatedRead(
+                section_id=str(r.section_id),
+                label=r.label,
+                via=list(r.via),
+                locked=locked_by_id.get(r.section_id, False),
+            )
+            for r in related
         ],
         n_plan_changed=sum(1 for d in items if "plan_changed" in d.reasons),
         n_source_excluded=sum(1 for d in items if "source_excluded" in d.reasons),
@@ -1276,6 +1300,18 @@ async def _apply_section_rewrite(
         content = renumber_content(draft.content, cited, mapping)
     except Exception:
         logger.warning("rewrite.renumber_failed", project_id=str(project.id), exc_info=True)
+    # 사실 대장 재적립 — 이 절을 이어받는 절이 다음 재작성에서 **새 값**을 받게.
+    # 안 하면 상류를 다시 써도 대장은 옛 값이라 주입이 낡는다(2026-08-28 흐름 추적).
+    try:
+        from src.services.ledger import extract_entries
+
+        meta["ledger_entries"] = extract_entries(
+            draft.content,
+            f"{row.chapter_number}.{row.section_number}",
+            list(meta.get("pool_chunk_ids") or []),
+        )
+    except Exception:
+        logger.warning("rewrite.ledger_extract_failed", project_id=str(project.id), exc_info=True)
     # 덮어쓰기 전에 원본을 한 번 얼린다 - 버전이 없는 문서는 이 수정이 원본을 지운다
     # (2026-08-27 실측 18건 중 10건이 본문은 있는데 버전이 0이었다).
     from src.services.sections.versions import ensure_baseline_version
@@ -1449,6 +1485,19 @@ async def rewrite_batch(
             message="고른 절이 모두 잠겨 있습니다 - 먼저 잠금을 푸세요",
             code="ALL_SECTIONS_LOCKED",
         )
+    # 의존 순서 정렬 — 클릭 순서대로 돌리면 이어받는 절이 상류보다 먼저 재작성돼
+    # 옛 전제를 받은 채 끝난다(2026-08-28 흐름 추적). 배치 안 의존만 상류 먼저.
+    from src.core.section_plan import plan_from_config as _pfc
+    from src.services.sections.drift import rewrite_order
+
+    ordered = rewrite_order(_pfc(project.config), set(targets))
+    if ordered != targets:
+        logger.info(
+            "rewrite_batch.reordered",
+            project_id=str(project.id),
+            n=len(targets),
+        )
+        targets = ordered
     job = start_job(
         project.id,
         REWRITE_JOB,
@@ -3982,6 +4031,42 @@ def _plan_for_row(project: Project, row: Section) -> SectionPlan:
     )
 
 
+async def _ledger_for_rewrite(project_id: UUID, plan: SectionPlan) -> tuple[list, list]:
+    """재작성용 사실 대장 주입 재료 — 작성 루프와 같은 계약(2026-08-28 흐름 추적).
+
+    적립분은 각 절 행의 meta["ledger_entries"]에 있다(작성 루프·재작성 재적립이 채움).
+    builds_on이 없으면 조용히 빈손 — 주입이 재작성을 막으면 안 된다.
+    """
+    if not plan.builds_on:
+        return [], []
+    try:
+        from src.db.session import async_session_maker
+        from src.services.ledger import select_for_refs
+        from src.workflows.stages import _chunk_loader
+
+        async with async_session_maker() as session:
+            rows = (
+                await session.execute(select(Section.meta).where(Section.project_id == project_id))
+            ).all()
+        ledger_by_label: dict[str, list[dict]] = {}
+        for (meta,) in rows:
+            for e in (meta or {}).get("ledger_entries") or []:
+                ref = e.get("section_ref")
+                if ref:
+                    ledger_by_label.setdefault(str(ref), []).append(e)
+        entries, warns = select_for_refs(list(plan.builds_on), ledger_by_label)
+        if warns:
+            logger.info("rewrite.ledger_warnings", project_id=str(project_id), warnings=warns[:5])
+        if not entries:
+            return [], []
+        need = list(dict.fromkeys(cid for e in entries for cid in e.get("chunk_ids", [])))
+        chunks = await _chunk_loader([UUID(str(c)) for c in need])
+        return entries, chunks
+    except Exception:
+        logger.warning("rewrite.ledger_load_failed", project_id=str(project_id), exc_info=True)
+        return [], []
+
+
 async def _default_section_rewriter(
     project: Project, plan: SectionPlan, instruction: str
 ) -> SectionDraft:
@@ -4010,6 +4095,7 @@ async def _default_section_rewriter(
     )
     models = _models_for(state)
     retrieve = _default_retriever_factory(state)
+    ledger_entries, ledger_chunks = await _ledger_for_rewrite(project.id, plan)
     return await regenerate_section(
         section=plan,
         retrieve=retrieve,
@@ -4021,6 +4107,8 @@ async def _default_section_rewriter(
         analyst_catalog=await _analyst_catalog(project.owner_id, state.options),
         rules=await _rule_texts(project.owner_id, _selected_rule_ids(state)),
         term_entries=await _term_entries(project.id),
+        ledger_entries=ledger_entries,
+        ledger_chunks=ledger_chunks,
         user_id=project.owner_id,
         project_id=project.id,
     )

@@ -21,6 +21,7 @@ from src.services.generation.effort import write_effort
 from src.services.generation.split_writer import generate_section_split, plan_part_count
 from src.services.generation.term_rules import format_term_injection
 from src.services.generation.writer_context import build_writer_context, scale_for_evidence
+from src.services.ledger import format_injection
 from src.services.retrieval.section import SectionRetriever
 
 
@@ -35,6 +36,8 @@ async def regenerate_section(
     analyst_catalog: dict[str, Any] | None = None,
     rules: list[str] | None = None,
     term_entries: list[dict[str, Any]] | None = None,
+    ledger_entries: list[dict[str, Any]] | None = None,
+    ledger_chunks: list[Any] | None = None,
     user_id: UUID | None = None,
     project_id: UUID | None = None,
 ) -> SectionDraft:
@@ -63,6 +66,19 @@ async def regenerate_section(
         search_plan = section.model_copy(update={"direction": merged})
 
     chunks = await retrieve(search_plan)
+    if ledger_chunks:
+        # 사실 대장이 지목한 원 청크를 풀에 덧붙인다 - 작성 루프와 같은 조건
+        # (write_loop._ledger_injection). 없으면 이어받은 값이 인용 불가로 나가고,
+        # 재작성한 절만 builds_on 계약을 잃는다(2026-08-28 흐름 추적).
+        have = {str(c.chunk_id) for c in chunks}
+        chunks = [*chunks, *(c for c in ledger_chunks if str(c.chunk_id) not in have)]
+    if ledger_entries:
+        citable = [c for c in chunks if not c.is_summary]
+        local_no = {str(c.chunk_id): i + 1 for i, c in enumerate(citable)}
+        ledger_note = format_injection(ledger_entries, local_no)
+        if ledger_note:
+            joined = "\n\n".join(x for x in (ctx.guidance, ledger_note) if x)
+            ctx = replace(ctx, guidance=joined)
     if term_entries:
         # 용어 규칙 주입 — 작성 루프와 같은 조건(write_loop 참조). 재작성만 빠지면
         # 그 절만 용어 표기·정의가 달라진다(페르소나를 잃던 병리와 같은 축).
