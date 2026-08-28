@@ -57,11 +57,18 @@ function splitList(value: string): string[] {
     .filter(Boolean);
 }
 
-/** 숫자로 읽히면 숫자, 아니면 null - 표의 어느 열이 수치인지 가릴 때 쓴다.
- *  단위·기호가 섞여 있어도("120억", "3.2%") 숫자 부분만 읽는다. */
+// 음수를 나타내는 앞 기호. 한글 보고서는 마이너스를 '△'로 적는다(정부·한국은행 표기 관례).
+// 안 읽으면 "수입액 △934"가 +934로 그려져 감소가 증가로 뒤집힌다(백엔드와 같은 목록).
+const NEGATIVE_SIGNS = ["△", "▽", "−", "–", "-"];
+
+/** 값 하나로 읽히면 숫자, 아니면 null. "△36"은 -36으로 읽는다.
+ *  단위·기호가 붙어 있어도("120억", "3.2%") 숫자 부분만 읽는다. */
 export function tryNumber(token: string): number | null {
   const m = NUMBER_RE.exec(token);
-  return m === null ? null : Number(m[0].replace(/,/g, ""));
+  if (m === null) return null;
+  const value = Number(m[0].replace(/,/g, ""));
+  const prefix = token.slice(0, m.index).trim();
+  return NEGATIVE_SIGNS.some((s) => prefix.endsWith(s)) ? -Math.abs(value) : value;
 }
 
 function parseNumber(token: string): number {

@@ -276,3 +276,42 @@ def test_바꾸지_않은_본문은_한_글자도_안_바뀐다() -> None:
 문단이다.(출처 3)
 """
     assert convert_tables_to_charts(md).content == md
+
+
+# ── 프론트와 같은 규칙인가 ────────────────────────────────────────────────────
+
+
+class TestFrontendParity:
+    """값 판정 규칙이 화면과 서버에서 같은가.
+
+    어긋나면 사람이 화면에서 만든 그래프와 서버가 만든 그래프가 같은 표에서 다른 값을
+    그린다. 웹에는 테스트 러너가 없어(그래서 이 규칙들의 결함이 여태 안 잡혔다) 소스
+    리터럴을 직접 읽어 대조한다.
+    """
+
+    @staticmethod
+    def _web_source(name: str) -> str:
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[2] / "web" / "src" / "features" / "preview" / name
+        return path.read_text(encoding="utf-8")
+
+    def test_값_칸_판정식이_같다(self) -> None:
+        from src.core.table_to_chart import _NUMERIC_CELL_RE
+
+        source = self._web_source("tableToChart.ts")
+        assert f"const NUMERIC_CELL_RE = /{_NUMERIC_CELL_RE.pattern}/;" in source
+
+    def test_부호_기호_목록이_같다(self) -> None:
+        from src.core.table_to_chart import _AMBIGUOUS_SIGNS, _NEGATIVE_SIGNS
+
+        ambiguous = ", ".join(f'"{s}"' for s in _AMBIGUOUS_SIGNS)
+        negative = ", ".join(f'"{s}"' for s in _NEGATIVE_SIGNS)
+        assert f"const AMBIGUOUS_SIGNS = [{ambiguous}];" in self._web_source("tableToChart.ts")
+        assert f"const NEGATIVE_SIGNS = [{negative}];" in self._web_source("chartSpec.ts")
+
+    def test_계열_색이_같다(self) -> None:
+        from src.core.charts import SERIES_COLORS
+
+        colors = ", ".join(f'"{c}"' for c in SERIES_COLORS)
+        assert f"export const SERIES_COLORS = [{colors}];" in self._web_source("chartSpec.ts")

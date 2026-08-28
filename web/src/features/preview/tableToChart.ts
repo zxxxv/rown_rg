@@ -1,8 +1,12 @@
 // 본문 블록의 마크다운 표 -> 차트 스펙. 표를 그래프로 바꾸는 UI가 쓰는 변환 규칙이다.
 //
-// 자동으로 바꾸지 않는다 - 사람이 표를 보고 고른다. "이건 추세니 꺾은선", "이건 구성비니
-// 원형"은 데이터 모양만 봐서는 못 정하고, 표 수치는 이미 근거에 매여 게이트를 통과한 값이라
-// 값을 새로 만들 일도 없다. 여기서는 사람이 고르기 좋은 기본값만 세운다.
+// 여기서 화면이 하는 일은 사람이 고르기 좋은 기본값을 세우는 것까지다. "이건 추세니
+// 꺾은선", "이건 구성비니 원형"은 데이터 모양만 봐서는 못 정하는 판단이라 유형은 사람이
+// 고른다. 표 수치는 이미 근거에 매여 게이트를 통과한 값이라 값을 새로 만들 일은 없다.
+//
+// 사람이 없는 자리(검증런)에서는 백엔드 src/core/table_to_chart.py가 같은 규칙 위에
+// "확신할 때만" 판정을 얹어 작성 직후 한 번 바꾼다. 이 파일과 그 파일은 같은 답을 내야
+// 한다 - 어긋나면 화면에서 사람이 만든 그래프와 서버가 만든 그래프가 다른 값을 그린다.
 
 import { type ChartSpec, type ChartType, MAX_SERIES, tryNumber } from "./chartSpec";
 
@@ -80,15 +84,36 @@ export function findTable(block: string): MarkdownTable | null {
   return { caption, captionUnit, headers, rows: padded, source };
 }
 
-/** 값 열로 쓸 수 있는 열 번호 - 데이터 칸이 **전부** 숫자로 읽히는 열.
+// 셀 안의 인용 마커 - "(출처 7)"의 7은 값이 아니다(백엔드 table_check와 같은 관례).
+const CELL_MARK_RE = /\(출처\s*\d+(?:\s*,\s*\d+)*\s*\)|\[\d+\](?!\()/g;
+// 값 칸으로 인정하는 꼴 - 부호 + 숫자 + **붙어 있는** 짧은 단위꼬리. 그게 전부여야 한다.
+// 백엔드 table_to_chart._NUMERIC_CELL_RE와 같은 규칙이다.
+const NUMERIC_CELL_RE = /^[+\-−–△▽]?\s*\d[\d,]*(?:\.\d+)?[^\d\s]{0,4}$/;
+// 방향 화살표는 부호가 아니다 - '▲'는 문서마다 증가를 뜻하기도, 값의 부호이기도 하다.
+const AMBIGUOUS_SIGNS = ["▲", "▼"];
+
+/** 이 칸이 '값 하나'인가 - 숫자를 품은 서술문은 값이 아니다.
  *
- * 과반이 아니라 전부여야 한다. 한 칸이라도 숫자가 아니면 그 계열은 NaN이 되어 어차피
+ * tryNumber가 무엇이든 첫 숫자를 집어 주므로, 어느 열을 값 열로 삼을지는 이쪽이 정한다.
+ * 둘을 갈라 두지 않으면 서술 열이 조용히 계열이 된다 - 셀 끝 "(출처 7)"의 7을 값으로
+ * 읽고, "1단계 미인지"의 1을 값으로 읽고, "자료상 '23년 값만 제시"의 23을 값으로 읽었다
+ * (v7 실측, 2026-08-28). 숫자와 단위 사이 공백을 안 받는 것이 "1 미인지"와 "54.8%"를
+ * 가르는 유일한 구조다. */
+export function isNumericCell(cell: string): boolean {
+  const text = cell.replace(CELL_MARK_RE, " ").trim();
+  if (AMBIGUOUS_SIGNS.some((s) => text.includes(s))) return false;
+  return NUMERIC_CELL_RE.test(text);
+}
+
+/** 값 열로 쓸 수 있는 열 번호 - 데이터 칸이 **전부** 값 하나로 읽히는 열.
+ *
+ * 과반이 아니라 전부여야 한다. 한 칸이라도 값이 아니면 그 계열은 구멍이 나 어차피
  * 못 그린다. 과반 기준일 때 "의미" 같은 서술 열이(칸마다 연도·%가 섞여 있어서) 수치 열로
  * 뽑혀 기본 선택에 들어갔고, 사람은 왜 변환이 막히는지 모른 채 오류만 봤다. */
 export function numericColumns(table: MarkdownTable): number[] {
   return table.headers
     .map((_, col) => col)
-    .filter((col) => table.rows.every((r) => tryNumber(r[col]) !== null));
+    .filter((col) => table.rows.every((r) => isNumericCell(r[col])));
 }
 
 /** 머리글에서 단위 후보를 뗀다 - "투자액(억 달러)" -> ["투자액", "억 달러"]. */
@@ -155,7 +180,7 @@ export function ambiguousCell(
 ): string | null {
   for (const row of table.rows) {
     for (const col of choice.seriesCols) {
-      const cell = row[col]?.trim() ?? "";
+      const cell = (row[col] ?? "").replace(CELL_MARK_RE, " ").trim();
       const found = cell.match(NUMBERS_IN_CELL_RE) ?? [];
       if (found.length > 1) {
         return `'${row[choice.xCol]}' 행의 "${cell}"에서 ${tryNumber(cell)}만 씁니다 - 한 칸에 숫자가 여럿이라 값이 잘립니다`;
@@ -177,7 +202,7 @@ export function buildSpec(
   const series = choice.seriesCols.map((col) => ({
     name: splitUnit(table.headers[col])[0] || `계열 ${col + 1}`,
     // 숫자로 안 읽히는 칸은 NaN으로 남긴다 - 0으로 메우면 없는 값이 있는 값처럼 그려진다.
-    values: rows.map((r) => tryNumber(r[col]) ?? Number.NaN),
+    values: rows.map((r) => tryNumber(r[col].replace(CELL_MARK_RE, " ")) ?? Number.NaN),
   }));
   return {
     type: choice.type,
