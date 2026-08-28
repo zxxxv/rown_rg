@@ -26,6 +26,7 @@ import re
 from typing import Any
 
 from src.core.builds_on import parse_ref
+from src.core.charts import chart_fences_as_tables
 from src.services.qa.gate import significant_numbers
 from src.services.qa.table_check import _TABLE_LINE_RE, _cells_of, _clean_label
 
@@ -189,6 +190,9 @@ def extract_entries(
     prose는 검출 전용 백스톱이라 불릿 라벨이 있는 줄만 담는다 — 라벨 없는 문장에서
     지표명을 결정적으로 뽑을 방법이 없고, 약한 지표명은 조인 오탐만 만든다.
     """
+    # 차트로 바뀐 표는 바뀌기 전 모습으로 읽는다 — 펜스의 'series:' 스펙 줄을 사실로
+    # 적립하면 metric 이름이 그대로 'series'인 엔트리가 쌓인다(2026-08-28 실측).
+    content = chart_fences_as_tables(content)
     entries: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 

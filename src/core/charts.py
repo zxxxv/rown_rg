@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import re
+import textwrap
 from dataclasses import dataclass, field
 
 # 지원 차트 종류 — 보고서에서 실제로 쓰이는 형태로 한정한다.
@@ -222,6 +223,28 @@ def parse_chart_spec(body: str) -> ChartSpec:
 def has_chart_fence(md: str) -> bool:
     """본문 조각에 차트 펜스가 들어 있는가 — AI 재작성에서 걸러 내기 위한 판정."""
     return CHART_FENCE_RE.search(md) is not None
+
+
+# 펜스 안에 보관된 원본 표 — 'table: |' 뒤 들여쓴 블록(report.py·chartSpec.ts와 같은 규칙).
+_FENCE_TABLE_RE = re.compile(r"^table:[ \t]*\|[ \t]*\n(?P<table>(?:[ \t]+.*\n?)+)", re.M)
+
+
+def chart_fences_as_tables(md: str) -> str:
+    """차트 펜스를 그 안에 보관된 **원본 표**로 되돌린 사본 — 검사망이 읽을 형태.
+
+    검사망(사실 대장·수치 대조)은 차트를 몰라도 된다. 오히려 알면 해롭다: 펜스의
+    ``series: 조달 비중 = 50 | 59`` 같은 스펙 줄을 '명시된 사실'로 읽어 metric 이름이
+    그대로 'series'인 엔트리를 적립했다(v7 8개 절 전부, 2026-08-28 실측).
+
+    표를 차트로 바꾼 것은 **표현**이지 내용이 아니므로, 검사망에는 바꾸기 전 모습을
+    보여 준다. 이 한 겹 덕에 검출기 15종 중 어느 것도 변환 전후로 답이 달라지지 않는다.
+    """
+
+    def _sub(match: re.Match[str]) -> str:
+        table = _FENCE_TABLE_RE.search(match.group("body"))
+        return textwrap.dedent(table.group("table")).strip() if table else ""
+
+    return CHART_FENCE_RE.sub(_sub, md)
 
 
 def to_fence(spec: ChartSpec) -> str:
