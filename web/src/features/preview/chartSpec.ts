@@ -184,8 +184,18 @@ export function toFence(spec: ChartSpec): string {
   return `\`\`\`chart\n${toFenceBody(spec)}\n\`\`\``;
 }
 
-/** 값 라벨 - 정수는 천 단위 쉼표, 소수는 한 자리(백엔드 _format_value와 같은 규칙). */
+/** 값 라벨 - 정수는 천 단위 쉼표, 소수는 한 자리(백엔드 _format_value와 같은 규칙).
+ *
+ * 0이 아닌 값을 "0"이라고 쓰지는 않는다. 반올림만 하던 때는 산출 변화율 △0.02가 라벨
+ * "0"으로 찍혔다 - 감소가 있었다는 것이 그 표의 요지인데 그림은 없었다고 말한 셈이다. */
 export function formatValue(value: number): string {
-  if (Math.abs(value - Math.round(value)) < 0.05) return Math.round(value).toLocaleString("ko-KR");
-  return value.toLocaleString("ko-KR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  if (Math.abs(value - Math.round(value)) < 0.05 && (Math.round(value) !== 0 || value === 0)) {
+    return Math.round(value).toLocaleString("ko-KR");
+  }
+  let digits = 1;
+  while (digits < 4 && Math.abs(value) < 0.5 * 10 ** -digits) digits++;
+  return value.toLocaleString("ko-KR", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
 }

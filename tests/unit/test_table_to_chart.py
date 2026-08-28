@@ -315,3 +315,24 @@ class TestFrontendParity:
 
         colors = ", ".join(f'"{c}"' for c in SERIES_COLORS)
         assert f"export const SERIES_COLORS = [{colors}];" in self._web_source("chartSpec.ts")
+
+
+# ── 값 라벨 ───────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("value", "label"),
+    [
+        (120, "120"),
+        (4027, "4,027"),
+        (11.8, "11.8"),
+        (0, "0"),
+        (-934, "-934"),
+        (-0.02, "-0.02"),  # 0이 아닌 값을 "0"이라 쓰면 감소가 없었다는 말이 된다
+        (0.001, "0.001"),
+    ],
+)
+def test_값_라벨(value: float, label: str) -> None:
+    from src.export.chart_render import _format_value
+
+    assert _format_value(value) == label

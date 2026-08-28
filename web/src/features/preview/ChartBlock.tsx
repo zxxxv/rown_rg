@@ -32,29 +32,42 @@ interface HoverPoint {
   color: string;
 }
 
-/** 눈금 값 - 0에서 최대값 **이상**까지 사람이 읽기 좋은 간격으로.
+/** 눈금 값 - 데이터를 **감싸는** 범위를 사람이 읽기 좋은 간격으로. 0은 늘 포함한다.
  *
- * 마지막 눈금이 최대값보다 낮으면 안 된다. 축 위쪽이 데이터보다 짧으면 막대와 선이
- * 그림 영역을 넘어가 잘리는데(1,419가 눈금 1,000에서 끝난 축을 뚫고 나가 선이 통째로
- * 사라졌다), SVG는 넘친 자리를 그냥 자를 뿐 아무 표시도 하지 않는다. */
-function ticks(max: number): number[] {
-  if (max <= 0) return [0];
-  const raw = max / 4;
+ * 마지막 눈금이 최대값보다 낮으면 안 된다. 축이 데이터보다 짧으면 막대와 선이 그림
+ * 영역을 넘어가 잘리는데(1,419가 눈금 1,000에서 끝난 축을 뚫고 나가 선이 통째로
+ * 사라졌다), SVG는 넘친 자리를 그냥 자를 뿐 아무 표시도 하지 않는다.
+ *
+ * 아래쪽도 같다. 음수를 안 받던 때는 "수입액 △934"짜리 막대가 높이 0으로 그려져
+ * 아예 안 보였다(2026-08-28). 감액·감소율 표가 자동 변환으로 들어오면서 실제 값이 됐다. */
+function ticks(min: number, max: number): number[] {
+  const lo = Math.min(min, 0);
+  const hi = Math.max(max, 0);
+  if (hi === lo) return [0];
+  const raw = (hi - lo) / 4;
   const mag = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? mag * 10;
   // 부동소수 오차로 눈금이 하나 더 붙는 것을 막으려 아주 작은 값을 빼고 올린다.
-  const count = Math.max(Math.ceil(max / step - 1e-9), 1);
-  return Array.from({ length: count + 1 }, (_, i) => i * step);
+  const from = Math.floor(lo / step + 1e-9);
+  const to = Math.ceil(hi / step - 1e-9);
+  return Array.from({ length: to - from + 1 }, (_, i) => {
+    const v = (from + i) * step;
+    // 0.1 * 3 같은 부동소수 찌꺼기가 눈금 글자에 새지 않게 간격 자릿수로 맞춘다.
+    return Number(v.toFixed(Math.max(0, -Math.floor(Math.log10(step)) + 1)));
+  });
 }
 
 function useScale(spec: ChartSpec) {
   return useMemo(() => {
     const all = spec.series.flatMap((s) => s.values);
-    const max = Math.max(...all, 0);
-    const tickValues = ticks(max);
-    const top = tickValues[tickValues.length - 1] || 1;
-    // 양수 데이터는 0을 바닥으로 - 밑을 자르면 증가폭이 실제보다 커 보인다.
-    return { top, tickValues, y: (v: number) => PAD.top + PLOT_H - (v / top) * PLOT_H };
+    const tickValues = ticks(Math.min(...all, 0), Math.max(...all, 0));
+    const top = tickValues[tickValues.length - 1];
+    const bottom = tickValues[0];
+    // 양수만이면 bottom이 0이라 0을 바닥으로 삼는 것과 같다 - 밑을 자르면 증가폭이
+    // 실제보다 커 보인다. 음수가 섞이면 축이 0 아래로 내려가고 0선이 기준이 된다.
+    const span = top - bottom || 1;
+    const y = (v: number) => PAD.top + PLOT_H - ((v - bottom) / span) * PLOT_H;
+    return { top, bottom, tickValues, y, zeroY: y(0) };
   }, [spec]);
 }
 
@@ -63,12 +76,14 @@ function Axes({ scale }: { scale: ReturnType<typeof useScale> }) {
     <g>
       {scale.tickValues.map((v) => (
         <g key={v}>
+          {/* 0선은 음수가 섞일 때 기준선이라 격자보다 진하게 - 어디가 0인지 안 보이면
+              아래로 자란 막대를 읽을 수 없다. */}
           <line
             x1={PAD.left}
             x2={PAD.left + PLOT_W}
             y1={scale.y(v)}
             y2={scale.y(v)}
-            stroke={GRID}
+            stroke={v === 0 && scale.bottom < 0 ? INK : GRID}
             strokeWidth={1}
           />
           <text x={PAD.left - 8} y={scale.y(v) + 4} textAnchor="end" fontSize={11} fill={INK}>
@@ -127,7 +142,10 @@ function BarMarks({
       {spec.series.map((s, si) =>
         s.values.map((v, i) => {
           const x = PAD.left + band * (i + 0.5) - (barW * n) / 2 + barW * si;
-          const y = scale.y(v);
+          // 막대는 0선에서 자란다 - 음수는 아래로. 높이를 바닥에서 재면 음수 막대가
+          // 높이 0이 되어 통째로 사라진다.
+          const y = Math.min(scale.y(v), scale.zeroY);
+          const barH = Math.max(Math.abs(scale.y(v) - scale.zeroY), 1);
           const color = SERIES_COLORS[si];
           return (
             <g key={`${s.name}-${spec.x[i]}`}>
@@ -136,7 +154,7 @@ function BarMarks({
                 x={x + 1} // 이웃 막대 사이 2px 틈
                 y={y}
                 width={Math.max(barW - 2, 1)}
-                height={Math.max(PAD.top + PLOT_H - y, 0)}
+                height={barH}
                 rx={3}
                 fill={color}
                 onMouseEnter={() =>
@@ -145,7 +163,13 @@ function BarMarks({
                 onMouseLeave={() => onHover(null)}
               />
               {showValues && (
-                <text x={x + barW / 2} y={y - 5} textAnchor="middle" fontSize={10} fill={INK}>
+                <text
+                  x={x + barW / 2}
+                  y={v < 0 ? y + barH + 12 : y - 5}
+                  textAnchor="middle"
+                  fontSize={10}
+                  fill={INK}
+                >
                   {formatValue(v)}
                 </text>
               )}

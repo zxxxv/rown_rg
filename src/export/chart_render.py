@@ -68,10 +68,19 @@ def _apply_style(font: str) -> None:
 
 
 def _format_value(value: float) -> str:
-    """값 라벨 — 정수는 천 단위 쉼표, 소수는 한 자리까지."""
-    if abs(value - round(value)) < 0.05:
+    """값 라벨 — 정수는 천 단위 쉼표, 소수는 한 자리까지.
+
+    다만 0이 아닌 값을 "0"이라고 쓰지는 않는다. 반올림만 하던 때는 산출 변화율
+    △0.02가 라벨 "0"으로 찍혔다(2026-08-28 렌더 확인) — 감소가 있었다는 것이 그 표의
+    요지인데 그림은 없었다고 말한 셈이다. 유효숫자가 보일 때까지 자릿수를 늘린다.
+    웹 chartSpec.formatValue가 같은 규칙을 쓴다.
+    """
+    if abs(value - round(value)) < 0.05 and (round(value) != 0 or value == 0):
         return f"{round(value):,}"
-    return f"{value:,.1f}"
+    digits = 1
+    while digits < 4 and abs(value) < 0.5 * 10**-digits:
+        digits += 1
+    return f"{value:,.{digits}f}"
 
 
 def _fit_x_labels(labels: tuple[str, ...]) -> list[str]:
@@ -99,7 +108,14 @@ def _draw_bar(ax, spec: ChartSpec) -> None:
             ax.bar_label(bars, labels=[_format_value(v) for v in s.values], padding=2, fontsize=8)
     ax.set_xticks(list(positions))
     ax.set_xticklabels(_fit_x_labels(spec.x))
-    ax.set_ylim(bottom=0)
+    # 양수 데이터는 0에서 시작한다 — 밑을 잘라내면 증가폭이 실제보다 커 보인다.
+    # 음수가 섞이면 축을 자동에 맡기고 0선을 그어 어디가 기준인지 보이게 한다.
+    # 감액·감소율 표(수입액 △934)가 자동 변환으로 들어오면서 실제로 필요해졌다 —
+    # 바닥을 0에 못 박고 있던 탓에 음수 막대가 통째로 안 보였다(2026-08-28).
+    if all(v >= 0 for s in spec.series for v in s.values):
+        ax.set_ylim(bottom=0)
+    else:
+        ax.axhline(0, color=_TEXT_SECONDARY, linewidth=0.8)
 
 
 def _draw_line(ax, spec: ChartSpec) -> None:
