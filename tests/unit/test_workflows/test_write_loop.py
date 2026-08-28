@@ -744,3 +744,72 @@ class TestTermInjection:
         )
         assert all("용어 규칙" not in r.messages[0].content for r in client.calls)
         assert "term_rules" not in result.section_meta[s1.section_id]
+
+
+class TestAutoChartConversion:
+    """작성 직후 표 → 차트 변환 — 사람 없이도 그래프가 실리는 유일한 경로."""
+
+    _TABLE = """
+
+표: 주요국 투자 현황
+(단위: 억 달러)
+| 국가 | 투자액 |
+|---|---|
+| 미국 | 120 |
+| 중국 | 95 |
+| 한국 | 30 |
+"""
+
+    async def test_적합한_표는_차트가_되어_본문에_남는다(self):
+        state, chunk = _mk_state(["개요"])
+
+        async def retrieve(section):
+            return [chunk]
+
+        client = _StubClient("본문입니다. [1] " * 30 + self._TABLE)
+        result = await run_write_loop(state, retrieve=retrieve, client=client, n=1)
+
+        content = result.section_candidates[0].survivors[0].draft.content
+        assert "```chart" in content
+        assert "series: 투자액 = 120 | 95 | 30" in content  # 값은 표 셀 그대로
+        assert "| 미국 | 120 |" in content  # 원본 표는 펜스 안에 남는다
+        assert result.section_meta[state.section_plan[0].section_id]["auto_charts"] == ["bar"]
+
+    async def test_적합하지_않은_표는_그대로_둔다(self):
+        """서술 열뿐인 표 — 바꿀 게 없으면 본문도 meta도 건드리지 않는다."""
+        state, chunk = _mk_state(["개요"])
+
+        async def retrieve(section):
+            return [chunk]
+
+        narrative = """
+
+표: 주요국 동향
+| 구분 | 주요 동향 |
+|---|---|
+| EU | 수소환원제철 가속 |
+| 일본 | 시험설비 지원 확대 |
+| 한국 | 로드맵 추진 |
+"""
+        client = _StubClient("본문입니다. [1] " * 30 + narrative)
+        result = await run_write_loop(state, retrieve=retrieve, client=client, n=1)
+
+        content = result.section_candidates[0].survivors[0].draft.content
+        assert "```chart" not in content
+        assert "| EU | 수소환원제철 가속 |" in content
+        assert "auto_charts" not in result.section_meta[state.section_plan[0].section_id]
+
+    async def test_사실_대장은_차트가_생겨도_같은_값을_적립한다(self):
+        """적립은 변환 전 표를 읽는다 — 스펙 줄이 'series'라는 지표로 쌓이면 안 된다."""
+        state, chunk = _mk_state(["개요"])
+
+        async def retrieve(section):
+            return [chunk]
+
+        client = _StubClient("본문입니다. [1] " * 30 + self._TABLE)
+        result = await run_write_loop(state, retrieve=retrieve, client=client, n=1)
+
+        entries = result.section_meta[state.section_plan[0].section_id]["ledger_entries"]
+        metrics = {e["metric"] for e in entries}
+        assert "series" not in metrics
+        assert {"미국", "중국", "한국"} <= metrics

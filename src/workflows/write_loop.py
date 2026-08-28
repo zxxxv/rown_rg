@@ -23,6 +23,7 @@ from src.core.builds_on import parse_ref
 from src.core.config import settings
 from src.core.section_plan import dump_section_plan, load_section_plan
 from src.core.state import ProjectState
+from src.core.table_to_chart import convert_tables_to_charts
 from src.core.types import (
     CheckSeverity,
     GateResult,
@@ -453,6 +454,20 @@ async def run_write_loop(
                 if chain_entry is not None:
                     section_meta[section.section_id]["chain_summary"] = chain_entry
                     chain_by_chapter.setdefault(section.chapter_number, []).append(chain_entry)
+            # 표 → 차트 — 사람이 없어도 그래프가 실리게. 값은 표 셀 그대로이고 원본 표는
+            # 펜스 안에 남는다. 적립·요약을 끝낸 뒤에 바꾸는 이유는 그 둘이 표를 읽는
+            # 쪽이기 때문이다 — 순서를 바꾸면 요약이 스펙 줄을 읽는다.
+            chart_report = convert_tables_to_charts(cset.survivors[0].draft.content)
+            if chart_report.converted:
+                cset.survivors[0].draft.content = chart_report.content
+                section_meta[section.section_id]["auto_charts"] = chart_report.types
+                logger.info(
+                    "write_loop.charts_converted",
+                    project_id=str(pid),
+                    section=label_ref,
+                    types=chart_report.types,
+                    skipped=chart_report.skipped,
+                )
         if draft_store is not None:
             # 절 완성 즉시 초안 영속화 — 편집기 미리보기가 진행 중에도 완성분을 보여준다
             survivor = cset.survivors[0].draft if cset.survivors else None
