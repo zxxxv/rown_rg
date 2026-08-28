@@ -145,19 +145,47 @@ _XREF_SECTION_RE = re.compile(r"(?<![\d.])(\d{1,2})\.(\d{1,2})\s*절")
 # 장 참조는 반드시 "제N장"이어야 한다. "N장"만 받으면 수량이 걸린다 - 실측에서
 # "추론 보드 10장~20장 구성"이 없는 장 참조로 잡혔다(2026-08-12).
 _XREF_CHAPTER_RE = re.compile(r"제\s*(\d{1,2})\s*장")
-# 앞을 가리키는 말. 보고서 첫 절에 나오면 가리킬 대상이 없다.
-_BACKREF_RE = re.compile(r"앞서|앞 절|전술한|위에서 (?:살펴|언급|서술)|상기한")
+# 앞을 가리키는 말. 보고서 첫 절에 나오면 가리킬 대상이 없다. "그에/이에 앞서"는
+# 문서가 아니라 시간을 가리킨다(2026-08-28 v7 실측: "2050년이며, 그에 앞서 2030년·
+# 2040년 …"이 첫 절 후방참조로 오탐).
+_BACKREF_RE = re.compile(r"(?<!에 )(?<!보다 )앞서|앞 절|전술한|위에서 (?:살펴|언급|서술)|상기한")
+# 이름으로 장을 가리키는 표기("시사점 장에서 전개", 2026-08-28 v7 실측: 그런 장이
+# 없었다). 이름과 '장' 사이 띄어쓰기가 필수다 — 붙여 쓰면 "시장에서"·"공사장에서"
+# 같은 일반 명사와 못 가르므로 보수적으로 놓친다.
+_XREF_NAMED_CHAPTER_RE = re.compile(r"([가-힣]{2,10})\s+장(?:에서|으로|에)")
+# 상대 지시어는 이름이 아니다 — 실재 여부를 제목으로 판정할 수 없다.
+_NAMED_CHAPTER_STOP = {
+    "이",
+    "그",
+    "본",
+    "각",
+    "다음",
+    "이번",
+    "해당",
+    "별도",
+    "별도의",
+    "앞선",
+    "마지막",
+    "모든",
+    "전체",
+}
 
 
-def dangling_references(sections: list[tuple[str, str]]) -> list[tuple[str, str]]:
+def dangling_references(
+    sections: list[tuple[str, str]],
+    chapter_titles: list[str] | None = None,
+) -> list[tuple[str, str]]:
     """실재하지 않는 절·장을 가리키는 문구를 찾는다. [(절 번호, 설명)]
 
     병렬 작성에서는 각 절이 다른 절의 최종 번호를 모른 채 쓰인다. 목차가 바뀌거나
     모델이 번호를 지어내면 "3.4절에서 살펴본 바와 같이"가 남는데, 그 절이 없다.
+    chapter_titles(목차의 장 제목들)가 오면 이름형 참조("시사점 장에서")도 대조한다 —
+    없으면 그 축은 건너뛴다(제목 없이 실재를 판정할 수 없다).
     """
     known_sections = {ref for ref, _ in sections}
     known_chapters = {ref.split(".")[0] for ref in known_sections}
     first_ref = min(known_sections, key=_ref_key) if known_sections else ""
+    title_bares = [t.replace(" ", "") for t in chapter_titles or [] if t]
 
     out: list[tuple[str, str]] = []
     for ref, content in sections:
@@ -169,6 +197,13 @@ def dangling_references(sections: list[tuple[str, str]]) -> list[tuple[str, str]
         for m in _XREF_CHAPTER_RE.finditer(text):
             if m.group(1) not in known_chapters:
                 out.append((ref, f"없는 장을 가리킴: {m.group()}"))
+        if title_bares:
+            for m in _XREF_NAMED_CHAPTER_RE.finditer(text):
+                name = m.group(1)
+                if name in _NAMED_CHAPTER_STOP:
+                    continue
+                if not any(name.replace(" ", "") in t for t in title_bares):
+                    out.append((ref, f"없는 장 이름을 가리킴: {m.group()}"))
         if ref == first_ref:
             found = _BACKREF_RE.search(text)
             if found:

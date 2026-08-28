@@ -102,3 +102,36 @@ def test_빈_보고서에도_터지지_않는다() -> None:
     assert duplicate_pairs([]) == []
     assert dangling_references([]) == []
     assert cross_section_findings([]) == []
+
+
+def test_없는_장_이름을_가리키면_잡는다() -> None:
+    # 2026-08-28 v7 실측: 2.5절이 "시사점 장에서 전개"라 썼는데 그런 장이 없었다.
+    sections = [("2.5", "구체적 대응은 시사점 장에서 전개한다. " * 2)]
+    titles = ["서론", "EU 규제 동향", "미국 규제 동향", "일본 및 아시아 동향"]
+    found = dangling_references(sections, titles)
+    assert any("없는 장 이름" in why and "시사점" in why for _ref, why in found)
+
+
+def test_장_제목에_있는_이름은_잡지_않는다() -> None:
+    sections = [("2.5", "구체적 대응은 시사점 장에서 전개한다.")]
+    titles = ["서론", "결론 및 시사점"]
+    assert dangling_references(sections, titles) == []
+
+
+def test_상대_지시어와_일반_명사는_잡지_않는다() -> None:
+    # "다음 장에서"는 상대 지시, "시장에서"는 붙여 쓴 일반 명사다.
+    sections = [("1.1", "다음 장에서 다룬다. 국내 시장에서 경쟁이 심화되고 있다.")]
+    assert dangling_references(sections, ["서론", "본론"]) == []
+
+
+def test_장_제목이_없으면_이름형_판정을_건너뛴다() -> None:
+    sections = [("2.5", "시사점 장에서 전개한다.")]
+    assert dangling_references(sections) == []
+
+
+def test_시간_의미의_앞서는_후방참조가_아니다() -> None:
+    # "그에 앞서 2030년"은 시간 서술이다(2026-08-28 v7 1.1절 오탐 실측).
+    sections = [("1.1", "최종 시점은 2050년이며, 그에 앞서 2030년 중간 이행률을 권고함.")]
+    assert dangling_references(sections) == []
+    flagged = dangling_references([("1.1", "앞서 살펴본 바와 같이 규제가 강화되고 있다.")])
+    assert any("앞을 가리킴" in why for _ref, why in flagged)

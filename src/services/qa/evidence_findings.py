@@ -10,6 +10,7 @@ LLM이라야 보이는 축이다. 반대로 "이 문장이 인용한 근거에 �
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 from uuid import UUID
 
@@ -456,7 +457,10 @@ _DUP_MIN = 3
 _DUP_CRITICAL = 8
 
 
-def cross_section_findings(sections: list[tuple[str, str]]) -> list[dict[str, Any]]:
+def cross_section_findings(
+    sections: list[tuple[str, str]],
+    chapter_titles: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """절 간 중복·떠 있는 참조 → 경고 행. 뒤에 오는 절에 책임을 묻는다.
 
     절을 병렬로 쓰면 각 절은 자기 근거만 본다. 같은 자료가 여러 절의 상위에 걸리면 같은
@@ -486,7 +490,7 @@ def cross_section_findings(sections: list[tuple[str, str]]) -> list[dict[str, An
         )
 
     dangling: dict[str, list[str]] = {}
-    for ref, why in dangling_references(sections):
+    for ref, why in dangling_references(sections, chapter_titles):
         dangling.setdefault(ref, []).append(why)
     for ref, whys in dangling.items():
         out.append(
@@ -514,6 +518,36 @@ def findings_for_section(
     """LLM 판정 없이 한 절을 대조한다 — 겹침 판정만 쓰는 경로."""
     claims, comparable = claims_for_section(row, chunk_texts, renumbered=renumbered)
     return findings_from_claims(row, claims, comparable=comparable)
+
+
+# 같은 자료로 몰린 오귀속이 이 수를 넘으면 개별 실수가 아니라 구조 사고로 본다.
+# 전수 조사 실측(2026-08-28): v6 오귀속 63건 중 33건이 한 자료("International
+# Reaction to the EU's CBAM")로 몰렸다 - renumber 번호 밀림 사고의 서명이다.
+_SHIFT_MIN = 5
+
+
+def citation_shift_findings(relocated_by_src: Counter[str]) -> list[dict[str, Any]]:
+    """오귀속 수치가 한 자료로 몰리면 '출처 번호 밀림 의심'으로 승격한다(보고서 단위).
+
+    절 단위 '출처 오귀속' 경고 수십 개로는 이 구조가 안 보인다 - 사람은 절마다
+    출처를 고치다 지치고, 병인(조립 번호 밀림)은 그대로 남는다. 몰림을 세워 한 행으로
+    알리면 조치가 '수치 하나 정정'이 아니라 '그 자료 인용 번호 전수 확인'으로 바뀐다.
+    """
+    out: list[dict[str, Any]] = []
+    for src, n in relocated_by_src.most_common():
+        if n < _SHIFT_MIN:
+            break
+        out.append(
+            _finding(
+                0,
+                "",
+                "critical",
+                "출처 번호 밀림 의심",
+                f"오귀속 수치 {n}건이 같은 자료({src})에 실재 - 조립 인용 번호가 통째로"
+                " 밀렸을 가능성. 이 자료를 인용한 절들의 출처 번호 전수 확인 필요",
+            )
+        )
+    return out
 
 
 async def _locate_tokens(
@@ -990,6 +1024,8 @@ async def evidence_findings(
     # 증발하고 그 손실은 어떤 지표에도 안 나타난다('남' 꼬리 실사고, 2026-08-14).
     # 미포착 수치 문장은 구조 규칙상 0이어야 한다 — 0이 아니면 회귀다.
     cov_picked, cov_total, cov_missed = 0, 0, []
+    # 오귀속 수치가 실재하는 자료별 집계 - 몰리면 번호 밀림 서명(citation_shift_findings).
+    relocated_by_src: Counter[str] = Counter()
     for row in rows:
         p, t, missed = claim_coverage(row.content or "")
         cov_picked += p
@@ -1037,6 +1073,12 @@ async def evidence_findings(
                 norms = {normalize_number(t) for t in confirmed_toks}
                 n_injected += len(norms & injected)
                 n_relocated += len({n for n in norms if n in located} - injected)
+                for norm in norms:
+                    if norm in own_grounded or norm in injected:
+                        continue
+                    src = located.get(norm)
+                    if src:
+                        relocated_by_src[src] += 1
         out.extend(
             findings_from_claims(
                 row,
@@ -1066,7 +1108,9 @@ async def evidence_findings(
     # 절 간 중복은 절 하나만 봐서는 안 보인다 — 전부 모은 뒤 한 번에 본다.
     out.extend(
         cross_section_findings(
-            [(f"{r.chapter_number}.{r.section_number}", r.content or "") for r in rows]
+            [(f"{r.chapter_number}.{r.section_number}", r.content or "") for r in rows],
+            # 장 제목을 넘겨야 이름형 참조("시사점 장에서")의 실재를 판정할 수 있다.
+            [str((c or {}).get("title") or "") for c in chapters],
         )
     )
     # 용어 병기 대조 — 색인이 캔 용어표와 본문의 "한글(원어)" 쌍을 결정적으로 대조한다.
@@ -1086,6 +1130,7 @@ async def evidence_findings(
             term_entries,
         )
     )
+    out.extend(citation_shift_findings(relocated_by_src))
     logger.info(
         "evidence_findings.done",
         project_id=str(project_id),
