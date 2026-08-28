@@ -1,0 +1,20 @@
+# 레지스트리 배포 오버레이(2026-08-28) - 온박스 빌드 폐지의 나머지 반쪽.
+#
+# 배경: 8GB 운영 서버에서 서빙+torch급 빌드가 겹쳐 SSH까지 마비된 실사고.
+# 빌드는 GitHub Actions(publish-app.yml)가 하고, 서버는 pull + up만 한다.
+#
+# 사용(배포 절차):
+#   git push origin dev:main            # 승격 = 빌드 트리거 (~5-8분)
+#   ssh rown 'cd ~/rown && git pull && \
+#     docker compose -f docker-compose.prod.yml -f docker-compose.registry.yml pull app migrate && \
+#     docker compose -f docker-compose.prod.yml -f docker-compose.registry.yml up -d'
+#
+# 선행 1회: 서버에서 ghcr 로그인(read:packages PAT) -
+#   echo <PAT> | docker login ghcr.io -u <github사용자> --password-stdin
+# SPA는 종전대로 별도 pnpm 빌드(이미지에 안 들어간다).
+
+services:
+  migrate:
+    image: ghcr.io/zxxxv/rown-app:main
+  app:
+    image: ghcr.io/zxxxv/rown-app:main
