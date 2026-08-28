@@ -141,3 +141,71 @@ class TestRankingAndDedup:
     def test_no_entries_or_no_chunks(self):
         assert format_term_injection([], [_chunk("본문")]) == ("", [])
         assert format_term_injection([_def_entry(uuid4())], []) == ("", [])
+
+
+def _pair(ko, title, definition=None):
+    return {
+        "ko": ko,
+        "en": "Renewable Electricity 100",
+        "abbr": "RE100",
+        "definition": definition,
+        "source_id": str(uuid4()),
+        "source_title": title,
+    }
+
+
+class TestPairConflicts:
+    """자료 간 표기 상충 보수화 - 2026-08-28 v7 실측(RE100 오염 증폭) 방어."""
+
+    def test_majority_notation_wins(self):
+        chunks = [_chunk("RE100 참여기업의 조달 확대")]
+        entries = [
+            _pair("알이백", "A"),
+            _pair("알이백", "B"),
+            _pair("재생에너지 사용 확인", "무역협회"),
+        ]
+        block, keys = format_term_injection(entries, chunks)
+        assert '"알이백"' in block
+        assert "재생에너지 사용 확인" not in block
+        assert keys == ["Renewable Electricity 100"]
+
+    def test_tie_drops_notation_enforcement_entirely(self):
+        chunks = [_chunk("RE100 참여기업의 조달 확대")]
+        entries = [_pair("알이백", "A"), _pair("재생에너지 사용 확인", "무역협회")]
+        block, keys = format_term_injection(entries, chunks)
+        assert block == ""
+        assert keys == []
+
+    def test_tie_keeps_definition_but_not_notation(self):
+        chunks = [_chunk("RE100 참여기업의 조달 확대")]
+        entries = [
+            _pair("알이백", "A", definition="a global corporate renewable electricity initiative"),
+            _pair("재생에너지 사용 확인", "무역협회"),
+        ]
+        block, keys = format_term_injection(entries, chunks)
+        assert "A의 정의" in block
+        assert "한글 표기는" not in block
+        assert "재생에너지 사용 확인" not in block
+
+    def test_spacing_variants_are_not_a_conflict(self):
+        chunks = [_chunk("EAC 기반 조달")]
+        entries = [
+            {
+                "ko": "에너지속성인증서",
+                "en": "Energy Attribute Certificate",
+                "abbr": "EAC",
+                "definition": None,
+                "source_id": str(uuid4()),
+                "source_title": "A",
+            },
+            {
+                "ko": "에너지 속성 인증서",
+                "en": "Energy Attribute Certificate",
+                "abbr": "EAC",
+                "definition": None,
+                "source_id": str(uuid4()),
+                "source_title": "B",
+            },
+        ]
+        block, _ = format_term_injection(entries, chunks)
+        assert "에너지속성인증서" in block

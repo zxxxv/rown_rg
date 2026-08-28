@@ -112,3 +112,27 @@ class TestFindings:
 
     def test_no_pairs_no_findings(self):
         assert term_notation_findings([(1, "1.1", "병기가 전혀 없는 본문")], []) == []
+
+
+class TestTableConflict:
+    """용어표 자체가 상충이면 불일치 판정 보류 + 상충 경고(주입 보수화와 대칭)."""
+
+    def test_conflicting_table_emits_conflict_not_mismatch(self):
+        sections = [(3, "3.4", "재생에너지 사용 확인(RE100)에 기업들이 참여한다")]
+        entries = [
+            _entry(ko="알이백", en="Renewable Electricity 100", abbr="RE100", source_title="A"),
+            _entry(ko="알이백", en="Renewable Electricity 100", abbr="RE100", source_title="B"),
+            _entry(
+                ko="재생에너지 사용 확인",
+                en="Renewable Electricity 100",
+                abbr="RE100",
+                source_title="무역협회",
+            ),
+        ]
+        found = term_notation_findings(sections, entries)
+        assert [f["category"] for f in found] == ["용어표 상충"]
+        f = found[0]
+        assert f["severity"] == "warning"
+        assert "무역협회" in f["detail"]
+        assert "알이백" in f["detail"]
+        assert f["section_ref"] == "3.4"

@@ -146,6 +146,30 @@ def term_notation_findings(
         if not cands:
             continue
         table_kos = {str(e["ko"]).strip() for e in cands}
+        # 용어표 자체가 상충이면 불일치 판정을 보류한다 — 오염된 표를 잣대로 쓰면
+        # 올바른 본문 표기를 벌한다(2026-08-28 v7 실측: 문장 조각 채굴판 "재생에너지
+        # 사용 확인"이 잣대가 돼 정상 표기 "RE100"이 불일치로 찍혔다). 대신 표 상충
+        # 자체를 경고해 사람이 정본을 고르게 한다(주입 쪽 보수화와 대칭).
+        if len(_collapse_variants({ko: [] for ko in table_kos})) > 1:
+            srcs = " · ".join(
+                f'"{e["ko"]}"({str(e.get("source_title") or "").strip() or "?"})'
+                for e in cands[:_MAX_SAMPLES]
+            )
+            body = " / ".join(f'"{k}"' for k in list(kos)[:3])
+            label = next(e.get("en") or e.get("abbr") for e in cands)
+            chapter, ref = first_at.get(key, (0, ""))
+            out.append(
+                _finding(
+                    chapter,
+                    ref,
+                    "warning",
+                    "용어표 상충",
+                    f"{label}의 한글 표기가 자료 간에 갈린다: {srcs} - 본문은 {body} 사용 중,"
+                    " 정본 표기 확인 필요",
+                )
+            )
+            flagged.add(key)
+            continue
         # 대조도 요동 병합과 같은 눈금 — 띄어쓰기 차이·문맥 접미("자료 기준 재생에너지
         # 공급인증서")를 불일치로 오인하면 안 된다.
         table_bares = {t.replace(" ", "") for t in table_kos}

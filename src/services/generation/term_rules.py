@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
@@ -28,6 +29,10 @@ logger = structlog.get_logger(__name__)
 _MAX_INJECTED = 12
 # en 표면형 대조 최소 길이 — 3자 이하 영단어는 우연 일치가 많다(약어는 별도 축).
 _MIN_EN_MATCH = 4
+# 접미 병합 최소 길이 — qa/term_notation._MIN_ABSORB_CHARS와 같은 눈금(짧은 접미가
+# 전부를 삼키는 것 방지). 두 쪽이 다른 눈금을 쓰면 주입은 상충으로 빼는데 검사기는
+# 정상으로 보는(또는 그 반대) 어긋남이 생긴다.
+_MIN_ABSORB_CHARS = 4
 
 _HEADER = (
     "용어 규칙 — 아래 용어는 근거 자료에 정의·병기 표기가 있는 것들이다. "
@@ -111,6 +116,59 @@ def _line(e: dict[str, Any]) -> str:
     return f"- {_label(e)}: {' · '.join(clauses)}"
 
 
+def _pair_conflict_key(e: dict[str, Any]) -> str | None:
+    """한영 병기 항목의 원어 키 — 병기가 아니면 None."""
+    if not (e.get("ko") and (e.get("en") or e.get("abbr"))):
+        return None
+    raw = str(e.get("en") or e.get("abbr"))
+    return " ".join(raw.split()).lower()
+
+
+def _absorb_bares(counter: Counter[str]) -> tuple[dict[str, str], Counter[str]]:
+    """공백 제거 표기들을 접미 관계로 병합 — (원표기→대표, 대표별 표수)."""
+    reps: list[str] = []
+    remap: dict[str, str] = {}
+    for bare in sorted(counter, key=len):
+        rep = next(
+            (r for r in reps if bare == r or (len(r) >= _MIN_ABSORB_CHARS and bare.endswith(r))),
+            None,
+        )
+        if rep is None:
+            reps.append(bare)
+            rep = bare
+        remap[bare] = rep
+    merged: Counter[str] = Counter()
+    for bare, n in counter.items():
+        merged[remap[bare]] += n
+    return remap, merged
+
+
+def _pair_conflicts(
+    entries: Sequence[dict[str, Any]],
+) -> dict[str, tuple[dict[str, str], str | None]]:
+    """자료 간 같은 원어의 한글 표기가 갈린 키 → (표기→대표 지도, 승자 대표|None).
+
+    상충 표기를 그대로 주입하면 채굴 오염이 본문 전체로 증폭된다(2026-08-28 v7 실측:
+    무역협회 자료의 문장 조각 "재생에너지 사용 확인(RE100)"이 주입을 타고 3.4·4.1절
+    본문 병기로 번졌다). 승자는 다수결 — 2표 이상이면서 모든 경쟁 표기보다 많을 때만
+    인정하고, 동률이면 승자 없음(그 키의 표기 강제는 통째로 뺀다).
+    """
+    votes: dict[str, Counter[str]] = defaultdict(Counter)
+    for e in entries:
+        key = _pair_conflict_key(e)
+        if key:
+            votes[key][str(e["ko"]).replace(" ", "")] += 1
+    out: dict[str, tuple[dict[str, str], str | None]] = {}
+    for key, counter in votes.items():
+        remap, merged = _absorb_bares(counter)
+        if len(merged) < 2:
+            continue
+        top = merged.most_common(2)
+        winner = top[0][0] if top[0][1] >= 2 and top[0][1] > top[1][1] else None
+        out[key] = (remap, winner)
+    return out
+
+
 def _rank(e: dict[str, Any], pack_sources: set[str]) -> tuple[int, int]:
     """정렬 — 근거팩에 든 자료의 정의 > 다른 자료의 정의 > 한영 병기 > 나머지."""
     if e.get("definition"):
@@ -137,6 +195,34 @@ def format_term_injection(
     hits = [e for e in entries if _appears(e, text, lowered)]
     if not hits:
         return "", []
+
+    # 상충 보수화 — 근거팩 밖 자료의 표까지 전체 용어표로 세야 상충이 보인다(팩에는
+    # 오염판 하나만 걸릴 수 있다). 승자 표기만 강제하고, 승자가 없으면 표기 강제를
+    # 통째로 뺀다(정의 항목은 정의만 남긴다).
+    conflicts = _pair_conflicts(entries)
+    if conflicts:
+        adjusted: list[dict[str, Any]] = []
+        for e in hits:
+            key = _pair_conflict_key(e)
+            if key is None or key not in conflicts:
+                adjusted.append(e)
+                continue
+            remap, winner = conflicts[key]
+            bare = str(e["ko"]).replace(" ", "")
+            if winner is not None and remap.get(bare) == winner:
+                adjusted.append(e)
+            elif e.get("definition"):
+                adjusted.append({**e, "ko": None})
+            else:
+                logger.info(
+                    "term_injection_conflict_dropped",
+                    term=_label(e),
+                    ko=e.get("ko"),
+                    source=e.get("source_title"),
+                )
+        hits = adjusted
+        if not hits:
+            return "", []
     hits.sort(key=lambda e: _rank(e, pack_sources))
 
     lines: list[str] = []

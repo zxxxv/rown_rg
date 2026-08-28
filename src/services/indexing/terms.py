@@ -59,9 +59,13 @@ _KO_PAREN_RE = re.compile(
     r"\((?P<inner>[A-Za-z][^)\n가-힣]{2,90})\)"
 )
 
-# 영문 풀네임 (ABBR) — 풀네임은 두 단어 이상(한 단어는 일반 낱말과 구분이 안 된다).
+# 영문 풀네임 (ABBR) — 풀네임은 두 단어 이상(한 단어는 일반 낱말과 구분이 안 된다),
+# 여섯 단어 이하(무제한이면 문장 통째가 캡처된다 — 2026-08-28 v7 실측: "We brought
+# together our initiatives on renewable electricity (RE100)"의 앞 문장이 영문명으로
+# 채굴됐다. 상한을 걸면 소문자 흐름의 문장은 괄호에 못 닿아 탈락하고, 긴 제목은
+# 괄호에서 여섯 단어 안쪽의 대문자 시작 지점부터 매칭돼 앞말이 잘려 나간다).
 _EN_ABBR_RE = re.compile(
-    r"(?P<en>[A-Z][A-Za-z0-9.&\-]*(?:\s+[A-Za-z0-9.&/\-]+)+)\s?\((?P<abbr>[A-Z][A-Za-z0-9&/\-]{1,15})\)"
+    r"(?P<en>[A-Z][A-Za-z0-9.&\-]*(?:\s+[A-Za-z0-9.&/\-]+){1,5})\s?\((?P<abbr>[A-Z][A-Za-z0-9&/\-]{1,15})\)"
 )
 
 # 정의 문형(영문): 'X' means/refers to/is defined as …

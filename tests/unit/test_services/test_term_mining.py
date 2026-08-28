@@ -145,3 +145,22 @@ class TestLlmValidation:
 def test_term_key_prefers_en():
     assert term_key({"en": "market boundary", "abbr": "MB", "ko": "시장경계"}) == "market boundary"
     assert term_key({"en": None, "abbr": "EAC", "ko": None}) == "EAC"
+
+
+class TestSentenceFragmentGuard:
+    """영문명 단어 수 상한(≤6) - 2026-08-28 v7 실측: 문장 조각이 영문명으로 채굴돼
+    용어 주입을 타고 본문 병기 오염("재생에너지 사용 확인(RE100)")으로 번졌다."""
+
+    def test_lowercase_sentence_fragment_not_captured(self):
+        entries = mine_term_patterns(
+            "We brought together our initiatives on renewable electricity (RE100) this year"
+        )
+        assert all("brought" not in (e.get("en") or "") for e in entries)
+
+    def test_long_title_matches_from_inner_capital(self):
+        entries = mine_term_patterns(
+            "International Reaction to the EU Carbon Border Adjustment Mechanism (CBAM)"
+        )
+        hit = next(e for e in entries if e["abbr"] == "CBAM")
+        assert hit["en"].endswith("Carbon Border Adjustment Mechanism")
+        assert len(hit["en"].split()) <= 6
