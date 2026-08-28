@@ -191,6 +191,26 @@ export function UnreflectedCard({ projectId }: { projectId: string }) {
         </p>
       )}
 
+      {/* 전체 선택 - 고를 수 있는 것 전부(잠긴 절 제외, 이어받는 절 포함). 몇 개가
+          걸리는지 라벨에 밝힌다 - 아래 예상 비용 줄과 함께 놀람 없는 일괄 선택. */}
+      {!running && pickable.size > 1 ? (
+        <div className="flex items-center gap-1.5 text-xs">
+          <Checkbox
+            id="drift-select-all"
+            checked={[...pickable].every((id) => picked.has(id))}
+            onCheckedChange={() =>
+              setPicked(
+                [...pickable].every((id) => picked.has(id)) ? new Set() : new Set(pickable),
+              )
+            }
+            aria-label="전체 선택"
+          />
+          <label htmlFor="drift-select-all" className="cursor-pointer text-fg-secondary">
+            전체 선택 ({pickable.size}개{related.length > 0 ? " - 이어받는 절 포함" : ""})
+          </label>
+        </div>
+      ) : null}
+
       <ul className="flex flex-col gap-1.5">
         {sections.map((s) => (
           <li key={s.section_id} className="flex flex-wrap items-center gap-1.5 text-xs">
