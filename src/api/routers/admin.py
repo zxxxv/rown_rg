@@ -24,6 +24,7 @@ from src.api.schemas.admin import (
     IpWhitelistUpdateInput,
     LimitDecisionInput,
     LimitRequestRead,
+    OnlineUserRead,
     QuotaSettingRead,
     QuotaSettingsPatchBody,
     ResetPasswordInput,
@@ -136,6 +137,19 @@ async def get_admin_dashboard(
             )
         )
     ).scalar_one()
+    # 명단까지 함께 - 카드 호버가 '몇 명'에서 '누구'로 답하게(2026-08-28 지시).
+    # 수는 명단 길이가 아니라 별도 카운트다(상한 50에 잘려도 수는 참값).
+    online_rows = (
+        await session.execute(
+            select(User.name, User.email, User.last_seen_at)
+            .where(
+                User.is_active.is_(True),
+                User.last_seen_at >= today - _ONLINE_WINDOW,
+            )
+            .order_by(User.last_seen_at.desc())
+            .limit(50)
+        )
+    ).all()
     online_users = (
         await session.execute(
             select(func.count())
@@ -196,6 +210,9 @@ async def get_admin_dashboard(
         cost_limit_usd=float(org_cost_limit_usd),
         allocated_limit_usd=float(allocated_limit_usd),
         online_users=online_users,
+        online_list=[
+            OnlineUserRead(name=n or e, email=e, last_seen_at=ts) for n, e, ts in online_rows
+        ],
         active_users=active_users,
         active_projects=active_projects,
         completed_reports=completed_reports,

@@ -13,6 +13,14 @@ from src.api.schemas.user import UserRole
 # zod coerce를 거치지 않으므로, Decimal→문자열 직렬화를 피해 JSON number로 내려준다.
 
 
+class OnlineUserRead(BaseModel):
+    """접속중 사용자 1명 — 이름에 마우스를 올렸을 때 '누구인가'를 답한다(2026-08-28)."""
+
+    name: str
+    email: str
+    last_seen_at: datetime
+
+
 class AdminKPI(BaseModel):
     total_cost_usd: float
     cost_limit_usd: float
@@ -22,6 +30,8 @@ class AdminKPI(BaseModel):
     allocated_limit_usd: float
     # 현재 접속중 — last_seen_at이 최근 5분 이내인 사용자 수 (기간 무관)
     online_users: int
+    # 접속중 명단(최근 활동순, 상한 50) — 카드 호버가 '누구인지'를 보여준다.
+    online_list: list[OnlineUserRead] = []
     # 기간 활성 — 조회 기간 내 1회 이상 로그인한 사용자 수
     active_users: int
     active_projects: int

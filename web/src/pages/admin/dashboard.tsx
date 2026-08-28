@@ -20,6 +20,12 @@ import {
   useUserUsageDetail,
 } from "@/api/admin";
 import { ApiError } from "@/api/client";
+import {
+  Tooltip as HoverTip,
+  TooltipContent as HoverTipContent,
+  TooltipProvider as HoverTipProvider,
+  TooltipTrigger as HoverTipTrigger,
+} from "@/components/ui/tooltip";
 import type {
   AdminDashboardData,
   AdminDashboardPeriod,
@@ -72,6 +78,13 @@ const PERIOD_LABEL: Record<AdminDashboardPeriod, string> = {
   last_30_days: "최근 30일",
   custom: "구간 선택",
 };
+
+
+/** last_seen_at → "방금" | "n분 전" - 접속중 창이 5분이라 분 단위면 충분하다. */
+function minutesAgoLabel(iso: string): string {
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
+  return mins <= 0 ? "방금" : `${mins}분 전`;
+}
 
 export default function AdminDashboardPage() {
   const { user, logout } = useAuth();
@@ -226,13 +239,42 @@ function DashboardBody({
           icon={Users}
           tone={overAllocated ? "warning" : "default"}
         />
-        <StatCard
-          label="현재 접속중"
-          value={`${data.kpis.online_users}명`}
-          hint="최근 5분 내 활동"
-          icon={Wifi}
-          tone="success"
-        />
+        {/* 호버 = 명단(2026-08-28 지시). 수만 보이면 '누가 쓰고 있나'를 답하려고
+            사용자 목록 화면으로 건너가야 했다 - 그 질문을 카드 위에서 끝낸다. */}
+        <HoverTipProvider delayDuration={150}>
+          <HoverTip>
+            <HoverTipTrigger asChild>
+              <div className="cursor-default">
+                <StatCard
+                  label="현재 접속중"
+                  value={`${data.kpis.online_users}명`}
+                  hint="최근 5분 내 활동 - 올려서 명단 보기"
+                  icon={Wifi}
+                  tone="success"
+                />
+              </div>
+            </HoverTipTrigger>
+            <HoverTipContent side="bottom" className="max-w-64">
+              {data.kpis.online_list.length === 0 ? (
+                <p className="text-xs">지금 접속중인 사용자가 없습니다.</p>
+              ) : (
+                <ul className="flex flex-col gap-0.5 text-xs">
+                  {data.kpis.online_list.map((u) => (
+                    <li key={u.email} className="flex items-center justify-between gap-3">
+                      <span>{u.name}</span>
+                      <span className="text-fg-tertiary">{minutesAgoLabel(u.last_seen_at)}</span>
+                    </li>
+                  ))}
+                  {data.kpis.online_users > data.kpis.online_list.length ? (
+                    <li className="text-fg-tertiary">
+                      외 {data.kpis.online_users - data.kpis.online_list.length}명
+                    </li>
+                  ) : null}
+                </ul>
+              )}
+            </HoverTipContent>
+          </HoverTip>
+        </HoverTipProvider>
         <StatCard
           label="활성 사용자"
           value={`${data.kpis.active_users}명`}
