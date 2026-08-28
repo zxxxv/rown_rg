@@ -26,7 +26,7 @@ from src.core.clock import now as clock_now
 from src.core.config import settings
 from src.core.section_plan import SECTION_PLAN_KEY, config_with_plan
 from src.core.state import ProjectState
-from src.core.types import ProjectStage, ReviewGate, SourceRef, SourceType
+from src.core.types import ProjectStage, ReviewGate, SectionPlan, SourceRef, SourceType
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.review_point import ReviewPoint
@@ -151,16 +151,15 @@ async def _commit_design_plan(
     project = await session.get(Project, project_id)
     if project is None:
         return
-    by_num = {
-        (p.chapter_number, p.section_number): str(p.section_id)
-        for p in plan_from_config(project.config)
-    }
+    plan = plan_from_config(project.config)
+    by_num = {(p.chapter_number, p.section_number): str(p.section_id) for p in plan}
     # 아크 한 줄 — 계획의 flows(from/to/carries)를 절별 두 문장으로 내린다.
     # flows는 지금까지 게이트 화면 표시로만 쓰고 커밋에서 버려졌는데(작성기가 절 간
     # 산출을 전달받지 못하던 시절의 결정), builds_on 값 주입이 생긴 지금은 토픽 수준
     # 접속 지시로 내려보내는 게 안전하다 — 내용이 아니라 역할만 전달하므로 창작 유도 없음.
     receives: dict[str, list[str]] = {}
     establishes: dict[str, list[str]] = {}
+    flow_deps: dict[str, list[str]] = {}
     for f in ai.get("flows") or []:
         if not isinstance(f, dict):
             continue
@@ -170,6 +169,22 @@ async def _commit_design_plan(
             continue
         establishes.setdefault(src, []).append(f"{carries} → {dst}절이 받는다")
         receives.setdefault(dst, []).append(f"{src}절이 {carries}를 다룬다")
+        flow_deps.setdefault(dst, []).append(src)
+    # flows → builds_on 이관 — 게이트가 보여주고 사람이 승인·수정한 흐름이 실행
+    # 배치와 값 주입까지 지배하게 한다(2026-08-28 사용자 결정: 병렬을 잃더라도 뒤
+    # 절이 앞 절 산출을 받아 연관되게 쓰이는 쪽). 종전에는 흐름의 '내용'(아크 문장)만
+    # 내려가고 '순서'는 게이트 뒤 별도 LLM 초안이 정해, 사람이 본 답과 실행되는 답이
+    # 갈렸다. 사람·프리셋이 이미 적어 둔 절은 정본이라 손대지 않고 빈 절만 채운다.
+    # sanitize가 유령·자기·후방 참조와 절당 상한을 정리하고, 실행 쪽 assign_levels가
+    # 깊이 캡·순환 절단을 한 번 더 지킨다.
+    merged = _merge_flow_builds_on(plan, flow_deps)
+    if merged is not None:
+        project.config = config_with_plan(project.config, merged)
+        logger.info(
+            "design_brief.flows_to_builds_on",
+            project_id=str(project_id),
+            n_linked=sum(1 for s in merged if s.builds_on),
+        )
     # 토픽 소유권 — 소유 절엔 정본 목록을, 나머지 전 절엔 금지 목록을 내린다.
     ownership = [
         t
@@ -203,6 +218,34 @@ async def _commit_design_plan(
     # JSONB 재할당 필수 — in-place 수정은 SQLAlchemy가 dirty로 안 잡는다.
     project.config = {**(project.config or {}), "_design_plan": notes}
     logger.info("design_brief.plan_committed", project_id=str(project_id), n_sections=len(notes))
+
+
+def _merge_flow_builds_on(
+    plan: list[SectionPlan], flow_deps: dict[str, list[str]]
+) -> list[SectionPlan] | None:
+    """flows에서 온 의존을 plan의 **빈** builds_on에만 채운다. 변화 없으면 None.
+
+    sanitize(dependency_graph)를 그대로 쓴다 — 유령 절·자기 참조·후방 참조(뒤를
+    기다리면 교착, 안 기다리면 빈 주입)·절당 상한(MAX_REFS_PER_SECTION)이 한 기준으로
+    정리된다. 값이 이미 있는 절은 사람·프리셋 지정이 정본이므로 건드리지 않는다.
+    """
+    if not flow_deps or not plan:
+        return None
+    from src.services.generation.dependency_graph import sanitize
+
+    graph = sanitize(plan, flow_deps)
+    if not graph:
+        return None
+    changed = False
+    out: list[SectionPlan] = []
+    for s in plan:
+        label = f"{s.chapter_number}.{s.section_number}"
+        if label in graph and not s.builds_on:
+            out.append(s.model_copy(update={"builds_on": graph[label]}))
+            changed = True
+        else:
+            out.append(s)
+    return out if changed else None
 
 
 def _parse_uuid_list(raw: Any) -> list[uuid.UUID]:

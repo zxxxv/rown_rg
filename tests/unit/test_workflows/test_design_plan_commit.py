@@ -133,3 +133,58 @@ class TestOwnershipAndArcCommit:
         await _commit_design_plan(_FakeSession(project), project.id, payload, None)
         notes = project.config["_design_plan"]
         assert notes[str(a.section_id)].get("establishes") == ""
+
+
+class TestFlowsToBuildsOn:
+    """flows -> builds_on 이관(2026-08-28 사용자 결정) - 승인한 흐름이 실행 순서가 된다."""
+
+    @staticmethod
+    def _flow_payload(*flows: dict) -> dict:
+        return {
+            "ai_plan": {
+                "sections": [{"chapter": 1, "section": 1, "goal": "g"}],
+                "flows": list(flows),
+            }
+        }
+
+    async def test_승인된_flow가_빈_builds_on을_채운다(self) -> None:
+        project, a, b = _two_section_project()
+        payload = self._flow_payload({"from": "1.1", "to": "4.1", "carries": "참여 기준"})
+        await _commit_design_plan(_FakeSession(project), project.id, payload, None)
+        from src.core.section_plan import plan_from_config
+
+        stored = {
+            f"{p.chapter_number}.{p.section_number}": p.builds_on
+            for p in plan_from_config(project.config)
+        }
+        assert stored["4.1"] == ["1.1"]
+        assert stored["1.1"] == []
+
+    async def test_사람이_적어_둔_builds_on은_안_건드린다(self) -> None:
+        from src.core.types import SectionPlan
+
+        a = SectionPlan(chapter_number=1, section_number=1, title="개요")
+        mid = SectionPlan(chapter_number=2, section_number=1, title="중간")
+        b = SectionPlan(chapter_number=4, section_number=1, title="대응", builds_on=["2.1"])
+        project = Project(id=uuid.uuid4(), title="t", topic="주제", owner_id=uuid.uuid4())
+        project.config = config_with_plan({}, [a, mid, b])
+        payload = self._flow_payload({"from": "1.1", "to": "4.1", "carries": "기준"})
+        await _commit_design_plan(_FakeSession(project), project.id, payload, None)
+        from src.core.section_plan import plan_from_config
+
+        stored = {
+            f"{p.chapter_number}.{p.section_number}": p.builds_on
+            for p in plan_from_config(project.config)
+        }
+        assert stored["4.1"] == ["2.1"]
+
+    async def test_후방_유령_flow는_버려진다(self) -> None:
+        project, a, b = _two_section_project()
+        payload = self._flow_payload(
+            {"from": "4.1", "to": "1.1", "carries": "역방향"},
+            {"from": "9.9", "to": "4.1", "carries": "유령"},
+        )
+        await _commit_design_plan(_FakeSession(project), project.id, payload, None)
+        from src.core.section_plan import plan_from_config
+
+        assert all(not p.builds_on for p in plan_from_config(project.config))
