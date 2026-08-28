@@ -36,7 +36,13 @@ from uuid import UUID
 
 import structlog
 
-from src.core.charts import CHART_FENCE_RE, ChartSpec, ChartSpecError, parse_chart_spec
+from src.core.charts import (
+    CHART_FENCE_RE,
+    ChartSpec,
+    ChartSpecError,
+    chart_fences_as_tables,
+    parse_chart_spec,
+)
 from src.core.citations import (
     source_numbers,
     strip_nonnumeric_source_marks,
@@ -336,6 +342,17 @@ def _extract_charts(md: str) -> tuple[str, list[ChartSpec]]:
 _CHART_TABLE_RE = re.compile(r"^table:[ \t]*\|[ \t]*\n(?P<table>(?:[ \t]+.*\n?)+)", re.M)
 
 
+def _fallback_table(spec: ChartSpec) -> Table | None:
+    """차트가 품고 있는 원본 표 → Table 블록. 렌더가 실패하면 이것이 대신 실린다.
+
+    스펙은 멀쩡한데 그림만 못 그리는 경우(운영 컨테이너에 한글 폰트가 없는 등)가 있어,
+    블록을 만들 때 미리 들려 보낸다 — 렌더 시점에는 마크다운을 읽을 자리가 아니다.
+    """
+    if not spec.table:
+        return None
+    return next((b for b in markdown_to_blocks(spec.table) if isinstance(b, Table)), None)
+
+
 def markdown_to_blocks(md: str) -> list[Block]:
     """마크다운 본문을 Heading/Paragraph/Table 블록으로 변환.
 
@@ -376,7 +393,8 @@ def markdown_to_blocks(md: str) -> list[Block]:
             flush_para()
             flush_table()
             # 캡션은 조립 단계에서 그림 번호와 함께 채운다(_number_visuals).
-            blocks.append(Chart(spec=charts[int(token.group(1))], caption=""))
+            spec = charts[int(token.group(1))]
+            blocks.append(Chart(spec=spec, caption="", fallback=_fallback_table(spec)))
             continue
         if _HR_RE.match(line):
             # 마크다운 구분선(---)은 시각 장식 — 문서에 리터럴로 남기지 않는다.
@@ -1017,16 +1035,21 @@ def report_blocks(
         _attach_table_sources(section_blocks, source_titles)
         section_blocks = _strip_citation_blocks(section_blocks, source_titles)
         visual_count = sum(1 for b in section_blocks if isinstance(b, Table | Chart))
+        # 분량·소재를 재는 자는 차트를 바꾸기 전 모습으로 본다. 펜스가 원본 표를 통째로
+        # 품고 있어 글자 수가 두 배로 세지는데, 그 사본은 읽는 사람에게 보이지 않는다 —
+        # 안 걷어내면 표를 차트로 바꿨다는 이유만으로 자리표시자가 더 붙는다
+        # (v7 실측 59 → 63, 2026-08-28).
+        measured = chart_fences_as_tables(content)
         draft = drafts[plan.section_id]
         pages = _cited_source_pages(
             [*draft.cited_chunk_ids, *draft.pool_chunk_ids], chunk_meta or {}
         )
-        hints = _figure_source_hints(content, state.sources, pages)
+        hints = _figure_source_hints(measured, state.sources, pages)
         section_blocks = _distribute_figures(
             section_blocks,
             [
                 _figure_placeholder(plan, i, hints)
-                for i in range(_figures_needed(content, visual_count, plan.key_points))
+                for i in range(_figures_needed(measured, visual_count, plan.key_points))
             ],
         )
         chapter_table_no, chapter_figure_no = _number_visuals(

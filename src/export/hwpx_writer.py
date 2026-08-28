@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from weakref import WeakKeyDictionary
@@ -224,13 +224,16 @@ class Figure:
 class Chart:
     """본문 차트 — 스펙을 PNG로 그려 그림으로 넣는다(자리표시자가 아닌 실제 그림).
 
-    이미지 바이트는 렌더 시점에 만든다. 그리지 못하면(폰트 없음 등) 호출부가
-    원본 표로 되돌리므로, 여기까지 온 차트는 그릴 수 있다고 본다.
+    이미지 바이트는 렌더 시점에 만든다. 그때 실패할 수 있으므로(운영 컨테이너에 한글
+    폰트가 없으면 라벨이 깨진 그림 대신 ChartRenderError가 온다) ``fallback``에 원본 표를
+    함께 들려 보낸다 — 그림 하나를 못 그렸다고 보고서 전체가 안 나오면 안 된다.
     """
 
     spec: object  # src.core.charts.ChartSpec — 순환 import를 피해 느슨하게 받는다
     caption: str  # 예: "<그림 2-1> 주요국 SMR 투자 현황"
     caption_bookmark: str = field(default="", compare=False)
+    # 못 그렸을 때 대신 실을 원본 표. 스펙에서 파생되는 값이라 블록 비교에서는 뺀다.
+    fallback: Table | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -829,10 +832,30 @@ def _add_caption_below(doc: HwpxDocument, caption: str, bookmark: str = "") -> N
 
 
 def _add_chart(doc: HwpxDocument, chart: Chart) -> None:
-    """차트 — 스펙을 PNG로 그려 가운데 넣고, 제목을 그림 아래에 단다."""
-    from src.export.chart_render import render_png  # 지연 import — 렌더 시점에만 필요
+    """차트 — 스펙을 PNG로 그려 가운데 넣고, 제목을 그림 아래에 단다.
 
-    png = render_png(chart.spec)
+    못 그리면 보관해 둔 원본 표로 되돌린다. 여기서 예외를 그냥 올리면 그림 하나 때문에
+    보고서 전체가 안 나온다 — 운영 컨테이너에 한글 폰트가 없기만 해도 그렇게 됐다
+    (2026-08-28 실측). 번호는 그림 번호 그대로 둔다: 그림 목차 줄이 이 자리를 가리키고
+    있어, 번호를 바꾸면 목차가 없는 곳을 가리킨다.
+    """
+    from src.export.chart_render import ChartRenderError, render_png  # 지연 import
+
+    try:
+        png = render_png(chart.spec)
+    except ChartRenderError as exc:
+        logger.warning("hwpx.chart_render_failed", caption=chart.caption, detail=str(exc))
+        if chart.fallback is None:
+            return  # 되돌릴 표조차 없으면 건너뛴다 — 깨진 그림보다 없는 편이 낫다
+        _add_table(
+            doc,
+            replace(
+                chart.fallback,
+                caption=chart.caption,
+                caption_bookmark=chart.caption_bookmark,
+            ),
+        )
+        return
     doc.add_picture(
         png,
         "png",
