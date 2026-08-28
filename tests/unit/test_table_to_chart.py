@@ -336,3 +336,40 @@ def test_값_라벨(value: float, label: str) -> None:
     from src.export.chart_render import _format_value
 
     assert _format_value(value) == label
+
+
+class TestPromptMatchesRules:
+    """작성 규칙이 말하는 숫자와 변환기가 쓰는 숫자가 같은가.
+
+    프롬프트는 모델에게 "행 3개 이상 12개 이하", "원형은 항목 5개 이하"라고 약속한다.
+    상수를 고치고 프롬프트를 안 고치면 그 약속이 조용히 거짓이 되고, 규칙대로 쓴 표가
+    그래프가 안 되는데 모델도 사람도 이유를 모른다.
+    """
+
+    @staticmethod
+    def _rules() -> str:
+        from src.prompts.loader import load_component
+
+        return load_component("agent_visual_rules")
+
+    def test_항목_수_경계가_같다(self) -> None:
+        from src.core.table_to_chart import AUTO_MAX_POINTS, AUTO_MIN_POINTS
+
+        assert f"자료 행 {AUTO_MIN_POINTS}개 이상, {AUTO_MAX_POINTS}개 이하" in self._rules()
+
+    def test_원형_조각_상한이_같다(self) -> None:
+        from src.core.charts import MAX_SERIES
+
+        assert f"항목 {MAX_SERIES}개 이하" in self._rules()
+
+    def test_음수_기호_안내가_판정과_같다(self) -> None:
+        """△는 음수로 읽고 ▲는 제외한다 - 규칙이 반대로 적혀 있으면 값이 뒤집힌다."""
+        from src.core.table_to_chart import _AMBIGUOUS_SIGNS, _NEGATIVE_SIGNS
+
+        rules = self._rules()
+        assert "△" in _NEGATIVE_SIGNS and "△934" in rules
+        assert "▲" in _AMBIGUOUS_SIGNS and '"▲"는' in rules
+
+    def test_펜스를_직접_쓰지_말라고_한다(self) -> None:
+        """펜스 안 수치는 근거 대조망이 못 읽는다(측정: 무근거 3건 중 0건 검출)."""
+        assert "차트 코드블록을 직접 만들지 마세요" in self._rules()
