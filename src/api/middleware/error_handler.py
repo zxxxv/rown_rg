@@ -58,9 +58,61 @@ def _friendly_reason(err: dict[str, Any]) -> str:
     return msg.removeprefix("Value error, ")
 
 
+# 필드명 → 화면 용어. 좌표("chapters.2.sections.0.agents")를 그대로 보여주면
+# 한글 사유가 붙어도 사람이 어디를 고칠지 모른다(2026-08-28 실사용: 프리셋 저장
+# 422를 여섯 번 받고도 원인을 못 찾았다 — 문구가 기계 좌표였다).
+_FIELD_LABEL: dict[str, str] = {
+    "agents": "담당 에이전트",
+    "analysts": "담당 에이전트",
+    "direction": "작성 방향",
+    "key_points": "핵심 포인트",
+    "builds_on": "이어받기",
+    "search_queries": "검색 질의",
+    "title": "제목",
+    "name": "이름",
+    "description": "설명",
+    "topic": "주제",
+    "instruction": "지시",
+    "chapters": "목차",
+    "sections": "절",
+}
+
+
 def _field_path(loc: tuple[Any, ...]) -> str:
-    """('body','spec','min_chars') → 'spec.min_chars'. 어느 필드인지가 핵심 정보다."""
-    return ".".join(str(x) for x in loc if x not in ("body", "query", "path", "header"))
+    """검증 실패 위치 → 사람 좌표.
+
+    목차 꼴(chapters[i].sections[j].field)은 "3.1절 담당 에이전트"로, 필드명은
+    화면 용어로 옮긴다. 모르는 꼴은 종전대로 점 경로 — 없는 것보다 낫다.
+    """
+    parts = [x for x in loc if x not in ("body", "query", "path", "header")]
+    if not parts:
+        return ""
+
+    def _label(field: Any) -> str:
+        return _FIELD_LABEL.get(str(field), str(field))
+
+    # 목차 좌표: chapters.<i>(.title | .sections.<j>(.field(.<k>)?)?)?
+    if parts[0] == "chapters" and len(parts) > 1 and isinstance(parts[1], int):
+        ch = parts[1] + 1
+        rest = parts[2:]
+        if rest and rest[0] == "sections" and len(rest) > 1 and isinstance(rest[1], int):
+            where = f"{ch}.{rest[1] + 1}절"
+            tail = rest[2:]
+        else:
+            where = f"{ch}장"
+            tail = rest
+        if not tail:
+            return where
+        text = f"{where} {_label(tail[0])}"
+        # 목록 항목 하나가 걸린 경우("key_points.31") — 몇 번째인지까지.
+        if len(tail) > 1 and isinstance(tail[1], int):
+            text += f" {tail[1] + 1}번째"
+        return text
+    # 일반 경로: 인덱스는 걷고 마지막 필드만 화면 용어로.
+    names = [str(x) for x in parts if not isinstance(x, int)]
+    if not names:
+        return ""
+    return ".".join([*names[:-1], _label(names[-1])])
 
 
 def _code(exc: BaseError, default: str) -> str:
