@@ -212,6 +212,14 @@ def number_variants(token: str) -> list[str]:
             if f"{text}{unit}" != norm:
                 out.append(f"{text}{unit}")
                 out.append(f"{text} {unit}")
+    # 소수 → 합성 표기 — "2,443.2억"을 원문(특수강 번역 페이지 실측)은
+    # "2443억 2천만 달러"로 적는다. 소수 한 자리만: .1억=1천만, .1조=1천억.
+    m_dec = re.match(r"^(\d+)\.(\d)(조|억)$", norm)
+    if m_dec and m_dec.group(2) != "0":
+        whole, frac, unit = m_dec.groups()
+        sub = "천억" if unit == "조" else "천만"
+        out.append(f"{whole}{unit} {frac}{sub}")
+        out.append(f"{whole}{unit}{frac}{sub}")
     # 공백을 넣어 쓴 한국어 표기도 근거에 있을 수 있다("2억 450만").
     spaced = re.sub(r"([조억만천])(\d)", r"\1 \2", norm)
     if spaced != norm:

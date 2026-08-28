@@ -1035,3 +1035,17 @@ class TestScaleRewriteVariants:
         # 등호 없는 맨 무근거 수치는 그대로 잡힌다.
         out2 = ungrounded_numbers("사업비는 약 2,414억 원임", "무관한 근거 본문 3,000억")
         assert any("2,414" in t for t in out2)
+
+
+class TestDecimalToCompositeVariant:
+    def test_decimal_eok_matches_composite_prose(self) -> None:
+        """철강 런 실측(2026-08-28): 번역 페이지가 "2025년 2443억 2천만 달러"로 적는
+        값을 본문은 "2,443.2억 달러"로 쓴다 - 소수→합성 방향이 없으면 영영 못 만난다."""
+        assert "2443억 2천만" in number_variants("2,443.2억")
+        assert number_in_text(
+            "2,443.2억", normalize_haystack("특수강 시장 규모는 2025년 2443억 2천만 달러에서")
+        )
+        # 조 단위도 같은 규칙: "1.5조" ↔ "1조 5천억".
+        assert number_in_text("1.5조", normalize_haystack("총사업비는 1조 5천억 원 규모"))
+        # 소수 0은 합성이 성립하지 않는다.
+        assert all("천만" not in v for v in number_variants("244.0억"))
