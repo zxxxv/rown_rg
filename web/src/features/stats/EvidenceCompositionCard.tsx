@@ -80,6 +80,12 @@ export function EvidenceCompositionCard({ projectId }: { projectId: string }) {
               )}
               <p className="mt-1 text-center text-xs text-fg-secondary">
                 대조 {tally.claims}문장 · 근거 확인률 {confirmedShare(tally)}
+                {tally.crosslingual > 0 ? (
+                  <span className="text-fg-tertiary">
+                    {" "}
+                    · 외국어 근거 {tally.crosslingual}문장
+                  </span>
+                ) : null}
               </p>
             </div>
           );

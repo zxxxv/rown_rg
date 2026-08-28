@@ -14,6 +14,7 @@ export const SourceUsageItemSchema = z.object({
   reliability: z.string().nullable(),
   citations: z.number(),
   sections_used: z.number(),
+  published_year: z.number().nullish(),
 });
 export type SourceUsageItem = z.infer<typeof SourceUsageItemSchema>;
 
@@ -70,6 +71,7 @@ export function useSourceUsage(projectId: string, enabled: boolean) {
 export const EvidenceTallySchema = z.object({
   claims: z.number(),
   confirmed: z.number(),
+  crosslingual: z.number().default(0),
   unconfirmed: z.number(),
   uncited: z.number(),
   defect: z.number(),

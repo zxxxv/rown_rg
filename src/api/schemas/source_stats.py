@@ -20,6 +20,8 @@ class SourceUsageItem(BaseModel):
     reliability: str | None = None  # high | medium | low
     citations: int  # 본문 참조 수(참고 (출처 n) + 직접 인용 [n] 합산)
     sections_used: int  # 이 자료를 참조한 절 수
+    # 발행연도(서지 채굴·백필 산출) - 연도 신선도 통계의 원천. 미상이면 None.
+    published_year: int | None = None
 
 
 class ChapterUsage(BaseModel):
@@ -59,6 +61,9 @@ class EvidenceTally(BaseModel):
 
     claims: int = 0
     confirmed: int = 0
+    # 확인 필요(unconfirmed)의 부분집합 - 근거가 외국어라 자동 대조가 성립하지 않는
+    # 문장 수. 파이 조각이 아니라 부가 지표로 보여준다(번역 리스크 조감).
+    crosslingual: int = 0
     unconfirmed: int = 0
     uncited: int = 0
     defect: int = 0

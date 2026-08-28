@@ -300,6 +300,19 @@ export function VerifyReportCard({
         ) : null}
       </header>
 
+      {/* 장별 분포 한 줄 - 어디에 몰렸는지 스크롤 없이 보인다. 몰림 자체가 신호다
+          (실측: 출처 번호 밀림 사고 때 경고가 한 장에 집중됐다). */}
+      {byChapter.size > 1 ? (
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-secondary">
+          <span className="text-fg-tertiary">장별</span>
+          {[...byChapter.entries()].map(([chapter, items]) => (
+            <span key={chapter}>
+              {chapter}장 <b className="font-mono text-fg">{items.length}</b>
+            </span>
+          ))}
+        </p>
+      ) : null}
+
       <CoverageLine projectId={projectId} />
 
       <div className="flex flex-col gap-3">

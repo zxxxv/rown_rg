@@ -3209,7 +3209,9 @@ async def _compute_evidence_composition(
     합산한다 — 별도 약식 판정을 쓰면 패널 숫자와 어긋나 어느 쪽도 못 믿게 된다.
     """
     rows = [r for r in await _load_sections(session, project.id) if (r.content or "").strip()]
-    fingerprint = f"{len(rows)}:{max((r.updated_at.isoformat() for r in rows), default='')}"
+    # v2: crosslingual 필드 추가(2026-08-28) - 버전을 지문에 넣어 옛 저장분(필드 0)을
+    # 그대로 믿지 않고 한 번 재계산하게 한다.
+    fingerprint = f"v2:{len(rows)}:{max((r.updated_at.isoformat() for r in rows), default='')}"
     cached = _EVIDENCE_COMP_CACHE.get(project.id)
     if cached is not None and cached[0] == fingerprint:
         return cached[1]
@@ -3237,6 +3239,9 @@ async def _compute_evidence_composition(
             tone = _claim_tone(claim)
             for bucket in (total, ch):
                 setattr(bucket, tone, getattr(bucket, tone) + 1)
+                # 외국어 근거는 확인 필요의 부분집합 - 번역 리스크 조감용 부가 지표.
+                if claim.status == "crosslingual":
+                    bucket.crosslingual += 1
 
     result = EvidenceCompositionResponse(
         total=total, chapters=[by_chapter[n] for n in sorted(by_chapter)]

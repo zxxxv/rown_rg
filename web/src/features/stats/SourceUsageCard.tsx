@@ -105,6 +105,28 @@ export function SourceUsageCard({ projectId }: { projectId: string }) {
     return acc;
   }, {});
 
+  // 연도 신선도(전체 고정, 인용 가중) - 보고서가 얼마나 최신 자료 위에 서 있는가.
+  // 연도 일관성 축(7차 검증 사전등록)의 조감 지표. 미상은 서지 채굴이 못 찾은 자료.
+  const yearBuckets = data.sources.reduce<Record<string, number>>((acc, x) => {
+    const y = x.published_year;
+    const bucket =
+      typeof y === "number" ? (y >= 2024 ? "2024년~" : y >= 2021 ? "2021~23년" : "~2020년") : "연도 미상";
+    acc[bucket] = (acc[bucket] ?? 0) + x.citations;
+    return acc;
+  }, {});
+  const yearEntries = ["2024년~", "2021~23년", "~2020년", "연도 미상"]
+    .map((label) => ({ label, v: yearBuckets[label] ?? 0 }))
+    .filter((e) => e.v > 0);
+  const yearFence =
+    yearEntries.length >= 2
+      ? [
+          "type: pie",
+          "title: 인용 자료 연도 분포",
+          `x: ${yearEntries.map((e) => e.label).join(" | ")}`,
+          `series: 참조 = ${yearEntries.map((e) => e.v).join(" | ")}`,
+        ].join("\n")
+      : null;
+
   return (
     <div className="flex flex-col gap-3">
       {/* 요약 줄 - 보고서 전체의 한 줄 조감 */}
@@ -217,6 +239,20 @@ export function SourceUsageCard({ projectId }: { projectId: string }) {
           </div>
         </div>
       )}
+
+      {/* 연도 신선도 - 전체 레벨에서만(장/절 드릴다운에는 표본이 얇아 소음) */}
+      {ch === null && yearFence ? (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
+          <div className="min-w-0">
+            <ChartBlock source={yearFence} />
+          </div>
+          <p className="self-center text-xs text-fg-secondary">
+            인용 횟수로 가중한 발행연도 분포입니다. 옛 자료 비중이 크면 최신 동향 서술이
+            낡은 수치 위에 설 수 있습니다. "연도 미상"은 서지에서 발행연도를 찾지 못한
+            자료로, 대부분 웹 문서입니다.
+          </p>
+        </div>
+      ) : null}
 
       {data.unused.length > 0 ? (
         <details className="text-xs text-fg-secondary">

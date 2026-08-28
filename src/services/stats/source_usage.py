@@ -75,6 +75,9 @@ def build_source_usage(
             reliability=src.reliability,
             citations=total_counts.get(number, 0),
             sections_used=len(sections_used.get(number, ())),
+            published_year=year
+            if isinstance((year := (src.metadata_ or {}).get("published_year")), int)
+            else None,
         )
 
     items = [_item(i + 1, src) for i, src in enumerate(sources_ordered)]
