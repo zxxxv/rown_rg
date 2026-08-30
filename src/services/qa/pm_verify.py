@@ -38,9 +38,14 @@ from src.services.qa.gate import normalize_number, significant_numbers
 
 logger = structlog.get_logger(__name__)
 
-DEFAULT_MAX_TOKENS = 1500
+# 출력 상한 4000 — 1500은 findings JSON이 중간에 끊겨 지적 수와 저장 수가 어긋났다
+# (2026-08-25 실측). 무한성은 MAX_FINDINGS_PER_CHAPTER가 따로 막는다.
+DEFAULT_MAX_TOKENS = 4000
 MAX_FINDINGS_PER_CHAPTER = 20  # 무한성 캡 — 모델이 과잉 지적해도 상한
-_MAX_CHAPTER_CHARS = 24_000  # 챕터 본문 입력 상한(비용·컨텍스트 캡)
+# 챕터 본문 입력 상한 — 24,000자였을 때 PM은 본문의 47.6%만 보고 판정했다(2026-08-25
+# 실측: 장마다 뒤 2~3절 미열람 — 철강 6.1 WT 부재도 이 사각에 있었다). 5절 × 20,000자
+# 챕터가 통째로 들어가는 크기로 해제하고, 상한은 폭주 방어로만 남긴다.
+_MAX_CHAPTER_CHARS = 120_000
 _MAX_DIGEST_ITEMS = 40
 
 _SEVERITIES = {"critical", "warning"}
@@ -63,7 +68,12 @@ _FORMAT = (
 # 숫자+단위 토큰 — 선행 챕터 수치를 다음 챕터 콜에 실어 챕터 간 값 충돌을 보게 하는
 # 다이제스트(결정적, LLM 아님). '년'은 단위에서 제외한다: 연도(2024년)·기간(3년)은
 # 통계가 아니라 시점 표기다(2026-08-03 실측: 경고 25건 중 12건이 이 노이즈).
-_NUM_RE = re.compile(r"\d[\d,.]*\s?(?:%|억\s?원|조\s?원|만\s?원|억|조|만|명|건|개소|개|배|%p|p)")
+# 통화는 단위째 싣는다 — "2,443.2억 달러"를 "2,443.2억"으로 떨구면 모델이 뒤 챕터의
+# "2,414억 원"(무관한 값)과 대조해 가짜 충돌을 만들었다(2026-08-29 철강 4.2 실측).
+_NUM_RE = re.compile(
+    r"\d[\d,.]*\s?(?:%p|%|(?:조|억|만|천)\s?(?:원|달러|유로|엔|위안|파운드)"
+    r"|억\s?원|조\s?원|만\s?원|억|조|만|명|건|개소|개|배|p)"
+)
 
 # 남길 LLM 축 — 프롬프트의 검증 항목과 짝(키워드 포함 판정). 그 밖의 카테고리
 # (중복 인용·환각 검출·형식·출처 매칭)는 결정적 검출기·근거 동봉 판정이 더 정확히
@@ -115,6 +125,26 @@ def _residue_tokens(s: str) -> set[str]:
         if token:
             out.add(token.lower())
     return out
+
+
+# 값 표기에 든 통화 어휘 — 다이제스트발 교차 통화 대조의 오탐 판별용.
+_CURRENCY_WORDS = frozenset({"원", "달러", "유로", "엔", "위안", "파운드"})
+
+
+def _digest_currency_conflict(values: list[str]) -> bool:
+    """두 값의 통화가 서로소인가 — 선행 다이제스트 대조에서만 쓰는 드롭 판정.
+
+    다이제스트의 값은 맥락 없는 토큰이라, 모델이 통화가 다른 값(억 원 vs 억 달러)을
+    크기만 보고 충돌로 엮는다(2026-08-29 철강 실측: 4.2 연평균 2,414억 **원**을 3.1
+    시장 규모 2,443억 **달러**와 대조). 본문 안(loc가 절 번호)의 통화 혼동 지적은
+    같은 사실을 두 통화로 쓴 진짜 결함일 수 있어 드롭하지 않는다 — 호출부가 '선행'
+    표시가 있는 행에만 이 판정을 건다.
+    """
+    if len(values) < 2:
+        return False
+    ca = {t for t in _residue_tokens(values[0]) if t in _CURRENCY_WORDS}
+    cb = {t for t in _residue_tokens(values[1]) if t in _CURRENCY_WORDS}
+    return bool(ca) and bool(cb) and not (ca & cb)
 
 
 def _same_quantity(value_a: str, value_b: str) -> bool:
@@ -241,6 +271,11 @@ def _to_rows(
         }
         if value_a and value_b:
             row["_values"] = [value_a, value_b]
+            # loc는 교차 통화 드롭 판정에만 쓴다('선행' 표시 여부) — 저장 전에 걷는다.
+            row["_locs"] = [
+                str(item.get("loc_a") or "").strip(),
+                str(item.get("loc_b") or "").strip(),
+            ]
         rows.append(row)
         if len(rows) >= MAX_FINDINGS_PER_CHAPTER:
             break
@@ -273,7 +308,7 @@ async def verify_report(
     rows: list[dict[str, Any]] = []
     seen_texts: list[str] = []  # 선행 챕터 본문 누적 — 값 충돌 대조 다이제스트 원천
     seen_pairs: set[frozenset[str]] = set()  # 이미 경고한 값 조합 — 교차 챕터 dedup
-    n_dup, n_ghost = 0, 0
+    n_dup, n_ghost, n_currency = 0, 0, 0
     for chapter_number, sections in _group_by_chapter(state):
         request = CompletionRequest(
             messages=[
@@ -302,6 +337,17 @@ async def verify_report(
         )
         for row in _to_rows(chapter_number, _parse_manifest(response.content), sid_by_label):
             values = row.pop("_values", [])
+            locs = row.pop("_locs", [])
+            # 선행 다이제스트와의 교차 통화 대조는 무관한 값끼리의 가짜 충돌이다
+            # (2026-08-29 철강: 억 원 vs 억 달러). 본문 안 통화 혼동은 남긴다.
+            if values and "선행" in locs and _digest_currency_conflict(values):
+                n_currency += 1
+                logger.info(
+                    "pm_verify.cross_currency_dropped",
+                    chapter=chapter_number,
+                    detail=row["detail"][:80],
+                )
+                continue
             # 값 실증 — 경고가 인용한 값이 본문 어디에도 없으면 그 경고 자체가 창작이다.
             if values and not all(_value_in_text(v, doc_norm) for v in values):
                 n_ghost += 1
@@ -326,12 +372,13 @@ async def verify_report(
                 seen_pairs.add(key)
             rows.append(row)
         seen_texts.extend(content for _, content in sections)
-    if n_dup or n_ghost:
+    if n_dup or n_ghost or n_currency:
         logger.info(
             "pm_verify.rows_deduped",
             project_id=str(state.project_id),
             n_dup=n_dup,
             n_ghost=n_ghost,
+            n_currency=n_currency,
         )
     return rows
 

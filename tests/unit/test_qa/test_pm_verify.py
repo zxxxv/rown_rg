@@ -18,6 +18,7 @@ from src.core.types import (
 )
 from src.services.qa.pm_verify import (
     MAX_FINDINGS_PER_CHAPTER,
+    _digest_currency_conflict,
     _to_rows,
     numeric_digest,
     verify_report,
@@ -287,3 +288,63 @@ class TestVerifyReport:
         assert system is not None
         assert "검증" in system  # pm_verify_system 실카탈로그 로드 확인
         assert "JSON" in system  # 출력 계약 부착 확인
+
+
+def _state_from(plans: list[SectionPlan], contents: list[str]) -> ProjectState:
+    csets, selections = [], {}
+    for plan, content in zip(plans, contents, strict=True):
+        cand = SectionCandidate(
+            draft=SectionDraft(section_id=plan.section_id, content=content, cited_chunk_ids=[])
+        )
+        csets.append(SectionCandidateSet(section_id=plan.section_id, candidates=[cand]))
+        selections[plan.section_id] = cand.candidate_id
+    state = ProjectState(user_id=uuid4(), topic="t", section_plan=plans, section_candidates=csets)
+    for sid, cid in selections.items():
+        state = state.record_selection(sid, cid)
+    return state
+
+
+class TestCurrencyGuard:
+    """교차 통화 대조 오탐 수리(2026-08-29 철강 4.2 실측: 억 원 vs 억 달러)."""
+
+    def test_다이제스트가_통화를_단위째_싣는다(self):
+        # "2,443.2억"으로 떨구면 뒤 챕터의 무관한 원화 값과 크기 대조가 된다.
+        assert numeric_digest(["시장 규모는 2,443.2억 달러로 전망됨"]) == ["2,443.2억 달러"]
+
+    def test_교차_통화_충돌_판정(self):
+        assert _digest_currency_conflict(["2,414억 원", "2,443.2억 달러"])
+        assert not _digest_currency_conflict(["91억 유로", "90억 유로"])
+        assert not _digest_currency_conflict(["2,414억", "2,443.2억 달러"])  # 한쪽 통화 없음
+
+    async def test_선행_다이제스트발_교차_통화_경고는_드롭된다(self):
+        plans = [
+            SectionPlan(chapter_number=1, section_number=1, title="시장 규모"),
+            SectionPlan(chapter_number=2, section_number=1, title="사업비"),
+        ]
+        state = _state_from(
+            plans, ["시장 규모는 2,443.2억 달러로 전망됨 [1]", "연평균 2,414억 원이 배분됨 [1]"]
+        )
+        finding = (
+            '{"severity": "warning", "category": "수치 일관성", "section": "2.1", '
+            '"value_a": "2,414억 원", "loc_a": "2.1", '
+            '"value_b": "2,443.2억 달러", "loc_b": "선행", '
+            '"detail": "연평균 2,414억 원이 선행 2,443.2억 달러와 불일치"}'
+        )
+        stub = _StubClient(
+            ['```json\n{"findings": []}\n```', f'```json\n{{"findings": [{finding}]}}\n```']
+        )
+        assert await verify_report(state, client=stub, model="stub-model") == []
+
+    async def test_본문_안_통화_혼동은_남긴다(self):
+        # 같은 사실을 유로/달러로 달리 쓴 진짜 결함 - 드롭 판정은 '선행' 행에만 건다.
+        plans = [SectionPlan(chapter_number=1, section_number=1, title="투자")]
+        state = _state_from(plans, ["투자 규모가 91억 유로와 91억 달러로 병기됨 [1]"])
+        finding = (
+            '{"severity": "warning", "category": "수치 일관성", "section": "1.1", '
+            '"value_a": "91억 유로", "loc_a": "1.1", '
+            '"value_b": "91억 달러", "loc_b": "1.1", '
+            '"detail": "같은 투자 규모가 유로와 달러로 상이 표기됨"}'
+        )
+        stub = _StubClient([f'```json\n{{"findings": [{finding}]}}\n```'])
+        rows = await verify_report(state, client=stub, model="stub-model")
+        assert len(rows) == 1 and "유로" in rows[0]["detail"]
