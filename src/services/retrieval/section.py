@@ -14,6 +14,7 @@ from uuid import UUID
 
 import structlog
 
+from src.core.outline import direction_axes
 from src.core.types import RetrievedChunk, SectionPlan
 from src.services.retrieval.base import SearchClient, SearchHit, Track
 
@@ -33,7 +34,10 @@ DEFAULT_FETCH_K = 30
 
 # 절 하나가 던지는 1차 검색 질의 수 상한. 질의 하나당 검색 왕복이 하나 늘고, 병합 뒤
 # 리랭커 입력은 width로 다시 캡되므로(=리랭킹 비용 불변) 늘어나는 건 검색 호출뿐이다.
-MAX_SECTION_QUERIES = 6
+# 6 → 8(2026-08-29 전수 조사): 핵심 포인트 2 + 브리프 3이면 기본 질의까지 6이 차서
+# 에이전트 질의 2건이 **항상** 잘려 있었다 — 질의 분화의 실측 이득(절쌍 자카드 -31%)이
+# 그런 절에서 통째로 죽는 자리다. 8이면 표준 구성(1+2+3+2)이 정확히 들어간다.
+MAX_SECTION_QUERIES = 8
 # 절 하나에서 질의로 승격할 핵심 포인트 수. 앞쪽이 사용자가 중요하게 적은 순서다.
 MAX_KEYPOINT_QUERIES = 2
 # 에이전트 1종이 기여할 질의 수. 다관점 절에서 한 관점이 질의를 독식하지 않게 한다.
@@ -232,6 +236,12 @@ def section_query_set(
         q = _keypoint_query(title, point)
         if q:
             queries.append(q)
+    # 작성 방향의 열거 축("사회·기술·경제·환경·정치 분석") — 축마다 독립 질의로 승격.
+    # 2026-08-29 철강 실사고: 방향은 작성 프롬프트로만 가고 검색엔 안 실려, 5개 축을
+    # 선언한 절(2.1 STEEP)의 사회·경제·정치 소재가 **수집 단계에서** 통째로 빠졌다.
+    # 브리프 질의는 상한 3이라 5축을 산술적으로 못 덮는다 — 축 질의는 결정적으로 만든다.
+    axis_queries = [f"{title} {axis}" for axis in direction_axes(section.direction)]
+    queries.extend(axis_queries)
     # 설계 브리프가 만든 절별 질의 — 목차 전체를 본 LLM이 "이 절만의 각도"를 넣는다.
     # 절 제목이 형식어인 목차("개요"·"시사점"이 장마다 반복)에서 특히 크다: 장 안에서
     # 갈릴 게 없어 다섯 절이 거의 같은 근거를 보던 자리다.
@@ -248,7 +258,9 @@ def section_query_set(
         if key and key not in seen:
             seen.add(key)
             unique.append(key)
-    return unique[:MAX_SECTION_QUERIES]
+    # 축 질의만큼 상한을 늘린다 — 고정 6에 축을 욱여넣으면 브리프·에이전트 질의가
+    # 밀려난다(2026-08-29 실측: 에이전트 질의 2건이 상한에 잘려 있었다).
+    return unique[: MAX_SECTION_QUERIES + len(axis_queries)]
 
 
 def interleave_by_query(ranked_lists: list[list[SearchHit]], limit: int) -> list[SearchHit]:

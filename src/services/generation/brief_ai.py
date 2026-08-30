@@ -26,6 +26,7 @@ import structlog
 from src.clients.llm.base import CompletionRequest, LLMClient, Message
 from src.clients.llm.factory import create_llm_client
 from src.clients.llm.token_tracker import token_context
+from src.core.outline import direction_axes
 
 logger = structlog.get_logger(__name__)
 
@@ -56,6 +57,10 @@ SYSTEM_PROMPT = """너는 정부·공공 보고서의 실행 계획을 세우는
 4. search_queries — 이 절을 자료 풀에서 찾을 **검색 질의 2~3개**. 규칙:
    - 절 제목을 그대로 쓰지 마라. 이미 기본 질의로 던진다 — 여기엔 **절 제목에 없는
      말**(기관명·지표명·제도명·영문 표기)을 넣어 다른 각도를 만든다.
+   - direction이 축을 가운뎃점으로 열거하면(예: "사회·기술·경제·환경·정치 분석")
+     질의들이 그 축을 빠짐없이 커버해야 한다 — 이 경우 축당 1개까지 질의를 늘려라
+     (최대 6개). 한 축도 안 덮인 채 남기지 마라: 안 덮인 축은 자료가 안 걷혀
+     본문에서 통째로 빠진다.
    - 같은 틀이 여러 장에 반복되는 목차에서는(예: 장마다 "개요"·"시사점") 그 장의
      대상이 무엇인지를 질의에 반드시 넣어라 — 안 넣으면 장 안의 절들이 같은 자료를
      받는다.
@@ -107,7 +112,10 @@ SYSTEM_PROMPT = """너는 정부·공공 보고서의 실행 계획을 세우는
 
 # 절당 질의 상한. 검색 왕복이 그만큼 늘고, 절 질의 집합 전체 상한
 # (retrieval.section.MAX_SECTION_QUERIES)에서 기본·핵심 포인트 몫을 남겨야 한다.
+# direction이 축을 열거한 절은 축 수만큼(캡 6) 허용 — 상한 3으로 5축을 자르면
+# 안 덮인 축의 소재가 수집에서 통째로 빠진다(2026-08-29 철강 2.1 STEEP 실사고).
 MAX_BRIEF_QUERIES = 3
+MAX_ENUMERATED_QUERIES = 6
 MAX_BRIEF_QUERY_CHARS = 80
 
 # 토픽 소유권 상한 — 열 개를 넘으면 소유권이 아니라 목차 재서술이다.
@@ -115,7 +123,7 @@ MAX_OWNERSHIP_TOPICS = 10
 MAX_OWNERSHIP_TOPIC_CHARS = 60
 
 
-def _clean_queries(raw: Any) -> list[str]:
+def _clean_queries(raw: Any, cap: int = MAX_BRIEF_QUERIES) -> list[str]:
     """LLM이 낸 검색 질의 목록을 다듬는다 — 문장·중복·과장 길이를 걷어낸다.
 
     계획 산출을 그대로 검색에 던지므로 여기서 안 다듬으면 잡음이 그대로 질의가 된다.
@@ -132,7 +140,7 @@ def _clean_queries(raw: Any) -> list[str]:
         if text and key not in seen:
             seen.add(key)
             out.append(text)
-        if len(out) >= MAX_BRIEF_QUERIES:
+        if len(out) >= cap:
             break
     return out
 
@@ -245,6 +253,16 @@ def _validate(raw: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any] | No
     dup_labels = {
         x["label"] for g in brief.get("duplicate_queries", []) for x in g.get("sections", [])
     }
+    # direction이 축을 열거한 절은 질의 상한을 축 수까지 연다 — 프롬프트가 축 커버를
+    # 요구했는데 여기서 3개로 자르면 요구가 무효가 된다(조용한 절단 금지).
+    query_cap = {
+        f"{s['chapter_number']}.{s['section_number']}": (
+            min(MAX_ENUMERATED_QUERIES, max(MAX_BRIEF_QUERIES, len(axes)))
+            if (axes := direction_axes(str(s.get("direction") or "")))
+            else MAX_BRIEF_QUERIES
+        )
+        for s in brief.get("sections", [])
+    }
 
     sections = []
     for s in raw.get("sections") or []:
@@ -263,7 +281,9 @@ def _validate(raw: dict[str, Any], brief: dict[str, Any]) -> dict[str, Any] | No
                 "goal": str(s.get("goal") or ""),
                 "source_strategy": str(s.get("source_strategy") or ""),
                 "writing_plan": str(s.get("writing_plan") or ""),
-                "search_queries": _clean_queries(s.get("search_queries")),
+                "search_queries": _clean_queries(
+                    s.get("search_queries"), cap=query_cap.get(label, MAX_BRIEF_QUERIES)
+                ),
             }
         )
     if not sections:

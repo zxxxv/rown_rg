@@ -36,6 +36,29 @@ from src.core.builds_on import MAX_REFS_PER_SECTION, parse_ref
 # 권장선(2~3)은 프론트 경고(AGENTS_WARN_THRESHOLD)가 맡는다.
 MAX_AGENTS_PER_SECTION = 5
 
+# 작성 방향의 열거 축 — "사회·기술·경제·환경·정치 분석"처럼 가운뎃점으로 3개 이상
+# 잇는 열거는 그 절이 커버해야 할 축의 선언이다. 2026-08-29 철강 실사고: 이 열거가
+# 검색 질의 어디에도 안 실려(방향은 작성 프롬프트로만 감) 사회·경제·정치 소재가
+# 수집 자체가 안 됐고, 작성기는 소재 없는 축을 조용히 생략했다.
+# 소비처: retrieval.section(축별 질의 승격)·generation.brief_ai(질의 상한 확장).
+_AXIS_ENUM_RE = re.compile(r"[가-힣A-Za-z0-9]{1,14}(?:\s*[·ㆍ・]\s*[가-힣A-Za-z0-9]{1,14}){2,}")
+MAX_DIRECTION_AXES = 6
+
+
+def direction_axes(direction: str) -> list[str]:
+    """작성 방향에 열거된 축들 — 가장 긴 열거 하나를 골라 쪼갠다(상한 6).
+
+    열거가 여럿이면 긴 쪽이 절의 뼈대일 확률이 높다. 2개짜리는 대구("국내·외")라
+    축 선언으로 안 본다.
+    """
+    runs = _AXIS_ENUM_RE.findall(" ".join((direction or "").split()))
+    if not runs:
+        return []
+    best = max(runs, key=lambda r: len(re.split(r"[·ㆍ・]", r)))
+    items = [t.strip() for t in re.split(r"[·ㆍ・]", best) if t.strip()]
+    return items[:MAX_DIRECTION_AXES] if len(items) >= 3 else []
+
+
 # id 토큰 표기 — 사람 입력("4.1")과 정규식이 겹칠 수 없게 접두를 붙인다.
 _SECTION_TOKEN_RE = re.compile(
     r"""^\s*s:(?P<id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})

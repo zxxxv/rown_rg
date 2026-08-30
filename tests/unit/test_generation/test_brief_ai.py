@@ -119,6 +119,52 @@ class TestValidate:
         assert out is not None
         assert out["sections"][0]["search_queries"] == []
 
+    def test_direction이_축을_열거하면_질의_상한이_축_수까지_열린다(self) -> None:
+        """철강 2.1 실사고: 5축 절의 질의가 상한 3에 잘려 사회·경제·정치 소재가
+        수집에서 빠졌다 - 프롬프트가 축 커버를 요구하고 여기서 자르면 요구가 무효다."""
+        import copy
+
+        brief = copy.deepcopy(_BRIEF)
+        brief["sections"][0]["direction"] = "사회·기술·경제·환경·정치 분석"
+        out = _validate(
+            {
+                "sections": [
+                    {
+                        "chapter": 1,
+                        "section": 1,
+                        "goal": "g",
+                        "search_queries": [
+                            "철강 인력 고령화 사회 변화",
+                            "수소환원제철 기술 실증",
+                            "철강 원가 구조 경제성",
+                            "탄소중립 환경 규제",
+                            "통상 정책 보호무역",
+                        ],
+                    }
+                ]
+            },
+            brief,
+        )
+        assert out is not None
+        assert len(out["sections"][0]["search_queries"]) == 5
+
+    def test_축_없는_절의_상한은_그대로_3이다(self) -> None:
+        out = _validate(
+            {
+                "sections": [
+                    {
+                        "chapter": 2,
+                        "section": 1,
+                        "goal": "g",
+                        "search_queries": ["q1", "q2", "q3", "q4", "q5"],
+                    }
+                ]
+            },
+            _BRIEF,
+        )
+        assert out is not None
+        assert len(out["sections"][0]["search_queries"]) == 3
+
     def test_유효_절이_하나도_없으면_None(self) -> None:
         assert _validate({"sections": [{"chapter": 9, "section": 9}]}, _BRIEF) is None
 

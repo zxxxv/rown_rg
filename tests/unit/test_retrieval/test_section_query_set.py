@@ -185,6 +185,59 @@ class TestQuerySet:
         assert qs == [section_search_query(_section())]
 
 
+class TestDirectionAxisQueries:
+    """2026-08-29 철강 2.1 실사고: direction의 5개 축이 검색 어디에도 안 실려
+    사회·경제·정치 소재가 수집 단계에서 통째로 빠졌다 - 축을 결정적 질의로 승격."""
+
+    def test_direction_열거_축이_질의로_승격된다(self):
+        qs = section_query_set(_section(direction="사회·기술·경제·환경·정치 분석"))
+        for axis in ["사회", "기술", "경제", "환경", "정치"]:
+            assert any(q.endswith(axis) for q in qs)
+
+    def test_축_질의는_절_맥락을_앞에_단다(self):
+        qs = section_query_set(_section(direction="사회·기술·경제·환경·정치 분석"))
+        axis_q = next(q for q in qs if q.endswith("사회"))
+        assert "적용 범위와 일정" in axis_q
+
+    def test_철강_2_1_재현_모든_질의원이_함께_들어간다(self):
+        # 종전 상한 6에서는 에이전트 질의가 잘리고 축 질의는 존재하지 않았다.
+        catalog = {
+            "STEEP분석": _spec("STEEP분석", ["{topic} STEEP analysis", "{topic} 거시환경 분석"])
+        }
+        qs = section_query_set(
+            _section(
+                direction="사회·기술·경제·환경·정치 분석",
+                key_points=["5개 요인", "핵심 트렌드"],
+                search_queries=[
+                    "EU CBAM 철강 탄소국경조정",
+                    "IEA steel decarbonization",
+                    "AI 데이터센터 전력 철강 수요",
+                ],
+                analysts=["STEEP분석"],
+            ),
+            "철강",
+            catalog,
+        )
+        for axis in ["사회", "경제", "정치"]:
+            assert any(q.endswith(axis) for q in qs)
+        assert any("STEEP analysis" in q for q in qs)
+        assert any("CBAM" in q for q in qs)
+
+    def test_두_개짜리_대구는_축이_아니다(self):
+        qs = section_query_set(_section(direction="국내·외 동향 비교"))
+        assert qs == [section_search_query(_section())]
+
+    def test_축이_없으면_상한은_종전과_같다(self):
+        catalog = {
+            f"a{i}": _spec(f"a{i}", [f"{{topic}} 관점{i}a", f"{{topic}} 관점{i}b"])
+            for i in range(5)
+        }
+        qs = section_query_set(
+            _section(key_points=["p1", "p2", "p3"], analysts=list(catalog)), "주제", catalog
+        )
+        assert len(qs) <= MAX_SECTION_QUERIES
+
+
 class TestInterleaveByQuery:
     def test_every_query_gets_its_turn(self):
         """한 질의만 찾아온 자료도 반드시 들어와야 한다 - RRF가 못 하던 일.
