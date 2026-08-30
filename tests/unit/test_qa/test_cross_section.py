@@ -6,6 +6,8 @@ from src.services.qa.cross_section import (
     DUPLICATE_THRESHOLD,
     dangling_references,
     duplicate_pairs,
+    pointer_restatements,
+    source_mismatch_pairs,
 )
 from src.services.qa.evidence_findings import cross_section_findings
 
@@ -135,3 +137,96 @@ def test_시간_의미의_앞서는_후방참조가_아니다() -> None:
     assert dangling_references(sections) == []
     flagged = dangling_references([("1.1", "앞서 살펴본 바와 같이 규제가 강화되고 있다.")])
     assert any("앞을 가리킴" in why for _ref, why in flagged)
+
+
+# ---- 참조 포인터 제외 (2026-08-29 철강 정독 오탐 수리) ----
+
+_POINTER = (
+    "'협력모델'의 개념(수평적·수직적 협력체계)과 지정 요건 및 세부 유형은 1.1절 참조(출처 31)"
+)
+
+
+def test_포인터_문장끼리는_중복으로_잡지_않는다() -> None:
+    # 실측 오탐: 4.2와 1.2가 같은 위임 문장을 갖고 있었다 — 실체는 1.1에만 있다.
+    assert duplicate_pairs([("1.2", _POINTER), ("4.2", _POINTER)]) == []
+
+
+def test_실내용_문장에_덧붙은_참조는_포인터가_아니다() -> None:
+    body = (
+        "특구 지정 시 연구개발·인프라·인력·투자 지원이 집중 추진되고 수소환원제철 실증을"
+        " 촉진하는 플랫폼으로 기능할 것으로 기대됨(1.1절 참조)"
+    )
+    pairs = duplicate_pairs([("1.1", body), ("5.1", body)])
+    assert pairs and pairs[0].score >= DUPLICATE_THRESHOLD
+
+
+# ---- 중복 출처 불일치 (2026-08-29 철강 정독: 같은 문장, 절마다 출처 4벌) ----
+
+_POHANG_A = (
+    "포스코는 포항제철소에 수소환원제철 개발센터를 개소하고 2030년 상용 기술 개발"
+    " 완료를 목표로 연구개발을 지속하고 있음(출처 8)"
+)
+_POHANG_B = (
+    "포스코는 포항제철소에 수소환원제철 개발센터를 개소하고 2030년 상용 기술 개발"
+    " 완료를 목표로 연구개발을 지속하고 있음(출처 31)"
+)
+
+
+def test_같은_문장에_다른_출처면_불일치로_잡는다() -> None:
+    pairs = duplicate_pairs([("4.1", _POHANG_A), ("4.3", _POHANG_B)])
+    mismatches = source_mismatch_pairs(pairs)
+    assert len(mismatches) == 1
+    assert mismatches[0].first_sources == (8,)
+    assert mismatches[0].second_sources == (31,)
+
+
+def test_출처가_겹치면_불일치가_아니다() -> None:
+    with_overlap = _POHANG_A.replace("(출처 8)", "(출처 8, 31)")
+    pairs = duplicate_pairs([("4.1", with_overlap), ("4.3", _POHANG_B)])
+    assert source_mismatch_pairs(pairs) == []
+
+
+def test_한쪽에_출처가_없으면_판정하지_않는다() -> None:
+    bare = _POHANG_A.replace("(출처 8)", "")
+    pairs = duplicate_pairs([("4.1", bare), ("4.3", _POHANG_B)])
+    assert source_mismatch_pairs(pairs) == []
+
+
+def test_불일치_소견이_경고_행으로_나온다() -> None:
+    findings = cross_section_findings([("4.1", _POHANG_A), ("4.3", _POHANG_B)])
+    rows = [f for f in findings if f["category"] == "중복 출처 불일치"]
+    assert len(rows) == 1
+    assert rows[0]["section_ref"] == "4.3"
+    assert "출처 8" in rows[0]["detail"] and "출처 31" in rows[0]["detail"]
+
+
+# ---- 참조 후 재서술 (2026-08-29 철강 5.1 실측) ----
+
+
+def test_참조로_넘긴_절을_다시_쓰면_잡는다() -> None:
+    origin = (
+        "철스크랩은 전기로 기반 저탄소 철강 생산의 핵심 원료로, 정부는 전문기업 육성을"
+        " 통해 품질 향상과 안정적 공급체계 구축을 추진함(출처 31)"
+    )
+    restated = (
+        "동 특별법 및 시행령의 제정·시행 경과는 1.1절 참조.\n\n"
+        "철스크랩은 전기로 기반 저탄소 철강 생산의 핵심 원료로, 정부는 전문기업 육성을"
+        " 통해 품질 향상과 안정적 공급체계 구축을 추진함(출처 17)"
+    )
+    sections = [("1.1", origin), ("5.1", restated)]
+    pairs = duplicate_pairs(sections)
+    assert pointer_restatements(sections, pairs) == [("5.1", "1.1", 1)]
+    rows = [f for f in cross_section_findings(sections) if f["category"] == "참조 후 재서술"]
+    assert len(rows) == 1 and rows[0]["section_ref"] == "5.1"
+
+
+def test_참조만_하고_재서술이_없으면_잡지_않는다() -> None:
+    sections = [
+        ("1.1", "저탄소철강특구 지정 요건과 지원 내용은 특별법 제23조가 규정함(출처 31)"),
+        (
+            "5.1",
+            "동 특별법 및 시행령의 제정·시행 경과는 1.1절 참조.\n\n5장 고유의 정책 평가 서술임",
+        ),
+    ]
+    pairs = duplicate_pairs(sections)
+    assert pointer_restatements(sections, pairs) == []

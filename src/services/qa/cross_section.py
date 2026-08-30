@@ -22,6 +22,7 @@ import re
 from collections import defaultdict
 from typing import NamedTuple
 
+from src.core.citations import numbers_in_order, strip_source_marks
 from src.services.qa.alignment import _weighted_tokens
 from src.services.qa.gate import claim_units
 
@@ -49,12 +50,27 @@ class DuplicatePair(NamedTuple):
     second_text: str
 
 
+# 술어가 '…N.N절 참조'인 문장은 내용이 아니라 위임이다. 포인터끼리 매칭하면 중복
+# 오탐이 된다(2026-08-29 철강 정독: 4.2 "'협력모델'의 개념…은 1.1절 참조"가 1.2의
+# 같은 포인터와 짝지어짐 — 실체는 1.1에만 있다). 출처 마커를 걷은 뒤 꼬리로 판정한다
+# — "…기대됨(1.1절 참조)"처럼 실내용 문장에 참조가 덧붙은 것은 포인터가 아니다.
+_POINTER_TAIL_RE = re.compile(r"\d{1,2}\s*\.\s*\d{1,2}\s*절\s*참조\s*[).\s]*$")
+
+
+def _is_pointer(unit: str) -> bool:
+    bare = strip_source_marks(unit).strip()
+    # 괄호 안 참조("…기대됨(1.1절 참조)")는 실내용 문장의 덧붙임이지 위임이 아니다 —
+    # 걷어낸 뒤에도 술어가 '…절 참조'로 끝나는 문장만 포인터로 본다.
+    bare = re.sub(r"\([^()]*절\s*참조[^()]*\)\s*$", "", bare).strip()
+    return bool(_POINTER_TAIL_RE.search(bare))
+
+
 def _units_by_section(sections: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """[(절 번호, 본문)] → [(절 번호, 주장 문장)]. 제목·표·구분선은 claim_units가 뺀다."""
     out: list[tuple[str, str]] = []
     for ref, content in sections:
         for unit in claim_units(content or ""):
-            if len(unit) >= _MIN_UNIT_CHARS:
+            if len(unit) >= _MIN_UNIT_CHARS and not _is_pointer(unit):
                 out.append((ref, unit))
     return out
 
@@ -138,6 +154,59 @@ def _ref_key(ref: str) -> tuple[int, int]:
         return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
     except ValueError:
         return (0, 0)
+
+
+class SourceMismatch(NamedTuple):
+    """복사 수준 중복인데 두 쪽의 출처 번호가 서로소인 쌍."""
+
+    pair: DuplicatePair
+    first_sources: tuple[int, ...]
+    second_sources: tuple[int, ...]
+
+
+def source_mismatch_pairs(pairs: list[DuplicatePair]) -> list[SourceMismatch]:
+    """같은 문장이 절을 옮기며 다른 출처 번호를 단 쌍 — 최소 한쪽은 오귀속이다.
+
+    2026-08-29 철강 정독의 최대 병리: BF-BOF 공정 표 수치가 7개 절에서 출처 4벌,
+    "포항 수소환원제철 개발센터" 문장이 4개 절에서 출처 4벌(6·8·31·28)로 실렸다.
+    전역 번호 체계에서 복사된 같은 문장의 근거가 둘일 수는 없으므로, 겹치는 번호가
+    하나도 없으면 확정 결함으로 본다(부분 겹침은 다중 인용의 정상 변형이라 둔다).
+    """
+    out: list[SourceMismatch] = []
+    for p in pairs:
+        if p.score < DUPLICATE_THRESHOLD:
+            continue
+        first = numbers_in_order(p.first_text)
+        second = numbers_in_order(p.second_text)
+        if first and second and not (set(first) & set(second)):
+            out.append(SourceMismatch(p, tuple(first), tuple(second)))
+    return out
+
+
+def pointer_restatements(
+    sections: list[tuple[str, str]], pairs: list[DuplicatePair]
+) -> list[tuple[str, str, int]]:
+    """'X.Y절 참조'로 넘겨 놓고 그 절 내용을 다시 쓴 절 — [(절, 참조 대상, 중복 건수)].
+
+    실측(2026-08-29 철강 5.1): "동 특별법 및 시행령의 제정·시행 경과는 1.1절 참조."
+    바로 다음 줄부터 1.1절 문장 14건이 축자 재등장했다. 참조와 재서술은 하나만 해야
+    한다 — 위임했으면 본문을 비우고, 서술했으면 참조 문장을 지운다.
+    """
+    dup_count: dict[tuple[str, str], int] = defaultdict(int)
+    for p in pairs:
+        if p.score >= DUPLICATE_THRESHOLD:
+            dup_count[(p.first_ref, p.second_ref)] += 1
+
+    out: list[tuple[str, str, int]] = []
+    for ref, content in sections:
+        targets = {
+            f"{int(m.group(1))}.{int(m.group(2))}" for m in _XREF_SECTION_RE.finditer(content or "")
+        }
+        for target in sorted(targets, key=_ref_key):
+            n = dup_count.get((target, ref), 0)
+            if n:
+                out.append((ref, target, n))
+    return out
 
 
 # 본문이 다른 절을 가리키는 표기.

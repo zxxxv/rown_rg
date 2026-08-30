@@ -31,6 +31,8 @@ from src.services.qa.cross_section import (
     DUPLICATE_THRESHOLD,
     dangling_references,
     duplicate_pairs,
+    pointer_restatements,
+    source_mismatch_pairs,
 )
 from src.services.qa.design_coverage import coverage_terms, judge_covered
 from src.services.qa.design_coverage import findings_for_section as coverage_findings
@@ -469,8 +471,9 @@ def cross_section_findings(
     본문을 그대로 옮겨 오는 게 전형이다).
     """
     out: list[dict[str, Any]] = []
+    all_pairs = duplicate_pairs(sections, threshold=DUPLICATE_THRESHOLD)
     by_section: dict[str, list[Any]] = {}
-    for pair in duplicate_pairs(sections, threshold=DUPLICATE_THRESHOLD):
+    for pair in all_pairs:
         by_section.setdefault(pair.second_ref, []).append(pair)
 
     for ref, pairs in by_section.items():
@@ -486,6 +489,41 @@ def cross_section_findings(
                 f"앞 절({', '.join(sources[:4])}{' 외' if len(sources) > 4 else ''})에"
                 f" 이미 있는 문장 {len(pairs)}건"
                 f' (예: "{pairs[0].second_text[:_SAMPLE_CHARS]}…")',
+            )
+        )
+
+    # 중복 출처 불일치 — 같은 문장이 절을 옮기며 다른 출처 번호를 단 것(최소 한쪽은
+    # 오귀속 확정). 2026-08-29 철강 정독: 이 병리가 근거 불일치·마커 오귀속 다발의
+    # 실제 원인이었는데 절 단위 경고로는 구조가 안 보였다.
+    mismatch_by_section: dict[str, list[Any]] = {}
+    for mm in source_mismatch_pairs(all_pairs):
+        mismatch_by_section.setdefault(mm.pair.second_ref, []).append(mm)
+    for ref, mms in mismatch_by_section.items():
+        head = mms[0]
+        out.append(
+            _finding(
+                _ref_chapter(ref),
+                ref,
+                "critical" if len(mms) >= _DUP_MIN else "warning",
+                "중복 출처 불일치",
+                f"앞 절과 같은 문장인데 출처 번호가 다름 {len(mms)}건 (예: "
+                f"{head.pair.first_ref}절은 출처 {', '.join(map(str, head.first_sources[:3]))} / "
+                f"{ref}절은 출처 {', '.join(map(str, head.second_sources[:3]))} — "
+                f'"{head.pair.second_text[:_SAMPLE_CHARS]}…") '
+                "— 같은 문장의 근거가 둘일 수 없어 최소 한쪽은 오귀속",
+            )
+        )
+
+    # 참조 후 재서술 — "X.Y절 참조"로 위임해 놓고 그 절 문장을 다시 쓴 것.
+    for ref, target, n in pointer_restatements(sections, all_pairs):
+        out.append(
+            _finding(
+                _ref_chapter(ref),
+                ref,
+                "warning",
+                "참조 후 재서술",
+                f"'{target}절 참조'로 넘긴 내용과 겹치는 문장 {n}건을 다시 서술 — "
+                "위임했으면 본문을 비우고, 서술했으면 참조 문장을 지울 것",
             )
         )
 
