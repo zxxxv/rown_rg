@@ -38,6 +38,7 @@ from src.services.qa.design_coverage import coverage_terms, judge_covered
 from src.services.qa.design_coverage import findings_for_section as coverage_findings
 from src.services.qa.gate import (
     arithmetic_suspects,
+    author_decl_citations,
     claim_coverage,
     claim_years,
     leftover_artifacts,
@@ -314,6 +315,19 @@ def content_findings(
     artifacts = leftover_artifacts(content)
     if artifacts:
         out.append(_finding(row.chapter_number, ref, "warning", "편집 잔재", "; ".join(artifacts)))
+    # 저자 선언문 출처 — 획정·구성 선언은 저자의 발화라 외부 출처가 대신 말할 수 없다.
+    decls = author_decl_citations(content)
+    if decls:
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "저자 선언 출처",
+                f"저자 자신의 획정·구성 선언에 출처 표기 {len(decls)}건 "
+                f'(예: "{decls[0][:_SAMPLE_CHARS]}…") — 출처는 자료가 말한 사실에만 단다',
+            )
+        )
     cut = truncated_lines(content)
     if cut:
         out.append(

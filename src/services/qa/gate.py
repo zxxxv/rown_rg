@@ -1146,6 +1146,13 @@ _LEFTOVER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "출처 배정 메모(해당 없음)",
     ),
     (re.compile(r"\(출[^\s처()]{1,12}처(?=\s*\d)"), "오염된 출처 마커"),
+    # 2026-08-29 철강 정독 실측 3종 — 4.1 "(출처 11 대신 출처 12 기준 — …)" 작업 메모가
+    # 본문에 그대로 노출됐고, 결측 표기("자료상 미제시")·근거팩 지칭("근거 자료상")이
+    # 독자에게 지시 대상 없는 내부 용어로 남았다.
+    (re.compile(r"\(출처\s*\d+\s*대신"), "출처 교체 메모('(출처 n 대신 …)')"),
+    (re.compile(r"자료상\s*(?:미제시|제시\s*없음)"), "자료 결측 메모('자료상 미제시')"),
+    (re.compile(r"제시되지\s*않아[^\n]{0,25}제외"), "편집 메모(비교 항목 제외)"),
+    (re.compile(r"근거 자료상"), "내부 근거팩 지칭('근거 자료상')"),
     (re.compile(r"<callout[^>]*>|</callout\s*>"), "기형 callout 태그(정식은 ::: 펜스)"),
     # 표 금지 셀 - 조립 세정(sections/scrub)이 걷지만, 수동 편집·구버전 본문은 세정을
     # 안 지나므로 여기서 가시화한다(2026-08-21 v6 결함 세대교체 3번). 값 집합은 세정과
@@ -1168,6 +1175,25 @@ def leftover_artifacts(content: str) -> list[str]:
     for pattern, label in _LEFTOVER_PATTERNS:
         if pattern.search(content) and label not in out:
             out.append(label)
+    return out
+
+
+# 저자 선언문 — 범위 획정·구성 확정 같은 저자 자신의 발화. 외부 자료가 대신 말할 수
+# 없는 문장이라 출처가 붙으면 그 자체가 오귀속이다(2026-08-29 철강 정독: 1.1의 결론
+# 문장 4개 전부 "동 보고서는 …로 정의하고 …설정함(출처 12)" 꼴 — 절마다 반복되며
+# 근거 불일치 다발의 구조 원인이 됐다).
+_AUTHOR_VOICE_RE = re.compile(r"(?:동|본|이)\s*(?:보고서|절|장|항)(?:은|는|에서는)")
+_AUTHOR_DECL_RE = re.compile(
+    r"(?:확정함|확정하며|설정함|설정하며|정의함|정의하고|획정함|획정하며|구성함|채택함|삼음|삼는다)"
+)
+
+
+def author_decl_citations(content: str) -> list[str]:
+    """출처가 붙은 저자 선언문 목록 — "동 보고서는 …확정함(출처 n)" 꼴."""
+    out: list[str] = []
+    for unit in claim_units(content or ""):
+        if MARK_RE.search(unit) and _AUTHOR_VOICE_RE.search(unit) and _AUTHOR_DECL_RE.search(unit):
+            out.append(unit.strip())
     return out
 
 

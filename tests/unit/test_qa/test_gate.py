@@ -1078,3 +1078,68 @@ class TestKoreanFlatBareSameSource:
         assert any(p.search(hay) for p in pats)
         # 경계 유지 - 890이나 189의 토막이 아니다.
         assert not any(p.search(normalize_haystack("총 1890억 규모")) for p in pats)
+
+
+class TestLeftoverPatternsSteel:
+    """2026-08-29 철강 정독 실측 잔재 3종 — 기존 패턴을 전부 뚫고 본문에 노출됐다."""
+
+    def test_출처_교체_메모(self):
+        from src.services.qa.gate import leftover_artifacts
+
+        content = (
+            "기술성숙도가 서로 다른 단계에 있음(출처 11 대신 출처 12 기준 — 유럽 선도)(출처 11)"
+        )
+        assert any("출처 교체 메모" in a for a in leftover_artifacts(content))
+
+    def test_자료_결측_메모(self):
+        from src.services.qa.gate import leftover_artifacts
+
+        row = "| 톤당 생산비 | 450 | 자료상 미제시 항목 제외 |"
+        assert any("자료 결측 메모" in a for a in leftover_artifacts(row))
+
+    def test_비교_항목_제외_메모(self):
+        from src.services.qa.gate import leftover_artifacts
+
+        content = "- 전기로 경로의 생산비용은 별도로 제시되지 않아 비교 항목에서 제외함"
+        assert any("비교 항목 제외" in a for a in leftover_artifacts(content))
+
+    def test_근거팩_지칭(self):
+        from src.services.qa.gate import leftover_artifacts
+
+        content = (
+            "다만 근거 자료상 저탄소 생산기술의 초기 비용 부담은 여전히 확인되므로 주의가 필요함"
+        )
+        assert any("근거팩 지칭" in a for a in leftover_artifacts(content))
+
+    def test_정상_출처_표기는_잡지_않는다(self):
+        from src.services.qa.gate import leftover_artifacts
+
+        assert leftover_artifacts("전환 비용은 2030년까지 하락할 전망임(출처 12)") == []
+
+
+class TestAuthorDeclCitations:
+    """저자 선언문 출처 — 획정·구성 선언은 저자 발화라 출처가 붙으면 그게 오귀속이다."""
+
+    def test_저자_선언에_출처가_붙으면_잡는다(self):
+        from src.services.qa.gate import author_decl_citations
+
+        content = (
+            "이에 따라 동 보고서는 철강산업을 '탄소중립 전환 대상 기초소재 산업'으로"
+            " 정의하고 분석 범위를 설정함(출처 12)"
+        )
+        assert len(author_decl_citations(content)) == 1
+
+    def test_출처_없는_선언은_정상이다(self):
+        from src.services.qa.gate import author_decl_citations
+
+        content = (
+            "이에 따라 동 보고서는 철강산업을 탄소중립 전환 대상 산업으로 정의하고"
+            " 분석 범위를 설정함"
+        )
+        assert author_decl_citations(content) == []
+
+    def test_자료_사실_문장은_잡지_않는다(self):
+        from src.services.qa.gate import author_decl_citations
+
+        content = "세계 조강 생산은 2023년 18.9억 톤으로 정체 국면에 진입함(출처 7)"
+        assert author_decl_citations(content) == []
