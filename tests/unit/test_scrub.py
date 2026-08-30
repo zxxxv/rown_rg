@@ -115,3 +115,22 @@ def test_해당없음_배정메모_신형(self=None) -> None:
     # 산문의 '해당 없음'은 문장의 일부다 - 괄호 밖이면 안 걷는다.
     prose = "분석 결과 해당 없음으로 판정된 항목(출처 12)은 제외했다.\n"
     assert scrub_leftovers(prose)[0] == prose
+
+
+class TestReplaceMemo:
+    """교체 메모(2026-08-31 철강 4.3 재작성 실측) - 최종 번호만 남긴다."""
+
+    def test_교체_메모는_최종_번호만_남긴다(self):
+        from src.services.sections.scrub import scrub_leftovers
+
+        out, notes = scrub_leftovers("지역 분포는 비대칭 구조로 나타남(출처 56 대신 출처 106)")
+        assert out == "지역 분포는 비대칭 구조로 나타남 (출처 106)"
+        assert any("교체 메모" in n for n in notes)
+
+    def test_꼬리_산문이_붙은_긴_변형은_남긴다(self):
+        # 의미 판단이 필요한 꼴은 세정하지 않고 검출기 경고 몫으로 둔다.
+        from src.services.sections.scrub import scrub_leftovers
+
+        text = "단계에 있음(출처 11 대신 출처 12 기준 — 유럽이 선도하고 있음)(출처 11)"
+        out, _notes = scrub_leftovers(text)
+        assert "대신" in out

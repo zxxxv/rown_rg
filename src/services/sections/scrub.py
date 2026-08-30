@@ -16,6 +16,10 @@ import re
 
 # 재지정 메모 — 목표 마커만 남긴다: "(출처 8, 19 중 8만 사용 → (출처 22))" → "(출처 22)"
 _REASSIGN_RE = re.compile(r"[^\S\n]*\(출처[^()]*→\s*\(출처\s*([\d,\s]+)\)\s*\)")
+# 교체 메모 — 최종 번호만 남긴다: "(출처 56 대신 출처 106)" → "(출처 106)"(2026-08-31
+# 철강 4.3 재작성 실측). 꼬리에 산문이 붙은 긴 변형("… 기준 — …")은 의미 판단이
+# 필요해 남긴다 — 검출기(leftover_artifacts) 경고 몫.
+_REPLACE_RE = re.compile(r"[^\S\n]*\(출처\s*[\d,\s]+\s*대신\s*출처\s*([\d,\s]+?)\s*\)")
 # 배정 메모 — 번호 바로 뒤 조사(은/는)까지만 허용해 산문 오식을 막는다.
 _MEMO_RES = (
     re.compile(r"[^\S\n]*\(출처\s*[\d,\s]+\s*(?:은|는)?\s*제외[^()]{0,30}\)"),
@@ -90,6 +94,7 @@ def scrub_leftovers(content: str) -> tuple[str, list[str]]:
         return new
 
     out = _sub(_REASSIGN_RE, r" (출처 \1)", "출처 재지정 메모 정리", out)
+    out = _sub(_REPLACE_RE, r" (출처 \1)", "출처 교체 메모 정리", out)
     for i, memo in enumerate(_MEMO_RES):
         out = _sub(memo, "", f"출처 배정 메모 제거({i + 1})", out)
     out = _sub(_CORRUPT_MARKER_RE, "(출처", "오염 마커 복구", out)

@@ -11,6 +11,8 @@ from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
+import structlog
+
 from src.clients.llm.base import CompletionRequest, LLMClient, Message
 from src.clients.llm.factory import get_llm_client
 from src.clients.llm.token_tracker import token_context
@@ -23,6 +25,8 @@ from src.services.generation.term_rules import format_term_injection
 from src.services.generation.writer_context import build_writer_context, scale_for_evidence
 from src.services.ledger import format_injection
 from src.services.retrieval.section import SectionRetriever
+
+logger = structlog.get_logger(__name__)
 
 
 async def regenerate_section(
@@ -105,7 +109,7 @@ async def regenerate_section(
             project_id=project_id,
         )
         if split is not None:
-            return split.model_copy(update={"volume_scaled": volume_scaled})
+            return _scrubbed(split.model_copy(update={"volume_scaled": volume_scaled}))
         # 분할이 무너져 단일 호출로 간다 - 절이 짧아지고 인용이 준다. 흔적을 남긴다.
         fell_back = True
     else:
@@ -121,9 +125,25 @@ async def regenerate_section(
         user_id=user_id,
         project_id=project_id,
     )
-    return drafts[0].model_copy(
-        update={"split_fallback": fell_back, "volume_scaled": volume_scaled}
+    return _scrubbed(
+        drafts[0].model_copy(update={"split_fallback": fell_back, "volume_scaled": volume_scaled})
     )
+
+
+def _scrubbed(draft: SectionDraft) -> SectionDraft:
+    """재작성 산출에도 조립과 같은 결정적 세정을 건다(2026-08-31).
+
+    재작성 경로는 assemble을 안 지나므로 작성 잔재가 세정 없이 본문에 실렸다 —
+    철강 4.3 재작성 실측: "(출처 56 대신 출처 106)" 교체 메모·"(출처 114 제외 …)"
+    배정 메모가 그대로 노출. 세정은 의미를 안 바꾸는 결정적 치환뿐이라 안전하다.
+    """
+    from src.services.sections.scrub import scrub_leftovers
+
+    cleaned, notes = scrub_leftovers(draft.content or "")
+    if not notes:
+        return draft
+    logger.info("rewrite.scrubbed", section_id=str(draft.section_id), notes=notes)
+    return draft.model_copy(update={"content": cleaned})
 
 
 _BLOCK_REWRITE_PROMPT = """다음은 보고서의 한 절 전체입니다. \
