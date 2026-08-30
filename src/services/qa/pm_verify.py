@@ -438,6 +438,16 @@ async def run_pm_verify(state: ProjectState, *, model: str | None = None) -> int
     except Exception:
         logger.warning("pm_verify.heading_failed", project_id=str(state.project_id), exc_info=True)
     try:
+        # 구조 완결성(결정적) — 서두 선언 vs 본문 이행 대조(2026-08-29 철강 정독:
+        # STEEP 5요인 중 3개 통누락·SWOT WT 부재·소제목 '가.' 중단이 전부 검사 밖이었다).
+        from src.services.qa.structure_check import structure_findings
+
+        rows.extend(structure_findings(pairs))
+    except Exception:
+        logger.warning(
+            "pm_verify.structure_failed", project_id=str(state.project_id), exc_info=True
+        )
+    try:
         # 시사점 절 두 규칙(결정적) — 새 수치 도입 / 주체 없는 제언.
         # sections는 목차 순서여야 한다: 규칙 ①은 "앞 절에 있었나"가 전부다.
         from src.services.qa.implications import implication_findings
