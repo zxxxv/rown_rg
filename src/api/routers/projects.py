@@ -737,8 +737,20 @@ async def get_project(
         # flush가 updated_at(onupdate)을 만료시킨다 - 그대로 직렬화하면 pydantic이
         # 그 칸을 읽다가 비동기 밖에서 IO를 시도한다(MissingGreenlet). 미리 되읽는다.
         await session.refresh(project)
+    # 최근 수정 = 프로젝트 행과 본문(절) 편집 중 늦은 쪽 — 절 재작성·수동 편집은
+    # projects.updated_at을 안 건드려 화면의 "최근 수정"이 옛 날짜에 멈춰 보였다
+    # (2026-08-31 지시: 본문이 바뀌면 자동 반영).
+    last_section_edit = (
+        await session.execute(
+            select(func.max(Section.updated_at)).where(Section.project_id == project.id)
+        )
+    ).scalar_one()
     read = ProjectRead.model_validate(project)
     read.total_chars = int(total)
+    if last_section_edit is not None and (
+        read.updated_at is None or last_section_edit > read.updated_at
+    ):
+        read.updated_at = last_section_edit
     return read
 
 

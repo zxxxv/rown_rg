@@ -242,7 +242,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
             <dl className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-fg-tertiary">
               <Meta label="생성일" value={project.created_at.slice(0, 10)} />
               {project.updated_at ? (
-                <Meta label="최근 수정" value={project.updated_at.slice(0, 10)} />
+                <Meta label="최근 수정" value={formatKstMinute(project.updated_at)} />
               ) : null}
               <Meta label="소유자" value={project.owner_name ?? project.owner_id} />
             </dl>
@@ -491,6 +491,14 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
       </Dialog>
     </>
   );
+}
+
+// 최근 수정을 분 단위 KST로 - 날짜만 보이면 같은 날의 편집이 화면에서 안 움직여
+// "반영이 안 된다"로 읽힌다(2026-08-31 지적). sv-SE 로케일이 YYYY-MM-DD HH:mm 꼴을 준다.
+function formatKstMinute(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return d.toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).slice(0, 16);
 }
 
 // 완성된 프로젝트의 결과 요약 - 개요 본문이 텅 비지 않게, 산출물의 핵심 숫자를
