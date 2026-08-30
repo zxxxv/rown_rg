@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
+from functools import lru_cache
 from pathlib import Path
 from uuid import UUID
 
@@ -283,6 +284,19 @@ def _models_for(state: ProjectState) -> dict[str, str]:
     }
 
 
+@lru_cache(maxsize=1)
+def _analyst_query_catalog() -> dict[str, list[str]]:
+    """에이전트 이름 → 검색 질의 템플릿. 수집 브리프 렌더링용(파일 카탈로그 1회 로드)."""
+    from src.prompts import list_analysts
+
+    return {a.name: list(a.queries or []) for a in list_analysts()}
+
+
+# 절 브리프에 실을 관점 질의 상한 — 다관점 절(최대 5명×2)에서 브리프가 검색어
+# 나열로 비대해지지 않게 자른다. 앞 순서 에이전트가 절의 주 관점이다.
+_BRIEF_ANALYST_QUERIES_MAX = 6
+
+
 def _section_brief(sec: SectionPlan) -> str:
     """검색 질의용 절 브리프 — 제목만으론 못 찾는 절(예산·경제성)에 방향·관점을 실어준다.
 
@@ -299,6 +313,22 @@ def _section_brief(sec: SectionPlan) -> str:
         parts.append("핵심: " + ", ".join(sec.key_points[:4]))
     if sec.analysts:
         parts.append("관점: " + ", ".join(sec.analysts))
+        # 관점의 검색 질의 템플릿을 수집기에 실어 보낸다(2026-08-31 전수 조사) —
+        # 이름만 나열하면 수집기는 그 관점이 요구하는 데이터(특허 출원 통계 등)를
+        # 검색할 이유를 모른다. 철강 실사고: 특허분석 에이전트의 "patent analysis"
+        # 질의가 수집·검색 어디에서도 발화되지 않아 특허 자료가 코퍼스에 0건이었고,
+        # 4.3절은 통계 없는 계획서가 됐다.
+        anchor = " ".join(f"{sec.chapter_title} {sec.title}".split())
+        rendered: list[str] = []
+        for name in sec.analysts:
+            for template in _analyst_query_catalog().get(name, [])[:2]:
+                if not isinstance(template, str):
+                    continue
+                q = " ".join(template.replace("{topic}", anchor).split())
+                if q and q not in rendered:
+                    rendered.append(q)
+        if rendered:
+            parts.append("필수 검색어: " + " / ".join(rendered[:_BRIEF_ANALYST_QUERIES_MAX]))
     return " — ".join(parts)
 
 
