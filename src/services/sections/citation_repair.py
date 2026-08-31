@@ -1,0 +1,238 @@
+"""저장 직전 결정층 — 인용 마커 자동 교정(3상태) + 절 내 중복 소거.
+
+철강 정독·일원화 실측(2026-08-29~31)의 처방을 검출에서 교정으로 승격한 것.
+26쌍 전수 판정에서 얻은 설계 제약(2026-09-01 사용자 검토 확정)을 그대로 따른다:
+
+① 3상태 — 교정 / 유지 / 보류. "부재하면 아무 청크나 붙이는" 이진 판정 금지.
+   - 교정: 인용 청크에 없는 수치가 팩의 **한 청크에 전부** 실재할 때만 그 청크로.
+   - 유지: 실재·양쪽 실재·파생값(합산 등)·외국어 인용 근거(어휘로 '없다' 선언 불가).
+   - 보류: 팩 어디에도 없음 — 파생 아니면 환각 후보다. 마커를 손대지 않고 목록으로
+     넘긴다(무근거 검출기·사람 몫). 억지 교정은 경고만 하던 종전보다 나쁘다.
+② 치환은 주장 단위(문장·불릿) 안의 마커 문자열만 — 줄 단위 치환은 표 이웃 셀의
+   출처까지 덮는다(2026-08-31 실사고).
+③ 마커를 바꾸거나 문단을 지우면 cited_chunk_ids를 **반드시 재규약**한다
+   (본문 첫 등장 순서 ↔ cited 목록, renumber._local_to_global 규약). 안 하면
+   조립 재번호에서 절 전체 인용이 밀린다(v6 renumber 사고의 재연 경로).
+
+수치 대조는 무근거 검출기와 같은 자(gate.numeric_mentions/number_in_text/
+derived_numbers)를 쓴다 — 교정과 검출이 다른 눈금이면 서로를 못 믿는다.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from uuid import UUID
+
+import structlog
+
+from src.core.citations import MARK_RE, numbers_in_order
+from src.services.qa.alignment import _weighted_tokens, token_similarity
+from src.services.qa.gate import (
+    claim_units,
+    derived_numbers,
+    normalize_haystack,
+    normalize_number,
+    number_in_text,
+    numeric_mentions,
+)
+
+logger = structlog.get_logger(__name__)
+
+# 교정 후보 탐색에서 문장당 대조할 수치 상한 — 상위 수치가 일치하면 충분하다.
+_MAX_TOKENS_PER_UNIT = 3
+# 절 내 중복 판정 임계 — cross_section.DUPLICATE_THRESHOLD과 같은 값(복사 수준).
+_INTRA_DUP_THRESHOLD = 0.80
+# 절 내 소거 가드레일 — 이 비율 넘게 얇아지면 중단한다(제거 방향 처방은 보고서를
+# 조용히 얇게 만든다는 검토 지적 반영). 남는 건 검출기 경고 몫.
+_MAX_REMOVAL_RATIO = 0.15
+_MIN_UNIT_CHARS = 30
+_HANGUL_RE = re.compile(r"[가-힣]")  # gate._HANGUL_RE와 같은 판정(비공개라 로컬 정의)
+# 출처형 마커 하나 — 교정 치환용(직접 인용 [n]은 원문 전사라 교정 대상이 아니다).
+_ONE_SOURCE_MARK_RE = re.compile(r"\(출처\s*\d+(?:\s*,\s*\d+)*\s*\)")
+# 술어가 '…절 참조'인 위임 문장 — 중복 소거 대상이 아니다(cross_section과 같은 판정).
+_POINTER_RE = re.compile(r"\d{1,2}\s*\.\s*\d{1,2}\s*절\s*참조\s*[).\s]*$")
+
+
+@dataclass
+class RepairOutcome:
+    """교정·소거 결과 — content/cited가 함께 움직인다(따로 쓰면 규약이 깨진다)."""
+
+    content: str
+    cited_chunk_ids: list[UUID]
+    n_fixed: int = 0
+    n_removed: int = 0
+    held: list[str] = field(default_factory=list)  # 보류 수치(팩 어디에도 없음)
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.n_fixed or self.n_removed)
+
+
+def _local_chunk_map(content: str, cited: list[UUID]) -> dict[int, UUID]:
+    """로컬 번호 → 청크. 첫 등장 i번째 고유 번호 ↔ cited[i] 규약을 편다."""
+    out: dict[int, UUID] = {}
+    for i, n in enumerate(numbers_in_order(content)):
+        if i >= len(cited):
+            break
+        out.setdefault(n, cited[i])
+    return out
+
+
+def _rebuild_cited(content: str, chunk_of: dict[int, UUID]) -> list[UUID]:
+    """본문 첫 등장 순서로 cited_chunk_ids를 다시 편다 — 규약의 재수립."""
+    return [chunk_of[n] for n in numbers_in_order(content) if n in chunk_of]
+
+
+def _has_ghost_numbers(content: str, chunk_of: dict[int, UUID]) -> bool:
+    """규약 밖 번호(마커 수 > cited 길이)가 있으면 참 — 재규약이 자리 배정을 어긋나게
+    할 수 있어 이 절은 손대지 않는다(유령 출처 경고가 따로 잡는 기형 초안)."""
+    return any(n not in chunk_of for n in numbers_in_order(content))
+
+
+def repair_citations(
+    content: str,
+    cited_chunk_ids: list[UUID],
+    pool: dict[UUID, str],
+) -> RepairOutcome:
+    """수치 문장의 마커를 인용 청크 실재 여부로 대조해 3상태로 처리한다."""
+    chunk_of = _local_chunk_map(content, cited_chunk_ids)
+    if not chunk_of or not pool or _has_ghost_numbers(content, chunk_of):
+        return RepairOutcome(content, list(cited_chunk_ids))
+    norm_pool = {cid: normalize_haystack(text or "") for cid, text in pool.items()}
+    local_of_chunk: dict[UUID, int] = {}
+    for n, cid in chunk_of.items():
+        local_of_chunk.setdefault(cid, n)
+    next_no = max(chunk_of) + 1
+
+    out = content
+    n_fixed = 0
+    held: list[str] = []
+    for unit in claim_units(content):
+        marks = list(dict.fromkeys(numbers_in_order(unit)))
+        if not marks:
+            continue
+        # 직접 인용 [n]이 섞였거나 마커가 여럿이면 손대지 않는다 — 어느 마커가 그
+        # 수치의 것인지 결정할 수 없다(정밀도 우선, 검출기 경고 몫).
+        source_marks = _ONE_SOURCE_MARK_RE.findall(unit)
+        if len(marks) != 1 or len(source_marks) != 1:
+            continue
+        cited_id = chunk_of.get(marks[0])
+        if cited_id is None:
+            continue
+        cited_text = norm_pool.get(cited_id, "")
+        # 외국어 인용 근거엔 어휘로 '없다'를 선언할 수 없다 — 오귀속 검출기와 같은 원칙.
+        if cited_text.strip() and not _HANGUL_RE.search(cited_text):
+            continue
+        bare = MARK_RE.sub(" ", unit)
+        derived = derived_numbers(bare)
+        missing = []
+        for tok in numeric_mentions(bare)[:_MAX_TOKENS_PER_UNIT]:
+            norm = normalize_number(tok)
+            if not norm or norm in derived:
+                continue
+            if not number_in_text(tok, cited_text):
+                missing.append(tok)
+        if not missing:
+            continue  # 유지 — 인용 청크에 실재
+        # 교정 대상 탐색: 빠진 수치 **전부**를 가진 단일 청크만 인정한다.
+        target: UUID | None = None
+        for cid, text in norm_pool.items():
+            if cid == cited_id:
+                continue
+            if all(number_in_text(tok, text) for tok in missing):
+                target = cid
+                break
+        if target is None:
+            held.extend(missing)  # 보류 — 팩 어디에도 없음(파생 확장형이거나 환각 후보)
+            continue
+        local = local_of_chunk.get(target)
+        if local is None:
+            local = next_no
+            next_no += 1
+            local_of_chunk[target] = local
+            chunk_of[local] = target
+        new_unit = _ONE_SOURCE_MARK_RE.sub(f"(출처 {local})", unit, count=1)
+        if new_unit != unit and unit in out:
+            out = out.replace(unit, new_unit, 1)
+            n_fixed += 1
+
+    rebuilt = _rebuild_cited(out, chunk_of) if n_fixed else list(cited_chunk_ids)
+    if n_fixed or held:
+        logger.info(
+            "citation_repair.done",
+            n_fixed=n_fixed,
+            n_held=len(held),
+            held_samples=held[:3],
+        )
+    return RepairOutcome(out, rebuilt, n_fixed=n_fixed, held=held)
+
+
+def dedup_intra_section(content: str, cited_chunk_ids: list[UUID]) -> RepairOutcome:
+    """절 안에서 복사 수준(0.8+)으로 겹치는 뒤 문장을 결정적으로 걷어낸다.
+
+    파트 분할 작성이 같은 소재를 두 파트에서 각각 소화한 흔적(철강 1.2 실측: 같은
+    문단 두 벌). 절 간 중복(cross_section)과 같은 자로 재되, '같은 절 안은 안 본다'
+    제약만 푼 것. 표·헤딩은 claim_units가 이미 빼고, 위임 포인터·리드(첫 유닛)는
+    남긴다. 가드레일: 전체의 15% 넘게 얇아지면 중단 — 나머지는 검출기 경고 몫.
+    """
+    units = [
+        u
+        for u in claim_units(content)
+        if len(u) >= _MIN_UNIT_CHARS and not _POINTER_RE.search(MARK_RE.sub("", u).strip())
+    ]
+    if len(units) < 2:
+        return RepairOutcome(content, list(cited_chunk_ids))
+    chunk_of = _local_chunk_map(content, cited_chunk_ids)
+    if _has_ghost_numbers(content, chunk_of):
+        return RepairOutcome(content, list(cited_chunk_ids))
+    tokens = [_weighted_tokens(MARK_RE.sub(" ", u)) for u in units]
+
+    out = content
+    removed_chars = 0
+    n_removed = 0
+    budget = int(len(content) * _MAX_REMOVAL_RATIO)
+    kept: list[int] = []
+    for j in range(len(units)):
+        dup_of = next(
+            (i for i in kept if token_similarity(tokens[i], tokens[j]) >= _INTRA_DUP_THRESHOLD),
+            None,
+        )
+        if dup_of is None or j == 0:
+            kept.append(j)
+            continue
+        unit = units[j]
+        # 첫 중복 1건은 항상 걷는다 — 그게 이 검사의 표적 계급이다. 이후부터 예산
+        # 가드레일(15%)이 대량 소거를 막는다(조용히 얇아지는 것 방지).
+        if n_removed and removed_chars + len(unit) > budget:
+            kept.append(j)
+            continue
+        # 줄째로 걷는다 — 개조식 불릿 한 줄이 주장 단위와 일치하는 전형을 노린다.
+        for candidate in (chr(10) + unit, unit):
+            if candidate in out:
+                out = out.replace(candidate, "", 1)
+                removed_chars += len(unit)
+                n_removed += 1
+                break
+
+    rebuilt = _rebuild_cited(out, chunk_of) if n_removed else list(cited_chunk_ids)
+    if n_removed:
+        logger.info("intra_dedup.removed", n_removed=n_removed, removed_chars=removed_chars)
+    return RepairOutcome(out, rebuilt, n_removed=n_removed)
+
+
+def post_process_draft(
+    content: str, cited_chunk_ids: list[UUID], pool: dict[UUID, str]
+) -> RepairOutcome:
+    """저장 직전 결정층 한 묶음 — 마커 교정 → 절 내 소거 순서(교정이 먼저라야
+    소거로 지워질 문장에 헛교정을 안 한다는 보장은 없지만, 소거 후 재규약이 교정의
+    번호 배정을 무효화하지 않도록 한 방향으로 고정한다)."""
+    repaired = repair_citations(content, cited_chunk_ids, pool)
+    deduped = dedup_intra_section(repaired.content, repaired.cited_chunk_ids)
+    return RepairOutcome(
+        deduped.content,
+        deduped.cited_chunk_ids,
+        n_fixed=repaired.n_fixed,
+        n_removed=deduped.n_removed,
+        held=repaired.held,
+    )

@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     # 골든 셋 통과(2026-08-20, v5c-2 실물 5/5 적용·격식 유지·고유 몫 보존·복제
     # 349->320)로 기본 on. 결정적 3중 검증+캡이 안전망, 실패는 전부 원문 유지.
     write_dedup_rewrite: bool = True
+    # 저장 직전 결정층(2026-09-01, 철강 일원화 실증의 상설화 - sections/citation_repair):
+    # 마커 자동 교정(3상태: 교정/유지/보류)과 절 내 중복 소거. 되돌리기는 설정 한 줄.
+    write_citation_repair: bool = True
+    write_intra_dedup: bool = True
     # 분할 생성 — 단일 LLM 호출은 재료·캡과 무관하게 4~8천자에서 멈춘다(2026-08-07
     # top_k 곡선 실측). volume_target min이 그 한계를 넘는 절은 소주제 파트로 나눠
     # 순차 생성 후 결합한다(프로토타입: 분량 7배·무근거 밀도 flat 이하, exp_split2).
@@ -397,6 +401,15 @@ class Settings(BaseSettings):
     @property
     def nw_private_key_pem(self) -> str:
         return self.nw_private_key.replace("\\n", "\n")
+
+    # ─── 메모리 계측(core/memprobe) ───
+    # 2026-08-28 사고 뒤 붙였다. 앱이 유휴 상태에서 5.3GiB를 쥐고 있었는데 재부팅
+    # 직후 같은 앱이 196MiB였다 - 런이 남기고 안 돌려준 것이다. 무엇이 언제 늘고 안
+    # 줄어드는지 시계열이 없어서, 사후에도 마지막 1.5GB의 주인을 특정하지 못했다.
+    # 읽기만 하는 계측이라 기본 on - 끌 이유가 생기면 이 스위치로 끈다.
+    mem_probe_enabled: bool = True
+    # 주기 표본 간격(초). 한 줄 수백 바이트라 5분이면 하루 300KB 남짓이다.
+    mem_probe_interval_s: float = 300.0
 
     @model_validator(mode="after")
     def _guard_production_secrets(self) -> Self:

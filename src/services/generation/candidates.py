@@ -13,6 +13,8 @@ import asyncio
 from collections.abc import Sequence
 from uuid import UUID
 
+import structlog
+
 from src.clients.llm.base import CompletionRequest, LLMClient, Message, incomplete_stop
 from src.clients.llm.factory import get_llm_client
 from src.clients.llm.token_tracker import token_context
@@ -109,6 +111,17 @@ def _build_prompt(
             "처럼 시점을 명기한 추이·비교로만 써라. 제도·기준 문서는 최신판이 유효본이다."
             " 단, 작성 방향·핵심 포인트가 특정 연도·특정 자료를 다루라고 지목하면 그 절에"
             "서는 그 지시가 우선이다(과거 시점 분석이 목적인 절까지 최신값으로 덮지 마라).",
+            # 교차언어 수치 규칙(2026-08-28 전수 조사) - 확정 결함 83건의 67%가 영어 근거
+            # 였다(판정 상태 crosslingual 72%). 영어 근거의 수치를 한국어로 옮기며 환산·
+            # 반올림하는 지점이 최대 위험축이다.
+            "영문 근거의 수치는 원문의 값과 단위를 그대로 옮겨라 - 임의로 환산하지 마라"
+            "(달러↔원, billion↔억 등). 환산이 꼭 필요하면 원값을 괄호로 병기하라"
+            "(예: 약 9.7조 원(75억 달러)).",
+            # 산술 파생 병기 규칙(2026-08-28 전수 조사) - '주입 의심' 수치의 실체가 근거
+            # 값에서 계산한 배수·CAGR였다(1.3배=0.14/0.11, 8.8%=75→171.9의 10년 환산).
+            # 원값 없는 파생값은 근거 대조가 원리적으로 불가능해 무근거로 보인다.
+            "근거 값에서 네가 계산한 파생 수치(배수·비중·증감률·CAGR)는 계산의 원값을"
+            " 함께 표기하라(예: 약 1.3배(0.14 대 0.11)). 원값 없이 파생값만 쓰지 마라.",
         ]
     )
     return "\n".join(lines)
@@ -215,4 +228,35 @@ async def generate_section_candidates(
                 for t in temps
             )
         )
-    return list(drafts)
+    return [_repaired(d, citable) for d in drafts]
+
+
+def _repaired(draft: SectionDraft, citable: list[RetrievedChunk]) -> SectionDraft:
+    """저장 직전 결정층(2026-09-01) — 마커 3상태 교정 + 절 내 중복 소거.
+
+    content와 cited_chunk_ids가 함께 갱신된다(재규약) — 따로 바꾸면 조립 재번호에서
+    절 전체 인용이 밀린다. 실패는 원문 유지(비치명).
+    """
+    from src.services.sections.citation_repair import (
+        dedup_intra_section,
+        repair_citations,
+    )
+
+    try:
+        content, cited = draft.content, list(draft.cited_chunk_ids)
+        if settings.write_citation_repair:
+            pool = {c.chunk_id: c.content for c in citable}
+            r = repair_citations(content, cited, pool)
+            content, cited = r.content, r.cited_chunk_ids
+        if settings.write_intra_dedup:
+            r = dedup_intra_section(content, cited)
+            content, cited = r.content, r.cited_chunk_ids
+        if content == draft.content and cited == list(draft.cited_chunk_ids):
+            return draft
+        return draft.model_copy(update={"content": content, "cited_chunk_ids": cited})
+    except Exception:
+        _logger.warning("citation_repair.failed", section_id=str(draft.section_id), exc_info=True)
+        return draft
+
+
+_logger = structlog.get_logger(__name__)

@@ -453,9 +453,16 @@ async def generate_section_split(
         total_chars=len(combined),
         cite_violations=violations,
     )
-    return SectionDraft(
-        section_id=section.section_id,
-        content=combined,
-        cited_chunk_ids=_extract_cited_ids(combined, citable),
-        pool_chunk_ids=[c.chunk_id for c in citable],
+    # 저장 직전 결정층(2026-09-01) — 마커 3상태 교정+절 내 소거. 단일 후보 경로와
+    # 같은 함수를 써 두 경로의 산출 규약이 같게 한다.
+    from src.services.generation.candidates import _repaired
+
+    return _repaired(
+        SectionDraft(
+            section_id=section.section_id,
+            content=combined,
+            cited_chunk_ids=_extract_cited_ids(combined, citable),
+            pool_chunk_ids=[c.chunk_id for c in citable],
+        ),
+        citable,
     )
