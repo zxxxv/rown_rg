@@ -244,16 +244,21 @@ def _repaired(draft: SectionDraft, citable: list[RetrievedChunk]) -> SectionDraf
 
     try:
         content, cited = draft.content, list(draft.cited_chunk_ids)
+        audit: dict = {}
         if settings.write_citation_repair:
             pool = {c.chunk_id: c.content for c in citable}
             r = repair_citations(content, cited, pool)
             content, cited = r.content, r.cited_chunk_ids
+            audit.update(r.audit())
         if settings.write_intra_dedup:
             r = dedup_intra_section(content, cited)
             content, cited = r.content, r.cited_chunk_ids
-        if content == draft.content and cited == list(draft.cited_chunk_ids):
+            audit.update(r.audit())
+        if content == draft.content and cited == list(draft.cited_chunk_ids) and not audit:
             return draft
-        return draft.model_copy(update={"content": content, "cited_chunk_ids": cited})
+        return draft.model_copy(
+            update={"content": content, "cited_chunk_ids": cited, "repair_log": audit}
+        )
     except Exception:
         _logger.warning("citation_repair.failed", section_id=str(draft.section_id), exc_info=True)
         return draft

@@ -114,13 +114,27 @@ def find_targets(sections: list[tuple[str, str]]) -> list[RewriteTarget]:
     ]
     # 중복 문장이 많은 문단부터 — 캡에 걸려도 큰 덩어리가 먼저 처리되게.
     targets.sort(key=lambda t: (-len(t.dup_sentences), _order_key(t.section_ref), t.para_index))
-    # 절당 캡
+    # 절당 캡 — 절대 수(MAX_PARAGRAPHS_PER_SECTION)에 더해 잔량 비율(문단의 25%)과
+    # **인접 문단 동시 압축 금지**를 건다. 철강 2.1 실사고(2026-08-29 정독): 파트
+    # 도입부 연속 3문단이 전부 "…절 참조"로 압축돼 절이 색인처럼 비었다 — 껍데기는
+    # 총량이 아니라 연속 압축이 만든다.
     per_section: dict[str, int] = {}
+    taken_paras: set[tuple[str, int]] = set()
+    ratio_cap: dict[str, int] = {
+        ref: max(1, len(_paragraphs(content)) // 4) for ref, content in sections
+    }
     capped: list[RewriteTarget] = []
     for t in targets:
-        if per_section.get(t.section_ref, 0) >= MAX_PARAGRAPHS_PER_SECTION:
+        limit = min(MAX_PARAGRAPHS_PER_SECTION, ratio_cap.get(t.section_ref, 1))
+        if per_section.get(t.section_ref, 0) >= limit:
+            continue
+        if (t.section_ref, t.para_index - 1) in taken_paras or (
+            t.section_ref,
+            t.para_index + 1,
+        ) in taken_paras:
             continue
         per_section[t.section_ref] = per_section.get(t.section_ref, 0) + 1
+        taken_paras.add((t.section_ref, t.para_index))
         capped.append(t)
     return capped[:MAX_CALLS_PER_DOC]
 

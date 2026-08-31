@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -213,6 +214,10 @@ class SectionDraft(BaseModel):
     # max_tokens 컷·refusal이 문장 중간에 멈춘 216자 토막을 '완성 절'로 통과시킨
     # 실사고(2026-08-13, 7.1절) 재발 방지 — 게이트가 이 값으로 HARD 제외한다.
     incomplete_reason: str = ""
+    # 저장 직전 결정층의 감사 기록(sections/citation_repair.audit()) — 지운 문장 쌍·
+    # 교정 마커·보류 수치·예산 소진. 결정적 삭제는 조용히 틀릴 수 있어(2026-09-01
+    # 검토) 절 meta로 실어 검증 카드가 노출해야 감사가 닫힌다.
+    repair_log: dict[str, Any] = Field(default_factory=dict)
 
 
 # QA 후보 검사 — AI는 후보만 생성, 합격/불합격은 정적 코드, 최종 선택은 사람.

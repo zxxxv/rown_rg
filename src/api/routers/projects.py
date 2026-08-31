@@ -1293,6 +1293,11 @@ async def _apply_section_rewrite(
     meta["volume_scaled"] = draft.volume_scaled
     if draft.pool_chunk_ids:
         meta["evidence_count"] = len(draft.pool_chunk_ids)
+    # 저장 직전 결정층 감사 기록 — 없으면 걷는다(옛 기록이 새 본문의 판정처럼 보이면 안 됨).
+    if draft.repair_log:
+        meta["citation_repair"] = draft.repair_log
+    else:
+        meta.pop("citation_repair", None)
     try:
         # 재작성 결과도 전역 번호로 재매핑 — 문서의 나머지 절·출처장과 번호 체계 유지.
         from src.services.sections.renumber import (
@@ -4231,6 +4236,7 @@ async def _variants_body(
                         "pool_chunk_ids": [str(c) for c in draft.pool_chunk_ids],
                         "volume_scaled": bool(draft.volume_scaled),
                         "split_fallback": bool(draft.split_fallback),
+                        "repair_log": dict(draft.repair_log or {}),
                         "created_at": clock_now().isoformat(),
                     }
                 )
@@ -4370,6 +4376,7 @@ async def adopt_section_variant(
         pool_chunk_ids=[UUID(c) for c in (picked.get("pool_chunk_ids") or [])],
         volume_scaled=bool(picked.get("volume_scaled")),
         split_fallback=bool(picked.get("split_fallback")),
+        repair_log=dict(picked.get("repair_log") or {}),
     )
     plan = _plan_for_row(project, row)
     await _apply_section_rewrite(session, project, row, plan, draft, created_by=current_user.id)

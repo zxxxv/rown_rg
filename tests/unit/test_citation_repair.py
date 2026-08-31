@@ -113,6 +113,39 @@ class TestIntraDedup:
         out = dedup_intra_section(content, [A, B])
         assert out.content == content and out.cited_chunk_ids == [A, B]
 
+    def test_숫자가_다르면_골격이_같아도_지우지_않는다(self) -> None:
+        # 연도별 추이 문장은 중복이 아니라 정보다(2026-09-01 검토).
+        a = "2024년 국내 철강 부문 매출은 3.2조 원으로 집계되어 완만한 회복세를 보임(출처 1)"
+        b = "2025년 국내 철강 부문 매출은 4.1조 원으로 집계되어 완만한 회복세를 보임(출처 1)"
+        out = dedup_intra_section(f"{a}\n\n{b}", [A])
+        assert out.n_removed == 0
+
+    def test_하위_불릿이_딸린_부모는_지우지_않는다(self) -> None:
+        dup = "동일한 핵심 서술이 반복되는 문장으로 검사 표적이 되는 사례임(출처 1)"
+        content = (
+            f"ㅇ {dup}\n\n중간의 무관한 다른 서술이 하나 들어감(출처 1)\n\n"
+            f"ㅇ {dup}\n- 하위 근거가 딸려 있음"
+        )
+        out = dedup_intra_section(content, [A])
+        assert out.n_removed == 0  # 지우면 하위가 고아가 된다
+
+    def test_지시어_후속이_있으면_지우지_않는다(self) -> None:
+        dup = "동일한 핵심 서술이 반복되는 문장으로 검사 표적이 되는 사례임(출처 1)"
+        content = (
+            f"{dup}\n\n중간의 무관한 다른 서술이 하나 들어감(출처 1)\n\n"
+            f"{dup}\n이는 앞 문장의 결과를 이어받는 서술임"
+        )
+        out = dedup_intra_section(content, [A])
+        assert out.n_removed == 0
+
+    def test_감사_기록과_예산_플래그가_남는다(self) -> None:
+        unit = "동일한 문장이 반복되어 등장하는 사례로 근거 검증 대상이 되는 서술임(출처 1)"
+        content = "\n\n".join([unit] * 12)
+        out = dedup_intra_section(content, [A])
+        assert out.removed and out.removed[0]["score"] >= 0.8
+        assert out.budget_exhausted  # 소진은 성공이 아니라 경보 - 층4로 올라간다
+        assert "budget_exhausted" in out.audit()
+
 
 class TestOutcome:
     def test_변경_없음_판별(self) -> None:

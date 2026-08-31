@@ -315,6 +315,44 @@ def content_findings(
     artifacts = leftover_artifacts(content)
     if artifacts:
         out.append(_finding(row.chapter_number, ref, "warning", "편집 잔재", "; ".join(artifacts)))
+    # 저장 직전 결정층의 감사 노출(2026-09-01) — 결정적 삭제·교정은 조용히 틀릴 수
+    # 있어, 지우고 고친 것을 층4가 반드시 보여줘야 임계 오류를 사람이 발견한다.
+    repair = (row.meta or {}).get("citation_repair") or {}
+    if repair.get("removed"):
+        first = repair["removed"][0]
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "자동 소거",
+                f"절 내 복사 수준 문장 {len(repair['removed'])}건 자동 삭제 "
+                f'(예: "{str(first.get("removed", ""))[:40]}…", 유사도 {first.get("score")}) '
+                "— 남긴 문장과 지운 문장 목록은 절 기록(citation_repair)에 있음",
+            )
+        )
+    if repair.get("fixed"):
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "마커 자동 교정",
+                f"인용 청크에 없는 수치의 마커 {len(repair['fixed'])}건을 실재 청크로 교정 "
+                f"(예: {repair['fixed'][0].get('from')} → {repair['fixed'][0].get('to')})",
+            )
+        )
+    if repair.get("budget_exhausted"):
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "소거 예산 소진",
+                "절 내 중복이 소거 예산(15%)을 초과 — 병리가 큰 절이라는 경보. "
+                "소유권·조립 압축 재처리 후보",
+            )
+        )
     # 저자 선언문 출처 — 획정·구성 선언은 저자의 발화라 외부 출처가 대신 말할 수 없다.
     decls = author_decl_citations(content)
     if decls:

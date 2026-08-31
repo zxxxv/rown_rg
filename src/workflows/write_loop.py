@@ -468,6 +468,10 @@ async def run_write_loop(
                     types=chart_report.types,
                     skipped=chart_report.skipped,
                 )
+        if cset.survivors and cset.survivors[0].draft.repair_log:
+            # 저장 직전 결정층의 감사 기록 — 층4(검증 카드)가 노출해야 결정적 삭제가
+            # 조용히 틀리는 것을 사람이 발견한다(2026-09-01 검토: 지운 건 안 보인다).
+            section_meta[section.section_id]["citation_repair"] = cset.survivors[0].draft.repair_log
         if draft_store is not None:
             # 절 완성 즉시 초안 영속화 — 편집기 미리보기가 진행 중에도 완성분을 보여준다
             survivor = cset.survivors[0].draft if cset.survivors else None

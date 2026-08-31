@@ -52,21 +52,48 @@ _HANGUL_RE = re.compile(r"[가-힣]")  # gate._HANGUL_RE와 같은 판정(비공
 _ONE_SOURCE_MARK_RE = re.compile(r"\(출처\s*\d+(?:\s*,\s*\d+)*\s*\)")
 # 술어가 '…절 참조'인 위임 문장 — 중복 소거 대상이 아니다(cross_section과 같은 판정).
 _POINTER_RE = re.compile(r"\d{1,2}\s*\.\s*\d{1,2}\s*절\s*참조\s*[).\s]*$")
+# 개조식 마커 깊이 — 삭제할 줄보다 깊은 하위 불릿이 바로 이어지면 고아가 되므로 포기.
+_MARKER_DEPTH = {"□": 0, "ㅇ": 1, "○": 1, "◦": 1, "-": 2, "*": 3}
+_LINE_MARKER_RE = re.compile(r"^\s*([□ㅇ○◦*-])\s+")
+# 지워진 문장을 가리킬 지시어 — 다음 줄이 이걸로 시작하면 흐름이 끊기므로 포기.
+_ANAPHORA_RE = re.compile(r"^(이는|이러한|이에|이를|그\s*결과|따라서|또한|아울러|즉)")
 
 
 @dataclass
 class RepairOutcome:
-    """교정·소거 결과 — content/cited가 함께 움직인다(따로 쓰면 규약이 깨진다)."""
+    """교정·소거 결과 — content/cited가 함께 움직인다(따로 쓰면 규약이 깨진다).
+
+    removed/held/budget_exhausted는 감사 기록이다(2026-09-01 검토: "결정적이면
+    조용히 틀린다" — 지운 것이 사람 눈에 걸릴 경로가 있어야 임계 오류를 발견한다).
+    절 meta로 실려 검증 카드(층4)가 노출한다.
+    """
 
     content: str
     cited_chunk_ids: list[UUID]
     n_fixed: int = 0
     n_removed: int = 0
     held: list[str] = field(default_factory=list)  # 보류 수치(팩 어디에도 없음)
+    # 삭제 감사 기록 — {kept: 남은 문장, removed: 지운 문장, score: 유사도}
+    removed: list[dict[str, object]] = field(default_factory=list)
+    fixed: list[dict[str, object]] = field(default_factory=list)  # 교정 전/후 마커
+    budget_exhausted: bool = False  # 예산 소진 = 병리 심한 절 신호(성공 아님, 경보)
 
     @property
     def changed(self) -> bool:
         return bool(self.n_fixed or self.n_removed)
+
+    def audit(self) -> dict[str, object]:
+        """절 meta에 실을 감사 요약 — 층4(검증 카드)가 읽는다."""
+        out: dict[str, object] = {}
+        if self.removed:
+            out["removed"] = self.removed[:12]
+        if self.fixed:
+            out["fixed"] = self.fixed[:12]
+        if self.held:
+            out["held"] = self.held[:12]
+        if self.budget_exhausted:
+            out["budget_exhausted"] = True
+        return out
 
 
 def _local_chunk_map(content: str, cited: list[UUID]) -> dict[int, UUID]:
@@ -106,7 +133,7 @@ def repair_citations(
     next_no = max(chunk_of) + 1
 
     out = content
-    n_fixed = 0
+    fixed: list[dict[str, object]] = []
     held: list[str] = []
     for unit in claim_units(content):
         marks = list(dict.fromkeys(numbers_in_order(unit)))
@@ -155,17 +182,17 @@ def repair_citations(
         new_unit = _ONE_SOURCE_MARK_RE.sub(f"(출처 {local})", unit, count=1)
         if new_unit != unit and unit in out:
             out = out.replace(unit, new_unit, 1)
-            n_fixed += 1
+            fixed.append({"unit": unit[:80], "from": source_marks[0], "to": f"(출처 {local})"})
 
-    rebuilt = _rebuild_cited(out, chunk_of) if n_fixed else list(cited_chunk_ids)
-    if n_fixed or held:
+    rebuilt = _rebuild_cited(out, chunk_of) if fixed else list(cited_chunk_ids)
+    if fixed or held:
         logger.info(
             "citation_repair.done",
-            n_fixed=n_fixed,
+            n_fixed=len(fixed),
             n_held=len(held),
             held_samples=held[:3],
         )
-    return RepairOutcome(out, rebuilt, n_fixed=n_fixed, held=held)
+    return RepairOutcome(out, rebuilt, n_fixed=len(fixed), held=held, fixed=fixed)
 
 
 def dedup_intra_section(content: str, cited_chunk_ids: list[UUID]) -> RepairOutcome:
@@ -187,38 +214,100 @@ def dedup_intra_section(content: str, cited_chunk_ids: list[UUID]) -> RepairOutc
     if _has_ghost_numbers(content, chunk_of):
         return RepairOutcome(content, list(cited_chunk_ids))
     tokens = [_weighted_tokens(MARK_RE.sub(" ", u)) for u in units]
+    numsets = [{normalize_number(t) for t in numeric_mentions(MARK_RE.sub(" ", u))} for u in units]
 
     out = content
     removed_chars = 0
-    n_removed = 0
+    records: list[dict[str, object]] = []
     budget = int(len(content) * _MAX_REMOVAL_RATIO)
+    budget_hit = False
     kept: list[int] = []
     for j in range(len(units)):
         dup_of = next(
-            (i for i in kept if token_similarity(tokens[i], tokens[j]) >= _INTRA_DUP_THRESHOLD),
+            (
+                i
+                for i in kept
+                # 숫자 집합이 다르면 삭제 금지 — 골격만 같은 연도별 추이 문장
+                # ("2024년 3.2조" vs "2025년 4.1조")은 중복이 아니라 정보다
+                # (2026-09-01 검토). 둘 다 무수치면 순수 문장 중복으로 본다.
+                if numsets[i] == numsets[j]
+                and token_similarity(tokens[i], tokens[j]) >= _INTRA_DUP_THRESHOLD
+            ),
             None,
         )
-        if dup_of is None or j == 0:
+        if dup_of is None:
             kept.append(j)
             continue
         unit = units[j]
         # 첫 중복 1건은 항상 걷는다 — 그게 이 검사의 표적 계급이다. 이후부터 예산
-        # 가드레일(15%)이 대량 소거를 막는다(조용히 얇아지는 것 방지).
-        if n_removed and removed_chars + len(unit) > budget:
+        # 가드레일(15%)이 대량 소거를 막는다. 단 예산 소진은 성공이 아니라 경보다 —
+        # 병리가 가장 심한 절일수록 방어가 약해진다는 뜻이라 플래그로 층4에 올린다.
+        if records and removed_chars + len(unit) > budget:
+            budget_hit = True
             kept.append(j)
             continue
-        # 줄째로 걷는다 — 개조식 불릿 한 줄이 주장 단위와 일치하는 전형을 노린다.
-        for candidate in (chr(10) + unit, unit):
-            if candidate in out:
-                out = out.replace(candidate, "", 1)
-                removed_chars += len(unit)
-                n_removed += 1
-                break
+        shrunk = _remove_unit_line(out, unit)
+        if shrunk is None:
+            kept.append(j)  # 줄 일부·고아 하위·지시어 후속 — 어색해질 자리라 포기
+            continue
+        out = shrunk
+        removed_chars += len(unit)
+        records.append(
+            {
+                "kept": units[dup_of][:80],
+                "removed": unit[:80],
+                "score": round(token_similarity(tokens[dup_of], tokens[j]), 3),
+            }
+        )
 
-    rebuilt = _rebuild_cited(out, chunk_of) if n_removed else list(cited_chunk_ids)
-    if n_removed:
-        logger.info("intra_dedup.removed", n_removed=n_removed, removed_chars=removed_chars)
-    return RepairOutcome(out, rebuilt, n_removed=n_removed)
+    rebuilt = _rebuild_cited(out, chunk_of) if records else list(cited_chunk_ids)
+    if records or budget_hit:
+        logger.info(
+            "intra_dedup.removed",
+            n_removed=len(records),
+            removed_chars=removed_chars,
+            budget_exhausted=budget_hit,
+            samples=[r["removed"] for r in records[:3]],
+        )
+    return RepairOutcome(
+        out, rebuilt, n_removed=len(records), removed=records, budget_exhausted=budget_hit
+    )
+
+
+def _line_depth(line: str) -> int | None:
+    m = _LINE_MARKER_RE.match(line)
+    return _MARKER_DEPTH.get(m.group(1)) if m else None
+
+
+def _remove_unit_line(content: str, unit: str) -> str | None:
+    """unit이 통째로 이루는 줄 하나를 걷는다. 어색해질 자리면 None(포기).
+
+    포기 조건(2026-09-01 검토 — "코드로 지우면 어색해진다"의 결정적 가드):
+    ① 문장이 줄의 일부다 — 도려내면 조각이 남는다
+    ② 다음 실줄이 더 깊은 불릿이다 — 부모를 지우면 고아가 된다
+    ③ 다음 실줄이 지시어로 시작한다 — 지워진 문장을 가리켜 흐름이 끊긴다
+    """
+    # 같은 문장이 여럿이면 **뒤 등장**을 걷는다 — 남기는 쪽은 첫 등장이다(중복 판정과
+    # 같은 방향). find로 첫 등장을 지우면 남길 줄을 지우고 가드도 엉뚱한 이웃을 본다.
+    idx = content.rfind(unit)
+    if idx < 0:
+        return None
+    ls = content.rfind(chr(10), 0, idx) + 1
+    le = content.find(chr(10), idx)
+    le = len(content) if le < 0 else le
+    line = content[ls:le]
+    if _LINE_MARKER_RE.sub("", line).strip() != unit.strip():
+        return None  # ① 줄 일부
+    depth = _line_depth(line)
+    rest = content[le + 1 :] if le < len(content) else ""
+    next_line = next((ln for ln in rest.split(chr(10)) if ln.strip()), "")
+    next_depth = _line_depth(next_line)
+    if depth is not None and next_depth is not None and next_depth > depth:
+        return None  # ② 고아 하위 불릿
+    if _ANAPHORA_RE.match(_LINE_MARKER_RE.sub("", next_line).strip()):
+        return None  # ③ 지시어 후속
+    cut_end = le + 1 if le < len(content) else le
+    return content[:ls] + content[cut_end:]
 
 
 def post_process_draft(
@@ -235,4 +324,7 @@ def post_process_draft(
         n_fixed=repaired.n_fixed,
         n_removed=deduped.n_removed,
         held=repaired.held,
+        fixed=repaired.fixed,
+        removed=deduped.removed,
+        budget_exhausted=deduped.budget_exhausted,
     )
