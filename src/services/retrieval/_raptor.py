@@ -47,8 +47,13 @@ def make_summary_fetcher(
     project_id: UUID,
     *,
     top_k: int,
+    min_similarity: float = 0.0,
 ) -> SummaryFetcher:
-    """프로젝트에 바인딩된 요약 노드 검색기 — 트리가 없으면 조용히 빈 결과."""
+    """프로젝트에 바인딩된 요약 노드 검색기 — 트리가 없으면 조용히 빈 결과.
+
+    min_similarity: 코사인 유사도 하한 — top_k 고정 채우기는 관련 없는 요약도 억지로
+    실었다(캡 12 시절 유해 실측의 잔재 경로). 하한을 넘는 것만 0~top_k개 가변 채택.
+    """
 
     async def fetch(query: str) -> list[RetrievedChunk]:
         vec = (await embedder.embed(query)).embedding
@@ -68,10 +73,11 @@ def make_summary_fetcher(
                 chunk_id=row.id,
                 source_id=row.id,
                 content=row.summary,
-                score=max(0.0, 1.0 - float(row.distance)),
+                score=score,
                 is_summary=True,
             )
             for row in rows
+            if (score := max(0.0, 1.0 - float(row.distance))) >= min_similarity
         ]
 
     return fetch

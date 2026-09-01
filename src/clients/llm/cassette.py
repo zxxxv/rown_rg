@@ -15,7 +15,13 @@ def compute_input_hash(request: CompletionRequest) -> str:
     # web_search는 live 모드 전용(외부 실시간 데이터, 캐셋 미사용)이므로 해시에서 제외해
     # 기존 단발 호출 캐셋이 무효화되지 않게 한다. cache_prefix_messages는 전송 내용을
     # 바꾸지 않는 프롬프트 캐싱 힌트라 같은 이유로 제외한다(같은 내용 = 같은 카세트).
-    payload = request.model_dump_json(exclude={"cache_key", "web_search", "cache_prefix_messages"})
+    exclude = {"cache_key", "web_search", "cache_prefix_messages"}
+    # effort는 응답을 실제로 바꾸므로 값이 있으면 해시에 포함한다. 단 None(미지정)은
+    # 제외 — 필드 추가만으로 "effort":null이 직렬화에 끼면 기존 카세트가 전부
+    # 무효화된다(필드 도입 이전 녹화본과 동일 요청인데 해시가 갈라짐).
+    if request.effort is None:
+        exclude.add("effort")
+    payload = request.model_dump_json(exclude=exclude)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

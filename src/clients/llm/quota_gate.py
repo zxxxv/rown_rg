@@ -123,12 +123,55 @@ async def enforce() -> None:
         return
     user_id, _project_id, _operation = token_tracker.get_context()
     org_cost, org_limit, user_cost, user_limit = await _fetch_usage(user_id)
+    _warn_if_org_budget_running_out(org_cost, org_limit)
     check_limits(
         org_cost=org_cost,
         org_limit=org_limit,
         user_cost=user_cost,
         user_limit=user_limit,
     )
+
+
+# 조직 예산 소진 경고선 — 이 비율을 넘으면 호출마다 warning을 남긴다.
+ORG_BUDGET_WARN_RATIO = Decimal("0.8")
+
+
+def _warn_if_org_budget_running_out(org_cost: Decimal, org_limit: Decimal) -> None:
+    """조직 예산이 바닥나 가는 것을 닿기 전에 알린다.
+
+    조직 한도는 **모두가 공유하는 단일 실링**이라, 닿는 순간 개인 한도가 얼마나
+    남았든 전원이 동시에 막힌다(선착순). 그런데 지금은 막히고 나서야 알게 된다 —
+    한 사람이 남은 예산을 다 태워도 나머지는 예고 없이 429를 맞는다.
+    로그로 먼저 흔적을 남겨 운영이 손 쓸 창을 만든다.
+    """
+    if org_limit <= 0 or org_cost < org_limit * ORG_BUDGET_WARN_RATIO:
+        return
+    logger.warning(
+        "quota.org_budget_running_out",
+        org_cost=float(org_cost),
+        org_limit=float(org_limit),
+        used_ratio=round(float(org_cost / org_limit), 3),
+    )
+
+
+async def remaining_budget(user_id: UUID) -> float | None:
+    """이번 달 남은 한도(USD) — 사용자·조직 중 더 빡빡한 쪽. 조회 실패면 None.
+
+    설계 브리프의 예상 비용 카드에 '남은 한도'를 함께 보여주기 위한 읽기 전용
+    조회다. **차단용이 아니다**(2026-08-15 사용자 결정: 경고만 표시) — 강제는
+    기존 enforce/check_user_quota(한도 도달 시)가 그대로 맡는다. 그래서
+    quota_enforcement_enabled와 무관하게 값을 돌려준다(표시는 정보다).
+    """
+    try:
+        org_cost, org_limit, user_cost, user_limit = await _fetch_usage(user_id)
+    except Exception:
+        # 표시용 조회가 브리프 생성을 막으면 안 된다 — 없으면 카드가 숫자를 생략한다.
+        logger.warning("quota.remaining_budget_failed", user_id=str(user_id), exc_info=True)
+        return None
+    candidates = [org_limit - org_cost]
+    if user_cost is not None and user_limit is not None:
+        candidates.append(user_limit - user_cost)
+    return float(max(Decimal("0"), min(candidates)))
 
 
 async def check_user_quota(user_id: UUID) -> None:

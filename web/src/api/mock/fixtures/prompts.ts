@@ -58,6 +58,7 @@ export const PERSONAL_PROMPTS: PersonalPrompt[] = [
     cat: "커스텀",
     description: "사내 전용",
     spec: { volume: "normal", queries: [], sections: {} },
+    is_public: false,
     updated_at: new Date("2026-05-20T00:00:00Z").toISOString(),
   },
 ];
@@ -80,7 +81,7 @@ export function promptNode(p: {
     name: p.name,
     type: "file",
     virtual: true,
-    prompt: { scope: p.scope, kind: p.kind, ref: p.ref, editable: p.editable },
+    prompt: { scope: p.scope, kind: p.kind, ref: p.ref, editable: p.editable, importable: false },
     file_meta: {
       size_bytes: 0,
       registered_at: p.registeredAt ?? new Date("2026-01-01T00:00:00Z").toISOString(),

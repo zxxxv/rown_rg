@@ -1,7 +1,8 @@
 """조립된 보고서 → HWPX 파일 — 파이프라인과 hwpx_writer 사이의 변환 계층.
 
 선택된 섹션 초안(LLM이 쓴 마크다운)을 hwpx_writer의 Block 시퀀스로 바꿔 렌더한다.
-실제 보고서 꼴을 갖추도록 **표지 → 목차 → 본문(장별)** 순으로 조립한다.
+실제 보고서 꼴을 갖추도록 **표지 → 요약문 → 목차 → 표·그림 목차 → 본문(장별)** 순으로
+조립한다(실납품 보고서 6종 실측 관례, 2026-08-11).
 
 작성 규칙(src/prompts) 반영:
 - 첫 장은 표지(제목·기관·날짜), 둘째 장은 목차다.
@@ -10,8 +11,15 @@
   각 장 끝에 "약어 정리"표로 정리한다.
 - 표가 없는 절에는 추천 시각자료(그림) 자리표시자를 넣는다(2페이지당 시각자료 1개 규칙).
 - 표 셀의 인라인 마크다운(**강조**·링크)은 벗기고, 표 폭은 본문 폭에 맞춰 긴 셀이 줄바꿈된다.
-- 인용 마커 [n]은 **전역 번호**(조립 시 renumber로 참고문헌장 번호에 재매핑됨)라 본문에
-  그대로 남긴다 — 독자가 본문 [n] ↔ 참고문헌 최종장 [n]을 맞춰 검증할 수 있다(2026-08-05).
+- 참고 표기 (출처 n)은 본문에서 **걷어낸다**(2026-08-11). 참고해 재작성한 문장에 출처
+  번호가 덕지덕지 붙으면 독자가 본문을 원문에서 검색했다 못 찾고 표기를 불신한다.
+  출처는 참고문헌 최종장으로만 밝힌다. 직접 인용 [n]은 원문을 그대로 옮긴 문장이라
+  그대로 남긴다. (웹 프리뷰는 참고 표기를 블록 우상단에 모아 보여준다.)
+  예외: 표 바로 아래 (출처 n) 단독 줄은 걷어내지 않고 표 하단 실서지 줄로 변환한다 —
+  캡션 위·출처 아래가 실측한 공공 보고서 관례다.
+- 표에는 제목을 붙인다: 작성 규칙이 표 위에 "표: 제목" 한 줄을 쓰게 하고, 번호(<표 N-M>)는
+  장 단위 일련번호로 이 계층에서 매긴다 — 절이 나뉘어 작성돼 모델은 번호를 알 수 없다.
+  제목과 표 사이 "(단위: …)" 단독 줄은 표의 단위 줄로 흡수한다.
 - 번호는 텍스트에 직접 넣는다("제1장", "1.1 …"). 헤딩에 개요 자동번호를 부여하지 않아
   한컴이 제목·목차 앞에 "1.", "2." 같은 개요 번호를 붙이지 않는다.
 """
@@ -19,17 +27,34 @@
 from __future__ import annotations
 
 import re
+import textwrap
+from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, timedelta, timezone
 from pathlib import Path
+from uuid import UUID
 
 import structlog
 
+from src.core.charts import (
+    CHART_FENCE_RE,
+    ChartSpec,
+    ChartSpecError,
+    chart_fences_as_tables,
+    parse_chart_spec,
+)
+from src.core.citations import (
+    source_numbers,
+    strip_nonnumeric_source_marks,
+    strip_source_marks,
+)
 from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import SectionPlan, SourceRef, SourceType
 from src.export.hwpx_writer import (
     HEADER_TEXT,
     Block,
+    Chart,
     Cover,
     Figure,
     Heading,
@@ -42,9 +67,24 @@ from src.export.hwpx_writer import (
 # 한국은 DST가 없어 UTC+9 고정 오프셋으로 표시 계층 변환이 정확하다(tzdata 의존 없음).
 _KST = timezone(timedelta(hours=9))
 
+# 렌더 규칙을 바꿀 때마다 올린다. 다운로드는 "본문이 파일보다 새것인가"로만 재렌더를
+# 판단하는데, 코드를 고쳐도 본문 수정 시각은 그대로라 옛 파일이 그대로 내려갔다
+# (2026-08-11 지적). 버전을 파일명에 섞어 새 코드가 옛 산출물을 집지 않게 한다.
+EXPORT_RENDER_VERSION = 9  # r9: 표 셀 가운데 정렬·안 여백 복원, 개조식 들여쓰기 한 칸(2026-08-20)
+
+
+def export_filename(project_id: UUID | str) -> str:
+    """산출물 파일명 — 렌더 버전이 들어가 코드가 바뀌면 자연히 새 파일이 된다."""
+    return f"{project_id}.r{EXPORT_RENDER_VERSION}.hwpx"
+
+
+def export_file_pattern(project_id: UUID | str) -> str:
+    """그 프로젝트가 남긴 모든 산출물 glob — 옛 버전과 버전 없던 파일까지 포함(정리용)."""
+    return f"{project_id}*.hwpx"
+
+
 logger = structlog.get_logger(__name__)
 
-_CITATION_RE = re.compile(r"\s*\[\d+\]")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 _TABLE_SEP_CELL_RE = re.compile(r"^:?-+:?$")
 
@@ -71,8 +111,8 @@ _COMMON_ABBR: frozenset[str] = frozenset({"AI", "IT", "API", "GDP", "UN", "EU", 
 
 
 def _strip_citations(text: str) -> str:
-    """[n] 인용 마커 제거."""
-    return _CITATION_RE.sub("", text)
+    """참고 표기 (출처 n) 제거. 직접 인용 [n]은 남긴다 — 원문을 옮긴 문장이라 출처가 필요하다."""
+    return strip_source_marks(text)
 
 
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
@@ -93,11 +133,129 @@ def _strip_invented_markers(text: str) -> str:
     )
 
 
+# 연도 어깨점 정규화 — 실납품 샘플의 고질병(‘24 / `24 / '24 혼용, 2026-08-11 실측)을
+# 오른쪽 홑따옴표(U+2019) 하나로 통일한다. ’24년·’24.5.·’23~’27 꼴만 건드린다.
+_YEAR_QUOTE_RE = re.compile(r"[‘'`´](?=\d{2}(?:년|[.~∼]))")
+
+
 def _clean_inline(text: str) -> str:
     """HWPX 평문 렌더에서 의미 없는 인라인 기호 제거(강조·링크·발명 인용 마커)."""
     text = text.replace("**", "")
     text = _MD_LINK_RE.sub(r"\1", text)
+    text = _YEAR_QUOTE_RE.sub("’", text)
     return _strip_invented_markers(text)
+
+
+# 표 제목 줄 — 표 바로 위에 오는 "표: 제목"(작성 규칙) 및 모델이 번호까지 쓴 변형을 잡는다.
+# 번호 뒤 구분자는 콜론·대괄호·꺾쇠로 한정한다: 마침표까지 허용하면 "표 3.1에서 보듯이"처럼
+# 표를 가리키는 평범한 서술 문장이 제목으로 오인된다.
+_TABLE_CAPTION_RE = re.compile(
+    r"^(?:[□ㅇ○◦\-*]\s+)?"  # 개조식 마커를 달고 쓴 경우까지 허용
+    r"(?:\[\s*표[^\]]*\]|<\s*표[^>]*>|표\s*[\d\-]*\s*[:：])"  # "[표 2-1]"·"<표 2-1>"·"표:"
+    r"\s*(?P<title>.+)$"
+)
+
+# 단위 줄 — 표 제목과 표 사이 "(단위: 백만 원)" 단독 줄(작성 규칙의 표 3종 세트).
+_TABLE_UNIT_RE = re.compile(r"^[（(]\s*단위\s*[:：][^)）]*[)）]$")
+# 제목 꼬리에 붙은 단위 — 빈 줄 없이 이어 쓰면 파서가 제목·단위를 한 문단으로 합친다.
+_CAPTION_TRAILING_UNIT_RE = re.compile(r"\s*(?P<unit>[（(]\s*단위\s*[:：][^)）]*[)）])$")
+
+
+def _pop_table_caption(blocks: list[Block]) -> tuple[str, str]:
+    """직전 블록들에서 표 제목·단위 줄을 떼어내 (제목, 단위)로 반환한다(없으면 빈 문자열).
+
+    제목을 문단으로 남겨 두면 표와 분리돼 본문처럼 떠 버리므로 Table 필드로 옮긴다.
+    모델이 쓴 번호는 버린다 — 절 단위로 나눠 작성되는 탓에 장 전체에서 중복·누락되기
+    때문이다. 최종 번호는 _number_visuals가 장 단위로 다시 매긴다.
+    """
+    unit = ""
+    if blocks:
+        last = blocks[-1]
+        if isinstance(last, Paragraph) and _TABLE_UNIT_RE.match(last.text.strip()):
+            unit = last.text.strip()
+            blocks.pop()
+    if not blocks:
+        return "", unit
+    last = blocks[-1]
+    if not isinstance(last, Paragraph):
+        return "", unit
+    match = _TABLE_CAPTION_RE.match(last.text.strip())
+    if not match:
+        return "", unit
+    blocks.pop()
+    title = match.group("title").strip()
+    trailing = _CAPTION_TRAILING_UNIT_RE.search(title)
+    if trailing and not unit:
+        unit = trailing.group("unit")
+        title = title[: trailing.start()].strip()
+    return title, unit
+
+
+# 표 머리행에서 제목을 세울 때 분류축으로 못 쓰는 일반어 — "구분별 값"처럼 뜻 없는 제목이 된다.
+_GENERIC_HEADERS: frozenset[str] = frozenset(
+    {"구분", "항목", "분류", "내용", "비고", "번호", "순번", "값", "단계", "특징"}
+)
+# 제목에 실을 열 수 — 다 나열하면 제목이 표만큼 길어진다.
+_CAPTION_MAX_COLS = 3
+
+
+def _caption_from_headers(headers: list[str], section_title: str) -> str:
+    """표 머리행으로 제목을 세운다 — 모델이 제목을 안 쓴 옛 본문의 폴백.
+
+    절 제목을 그대로 쓰면 한 절의 표 네 개가 전부 같은 이름이 된다(2026-08-11 지적).
+    머리행은 그 표가 무엇을 담았는지 이미 말하고 있으므로, 첫 열을 분류축 삼아
+    "국가별 노형·상용화 시점"처럼 세운다. 첫 열이 '구분'같은 일반어면 축이 못 되니
+    절 제목을 앞에 두고 나머지 열을 잇는다.
+    """
+    cols = [h.strip() for h in headers if h.strip()]
+    if len(cols) < 2:
+        return section_title
+    if cols[0] in _GENERIC_HEADERS:
+        rest = [c for c in cols[1:] if c not in _GENERIC_HEADERS][: _CAPTION_MAX_COLS - 1]
+        return f"{section_title}: {'·'.join(rest)}" if rest else section_title
+    return f"{cols[0]}별 {'·'.join(cols[1:_CAPTION_MAX_COLS])}"
+
+
+def _number_visuals(
+    blocks: list[Block],
+    chapter: int,
+    table_no: int,
+    figure_no: int,
+    fallback_title: str,
+) -> tuple[int, int]:
+    """표·그림에 "<표 N-M> 제목"·"<그림 N-M> 제목" 캡션을 매기고 다음 번호들을 반환한다.
+
+    꺾쇠 표기는 실납품 보고서 실측 다수 관행이다(2026-08-11, 6종 중 4종). M은 장 안에서
+    이어지는 번호다(표와 그림이 각각 따로 센다). 절 단위로 나눠 작성되는 탓에 모델은
+    이 번호를 알 수 없어 조립 단계에서만 매길 수 있다. 모델이 제목을 빠뜨린 표는
+    절 제목으로 채워 번호 없는 표가 남지 않게 한다.
+    """
+    for i, block in enumerate(blocks):
+        if isinstance(block, Table):
+            table_no += 1
+            title = block.caption or _caption_from_headers(block.headers, fallback_title)
+            blocks[i] = replace(
+                block,
+                caption=f"<표 {chapter}-{table_no}> {title}",
+                caption_bookmark=f"rown_t{chapter}_{table_no}",
+            )
+        elif isinstance(block, Figure):
+            figure_no += 1
+            blocks[i] = replace(
+                block,
+                caption=f"<그림 {chapter}-{figure_no}> {block.caption}",
+                caption_bookmark=f"rown_f{chapter}_{figure_no}",
+            )
+        elif isinstance(block, Chart):
+            # 차트도 그림이다 — 자리표시자와 같은 번호 흐름을 쓴다.
+            figure_no += 1
+            title = getattr(block.spec, "title", "") or fallback_title
+            blocks[i] = replace(
+                block,
+                caption=f"<그림 {chapter}-{figure_no}> {title}",
+                caption_bookmark=f"rown_f{chapter}_{figure_no}",
+            )
+    return table_no, figure_no
 
 
 def _outline_level(line: str) -> int | None:
@@ -107,21 +265,92 @@ def _outline_level(line: str) -> int | None:
     return None
 
 
+# 약어 안에 허용할 소문자 수 — 둘 이상이면 약어가 아니라 그냥 영어 낱말이다.
+# 실측(2026-08-24 v6): "Annex"·"Fortune"·"SteelZero"·"Market-Based" 등 오탐 9개가
+# 사전 캡(40) 자리를 차지해 진짜 약어(BIPV·METI·JCLP)가 사전에서 밀려났고, 밀려난
+# 약어는 표에서 설명이 빈칸이 되고 전체 명칭도 기계 추출값(한글)으로 남았다.
+# 소문자 하나는 허용한다 — IoT·PhD 같은 정상 약어가 있다.
+_MAX_LOWERCASE_IN_ABBR = 1
+
+# 풀네임으로 삼을 수 없는 문장 조각 — 조사·연결어미가 섞였다면 괄호 앞 문맥을 긁어
+# 온 것이다("…설비를 보유하는 동시에 잉카(Ingka)" → "설비를 보유하는 동시에 잉카").
+_SENTENCE_FRAGMENT_RE = re.compile(
+    r"(?:[을를이가은는와과에의로]|으로|에서|하는|되는|같은|또는|동시에|위한|따른)\s"
+)
+
+
+def _is_abbreviation(token: str) -> bool:
+    """약어다운 토큰인가 — 소문자가 둘 이상이면 영어 낱말로 본다."""
+    return sum(1 for ch in token if ch.islower()) <= _MAX_LOWERCASE_IN_ABBR
+
+
 def _collect_abbreviations(text: str, acc: dict[str, str]) -> None:
     """text의 "풀네임(약어)" 표기를 acc(약어→풀네임)에 첫 등장 순서로 누적한다."""
     for match in _ABBR_RE.finditer(text):
         abbr = match.group("abbr")
-        if abbr in _COMMON_ABBR or abbr in acc:
+        if abbr in _COMMON_ABBR or abbr in acc or not _is_abbreviation(abbr):
             continue
-        acc[abbr] = _clean_inline(match.group("full")).strip()
+        full = _clean_inline(match.group("full")).strip()
+        # 문장 조각이면 풀네임 자리를 비워 둔다 — 사전이 영문 원어로 채운다.
+        acc[abbr] = "" if _SENTENCE_FRAGMENT_RE.search(full) else full
+
+
+# 행 끝 '|(출처 n)' 꼬리 — 마지막 파이프 **뒤**에 붙은 출처 표기만 잡는다. 근거 열이
+# 있는 표의 정상 셀("…|(출처 17) |")은 뒤에 파이프가 더 있어 매칭되지 않는다.
+_ROW_TAIL_SOURCE_RE = re.compile(r"\|\s*\((?:출처|근거)[^)]*\)\s*$")
 
 
 def _table_cells(line: str) -> list[str]:
-    return [c.strip() for c in line.strip().strip("|").split("|")]
+    # 모델이 표 마지막 행 끝에 출처를 덧붙이는 습관이 칸 수를 늘려, HWPX 렌더에서
+    # 56개 행의 끝 칸이 잘렸다(2026-08-21 v6 실측). 꼬리는 칸이 아니라 표 단위
+    # 출처 표기이므로 떼어낸다 — 출처 줄 규약('* 출처:')이 정본이다.
+    line = _ROW_TAIL_SOURCE_RE.sub("|", line.strip())
+    return [c.strip() for c in line.strip("|").split("|")]
 
 
 def _is_separator_row(cells: list[str]) -> bool:
     return all(_TABLE_SEP_CELL_RE.match(c) for c in cells if c) and any(cells)
+
+
+# 차트 펜스를 잠시 대신할 표식 — 파서가 펜스 본문을 문단으로 흘리지 않게 한 줄로 줄인다.
+_CHART_TOKEN = "\x00chart:{index}\x00"
+_CHART_TOKEN_RE = re.compile(r"^\x00chart:(\d+)\x00$")
+
+
+def _extract_charts(md: str) -> tuple[str, list[ChartSpec]]:
+    """차트 펜스를 한 줄 표식으로 바꾸고 스펙 목록을 함께 돌려준다.
+
+    그릴 수 없는 스펙(값 개수 불일치·숫자 아님 등)은 차트를 포기하고 **원본 표**로
+    되돌린다 — 보관해 둔 spec.table이 그 안전망이다. 원본 표도 없으면 통째로 버린다.
+    틀린 그래프보다 표가, 표보다 아무것도 없는 게 낫다.
+    """
+    specs: list[ChartSpec] = []
+
+    def _sub(match: re.Match[str]) -> str:
+        try:
+            specs.append(parse_chart_spec(match.group("body")))
+        except ChartSpecError as exc:
+            logger.warning("export.chart_spec_invalid", detail=str(exc))
+            fallback = _CHART_TABLE_RE.search(match.group("body"))
+            return textwrap.dedent(fallback.group("table")) if fallback else ""
+        return _CHART_TOKEN.format(index=len(specs) - 1)
+
+    return CHART_FENCE_RE.sub(_sub, md), specs
+
+
+# 못 그리는 차트에서 원본 표를 건져 내기 위한 최소 추출 — 'table: |' 뒤 들여쓴 블록.
+_CHART_TABLE_RE = re.compile(r"^table:[ \t]*\|[ \t]*\n(?P<table>(?:[ \t]+.*\n?)+)", re.M)
+
+
+def _fallback_table(spec: ChartSpec) -> Table | None:
+    """차트가 품고 있는 원본 표 → Table 블록. 렌더가 실패하면 이것이 대신 실린다.
+
+    스펙은 멀쩡한데 그림만 못 그리는 경우(운영 컨테이너에 한글 폰트가 없는 등)가 있어,
+    블록을 만들 때 미리 들려 보낸다 — 렌더 시점에는 마크다운을 읽을 자리가 아니다.
+    """
+    if not spec.table:
+        return None
+    return next((b for b in markdown_to_blocks(spec.table) if isinstance(b, Table)), None)
 
 
 def markdown_to_blocks(md: str) -> list[Block]:
@@ -134,6 +363,7 @@ def markdown_to_blocks(md: str) -> list[Block]:
     blocks: list[Block] = []
     para_buf: list[str] = []
     table_buf: list[list[str]] = []
+    md, charts = _extract_charts(md)
 
     def flush_para() -> None:
         if para_buf:
@@ -148,13 +378,23 @@ def markdown_to_blocks(md: str) -> list[Block]:
         if rows:
             # 셀 안의 인라인 마크다운(**강조**·[링크])을 벗겨 평문으로 렌더한다.
             cleaned = [[_clean_inline(c) for c in row] for row in rows]
-            blocks.append(Table(headers=cleaned[0], rows=cleaned[1:]))
+            # 표 제목·단위 줄은 표 위 문단으로 들어오므로 여기서 흡수한다(번호는 조립 단계에서).
+            caption, unit = _pop_table_caption(blocks)
+            blocks.append(Table(headers=cleaned[0], rows=cleaned[1:], caption=caption, unit=unit))
 
     for raw in md.splitlines():
         line = raw.strip()
         if not line:
             flush_para()
             flush_table()
+            continue
+        token = _CHART_TOKEN_RE.match(line)
+        if token:
+            flush_para()
+            flush_table()
+            # 캡션은 조립 단계에서 그림 번호와 함께 채운다(_number_visuals).
+            spec = charts[int(token.group(1))]
+            blocks.append(Chart(spec=spec, caption="", fallback=_fallback_table(spec)))
             continue
         if _HR_RE.match(line):
             # 마크다운 구분선(---)은 시각 장식 — 문서에 리터럴로 남기지 않는다.
@@ -200,6 +440,120 @@ def markdown_to_blocks(md: str) -> list[Block]:
     return blocks
 
 
+# 표 아래 출처 줄 — "(출처 3)"/"(출처 3, 7)" 단독. 앞의 불릿(※·*·-)과 "출처:"/"자료:"
+# 라벨도 허용한다 — 작성기가 규약대로 단독 마커만 내지 않고 "* 출처: (출처 34, 21)"처럼
+# 라벨을 붙여 내는 게 실제 출력이었다(2026-08-15 실측: 라벨 변형이 안 잡혀 실서지 변환이
+# 통째로 빠지고, 마커만 걷힌 빈 '출처:' 껍데기가 표 밑에 남았다). 조립 시 실서지로 바꾼다.
+_TABLE_SOURCE_RE = re.compile(
+    r"^(?:[※*\-–ㅇ○◦]\s*)?(?:(?:출처|자료|참고)\s*[:：]\s*)?"
+    r"[（(]\s*출처\s*(?P<nums>\d{1,3}(?:\s*,\s*\d{1,3})*)\s*[)）]$"
+)
+
+
+def _attach_table_sources(blocks: list[Block], titles: dict[int, str]) -> None:
+    """표 바로 다음의 (출처 n) 단독 문단을 떼어 표 하단 실서지 줄로 옮긴다.
+
+    본문의 (출처 n)은 걷어내는 규칙이지만, 표 출처만은 실측 관례(캡션 위·출처 아래)대로
+    참고문헌 번호가 가리키는 자료 제목을 풀어 표 아래 남긴다.
+    """
+    i = 0
+    while i < len(blocks) - 1:
+        block, nxt = blocks[i], blocks[i + 1]
+        if isinstance(block, Table) and isinstance(nxt, Paragraph):
+            match = _TABLE_SOURCE_RE.match(nxt.text.strip())
+            if match:
+                nums = [int(n) for n in match.group("nums").split(",")]
+                names = [titles.get(n, f"자료 {n}") for n in nums]
+                blocks[i] = replace(block, source="※ 출처: " + "; ".join(names))
+                del blocks[i + 1]
+        i += 1
+
+
+# "(출처 n)"을 걷어내면 "- 출처:"처럼 라벨만 남는 줄이 생긴다 — 가리키는 것이 없어진
+# 껍데기라 통째로 버린다(2026-08-12 지적: 표 밑에 빈 '출처:'만 떠 있었다).
+_BARE_SOURCE_LABEL_RE = re.compile(r"^[□ㅇ○◦\-*※\s]*(?:출처|자료|참고)\s*[:：]?\s*$")
+# 표 안 어디든 박힌 (출처 n) — 하단 출처 줄이 없는 표의 출처 복원에 쓴다.
+_TABLE_SOURCE_NUM_RE = re.compile(r"\((?:출처|근거)\s*(?P<nums>\d+(?:\s*,\s*\d+)*)\s*\)")
+
+
+# 표 금지 셀 정의는 조립 세정(sections/scrub)이 정본 — 여기는 세정 밖 경로
+# (수동 편집·구버전 본문)용 이중 방어라 같은 집합을 가져다 쓴다.
+from src.services.sections.scrub import EMPTY_CELL_VALUES as _EMPTY_CELL_VALUES  # noqa: E402
+
+
+def _clean_cell(value: str) -> str:
+    text = _strip_citations(value).strip()
+    return "-" if text in _EMPTY_CELL_VALUES else text
+
+
+def _drop_inherited_source_marks(
+    text: str, indent: int, parent_sources: dict[int, set[int]]
+) -> str:
+    """상위 항목이 이미 밝힌 출처면 하위 항목에서는 표기를 걷는다(2026-08-24 지시).
+
+    "네모 문장 아래 동그라미·대시가 모두 같은 출처면 네모에만 달면 된다" — 같은
+    출처가 계층마다 되풀이되면 표기가 글보다 많아 보인다. 하위가 상위의 부분집합일
+    때만 걷고, 다른 출처가 하나라도 섞이면 그대로 둔다(근거를 지우는 쪽이 비싸다).
+    """
+    nums = set(source_numbers(text))
+    if not nums:
+        return text
+    inherited: set[int] = set()
+    for level, sources in parent_sources.items():
+        if level < indent:
+            inherited |= sources
+    # 내 자리와 그 아래 기록은 새로 쓴다 — 형제 항목의 출처는 물려받지 않는다.
+    for level in [lv for lv in parent_sources if lv >= indent]:
+        del parent_sources[level]
+    parent_sources[indent] = nums
+    return strip_source_marks(text).strip() if nums <= inherited else text
+
+
+def _strip_citation_blocks(blocks: list[Block], titles: dict[int, str]) -> list[Block]:
+    """블록들에서 참고 표기 (출처 n)을 선별 정리한다.
+
+    - 문단: **수치 없는 문장**의 표기만 걷어낸다(2026-08-21 사용자 지시 — 수치 인용은
+      출처를 문장 자리에 남긴다). 표기만 담고 있던 문단은 빈 껍데기가 되므로 버린다.
+    - 표: 셀·제목의 표기는 전부 걷어내되, 하단 출처 줄이 없는 표는 걷어낸 마커들을
+      모아 출처 줄로 살린다(표 4-4처럼 출처 없는 표가 남지 않게).
+    파싱 전에 원문에서 걷어내지 않는 이유: 표 하단 출처 줄(_attach_table_sources)이
+    먼저 살아남아야 한다.
+    """
+    out: list[Block] = []
+    # 개조식 수준별로 '그 자리에서 살아 있는 상위 출처' — 계층 생략의 근거.
+    parent_sources: dict[int, set[int]] = {}
+    for block in blocks:
+        if isinstance(block, Paragraph):
+            text = strip_nonnumeric_source_marks(block.text).strip()
+            if not text or _BARE_SOURCE_LABEL_RE.match(text):
+                continue
+            text = _drop_inherited_source_marks(text, block.indent, parent_sources)
+            out.append(replace(block, text=text))
+        elif isinstance(block, Table):
+            source = block.source
+            if not source:
+                nums: list[int] = []
+                for chunk in [block.caption, *block.headers, *(c for r in block.rows for c in r)]:
+                    for m in _TABLE_SOURCE_NUM_RE.finditer(chunk):
+                        for n in m.group("nums").replace(" ", "").split(","):
+                            if n.isdigit() and int(n) not in nums:
+                                nums.append(int(n))
+                if nums:
+                    source = "※ 출처: " + "; ".join(titles.get(n, f"자료 {n}") for n in nums)
+            out.append(
+                replace(
+                    block,
+                    caption=_strip_citations(block.caption).strip(),
+                    headers=[_strip_citations(h) for h in block.headers],
+                    rows=[[_clean_cell(c) for c in row] for row in block.rows],
+                    source=source,
+                )
+            )
+        else:
+            out.append(block)
+    return out
+
+
 def _drop_duplicate_lead_heading(md: str, chapter: int, section: int) -> str:
     """본문 첫 헤딩이 '# N.N …'로 섹션 제목을 반복하면 제거한다(제목 이중 인쇄 방지)."""
     lines = md.splitlines()
@@ -212,6 +566,42 @@ def _drop_duplicate_lead_heading(md: str, chapter: int, section: int) -> str:
             return "\n".join(lines[:i] + lines[i + 1 :])
         break
     return md
+
+
+# 약어 정리표 배치 — 한 단(段)에 15줄, 두 단을 나란히(=한 표에 30개). 넘치면 다음 표로.
+# 3열 한 줄짜리는 본문 폭을 다 쓰면서 내용이 몇 글자뿐이라 페이지가 비어 보였다
+# (2026-08-10 지적). 두 단으로 접어 폭을 절반씩 쓴다.
+# 한 표에 담을 행 수(단 하나 기준) — 설명이 두세 줄로 접히는 행을 감안해 한 쪽에 들어갈
+# 만큼만 잡는다. 넘치면 표가 쪽을 걸쳐 잘리고 제목만 남은 빈 쪽이 생긴다.
+# 10이었으나 설명이 길게 접히는 항목이 많은 보고서에서 표 전체가 한 쪽을 넘어
+# "약어 정리" 제목만 남은 빈 쪽이 재발(2026-08-21 v6 실측) — 여유 있게 줄인다.
+# 머리행 반복(repeatHeader)이 켜져 있어 표가 나뉘어도 읽기에 지장이 없다.
+_GLOSSARY_ROWS_PER_COLUMN = 6
+_GLOSSARY_HEADERS = ["약어", "전체 명칭", "설명", "약어", "전체 명칭", "설명"]
+# 약어 표 열 폭은 내용이 아니라 **고정 비율**로 준다. 표마다 내용으로 계산하면 쪽을
+# 넘길 때마다 열 폭이 달라져 같은 표가 여러 모양으로 보인다(2026-08-12 지적).
+_GLOSSARY_WEIGHTS = [14, 20, 16, 14, 20, 16]
+
+
+def _glossary_tables(entries: list[list[str]]) -> list[Table]:
+    """약어 목록 → 2단 표들. 한 표가 한 쪽에 들어가도록 행 수를 묶는다.
+
+    행 수를 줄인 이유가 있다. 표는 남은 자리에 안 들어가면 통째로 다음 쪽으로 밀리는데,
+    그러면 "약어 정리" 제목만 남은 빈 쪽이 생기고 표는 쪽을 걸쳐 잘린다(2026-08-12 지적).
+    설명이 길어 두세 줄로 접히는 행이 섞이므로 여유를 두고 잡는다.
+
+    마지막 표는 남은 항목을 좌우로 **반씩** 나눈다 — 왼쪽부터 채우면 오른쪽 절반이
+    통째로 빈 표가 나온다.
+    """
+    per_table = _GLOSSARY_ROWS_PER_COLUMN * 2
+    tables: list[Table] = []
+    for start in range(0, len(entries), per_table):
+        chunk = entries[start : start + per_table]
+        half = (len(chunk) + 1) // 2
+        left, right = chunk[:half], chunk[half:]
+        rows = [left[i] + (right[i] if i < len(right) else ["", "", ""]) for i in range(len(left))]
+        tables.append(Table(headers=_GLOSSARY_HEADERS, rows=rows, column_weights=_GLOSSARY_WEIGHTS))
+    return tables
 
 
 def _chapter_titles(state: ProjectState) -> dict[int, str]:
@@ -238,26 +628,15 @@ def _report_type_label(preset: str | None) -> str:
 
 
 def _cover_subtitle(state: ProjectState) -> str:
-    """부제 — 주제문(topic). 제목과 사실상 같으면 생략한다(같은 줄을 두 번 쓰지 않는다).
+    """표지 부제 — 프로젝트가 명시한 값만 쓴다.
 
-    topic은 "무엇을 어떤 범위로 검토한다"는 문장이라 표지 부제로 읽힌다. 제목이
-    비어 topic이 이미 제목 자리에 올라간 경우에는 부제를 비운다.
+    한때 주제문(topic)을 부제로 올렸지만, topic은 "무엇을 어떤 범위로 검토하라"는
+    **검색·작성 지시문**이지 표지에 실을 문장이 아니다(2026-08-10 판단). 지시문을
+    납품물 표지에 인쇄하면 읽는 사람에게는 군더더기다. 부제를 따로 받기 전까지는
+    표지에서 생략한다.
     """
-    topic = (state.topic or "").strip()
-    title = (state.title or "").strip()
-    if not topic or not title:
-        return ""
-    if topic == title or topic.startswith(title) or title.startswith(topic):
-        return ""
-    if len(topic) > _SUBTITLE_MAX_CHARS:
-        # 긴 주제문은 앞부분이 제목을 되풀이하고 뒤가 실제 범위 서술이다
-        # ("A 사업의 예타 분석 - 기술 수준, 시장 전망, …을 검토한다"). 뒤를 쓴다.
-        for sep in (" - ", " – ", " — ", ": "):
-            head, found, tail = topic.partition(sep)
-            if found and len(tail.strip()) >= 15:
-                topic = tail.strip()
-                break
-    return topic if len(topic) <= _SUBTITLE_MAX_CHARS else topic[: _SUBTITLE_MAX_CHARS - 1] + "…"
+    options = state.options if isinstance(state.options, dict) else {}
+    return str(options.get("subtitle") or "").strip()
 
 
 def _cover_block(state: ProjectState) -> Cover:
@@ -277,27 +656,215 @@ def _cover_block(state: ProjectState) -> Cover:
     )
 
 
+# 목차 줄과 본문 제목을 잇는 책갈피 이름. 한컴 상호참조가 이름으로 표적을 찾으므로
+# 문서 안에서 유일하고 안정적이어야 한다 — 제목 글자가 아니라 번호로 짓는다(제목이
+# 바뀌거나 같은 제목이 두 번 나와도 안 흔들린다).
+_REFERENCES_BOOKMARK = "rown_ref"
+
+
+def _toc_bookmark(chapter_number: int, section_number: int | None = None) -> str:
+    if section_number is None:
+        return f"rown_ch{chapter_number}"
+    return f"rown_s{chapter_number}_{section_number}"
+
+
 def _chapter_heading_text(chapter_number: int, ch_titles: dict[int, str]) -> str:
     """장 헤딩 텍스트 — '제N장  제목'(제목 없으면 '제N장')."""
     ch_title = ch_titles.get(chapter_number)
     return f"제{chapter_number}장  {ch_title}" if ch_title else f"제{chapter_number}장"
 
 
-def _figure_placeholder(plan: SectionPlan) -> Figure:
-    """표가 없는 절에 넣을 추천 시각자료(그림) 자리표시자.
+# 이 분량마다 시각자료 1개 — "쪽마다 표나 그림이 하나씩은 있게"(2026-08-24 지시).
+# 새 판형(A4·좌우 20mm·본문 12pt·줄간격 160%)에서 한 쪽이 대략 1,200자다.
+_CHARS_PER_VISUAL = 1200
+
+
+def _figures_needed(content: str, visual_count: int, key_points: Sequence[str] = ()) -> int:
+    """그 절에 더 넣을 그림 수 — 분량이 요구하는 시각자료 수에서 이미 있는 것을 뺀 만큼.
+
+    visual_count는 표와 차트를 함께 센다 — 둘 다 시각자료라, 차트를 안 세면 이미 그림이
+    있는 절에 자리표시자가 덧붙는다.
+
+    한때는 "표가 하나도 없는 절"에만 그림을 넣었다. 그러다 보니 표를 많이 쓴 절일수록
+    그림이 사라져, 표만 빽빽한 보고서가 됐다(2026-08-11 지적). 분량 기준으로 바꿔
+    표가 있어도 긴 절에는 그림이 함께 들어가게 한다.
+
+    자리표시자 수는 key_points 수로 캡한다(없으면 1) — 설명을 하나씩 나눠 맡을 소재가
+    떨어지면 남는 그림이 같은 제목·같은 폴백 설명으로 복제된다(2026-08-13 실사고:
+    key_points 없는 절에 동일 그림 4개가 나란히 배치됨).
+    """
+    required = max(1, len(content) // _CHARS_PER_VISUAL)
+    needed = max(0, required - visual_count)
+    return min(needed, max(1, len(key_points)))
+
+
+# 블록이 지면에서 차지하는 세로 몫 — 글자 수로 환산한 어림값(분산 배치용 자).
+# 표는 행마다 한 줄, 그림·차트는 본문 폭 그림 한 장이 대략 이만큼의 글을 밀어낸다.
+_TABLE_ROW_WEIGHT = 60
+_FIGURE_WEIGHT = 350
+_CHART_WEIGHT = 800
+_HEADING_WEIGHT = 40
+
+
+def _block_weight(block: Block) -> int:
+    """블록 하나가 지면에서 차지하는 몫(글자 수 환산)."""
+    if isinstance(block, Paragraph):
+        return len(block.text)
+    if isinstance(block, Heading):
+        return _HEADING_WEIGHT
+    if isinstance(block, Table):
+        return _TABLE_ROW_WEIGHT * (len(block.rows) + 1)
+    if isinstance(block, Chart):
+        return _CHART_WEIGHT
+    if isinstance(block, Figure):
+        return _FIGURE_WEIGHT
+    return 0
+
+
+def _distribute_figures(blocks: list[Block], figures: list[Figure]) -> list[Block]:
+    """그림 자리표시자를 **그 그림이 말하는 대목** 뒤에 넣는다.
+
+    종전에는 절 뒤에 붙였다. 그래서 긴 절일수록 자리표시자가 끝(대개 페이지 하단)에
+    몰렸다(2026-08-24 지적). 시각자료는 읽는 피로를 덜자고 넣는 것이라 본문 사이에
+    있어야 뜻이 산다. 자리는 두 가지로 고른다 — 먼저 그림 제목(담당 key_point)의
+    낱말과 겹치는 문단을 찾고, 겹치는 곳이 여럿이면 이미 있는 표·차트에서 가장 먼
+    곳을 고른다. 겹치는 문단이 없으면 간격만 보고 고른다(종전 방식).
+
+    헤딩 바로 뒤에는 넣지 않는다(소제목과 본문 사이를 그림이 가르면 읽는 흐름이 끊긴다).
+    """
+    out = list(blocks)
+    for figure in figures:
+        pos = _best_figure_slot(out, figure)
+        if pos is None:
+            out.append(figure)
+            continue
+        out.insert(pos, figure)
+    return out
+
+
+# 내용 매칭용 낱말 — 한글 2자 이상·라틴 3자 이상만 센다(조사·전치사 잡음 제외).
+_TOPIC_WORD_RE = re.compile(r"[가-힣]{2,}|[A-Za-z][A-Za-z0-9]{2,}")
+
+
+def _topic_words(text: str) -> set[str]:
+    return {w.lower() for w in _TOPIC_WORD_RE.findall(text)}
+
+
+def _best_figure_slot(blocks: list[Block], figure: Figure | None = None) -> int | None:
+    """그림을 넣을 자리(블록 색인). 내용이 겹치는 대목 우선, 그다음 간격."""
+    if not blocks:
+        return None
+    cum: list[int] = []  # 각 블록 뒤 경계까지의 누적 몫
+    total = 0
+    for block in blocks:
+        total += _block_weight(block)
+        cum.append(total)
+    visuals = [cum[i] for i, b in enumerate(blocks) if isinstance(b, Table | Chart | Figure)]
+    topic = _topic_words(figure.caption) if figure else set()
+
+    scored: list[tuple[int, int, float]] = []  # (겹침, 색인, 시각자료와의 거리)
+    for i, block in enumerate(blocks):
+        # 마지막 블록 뒤는 후보에서 뺀다 — 그게 바로 종전의 '절 끝 몰림'이다.
+        if i == len(blocks) - 1 or isinstance(block, Heading):
+            continue
+        here = cum[i]
+        gap = (
+            min(abs(here - v) for v in visuals)
+            if visuals
+            else min(here, total - here)  # 시각자료가 없으면 절 한가운데가 가장 멀다
+        )
+        overlap = (
+            len(topic & _topic_words(block.text)) if topic and isinstance(block, Paragraph) else 0
+        )
+        scored.append((overlap, i + 1, float(gap)))
+    if not scored:
+        return None
+    best_overlap = max(s[0] for s in scored)
+    # 겹침이 있으면 그 대목들 안에서, 없으면 전체에서 — 시각자료에서 가장 먼 자리.
+    pool = [s for s in scored if s[0] == best_overlap] if best_overlap else scored
+    return max(pool, key=lambda s: s[2])[1]
+
+
+# 프리셋 키포인트의 파트 라벨 — "(4-5-1)" 같은 내부 번호가 캡션에 새지 않게 걷는다.
+_PART_LABEL_RE = re.compile(r"^\s*\(\d+(?:-\d+)+\)\s*")
+
+
+# 자리표시자에 실을 원본 자료 수 — 링크가 길어 더 실으면 안내 줄이 그림 자리를 먹는다.
+_FIGURE_HINT_MAX = 2
+
+
+def _figure_source_hints(
+    content: str,
+    sources: Sequence[SourceRef],
+    pages: dict[UUID, int] | None = None,
+) -> list[str]:
+    """그 절이 인용한 자료 중 원본 그림을 찾아갈 만한 것.
+
+    "그림 넣으라고 표시된 부분은 원본 그림 출처를 링크로 표기해 달라"(2026-08-24 지시).
+    따라가 보고 다시 그릴지 따다 쓸지 판단하려면 자리표시자가 출처를 데리고 있어야
+    한다. 웹 자료는 URL(눌러서 바로 열린다), 업로드 자료는 **쪽 번호**를 붙인다 —
+    업로드 PDF는 URL이 애초에 없어 파일명만 남았는데(2026-08-25 지적), 손에 있는
+    파일에서 몇 쪽을 펴면 되는지가 링크만큼 쓸모 있다.
+    """
+    nums = source_numbers(content)
+    picked: list[str] = []
+    for has_url in (True, False):
+        for n in nums:
+            if not 1 <= n <= len(sources):
+                continue
+            src = sources[n - 1]
+            if bool(src.url) is not has_url:
+                continue
+            label = (src.title or "").strip() or (src.url or "")
+            if src.url:
+                entry = f"{label} ({src.url})"
+            else:
+                page = (pages or {}).get(src.id)
+                entry = f"{label} (p.{page})" if page else label
+            if entry and entry not in picked:
+                picked.append(entry)
+            if len(picked) >= _FIGURE_HINT_MAX:
+                return picked
+    return picked
+
+
+def _cited_source_pages(
+    chunk_ids: Sequence[UUID], chunk_meta: dict[UUID, tuple[UUID, int | None]]
+) -> dict[UUID, int]:
+    """자료별 대표 쪽 번호 — 그 절이 인용한 청크 중 가장 앞 쪽.
+
+    한 자료에서 여러 대목을 인용했으면 앞쪽부터 넘겨 보는 편이 자연스럽다.
+    """
+    out: dict[UUID, int] = {}
+    for cid in chunk_ids:
+        source_id, page = chunk_meta.get(cid, (None, None))
+        if source_id is None or not page:
+            continue
+        if source_id not in out or page < out[source_id]:
+            out[source_id] = page
+    return out
+
+
+def _figure_placeholder(
+    plan: SectionPlan, index: int = 0, source_hints: Sequence[str] | None = None
+) -> Figure:
+    """추천 시각자료(그림) 자리표시자. index는 한 절에서 몇 번째 그림인지.
 
     실제 이미지를 못 구하므로, 절의 초점(key_points→direction→제목)을 근거로 어떤
-    그림이 적합한지 설명을 적어 배치한다. 캡션 번호는 절 번호를 따른다.
+    그림이 적합한지 설명을 적어 배치한다. 한 절에 여러 개면 key_points를 하나씩 나눠
+    맡겨 같은 설명이 반복되지 않게 한다. 캡션 번호는 조립 단계에서 장 단위로 매긴다.
     """
-    if plan.key_points:
-        focus = plan.key_points[0]
-    elif plan.direction:
-        focus = plan.direction
-    else:
-        focus = f"{plan.title}의 핵심 내용"
-    caption = f"[그림 {plan.chapter_number}-{plan.section_number}] {plan.title}"
-    description = f"{focus} 관련 핵심 수치·구조를 요약한 도표 또는 그래프"
-    return Figure(caption=caption, description=description)
+    # 캡션이 이미 초점을 말하므로 설명은 반복하지 않는다(2026-08-21 지적: 두 줄이
+    # 같은 문장을 되풀이했다).
+    description = "위 주제의 핵심 수치·구조를 요약한 도표 또는 그래프"
+    # 번호 없는 제목만 담는다 — 조립 단계에서 장 단위 일련번호를 붙인다. 제목은 담당
+    # key_point로 짓는다: 절 제목을 그대로 쓰면 한 절의 그림 여러 개가 전부 같은
+    # 이름이 된다(표 폴백 제목과 같은 문제, 2026-08-11 지적·2026-08-13 재발).
+    caption_src = plan.key_points[index] if index < len(plan.key_points) else plan.title
+    # 프리셋 키포인트에 붙는 파트 라벨("(4-5-1) …")은 캡션에 새면 내부 표기 누출이다
+    # (2026-08-21 지적) — 표시용으로만 걷어낸다(키포인트 원문은 불변).
+    caption = _PART_LABEL_RE.sub("", caption_src).split("\n")[0].strip() or plan.title
+    return Figure(caption=caption, description=description, source_hints=list(source_hints or []))
 
 
 _SOURCE_TYPE_LABEL: dict[SourceType, str] = {
@@ -311,24 +878,89 @@ _SOURCE_TYPE_LABEL: dict[SourceType, str] = {
 REFERENCES_HEADING = "참고문헌"
 
 
+def _visual_index_blocks(body: list[Block]) -> list[Block]:
+    """표 목차·그림 목차 — 본문에 매겨진 캡션을 그대로 나열한다(실측 전 샘플 보유).
+
+    쪽번호는 목차와 같은 방식이다 — 본문 캡션에 심은 책갈피를 가리키는 필드를 두고
+    값은 문서를 여는 한컴이 채운다. 캡션 없는 표(약어 정리표)는 번호 접두가 없어
+    자연히 빠진다.
+    """
+    tables = [(b.caption, b.caption_bookmark) for b in body if isinstance(b, Table)]
+    figures = [(str(b.caption), b.caption_bookmark) for b in body if isinstance(b, Figure | Chart)]
+    table_caps = [(cap, mark) for cap, mark in tables if cap.startswith("<표")]
+    figure_caps = [(cap, mark) for cap, mark in figures if cap.startswith("<그림")]
+    blocks: list[Block] = []
+    if table_caps:
+        blocks += [PageBreak(), Heading(level=1, text="표 목차")]
+        blocks += [Paragraph(text=cap, indent=1, page_ref=mark) for cap, mark in table_caps]
+    if figure_caps:
+        blocks += [PageBreak(), Heading(level=1, text="그림 목차")]
+        blocks += [Paragraph(text=cap, indent=1, page_ref=mark) for cap, mark in figure_caps]
+    return blocks
+
+
+# 서지에서 걷어낼 파일명 티 — 확장자, 중복 내려받기 꼬리("(1)"·"(2)"), 파일명 구분자.
+# 업로드 자료의 제목은 파일명에서 오므로 "RE100 Annual Report_FY 2024-25_FINAL_17
+# March 2026_SIGNED (1) (1).pdf"처럼 내려받은 흔적이 그대로 서지에 실렸다
+# (2026-08-24 지적). 표제 추출(07f25a7)이 붙기 전 자료라 파일명이 곧 제목이다.
+_FILE_EXT_RE = re.compile(r"\.(?:pdf|hwpx?|docx?|pptx?|xlsx?|txt|md)$", re.I)
+_DOWNLOAD_DUP_RE = re.compile(r"(?:\s*\(\d+\))+$")
+_FILENAME_SEPARATORS_RE = re.compile(r"[+_]+")
+
+
+def _clean_source_title(title: str) -> str:
+    """파일명 티를 걷어 사람이 읽을 서지 제목으로 만든다."""
+    text = _FILE_EXT_RE.sub("", title.strip())
+    text = _DOWNLOAD_DUP_RE.sub("", text)
+    text = _FILENAME_SEPARATORS_RE.sub(" ", text)
+    return re.sub(r"\s{2,}", " ", text).strip(" -–—")
+
+
+def _bib_label(src: SourceRef) -> str:
+    """출처 표기 한 조각 — "제목 (발행기관, 2024년 17호)" 꼴(미상 조각은 생략).
+
+    파일명·웹 제목이 그대로 나가던 것의 처방(2026-08-27 지시). 서지 조각은 괄호로
+    묶는다(2026-08-28 지시: "제목 (기관명, 연도, 몇호)" 꼴, 확장자 없이). 호수에
+    연도가 들어 있으면 연도를 따로 안 단다 — "(2024, 2024년 17호)"는 소음이다.
+    """
+    title = _clean_source_title(src.title) or "(제목 없음)"
+    bits = [b for b in (src.publisher, src.issue_label or _year_bit(src)) if b]
+    return f"{title} ({', '.join(bits)})" if bits else title
+
+
+def _year_bit(src: SourceRef) -> str | None:
+    return str(src.published_year) if src.published_year else None
+
+
 def _source_entry(index: int, src: SourceRef) -> str:
-    """참고문헌 목록 한 줄 — '[n] 제목 (유형) URL'."""
-    line = f"[{index}] {src.title.strip() or '(제목 없음)'}"
-    label = _SOURCE_TYPE_LABEL.get(src.source_type)
-    if label:
-        line += f" ({label})"
+    """참고문헌 목록 한 줄 — '[n] 제목 (서지) (URL) (검색 일시)'.
+
+    유형 꼬리("(업로드)"·"(웹)"·"(라이브러리)")는 달지 않는다(2026-08-21 사용자 지시 —
+    내부 수집 경로는 납품물의 서지 정보가 아니다). URL은 괄호로 감싼다 — 제목에 그냥
+    이어 붙이면 어디까지가 제목인지 눈으로 갈리지 않는다(실납품도 "자료: 기관 홈페이지
+    (https://…)" 꼴로 괄호에 넣는다, 2026-08-24 실측). 웹 출처는 수집(검색) 시각을
+    KST로 병기한다(2026-08-28 지시) — 웹 문서는 판이 없어 '언제 본 것인가'가 서지다.
+    """
+    line = f"[{index}] {_bib_label(src)}"
     if src.url:
-        line += f" {src.url}"
+        line += f" ({src.url})"
+    if src.source_type == SourceType.WEB_SEARCH and src.collected_at is not None:
+        stamp = src.collected_at.astimezone(_KST).strftime("%Y.%m.%d %H:%M")
+        line += f" ({stamp} 검색)"
     return line
 
 
 def report_blocks(
-    state: ProjectState, glossary: dict[str, dict[str, str]] | None = None
+    state: ProjectState,
+    glossary: dict[str, dict[str, str]] | None = None,
+    chunk_meta: dict[UUID, tuple[UUID, int | None]] | None = None,
 ) -> list[Block]:
-    """보고서 전체 블록을 실제 순서(표지 → 목차 → 본문 → 참고문헌)로 조립한다.
+    """보고서 전체 블록을 실제 순서(표지 → 요약문 → 목차 → 표·그림 목차 → 본문 →
+    참고문헌)로 조립한다.
 
-    - 1장: 표지(제목·기관·날짜).
-    - 2장: 목차 — 렌더되는 장·절을 텍스트 번호로 나열(본문과 항상 일치).
+    - 표지(제목·기관·날짜) → 요약문(조립 시 생성·config 저장분, 없으면 생략).
+    - 목차 — 렌더되는 장·절을 텍스트 번호로 나열(본문과 항상 일치). 이어서 표 목차·
+      그림 목차(본문 캡션 그대로, 실측 전 샘플 보유 관행).
     - 본문: 챕터 경계마다 쪽 나눔 + 장 헤딩, 섹션마다 [제목(2) + 개조식 본문].
       각 장 끝에는 그 장의 약어 정리를 **별도 페이지**(쪽 나눔 후)로 붙인다.
       glossary(조립 시 생성한 약어 사전)가 있으면 설명 열을 채운다.
@@ -343,66 +975,127 @@ def report_blocks(
         return blocks
 
     ch_titles = _chapter_titles(state)
-    # 인용 [n]은 전역 번호(참고문헌장과 일치)라 본문에 유지한다 — 제거하지 않는다(2026-08-05).
+    # 본문은 원문 그대로 파싱한다 — (출처 n)은 작성·검증 단계의 근거 표식이지 납품물의
+    # 표기가 아니라 걷어내지만(2026-08-11), 표 아래 출처 줄로 살릴 것을 먼저 골라내야
+    # 하므로 블록 단계(_attach_table_sources → _strip_citation_blocks)에서 처리한다.
     contents = {plan.section_id: drafts[plan.section_id].content for plan in rendered}
+    # 표 밑 출처 줄도 참고문헌과 같은 서지 표기를 쓴다 - "제목.pdf; About RE100 - RE100"
+    # 이 아니라 "제목, 발행기관, 2024년 17호"(2026-08-27 지시).
+    source_titles = {i: _bib_label(src) for i, src in enumerate(state.sources, start=1)}
 
-    # 목차(2장) — 장 제목(indent 0) 아래 절(indent 1)을 계층으로 나열한다.
-    blocks.append(PageBreak())
-    blocks.append(Heading(level=1, text="목차"))
-    toc_chapter: int | None = None
-    for plan in rendered:
-        if plan.chapter_number != toc_chapter:
-            blocks.append(Paragraph(text=_chapter_heading_text(plan.chapter_number, ch_titles)))
-            toc_chapter = plan.chapter_number
-        entry = f"{plan.chapter_number}.{plan.section_number}  {plan.title}"
-        blocks.append(Paragraph(text=entry, indent=1))
-    # 참고문헌은 계획에 없는 최종장이라 목차에도 따로 실어야 본문과 어긋나지 않는다.
-    if state.sources:
-        blocks.append(Paragraph(text=REFERENCES_HEADING))
-
-    # 본문 — 챕터마다 쪽 나눔 + 장 헤딩. 각 장의 약어는 그 장 끝에 "약어 정리"로 모으고,
-    # 표가 없는 절에는 추천 시각자료(그림) 자리표시자를 넣어 페이지에 시각자료가 있게 한다.
+    # 본문을 먼저 조립한다 — 표·그림 목차는 번호 매겨진 캡션을 알아야 만들 수 있다.
+    body: list[Block] = []
     chapter_abbrs: dict[str, str] = {}
     current_chapter: int | None = None
+    # 표·그림 번호는 장이 바뀔 때마다 1부터 다시 센다(<표 2-1>, <그림 2-1>…).
+    chapter_table_no = 0
+    chapter_figure_no = 0
 
     def flush_glossary() -> None:
         if chapter_abbrs:
             # 약어 정리는 장 끝 별도 페이지(쪽 나눔 후)에 배치한다(2026-08-05 확정).
-            blocks.append(PageBreak())
-            blocks.append(Heading(level=2, text="약어 정리"))
-            rows = [
-                [abbr, full, (glossary or {}).get(abbr, {}).get("desc", "")]
+            body.append(PageBreak())
+            body.append(Heading(level=2, text="약어 정리"))
+            # 전체 명칭은 사전이 만든 **영문 원어**가 정본이다 — 기계 추출값은 괄호 앞
+            # 글자를 긁은 것이라 "녹색에너지인증서(GEC)"처럼 한글이 잡힌다. 영문 약어의
+            # 전체 명칭은 영문이어야 하고 한글은 설명 열의 몫이다(2026-08-24 지시).
+            entries = [
+                [
+                    abbr,
+                    (glossary or {}).get(abbr, {}).get("full") or full,
+                    (glossary or {}).get(abbr, {}).get("desc", ""),
+                ]
                 for abbr, full in chapter_abbrs.items()
             ]
-            blocks.append(Table(headers=["약어", "전체 명칭", "설명"], rows=rows))
+            body.extend(_glossary_tables(entries))
             chapter_abbrs.clear()
 
     for plan in rendered:
         if plan.chapter_number != current_chapter:
             if current_chapter is not None:
                 flush_glossary()  # 앞 장의 약어 정리를 그 장 끝에 배치
-            blocks.append(PageBreak())  # 챕터는 항상 새 쪽에서 시작
+            body.append(PageBreak())  # 챕터는 항상 새 쪽에서 시작
             ch_text = _chapter_heading_text(plan.chapter_number, ch_titles)
-            blocks.append(Heading(level=1, text=ch_text))
+            body.append(Heading(level=1, text=ch_text, bookmark=_toc_bookmark(plan.chapter_number)))
             current_chapter = plan.chapter_number
+            chapter_table_no = 0
+            chapter_figure_no = 0
         title = f"{plan.chapter_number}.{plan.section_number} {plan.title}"
-        blocks.append(Heading(level=2, text=title))
+        body.append(
+            Heading(
+                level=2,
+                text=title,
+                bookmark=_toc_bookmark(plan.chapter_number, plan.section_number),
+            )
+        )
         content = _drop_duplicate_lead_heading(
             contents[plan.section_id], plan.chapter_number, plan.section_number
         )
         section_blocks = markdown_to_blocks(content)
-        blocks.extend(section_blocks)
-        if not any(isinstance(b, Table) for b in section_blocks):
-            blocks.append(_figure_placeholder(plan))
+        _attach_table_sources(section_blocks, source_titles)
+        section_blocks = _strip_citation_blocks(section_blocks, source_titles)
+        visual_count = sum(1 for b in section_blocks if isinstance(b, Table | Chart))
+        # 분량·소재를 재는 자는 차트를 바꾸기 전 모습으로 본다. 펜스가 원본 표를 통째로
+        # 품고 있어 글자 수가 두 배로 세지는데, 그 사본은 읽는 사람에게 보이지 않는다 —
+        # 안 걷어내면 표를 차트로 바꿨다는 이유만으로 자리표시자가 더 붙는다
+        # (v7 실측 59 → 63, 2026-08-28).
+        measured = chart_fences_as_tables(content)
+        draft = drafts[plan.section_id]
+        pages = _cited_source_pages(
+            [*draft.cited_chunk_ids, *draft.pool_chunk_ids], chunk_meta or {}
+        )
+        hints = _figure_source_hints(measured, state.sources, pages)
+        section_blocks = _distribute_figures(
+            section_blocks,
+            [
+                _figure_placeholder(plan, i, hints)
+                for i in range(_figures_needed(measured, visual_count, plan.key_points))
+            ],
+        )
+        chapter_table_no, chapter_figure_no = _number_visuals(
+            section_blocks, plan.chapter_number, chapter_table_no, chapter_figure_no, plan.title
+        )
+        body.extend(section_blocks)
         _collect_abbreviations(contents[plan.section_id], chapter_abbrs)
     flush_glossary()  # 마지막 장
+
+    # 전문(前文): 목차 → 표·그림 목차. (요약문은 r6에서 제거 — 최종 산출물에
+    # 싣지 않기로 함, 2026-08-13 사용자 결정. 옛 config["summary"]는 그냥 무시된다.)
+    blocks.append(PageBreak())
+    blocks.append(Heading(level=1, text="목차"))
+    toc_chapter: int | None = None
+    for plan in rendered:
+        if plan.chapter_number != toc_chapter:
+            blocks.append(
+                Paragraph(
+                    text=_chapter_heading_text(plan.chapter_number, ch_titles),
+                    page_ref=_toc_bookmark(plan.chapter_number),
+                )
+            )
+            toc_chapter = plan.chapter_number
+        entry = f"{plan.chapter_number}.{plan.section_number}  {plan.title}"
+        blocks.append(
+            Paragraph(
+                text=entry,
+                indent=1,
+                page_ref=_toc_bookmark(plan.chapter_number, plan.section_number),
+            )
+        )
+    # 참고문헌은 계획에 없는 최종장이라 목차에도 따로 실어야 본문과 어긋나지 않는다.
+    if state.sources:
+        blocks.append(Paragraph(text=REFERENCES_HEADING, page_ref=_REFERENCES_BOOKMARK))
+    blocks.extend(_visual_index_blocks(body))
+
+    blocks.extend(body)
 
     # 최종장: 참고문헌 — 프로젝트 자료 풀을 번호 목록으로 정리한다(자료 없으면 생략).
     if state.sources:
         blocks.append(PageBreak())
-        blocks.append(Heading(level=1, text=REFERENCES_HEADING))
+        blocks.append(Heading(level=1, text=REFERENCES_HEADING, bookmark=_REFERENCES_BOOKMARK))
         for i, src in enumerate(state.sources, start=1):
-            blocks.append(Paragraph(text=_source_entry(i, src), indent=1))
+            # 왼쪽 정렬 — 서지 줄에는 줄바꿈이 안 되는 긴 URL이 들어 있어, 양쪽 정렬이면
+            # 그 앞줄의 글자 사이가 벌어져 문단이 성글게 흩어진다(2026-08-12 지적).
+            blocks.append(Paragraph(text=_source_entry(i, src), indent=1, align="LEFT"))
     return blocks
 
 
@@ -412,6 +1105,7 @@ def export_report(
     output_dir: str | Path | None = None,
     template_path: str | Path | None = None,
     glossary: dict[str, dict[str, str]] | None = None,
+    chunk_meta: dict[UUID, tuple[UUID, int | None]] | None = None,
 ) -> Path:
     """선택·조립된 보고서를 `<export_dir>/<project_id>.hwpx`로 렌더하고 경로를 반환.
 
@@ -428,9 +1122,12 @@ def export_report(
     else:
         template = None
 
-    path = out_dir / f"{state.project_id}.hwpx"
+    path = out_dir / export_filename(state.project_id)
     build_report(
-        report_blocks(state, glossary), path, template_path=template, apply_chrome=template is None
+        report_blocks(state, glossary, chunk_meta),
+        path,
+        template_path=template,
+        apply_chrome=template is None,
     )
     logger.info("export.hwpx_written", project_id=str(state.project_id), path=str(path))
     return path

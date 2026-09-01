@@ -55,7 +55,6 @@ jobs:
         with:
           enable-cache: true
 
-      # lxml·xmlsec는 no-binary(소스 빌드)로 고정돼 있어(pyproject [tool.uv]) 개발 헤더가 필요.
       - name: Install system libs for lxml/xmlsec source build
         run: |
           sudo apt-get update

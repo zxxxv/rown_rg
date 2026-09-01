@@ -64,14 +64,21 @@ class PromptRef(BaseModel):
     """프롬프트 파일 노드 마커 — 이 노드는 자료 파일이 아니라 프롬프트다.
 
     프론트는 이 마커가 있으면 상세 패널에서 프롬프트 에디터/뷰어를 연다.
-    - scope=personal: ref=user_prompt id, editable=True → PATCH /prompts/personal/{ref}
-    - scope=system  : ref=에이전트 id 또는 조각 이름, editable=False (읽기전용)
+    - scope=personal: ref=user_prompt id(agent·rule) 또는 user_preset id(preset),
+      editable=True → PATCH /prompts/personal/{ref} · PUT /presets/personal/{ref}
+    - scope=system  : ref=에이전트 id·조각 이름·프리셋 키, editable=False (읽기전용)
+    - scope=shared  : 남이 공개한 것. 읽기 전용이되 '내 것으로 가져오기'가 가능하다 —
+      남의 자산을 라이브러리에서 고칠 수 있으면 공유가 아니라 공용 편집이 된다.
     """
 
-    scope: Literal["personal", "system"]
-    kind: Literal["agent", "rule"]
+    scope: Literal["personal", "system", "shared"]
+    kind: Literal["agent", "rule", "preset"]
     ref: str
     editable: bool = False
+    # shared일 때 누구 것인지. 같은 이름이 둘일 때 사람이 가려 고르는 단서다.
+    owner_name: str | None = None
+    # 가져오기가 가능한가(shared 전용). 프론트가 '내 것으로 가져오기' 버튼을 띄운다.
+    importable: bool = False
 
 
 class LibraryTreeFile(BaseModel):
@@ -101,6 +108,9 @@ class LibraryTreeFolder(BaseModel):
     virtual: bool = False
     # 업로드·폴더생성 대상이면 컨텍스트, 아니면 None(쓰기 불가).
     writable: WritableTarget | None = None
+    # 폴더의 등록자(소유자) 표시용 — 파일은 file_meta.registered_by가 담지만 폴더 행은
+    # 담을 곳이 없어 목록에서 "-"로 비었다(2026-08-20 운영 지적). 없으면 종전 표시.
+    owner_name: str | None = None
 
 
 class LibraryTreeResponse(BaseModel):
@@ -124,6 +134,10 @@ class SourceContentResponse(BaseModel):
     content_md: str
     char_count: int
     byte_count: int
+    # 색인에서 배제된 대목 — 화면이 "무엇을 왜 뺐는지" 말할 수 있게. 조용히 지우면
+    # 사람이 "본문이 왜 잘렸지"를 알 수 없고, 안 지우면 댓글 폼·푸터를 본문으로 읽는다.
+    excluded_kinds: list[str] = Field(default_factory=list)
+    excluded_chars: int = 0
 
 
 class FolderCreateRequest(BaseModel):

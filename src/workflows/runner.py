@@ -15,6 +15,7 @@ status는 척추 위치(work 단계: created→researching→…→completed)를
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from typing import Any
 
@@ -24,8 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.clock import now as clock_now
 from src.core.config import settings
+from src.core.section_plan import SECTION_PLAN_KEY, config_with_plan
 from src.core.state import ProjectState
-from src.core.types import ProjectStage, ReviewGate, SourceRef, SourceType
+from src.core.types import ProjectStage, ReviewGate, SectionPlan, SourceRef, SourceType
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.review_point import ReviewPoint
@@ -57,6 +59,10 @@ async def _notify_safe(
     프로젝트별 옵트인: config.notification_channels에 'naver_works'가 있을 때만 발송한다
     (전역 기본은 off — 사용자가 프로젝트에서 알림을 켜야 온다). result_type은 봇 템플릿
     키(success=완료, partial=검토 대기, failed=실패).
+
+    page는 버튼이 여는 화면 — 문구가 "검토하러 가기"인데 검토 화면이 아닌 곳에 떨어지면
+    안 되므로, 게이트 알림은 _GATE_PAGES로 결정 UI가 실제로 있는 화면을 넘긴다.
+    /export·/progress는 폐지된 경로다(개요로 리다이렉트만 남음) — 쓰지 말 것.
     """
     try:
         async with async_session_maker() as session:
@@ -75,6 +81,172 @@ async def _notify_safe(
         )
     except Exception:
         logger.warning("project.notify_failed", project_id=str(project_id), exc_info=True)
+
+
+# 게이트 → 결정 UI가 있는 화면. 자료 검토는 /sources, 본문 검토(QA)는 /preview에 통합됐다.
+_GATE_PAGES = {"design_brief": "brief", "source_pool": "sources", "qa_select": "preview"}
+
+
+async def _apply_design_brief(
+    session: AsyncSession, project_id: uuid.UUID, decision: dict[str, Any]
+) -> bool:
+    """브리프 게이트 결정의 목차를 config.outline에 커밋. 바뀐 게 없으면 False.
+
+    ⚠️ JSONB를 in-place로 고치면 SQLAlchemy가 dirty로 표시하지 않아 커밋해도 안 써진다.
+    반드시 새 dict를 만들어 재할당한다(config_with_plan이 같은 이유로 새 dict를 준다).
+
+    plan 정본은 함께 버린다 — 목차가 바뀌었는데 남겨 두면 collect가 '이미 plan이 있다'고
+    보고 옛 목차로 실행한다(merge_config_update의 규칙과 같다).
+    """
+    outline = decision.get("outline")
+    if not isinstance(outline, dict) or not outline.get("chapters"):
+        return False
+    project = await session.get(Project, project_id)
+    if project is None:
+        return False
+    config = dict(project.config or {})
+    if config.get("outline") == outline:
+        return False
+    config["outline"] = outline
+    # 목차가 바뀌면 파생 스냅샷은 전부 버린다 — plan 정본도, 절별 실행 계획도
+    # 옛 목차 기준이라 남겨 두면 새 목차와 어긋난 채 실행된다.
+    config.pop(SECTION_PLAN_KEY, None)
+    config.pop("_design_plan", None)
+    project.config = config
+    logger.info("design_brief.outline_updated", project_id=str(project_id))
+    return True
+
+
+# 계획 필드 하나의 상한 — 사람 편집이 열려 있으므로 폭주 입력을 프롬프트에 싣지 않는다.
+_PLAN_FIELD_MAX_CHARS = 2000
+
+
+async def _commit_design_plan(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    payload: dict[str, Any] | None,
+    decision: dict[str, Any] | None = None,
+) -> None:
+    """승인된 AI 실행 계획을 config["_design_plan"]에 커밋 — 작성 프롬프트 주입용.
+
+    계획을 커밋하지 않으면 게이트가 보여준 계획은 안내문일 뿐이고 작성기는 그 계획을
+    본 적 없는 채로 쓴다 — '공개한 대로 쓴다'가 성립하려면 계획이 계약이 되어야 한다.
+    section_id 매핑은 config의 plan 정본(_section_plan)을 쓴다. 게이트에서 목차를
+    고친 경우엔 호출하지 않는다(계획이 옛 목차 기준이라 주입하면 어긋난다).
+
+    **사람이 게이트에서 고친 계획(decision["ai_plan"])이 AI 원안(payload)보다 우선한다**
+    — 계획은 제안이고 확정은 사람 몫이라는 게이트 원칙 그대로. 원안은 payload에,
+    수정본은 review.decision에 남아 무엇이 바뀌었는지 감사 이력도 유지된다.
+    """
+    from src.core.section_plan import plan_from_config
+
+    override = (decision or {}).get("ai_plan")
+    ai = (
+        override
+        if isinstance(override, dict) and isinstance(override.get("sections"), list)
+        else (payload or {}).get("ai_plan")
+    )
+    sections = ai.get("sections") if isinstance(ai, dict) else None
+    if not isinstance(sections, list) or not sections:
+        return
+    project = await session.get(Project, project_id)
+    if project is None:
+        return
+    plan = plan_from_config(project.config)
+    by_num = {(p.chapter_number, p.section_number): str(p.section_id) for p in plan}
+    # 아크 한 줄 — 계획의 flows(from/to/carries)를 절별 두 문장으로 내린다.
+    # flows는 지금까지 게이트 화면 표시로만 쓰고 커밋에서 버려졌는데(작성기가 절 간
+    # 산출을 전달받지 못하던 시절의 결정), builds_on 값 주입이 생긴 지금은 토픽 수준
+    # 접속 지시로 내려보내는 게 안전하다 — 내용이 아니라 역할만 전달하므로 창작 유도 없음.
+    receives: dict[str, list[str]] = {}
+    establishes: dict[str, list[str]] = {}
+    flow_deps: dict[str, list[str]] = {}
+    for f in ai.get("flows") or []:
+        if not isinstance(f, dict):
+            continue
+        src, dst = str(f.get("from") or ""), str(f.get("to") or "")
+        carries = " ".join(str(f.get("carries") or "").split())[:120]
+        if not (src and dst and carries):
+            continue
+        establishes.setdefault(src, []).append(f"{carries} → {dst}절이 받는다")
+        receives.setdefault(dst, []).append(f"{src}절이 {carries}를 다룬다")
+        flow_deps.setdefault(dst, []).append(src)
+    # flows → builds_on 이관 — 게이트가 보여주고 사람이 승인·수정한 흐름이 실행
+    # 배치와 값 주입까지 지배하게 한다(2026-08-28 사용자 결정: 병렬을 잃더라도 뒤
+    # 절이 앞 절 산출을 받아 연관되게 쓰이는 쪽). 종전에는 흐름의 '내용'(아크 문장)만
+    # 내려가고 '순서'는 게이트 뒤 별도 LLM 초안이 정해, 사람이 본 답과 실행되는 답이
+    # 갈렸다. 사람·프리셋이 이미 적어 둔 절은 정본이라 손대지 않고 빈 절만 채운다.
+    # sanitize가 유령·자기·후방 참조와 절당 상한을 정리하고, 실행 쪽 assign_levels가
+    # 깊이 캡·순환 절단을 한 번 더 지킨다.
+    merged = _merge_flow_builds_on(plan, flow_deps)
+    if merged is not None:
+        project.config = config_with_plan(project.config, merged)
+        logger.info(
+            "design_brief.flows_to_builds_on",
+            project_id=str(project_id),
+            n_linked=sum(1 for s in merged if s.builds_on),
+        )
+    # 토픽 소유권 — 소유 절엔 정본 목록을, 나머지 전 절엔 금지 목록을 내린다.
+    ownership = [
+        t
+        for t in (ai.get("topic_ownership") or [])
+        if isinstance(t, dict) and t.get("topic") and t.get("owner")
+    ]
+    notes: dict[str, dict[str, str]] = {}
+    for s in sections:
+        if not isinstance(s, dict):
+            continue
+        sid = by_num.get((s.get("chapter"), s.get("section")))
+        if sid is None:
+            continue
+        label = f"{s.get('chapter')}.{s.get('section')}"
+        note = {
+            key: str(s.get(key) or "").strip()[:_PLAN_FIELD_MAX_CHARS]
+            for key in ("goal", "source_strategy", "writing_plan")
+        }
+        note["owns"] = " · ".join(t["topic"] for t in ownership if t["owner"] == label)[
+            :_PLAN_FIELD_MAX_CHARS
+        ]
+        note["foreign_topics"] = " · ".join(
+            f"{t['topic']}({t['owner']}절 소관)" for t in ownership if t["owner"] != label
+        )[:_PLAN_FIELD_MAX_CHARS]
+        note["receives"] = "; ".join(receives.get(label, []))[:_PLAN_FIELD_MAX_CHARS]
+        note["establishes"] = "; ".join(establishes.get(label, []))[:_PLAN_FIELD_MAX_CHARS]
+        if any(note.values()):
+            notes[sid] = note
+    if not notes:
+        return
+    # JSONB 재할당 필수 — in-place 수정은 SQLAlchemy가 dirty로 안 잡는다.
+    project.config = {**(project.config or {}), "_design_plan": notes}
+    logger.info("design_brief.plan_committed", project_id=str(project_id), n_sections=len(notes))
+
+
+def _merge_flow_builds_on(
+    plan: list[SectionPlan], flow_deps: dict[str, list[str]]
+) -> list[SectionPlan] | None:
+    """flows에서 온 의존을 plan의 **빈** builds_on에만 채운다. 변화 없으면 None.
+
+    sanitize(dependency_graph)를 그대로 쓴다 — 유령 절·자기 참조·후방 참조(뒤를
+    기다리면 교착, 안 기다리면 빈 주입)·절당 상한(MAX_REFS_PER_SECTION)이 한 기준으로
+    정리된다. 값이 이미 있는 절은 사람·프리셋 지정이 정본이므로 건드리지 않는다.
+    """
+    if not flow_deps or not plan:
+        return None
+    from src.services.generation.dependency_graph import sanitize
+
+    graph = sanitize(plan, flow_deps)
+    if not graph:
+        return None
+    changed = False
+    out: list[SectionPlan] = []
+    for s in plan:
+        label = f"{s.chapter_number}.{s.section_number}"
+        if label in graph and not s.builds_on:
+            out.append(s.model_copy(update={"builds_on": graph[label]}))
+            changed = True
+        else:
+            out.append(s)
+    return out if changed else None
 
 
 def _parse_uuid_list(raw: Any) -> list[uuid.UUID]:
@@ -110,12 +282,66 @@ async def _apply_source_pool_exclusions(
     return len(excluded)
 
 
+async def _normalize_resume_stage(
+    session: AsyncSession, project_id: uuid.UUID, state: ProjectState
+) -> ProjectState:
+    """죽은 런 재개 시 게이트를 건너뛰지 않게 단계를 되돌린다.
+
+    PLANNING·RESEARCHING은 '단계 실행 중'의 표시 상태이기도 하다 — plan_brief/collect
+    도중 프로세스가 죽으면(재배포·--reload·강제 종료) status가 그 값으로 남는데, 그대로
+    재개하면 advance가 "게이트 승인 완료"로 읽어 다음 단계로 건너뛴다. 실측(2026-08-15):
+    수집 도중 --reload 재시작 → 재개가 자료 검토 게이트 없이 색인→작성으로 직행, 부분
+    수집(13건)만으로 Opus 작성이 시작됐다.
+
+    판정은 결정적이다: 그 단계의 게이트가 **resolved로 존재**해야 통과한 것이다.
+    없으면 게이트를 만드는 단계로 되돌린다(이미 스테이징된 자료·plan 정본은 그대로라
+    되돌려도 수집은 제외분 빼고 부족분만 채운다).
+    """
+    checks = {
+        ProjectStage.PLANNING: (ReviewGate.DESIGN_BRIEF, ProjectStage.CREATED),
+        ProjectStage.RESEARCHING: (ReviewGate.SOURCE_POOL, ProjectStage.PLANNING),
+    }
+    gate_and_fallback = checks.get(state.current_stage)
+    if gate_and_fallback is None:
+        return state
+    gate, fallback = gate_and_fallback
+    resolved = (
+        await session.execute(
+            select(ReviewPoint.id)
+            .where(
+                ReviewPoint.project_id == project_id,
+                ReviewPoint.gate == gate.value,
+                ReviewPoint.status == "resolved",
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if resolved is not None:
+        return state
+    logger.warning(
+        "project.resume_stage_rollback",
+        project_id=str(project_id),
+        from_stage=state.current_stage.value,
+        to_stage=fallback.value,
+        missing_gate=gate.value,
+    )
+    return state.with_stage(fallback)
+
+
 def _state_from_project(project: Project) -> ProjectState:
     # projects.status는 '표시용 단계'도 담는다(Phase.running) — WRITING은 척추 단계가
     # 아니라 INDEXING 구간이 실행 중임을 뜻한다. 그대로 stage로 삼으면 매칭되는 Phase가
     # 없어 advance가 즉시 Done을 돌려주고, 작성 도중 죽은 런이 '완료'로 둔갑한다
     # (2026-08-09 실측: 메모리 고갈로 1.3절에서 멈춘 런). 소유 단계로 되돌려 복구한다.
     status = project.status
+    # 다시 열기가 남긴 재개 지점 — status는 이제 **산출물에서 되짚은 진척**이라
+    # (services/projects/derive) 그대로 파이프라인 위치로 쓰면 안 된다. 본문이 있으면
+    # 파생값이 REVIEWING이고, 그 단계의 Phase는 assemble이라 **새로 올린 자료의 색인과
+    # 작성을 통째로 건너뛴다**. 다시 열기는 "자료부터 다시"를 뜻하므로 그 지점을
+    # config에 따로 적어 둔다(취소의 cancelled_from과 같은 방식, 2026-08-27).
+    resume_from = (project.config or {}).get("resume_from")
+    if resume_from in {stage.value for stage in ProjectStage}:
+        status = str(resume_from)
     # 취소된 런은 재개 지점을 잃는다(status=cancelled). 취소 시 기록해 둔 직전 단계로
     # 되돌려 이어서 돌린다 — 없으면 처음부터(created). 화면의 "다시 시작" 버튼과
     # 라우터 가드가 cancelled를 재개 가능으로 보므로 여기서도 살려야 한다(2026-08-10).
@@ -125,6 +351,13 @@ def _state_from_project(project: Project) -> ProjectState:
             status = ProjectStage.CREATED.value
     if status == ProjectStage.WRITING.value:
         status = ProjectStage.INDEXING.value
+    elif status == ProjectStage.INDEXING.value:
+        # 색인 도중 죽은 런(표시 status=INDEXING)은 '색인 완료'가 아니다 — stage 값은
+        # "그 단계까지 완료" 마커라 그대로 두면 재개가 작성으로 직행한다(2026-08-28
+        # v7 실측 2회: 업로드 4/13 코퍼스로 Opus 작성 시작, 반쪽 보고서 ~$2 손실).
+        # 수집 완료 마커로 되감아 색인부터 다시 돈다 — 색인은 증분·멱등(청크 있는
+        # 자료 스킵)이고 GPU 원격이면 수 분이라, 완료 직후 재개가 겹쳐도 값싸다.
+        status = ProjectStage.RESEARCHING.value
     return ProjectState.from_db(
         {
             "id": project.id,
@@ -144,11 +377,11 @@ def _state_from_project(project: Project) -> ProjectState:
 async def _rehydrate_section_plan(
     session: AsyncSession, project_id: uuid.UUID, state: ProjectState
 ) -> ProjectState:
-    """resume 시 SOURCE_POOL review payload에서 section_plan을 되살린다.
+    """구버전 폴백 — SOURCE_POOL review payload에서 section_plan을 되살린다.
 
-    plan은 projects 테이블에 없어 게이트 payload가 유일한 복원원이다. 확정 게이트 이후
-    구간(RESEARCHING→index, INDEXING→write)에서 재개될 때 복원하며, 이미 plan이 있거나
-    해당 구간이 아니면 그대로 둔다(멱등).
+    정본은 projects.config["_section_plan"]이고 _state_from_project가 이미 읽는다.
+    이 경로는 그 필드가 생기기 전에 시작돼 지금 재개되는 런에만 걸린다 — state에 plan이
+    있으면(정본이 있었다는 뜻) 즉시 반환하므로 새 런에는 쿼리조차 안 나간다.
     """
     # REVIEWING 포함: QA 게이트 제거 후 조립 중 크래시 복구는 sections 행+plan으로
     # 재구성한다(_rehydrate_qa_selection의 overlay가 행을 후보로 승격).
@@ -226,13 +459,45 @@ async def _execute(project_id: uuid.UUID) -> None:
             owner_id = project.owner_id
 
             state = _state_from_project(project)
+            # 재개 지점은 **한 번만** 쓴다 - 안 지우면 이후 모든 재개가 자료 단계로
+            # 되감겨, 조립만 남은 런도 색인부터 다시 돈다(취소의 cancelled_from은
+            # 취소 때마다 새로 써서 같은 문제가 없다).
+            if (project.config or {}).get("resume_from"):
+                cfg = dict(project.config or {})
+                cfg.pop("resume_from", None)
+                project.config = cfg
+                # 즉시 커밋 — 커밋 없이 두면 다음 쿼리의 autoflush가 미커밋 UPDATE로
+                # projects 행 잠금을 문 채 페이즈에 들어가고, 진행 표시용 별도 세션
+                # (_persist_running_stage)의 status UPDATE가 그 잠금을 기다리며
+                # **자기교착**이 된다(2026-08-27 운영 3연속 실측: 러너 무한 정지 +
+                # 폴링이 뒤에 쌓여 커넥션 풀 고갈로 API 전면 500). 소비의 영속도
+                # 이 커밋이 보장한다 — 안 그러면 행이 잠긴 채 죽은 런이 resume_from을
+                # 남겨 다음 재개가 또 되감긴다.
+                await session.commit()
+            # 죽은 런 재개 가드 — 게이트가 resolved로 없으면 그 단계를 다시 돈다.
+            state = await _normalize_resume_stage(session, project.id, state)
             if project.status == ProjectStage.CREATED.value:
                 # 표시용 선행 전이: 실행에 들어간 순간부터 UI가 '시작 전'으로
                 # 보이지 않게 researching으로 먼저 영속화한다. 척추 진행 판단은
                 # 위에서 이미 만든 in-memory state(CREATED) 기준이라 단계를
                 # 건너뛰지 않는다(엔드포인트 상태 선점 사고와 다른 지점).
                 entered_from_created = True
-                project.status = ProjectStage.RESEARCHING.value
+                project.status = ProjectStage.PLANNING.value
+                # 실행 시점 역할별 모델 스냅샷 — 모드→모델 매핑은 코드가 진실이라
+                # 배포로 바뀌면 과거 런의 표시가 함께 바뀐다(2026-08-14 고급 수집
+                # Haiku 환원 때 옛 Sonnet 수집 런이 'Haiku 수집'으로 둔갑).
+                # 이 런이 실제로 쓴 조합을 config에 남겨 표시·기록을 고정한다.
+                from src.services.prompts import snapshot_agents
+                from src.workflows.stages import _models_for
+
+                # 에이전트 스냅샷 — 남이 공개한 개인 에이전트는 라이브 참조라(주인이
+                # 언제든 고치고 내린다) 런 도중·재개 후에 페르소나가 갈릴 수 있다.
+                # 시작 순간의 프롬프트를 얼려 이 런 내내 같은 목소리로 쓰게 한다.
+                project.config = {
+                    **(project.config or {}),
+                    "models": _models_for(state),
+                    "analysts": await snapshot_agents(session, project.owner_id),
+                }
                 await session.commit()
 
             async def _persist_running_stage(stage: ProjectStage) -> None:
@@ -252,11 +517,25 @@ async def _execute(project_id: uuid.UUID) -> None:
                 except Exception:
                     logger.warning("project.stage_display_failed", project_id=str(project_id))
 
+            # 퇴장 도장 가드용 지문 - 런 도중 사용자가 목차를 저장하면 병합된
+            # plan이 config의 정본이 된다. 그때 in-memory plan을 무조건 재도장하면
+            # "저장 → 재개 → 옛 목차 회귀" 루프가 된다(2026-08-28 실사고: 11절 저장을
+            # 실패 런 퇴장이 8절로 세 번 되돌림). 시작 시점 지문을 기억해 두고,
+            # 퇴장 때 달라져 있으면 도장을 건너뛴다.
+            plan_stamp_before = json.dumps(
+                (project.config or {}).get(SECTION_PLAN_KEY), sort_keys=True, ensure_ascii=False
+            )
             state = await _rehydrate_section_plan(session, project.id, state)
             state = await _rehydrate_qa_selection(session, project.id, state)
-            if entered_from_created and not state.sources:
-                # 부분 실패 후 재시작: 이전 실행이 스테이징해 둔 출처를 상태로 복원 —
-                # collect가 기존 출처를 제외(중복 스테이징 방지)하고 모자란 만큼만 보충한다.
+            # 수집을 앞둔 재개(CREATED·PLANNING)면 스테이징돼 있던 출처를 상태로 복원 —
+            # collect가 기존 출처를 제외(중복 스테이징 방지)하고 모자란 만큼만 보충하며,
+            # 게이트 payload에도 업로드·기존 수집분이 함께 실린다. entered_from_created만
+            # 보던 시절엔 PLANNING 재개가 빈 상태로 수집을 돌아 목표 계산이 어긋나고
+            # 게이트가 이번 콜 수집분만 보여줬다(2026-08-15 실측: 37건 중 17건만 집계).
+            if (
+                state.current_stage in (ProjectStage.CREATED, ProjectStage.PLANNING)
+                and not state.sources
+            ):
                 rows = (
                     (
                         await session.execute(
@@ -270,6 +549,36 @@ async def _execute(project_id: uuid.UUID) -> None:
                     state = state.add_sources([_source_ref_from_row(r) for r in rows])
             outcome = await advance(state, on_stage=_persist_running_stage)
             project.status = outcome.state.current_stage.value
+            # section_plan 정본을 config에 남긴다 — 이걸로 다음 구간이 게이트 payload를
+            # 뒤지지 않고 그대로 이어받는다. **재할당이어야 한다**: JSONB를 in-place로
+            # 고치면 SQLAlchemy가 dirty로 안 잡아 커밋해도 안 써진다(config_with_plan이
+            # 항상 새 dict를 돌려주는 이유).
+            # 런 도중 목차가 저장됐으면(지문 변화) config의 병합 plan이 정본 -
+            # in-memory plan 도장을 건너뛴다. 같으면 종전대로 새겨 다음 구간이
+            # 게이트 payload를 뒤지지 않게 한다.
+            await session.refresh(project, ["config"])
+            plan_stamp_now = json.dumps(
+                (project.config or {}).get(SECTION_PLAN_KEY), sort_keys=True, ensure_ascii=False
+            )
+            if plan_stamp_now != plan_stamp_before:
+                logger.info(
+                    "run.plan_stamp_skipped",
+                    project_id=str(project_id),
+                    reason="run 도중 목차 저장 감지 - config 병합 plan 보존",
+                )
+                updated_config = dict(project.config or {})
+            else:
+                updated_config = config_with_plan(project.config, outcome.state.section_plan)
+            # 리허설 재개방 카운터 — state.options는 영속 경로가 없어(config 재할당이
+            # DB의 config 기준) 단계가 올린 값을 여기서 실어 나른다. 2회 상한의 진실.
+            reopens = (
+                outcome.state.options.get("_rehearsal_reopens")
+                if isinstance(outcome.state.options, dict)
+                else None
+            )
+            if isinstance(reopens, int) and reopens > 0:
+                updated_config = {**updated_config, "_rehearsal_reopens": reopens}
+            project.config = updated_config
 
             if isinstance(outcome, Paused):
                 # 게이트 대기 진입 — pending review_point 영속화(재시작 복구·감사 이력)
@@ -293,12 +602,23 @@ async def _execute(project_id: uuid.UUID) -> None:
                     str(outcome.review.id),
                     gate_level(outcome.review.gate.value),
                 )
-                # 검토 차례 알림 (partial=확인 필요 템플릿)
-                await _notify_safe(owner_id, project_id, "partial", page="progress")
+                # 검토 차례 알림 (partial=확인 필요 템플릿) — 버튼은 그 게이트의 결정 화면으로
+                await _notify_safe(
+                    owner_id,
+                    project_id,
+                    "partial",
+                    page=_GATE_PAGES.get(outcome.review.gate.value, "overview"),
+                )
             else:
                 await session.commit()
                 logger.info("project.completed", project_id=str(project_id))
-                await _notify_safe(owner_id, project_id, "success", page="export")
+                # 완료 알림 — 다운로드는 개요 헤더에 있다
+                await _notify_safe(owner_id, project_id, "success", page="overview")
+                # 서술 구성 통계 선계산 — 조회 시점 계산은 첫 클릭이 수십 초라
+                # 완성 직후 백그라운드로 채워 둔다(fire-and-forget, 실패해도 무관).
+                from src.api.routers.projects import precompute_evidence_composition
+
+                _spawn(precompute_evidence_composition(project_id))
     except cancel.RunCancelled:
         # 사용자 취소 — 실패가 아니라 깨끗한 중단으로 CANCELLED 확정(created 복귀 로직 회피).
         logger.info("project.cancelled", project_id=str(project_id))
@@ -345,16 +665,25 @@ async def _execute(project_id: uuid.UUID) -> None:
                 logger.warning("project.status_rollback_failed", project_id=str(project_id))
         # 한도 초과는 원인이 명확한 실패 — 일반 오류로 뭉개지 말고 그대로 알린다
         # (진행 중 도달 케이스: 사전 검사는 통과했지만 실행 도중 한도에 닿음).
-        from src.core.exceptions import QuotaExceededError
+        from src.core.exceptions import IncompleteReportError, QuotaExceededError
 
         if isinstance(exc, QuotaExceededError):
             emit_error(
                 project_id, "quota_exceeded", f"{exc.message} - 한도 상향 후 다시 시작하세요"
             )
+        elif isinstance(exc, IncompleteReportError):
+            # 완성 게이트(2026-08-13) — 어느 절이 비었는지까지 그대로 알린다.
+            # 완성분은 sections에 저장돼 있어 미리보기에서 열람·재작성 후 재시작하면 된다.
+            emit_error(
+                project_id,
+                "sections_incomplete",
+                f"{exc.message} - 미리보기에서 실패한 절을 채운 뒤 다시 시작하세요",
+            )
         else:
             emit_error(project_id, "run_failed", "실행 중 오류가 발생했습니다")
         if owner_id is not None:
-            await _notify_safe(owner_id, project_id, "failed", page="progress")
+            # 실패 알림 — 상태·재시작은 개요 화면에 있다(/progress는 폐지된 경로)
+            await _notify_safe(owner_id, project_id, "failed", page="overview")
 
 
 def _spawn(coro: Any) -> None:
@@ -429,11 +758,31 @@ def _spawn_limited(project_id: uuid.UUID, work: Any, *, clear_cancel_on_exit: bo
             if project_id in _WAITING:  # 대기 중 태스크가 죽은 비정상 경로 정리
                 _WAITING.remove(project_id)
             _RUNNING.discard(project_id)
+            # 멈춘 순간 단계를 산출물로 되짚어 다시 새긴다. 러너가 쓴 값은 "도는 동안"의
+            # 진실이라, 그대로 두면 목록이 멈춘 프로젝트를 "작성 중"으로 보여 준다
+            # (컬럼 하나가 진척과 실행을 겸하던 병 — services/projects/derive).
+            await _resync_stage(project_id)
             if clear_cancel_on_exit:
                 cancel.clear(project_id)  # 취소 요청이 남아도 다음 실행이 즉시 취소되지 않게
 
     _spawn(_run())
     return True
+
+
+async def _resync_stage(project_id: uuid.UUID) -> None:
+    """실행이 끝난 뒤 단계를 다시 새긴다 — 실패해도 실행 정리를 막지 않는다."""
+    from src.db.session import open_session
+    from src.services.projects.derive import sync_project_stage
+
+    try:
+        async with open_session() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                return
+            await sync_project_stage(session, project, running=False)
+            await session.commit()
+    except Exception:
+        logger.warning("run.stage_resync_failed", project_id=str(project_id), exc_info=True)
 
 
 def _spawn_guarded(project_id: uuid.UUID) -> bool:
@@ -469,12 +818,50 @@ async def resume_run(project_id: uuid.UUID, decision: dict[str, Any]) -> None:
         review.decision = decision
         review.resolved_at = clock_now()
         gate = review.gate
+        # 설계 브리프 확정: 사람이 고친 목차를 config.outline에 커밋한다. plan 정본은
+        # 함께 버려서 collect가 새 목차로 다시 뽑게 한다 — 결정을 payload 복원에 기대지
+        # 않으므로 재개 경로가 하나로 모인다.
+        if gate == ReviewGate.DESIGN_BRIEF.value:
+            outline_changed = await _apply_design_brief(session, project_id, decision)
+            if decision.get("action") != "replan" and not outline_changed:
+                # 그대로 승인 — 게이트가 보여준 AI 실행 계획(사람 수정본 우선)을 작성
+                # 계약으로 커밋. 목차를 고친 채 곧장 진행하면 계획이 옛 목차 기준이라
+                # 커밋하지 않는다(재계산 라운드를 돌면 새 계획이 커밋된다).
+                await _commit_design_plan(session, project_id, review.payload, decision)
         # 자료 풀 확정: 사람이 제외한 출처를 같은 커밋에서 is_included=false로 반영한다.
+        n_excluded = 0
         if gate == ReviewGate.SOURCE_POOL.value:
             n_excluded = await _apply_source_pool_exclusions(session, project_id, decision)
             if n_excluded:
                 logger.info("source_pool.pruned", project_id=str(project_id), excluded=n_excluded)
+            project = await session.get(Project, project_id)
+            if project is not None and project.status == ProjectStage.INDEXING.value:
+                # 리허설이 다시 연 자료 게이트다(정상 SOURCE_POOL은 RESEARCHING에서 멈춘다).
+                # 색인 단계로 되돌려 보강분 색인→리허설 재판정을 다시 돈다 — 색인은
+                # 증분(이미 청크 있는 자료 스킵)이라 변화분만 비용이 든다.
+                project.status = ProjectStage.RESEARCHING.value
+                logger.info("rehearsal.reopen_resolved", project_id=str(project_id))
         await session.commit()
+    if n_excluded:
+        # 제외는 검색 결과를 바꾼다(검색 SQL이 is_included=false를 거른다) — 리허설
+        # 캐시를 무효화해 작성이 제외 전 근거를 그대로 쓰는 일이 없게 한다.
+        from src.services.retrieval.rehearsal import bump_index_version
+
+        await bump_index_version(project_id)
+        # 재개(reopen)로 열린 게이트에서 제외하면 이미 본문이 있다 — 전역 인용 번호가
+        # 당겨져 문서 전체가 어긋나므로 여기서도 다시 맞춘다. 첫 런에서는 절이 비어
+        # 있어 아무 일도 하지 않는다(비용 0).
+        from src.db.session import open_session
+        from src.services.sections.renumber import rebase_global_numbers
+
+        async with open_session() as s2:
+            if await rebase_global_numbers(s2, project_id):
+                await s2.commit()
+    if gate == ReviewGate.DESIGN_BRIEF.value and decision.get("action") == "replan":
+        # 고친 목차로 브리프를 다시 계산해 게이트를 다시 연다 — 수집으로 안 간다.
+        # '추가 조사'와 같은 라운드 패턴: 사람이 누를 때마다 1회(무한성 캡은 사람 손에).
+        _spawn_replan(project_id)
+        return
     if gate == ReviewGate.SOURCE_POOL.value and decision.get("action") == "collect_more":
         _spawn_collect_more(project_id)
         return
@@ -488,33 +875,169 @@ def _source_ref_from_row(row: ProjectSource) -> SourceRef:
     meta = row.metadata_ or {}
     content_md = meta.get("content_md") or ""
     usable = has_usable_content(content_md)
+    source_type = SourceType(row.source_type)
+    # 업로드·라이브러리 자료는 본문 추출(파싱)이 색인 단계에서 일어난다 — 지금
+    # content_md가 비어도 파일이 있으므로 '쓸 수 있는 자료'다. 웹처럼 회수 실패로
+    # 치면 게이트가 "본문 있는 자료 부족"을 오경보한다(2026-08-15 실측: PDF 12건을
+    # 올렸는데 전부 본문 없음으로 집계돼 17/40 경고).
+    file_backed = source_type in (SourceType.UPLOAD, SourceType.LIBRARY)
     matched = list(meta.get("matched_sections") or [])
     return SourceRef(
         id=row.id,
-        source_type=SourceType(row.source_type),
+        source_type=source_type,
         title=row.title or row.url or "(제목 없음)",
         url=row.url,
         reliability=row.reliability,
         matched_sections=list(meta.get("matched_sections") or []),
         page_age=meta.get("page_age"),
+        publisher=meta.get("publisher"),
+        issue_label=meta.get("issue_label"),
+        published_year=meta.get("published_year")
+        if isinstance(meta.get("published_year"), int)
+        else None,
+        collected_at=row.created_at,
         preview=(relevance_excerpt(content_md, matched) or _source_preview(content_md))
         if usable
         else None,
-        has_content=usable,
+        has_content=usable or file_backed,
     )
 
 
-def _spawn_collect_more(project_id: uuid.UUID) -> bool:
+def _spawn_collect_more(project_id: uuid.UUID, *, reopen_gate: bool = True) -> bool:
     """보충 수집 라운드를 중복 가드 + 전역 슬롯 하에 spawn."""
-    return _spawn_limited(project_id, lambda: _collect_more(project_id), clear_cancel_on_exit=False)
+    return _spawn_limited(
+        project_id,
+        lambda: _collect_more(project_id, reopen_gate=reopen_gate),
+        clear_cancel_on_exit=False,
+    )
 
 
-async def _collect_more(project_id: uuid.UUID) -> None:
-    """SOURCE_POOL '추가 조사' — 기존 풀 유지 + research_more_batch건 보충 + 게이트 재개방.
+def _spawn_replan(project_id: uuid.UUID) -> bool:
+    """설계 브리프 재계산 라운드를 중복 가드 + 전역 슬롯 하에 spawn."""
+    return _spawn_limited(project_id, lambda: _replan(project_id), clear_cancel_on_exit=False)
 
-    write로 전진하지 않는다: 새로 모은 출처를 기존 풀에 합쳐(URL 중복 제거)
-    새 SOURCE_POOL 게이트를 만들고 다시 사람 판단을 기다린다. 사람이 누를
-    때마다 한 라운드씩이라 무한성 캡은 사람 손에 있다.
+
+async def _replan(project_id: uuid.UUID) -> None:
+    """DESIGN_BRIEF '재계산' — 고친 목차로 브리프·AI 계획을 다시 만들어 게이트 재개방.
+
+    척추를 전진시키지 않는다(수집 안 함). _apply_design_brief가 이미 config.outline을
+    갱신하고 plan 정본을 버렸으므로, plan_brief가 새 목차에서 plan과 브리프를 다시
+    만든다. 새 게이트가 열리면 사람이 다시 보고 확정한다.
+    """
+    from src.workflows.pipeline import _design_brief_gate
+    from src.workflows.stages import plan_brief
+
+    owner_id: uuid.UUID | None = None
+    try:
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                logger.warning("project.missing", project_id=str(project_id))
+                return
+            owner_id = project.owner_id
+            state = _state_from_project(project)
+        state = await plan_brief(state)
+        review = _design_brief_gate(state)
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                return
+            # 새 plan 정본 영속화 — 재할당 필수(JSONB in-place는 dirty로 안 잡힌다).
+            project.config = config_with_plan(project.config, state.section_plan)
+            session.add(
+                ReviewPoint(
+                    id=review.id,
+                    project_id=project_id,
+                    gate=review.gate.value,
+                    payload=review.payload,
+                    status="pending",
+                    created_at=review.created_at,
+                )
+            )
+            await session.commit()
+        emit_checkpoint(project_id, str(review.id), gate_level(review.gate.value))
+        if owner_id is not None:
+            await _notify_safe(owner_id, project_id, "partial", page="brief")
+    except Exception:
+        logger.exception("design_brief.replan_failed", project_id=str(project_id))
+        if owner_id is not None:
+            await _notify_safe(owner_id, project_id, "failed", page="brief")
+
+
+async def refresh_design_plan(project_id: uuid.UUID) -> None:
+    """목차가 바뀌었으니 설계를 다시 뽑는다 — 게이트 없이, 조용히.
+
+    **왜 자동인가**: 설계(브리프·소재 분담)는 목차에서 파생되는 값이고 LLM 1콜(≈$0.01)
+    이다. 수집·작성과 달리 되돌리기 비싼 일이 아니라, 사람에게 물을 이유가 없다.
+
+    **왜 필요한가**: 남겨 두면 거짓말을 한다. 소재 분담은 절 번호를 문자열로 박아 둔다
+    ("…는 1.2절 소관, 참조 한 문장으로 대체하라"). 목차에서 절을 하나 끼워 넣으면 번호가
+    밀리는데 그 문자열은 그대로라, 작성기가 **엉뚱한 절을 가리키는 지시**를 따른다
+    (2026-08-27 실측: 운영 프로젝트의 foreign_topics가 전부 라벨 문자열이었다).
+    새로 생긴 절은 담당이 없어 다른 절과 같은 소재를 또 쓴다.
+
+    게이트는 열지 않는다 — 게이트는 실행을 멈추는 장치인데 여기서 멈출 이유가 없다.
+    새 브리프는 resolved 상태로 남겨 설계 검토 화면이 최신본을 보여주게 한다.
+
+    수집·작성은 **따라 돌지 않는다**. 절 하나 재작성이 실측 $0.4~1.3, 전체가 $15.5라
+    목차 한 줄에 자동으로 딸려 돌면 사고다 — 그건 '미반영'으로 표시하고 사람이 고른다.
+    """
+    from src.core.clock import now as clock_now
+    from src.workflows.pipeline import _design_brief_gate
+    from src.workflows.stages import plan_brief
+
+    try:
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                return
+            state = _state_from_project(project)
+        state = await plan_brief(state)
+        review = _design_brief_gate(state)
+        async with async_session_maker() as session:
+            project = await session.get(Project, project_id)
+            if project is None:
+                return
+            project.config = config_with_plan(project.config, state.section_plan)
+            session.add(
+                ReviewPoint(
+                    id=review.id,
+                    project_id=project_id,
+                    gate=review.gate.value,
+                    payload=review.payload,
+                    # 결정이 필요 없는 갱신이다 - 처음부터 resolved로 남긴다.
+                    status="resolved",
+                    decision={"outcome": "auto_refresh", "reason": "outline_changed"},
+                    created_at=review.created_at,
+                    resolved_at=clock_now(),
+                )
+            )
+            # 소재 분담(_design_plan)을 새 목차 기준으로 다시 커밋한다 - 같은 세션
+            # 안에서 해야 방금 심은 plan 정본을 보고 절 id를 맞춘다.
+            await _commit_design_plan(session, project_id, review.payload)
+            await session.commit()
+        logger.info("design_plan.refreshed", project_id=str(project_id))
+    except Exception:
+        logger.exception("design_plan.refresh_failed", project_id=str(project_id))
+
+
+def spawn_design_refresh(project_id: uuid.UUID) -> bool:
+    """설계 재계산을 백그라운드로 — 저장 버튼이 LLM 콜을 기다리지 않게."""
+    return _spawn_limited(
+        project_id, lambda: refresh_design_plan(project_id), clear_cancel_on_exit=False
+    )
+
+
+async def _collect_more(project_id: uuid.UUID, *, reopen_gate: bool = True) -> None:
+    """자료 보충 — 기존 풀 유지 + research_more_batch건 추가(URL 중복 제거).
+
+    write로 전진하지 않는다. 사람이 누를 때마다 한 라운드씩이라 무한성 캡은 사람
+    손에 있다.
+
+    reopen_gate: 첫 런의 자료 검토 중이면 새 SOURCE_POOL 게이트를 만들어 다시 판단을
+    기다린다(종전 동작). 완주 뒤 사람이 그냥 "자료 더 모으기"를 누른 경우에는 멈춰
+    세울 파이프라인이 없으므로 게이트를 만들지 않는다 — 만들면 완료된 보고서가
+    난데없이 "검토 대기"로 바뀐다(2026-08-26 행동·게이트 분리).
     """
     from src.workflows.pipeline import _source_pool_gate
     from src.workflows.stages import _collect_sources, source_dedup_key
@@ -577,6 +1100,10 @@ async def _collect_more(project_id: uuid.UUID) -> None:
             n_total=len(state.sources),
         )
 
+        if not reopen_gate:
+            # 게이트 없이 보충만 — 화면은 자료 목록을 폴링해 새 자료를 이어받는다.
+            logger.info("source_pool.collect_more_done", project_id=str(project_id))
+            return
         review = _source_pool_gate(state)
         async with async_session_maker() as session:
             session.add(
@@ -592,7 +1119,8 @@ async def _collect_more(project_id: uuid.UUID) -> None:
             await session.commit()
         emit_checkpoint(project_id, str(review.id), gate_level(review.gate.value))
         if owner_id is not None:
-            await _notify_safe(owner_id, project_id, "partial", page="progress")
+            # 추가 조사 후 재검토 — 항상 자료 검토 게이트라 결정 화면(/sources)으로
+            await _notify_safe(owner_id, project_id, "partial", page="sources")
     except Exception:
         logger.exception("source_pool.collect_more_failed", project_id=str(project_id))
         emit_error(project_id, "collect_more_failed", "추가 조사 중 오류가 발생했습니다")

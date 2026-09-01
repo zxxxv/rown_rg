@@ -1,4 +1,14 @@
-import { ArrowRight, Ban, Check, CircleDashed, Loader2 } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Ban,
+  Check,
+  ChevronDown,
+  CircleDashed,
+  Loader2,
+  RotateCcw,
+  User,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -20,13 +30,25 @@ import { cn } from "@/lib/utils";
 // 파이프라인 순서 - 사람 결정이 필요한 단계(자료 검토)는 도달 시 강조되고 해당
 // 작업 화면으로 가는 버튼이 붙는다. 본문 검토(QA) 게이트는 제거됨(2026-08-07) -
 // 작성이 끝나면 곧장 조립·검증되고, 검토·편집은 보고서 화면에서 사후에 한다.
+// human: 사람의 확인·결정이 필요한 단계(단계 지도 이식, 2026-08-21 사용자 요청).
+// loop: 이 단계에서 앞으로 되돌아갈 수 있음 - 회전 아이콘과 한 줄 설명이 붙는다.
 const STEPS = [
+  { key: "brief", label: "설계 검토 · 확정", human: true },
   { key: "collect", label: "자료 수집" },
-  { key: "review", label: "자료 검토 · 확정" },
-  { key: "index", label: "색인 (임베딩)" },
+  { key: "review", label: "자료 검토 · 확정", human: true },
+  {
+    key: "index",
+    label: "색인 · 리허설",
+    loop: "자료가 부족한 절이 있으면 자료 검토로 되돌아옵니다(최대 2회)",
+  },
   { key: "write", label: "본문 작성" },
   { key: "assemble", label: "조립 · PM 검증" },
-  { key: "done", label: "완성" },
+  {
+    key: "done",
+    label: "완성 검토",
+    human: true,
+    loop: "절 재작성·자료 보강은 전체를 되돌리지 않고 해당 절만 다시 씁니다",
+  },
 ] as const;
 
 type StepPhase = "done" | "active" | "action" | "pending";
@@ -34,6 +56,8 @@ type StepPhase = "done" | "active" | "action" | "pending";
 interface StepView {
   label: string;
   phase: StepPhase;
+  human?: boolean;
+  loop?: string;
   actionLabel?: string;
   actionTo?: string;
 }
@@ -50,34 +74,42 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
   let actionLabel: string | undefined;
   let actionTo: string | undefined;
 
-  if (gate === "source_pool") {
-    current = 1;
+  if (gate === "design_brief") {
+    current = 0;
+    currentPhase = "action";
+    actionLabel = "설계 검토로 이동";
+    actionTo = `/projects/${projectId}/brief`;
+  } else if (gate === "source_pool") {
+    current = 2;
     currentPhase = "action";
     actionLabel = "자료 검토로 이동";
     actionTo = `/projects/${projectId}/sources`;
   } else if (gate === "qa_select") {
     // 레거시 - 게이트 제거 전 백엔드로 작성돼 아직 pending인 프로젝트만 도달한다.
-    current = 4;
+    current = 5;
     currentPhase = "action";
     actionLabel = "본문 검토로 이동";
     actionTo = `/projects/${projectId}/preview`;
   } else {
     switch (status) {
-      case "researching":
+      case "planning":
         current = 0;
         break;
-      case "indexing":
-        current = 2;
+      case "researching":
+        current = 1;
         break;
-      case "writing":
+      case "indexing":
         current = 3;
         break;
-      case "reviewing":
+      case "writing":
         current = 4;
+        break;
+      case "reviewing":
+        current = 5;
         break;
       case "completed":
       case "archived":
-        current = 6; // 전부 완료
+        current = 7; // 전부 완료
         break;
       default: // created·cancelled - 아직 진입 전(취소는 카드 하단에 별도 표기)
         current = -1;
@@ -85,9 +117,14 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
   }
 
   return STEPS.map((step, i) => {
-    if (i < current) return { label: step.label, phase: "done" as const };
-    if (i === current) return { label: step.label, phase: currentPhase, actionLabel, actionTo };
-    return { label: step.label, phase: "pending" as const };
+    const base = {
+      label: step.label,
+      human: "human" in step ? step.human : undefined,
+      loop: "loop" in step ? step.loop : undefined,
+    };
+    if (i < current) return { ...base, phase: "done" as const };
+    if (i === current) return { ...base, phase: currentPhase, actionLabel, actionTo };
+    return { ...base, phase: "pending" as const };
   });
 }
 
@@ -107,7 +144,7 @@ function formatDuration(ms: number): string {
 활동 이후 경과를 더해 초 단위로 흐르게 한다. 게이트에서 멈추면 값이 그대로 선다
 (2026-08-09: 게이트 9시간이 경과에 섞여 22시간으로 보였다). 벽시계 총경과는
 부차 정보라 괄호로 함께 보여준다. */
-function ElapsedRow({ snapshot }: { snapshot: ProgressSnapshot }) {
+export function ElapsedRow({ snapshot }: { snapshot: ProgressSnapshot }) {
   const [now, setNow] = useState(() => Date.now());
   const ended = ["completed", "archived", "cancelled"].includes(snapshot.status);
   const waiting = Boolean(snapshot.pending_gate);
@@ -142,14 +179,20 @@ function ElapsedRow({ snapshot }: { snapshot: ProgressSnapshot }) {
 export interface PipelineStepperProps {
   projectId: string;
   snapshot: ProgressSnapshot | undefined;
+  /** 죽은 런 확정(연속 폴링 판정) - 스피너 대신 중단 표시를 그린다 */
+  stalled?: boolean;
 }
 
 /** 개요 우측의 파이프라인 스테퍼 - 어디까지 왔는지, 다음에 사람이 뭘 해야 하는지. */
-export function PipelineStepper({ projectId, snapshot }: PipelineStepperProps) {
+export function PipelineStepper({ projectId, snapshot, stalled = false }: PipelineStepperProps) {
   const navigate = useNavigate();
   const steps = deriveSteps(projectId, snapshot);
   const status = snapshot?.status ?? "created";
-  const isActive = ["researching", "indexing", "writing", "reviewing"].includes(status);
+  // **실제로 도는 런에만** 취소 버튼을 띄운다. 단계 이름으로 판정하면 멈춰 있는
+  // 보고서에도 뜨고, 누르면 멀쩡한 문서가 통째로 cancelled가 된다 - status는 서 있는
+  // 자리지 실행 신호가 아니다(2026-08-26 파생화). 끊긴 런(stalled)은 정리해야 하므로
+  // 함께 연다.
+  const isActive = (snapshot?.runner_alive ?? false) || stalled;
   const cancelled = status === "cancelled";
 
   const cancel = useCancelProject();
@@ -174,14 +217,23 @@ export function PipelineStepper({ projectId, snapshot }: PipelineStepperProps) {
         <CardTitle className="text-base">진행 단계</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <ol className="flex flex-col gap-2.5">
-          {steps.map((step) => (
+        <ol className="flex flex-col">
+          {steps.map((step, i) => (
             <li key={step.label} className="flex flex-col gap-1.5">
+              {/* 단계 사이 화살표 - "다음 단계로 간다"를 아이콘 열 아래에 명시 */}
+              {i > 0 ? (
+                <ChevronDown className="my-0.5 ml-0.5 h-3 w-3 text-fg-tertiary" aria-hidden />
+              ) : null}
               <div className="flex items-center gap-2">
                 {step.phase === "done" ? (
                   <Check className="h-4 w-4 shrink-0 text-fg-success" aria-hidden />
                 ) : step.phase === "active" ? (
-                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" aria-hidden />
+                  stalled ? (
+                    // 실행이 끊겼는데 스피너를 돌리면 '진행 중'이라는 거짓말이 된다
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-fg-danger" aria-hidden />
+                  ) : (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" aria-hidden />
+                  )
                 ) : step.phase === "action" ? (
                   <ArrowRight className="h-4 w-4 shrink-0 text-fg-warning" aria-hidden />
                 ) : (
@@ -198,16 +250,38 @@ export function PipelineStepper({ projectId, snapshot }: PipelineStepperProps) {
                 >
                   {step.label}
                 </span>
+                {step.human ? (
+                  <User className="h-3.5 w-3.5 shrink-0 text-accent" aria-label="사람 검토 지점" />
+                ) : null}
+                {step.loop ? (
+                  <RotateCcw
+                    className="h-3.5 w-3.5 shrink-0 text-fg-tertiary"
+                    aria-label={step.loop}
+                  />
+                ) : null}
                 {step.phase === "action" ? (
                   <span className="ml-auto rounded-sm border border-fg-warning/40 bg-bg-warning px-1.5 py-0.5 text-[10px] font-medium text-fg-warning">
                     결정 필요
                   </span>
                 ) : null}
               </div>
+              {step.loop ? (
+                <p className="ml-6 text-[11px] leading-snug text-fg-tertiary">{step.loop}</p>
+              ) : null}
               {/* 실행 중 세부 단계 - 색인·RAPTOR처럼 수 분짜리 단계의 내부 진행
                   (예: "청킹·임베딩 5/17", "배경 요약 1층 · 40/152") */}
-              {step.phase === "active" && snapshot?.active_step ? (
-                <p className="ml-6 text-xs text-fg-tertiary">{snapshot.active_step}</p>
+              {step.phase === "active" &&
+              (snapshot?.active_steps?.length || snapshot?.active_step) ? (
+                <div className="ml-6 flex flex-col gap-0.5">
+                  {(snapshot.active_steps?.length
+                    ? snapshot.active_steps
+                    : [snapshot.active_step as string]
+                  ).map((label) => (
+                    <p key={label} className="text-xs text-fg-tertiary">
+                      {label}
+                    </p>
+                  ))}
+                </div>
               ) : null}
               {step.phase === "action" && step.actionTo ? (
                 <Button
@@ -222,6 +296,14 @@ export function PipelineStepper({ projectId, snapshot }: PipelineStepperProps) {
             </li>
           ))}
         </ol>
+
+        {stalled ? (
+          <p className="flex items-start gap-1.5 rounded border border-fg-danger/30 bg-bg-danger px-2.5 py-2 text-xs text-fg">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-fg-danger" aria-hidden />
+            실행이 중단되었습니다 - 서버 재시작이나 오류로 실행이 끊겼습니다. 상단의 '이어서 재개'를
+            누르면 멈춘 단계부터 다시 진행합니다.
+          </p>
+        ) : null}
 
         {snapshot?.queue_position ? (
           <p className="flex items-center gap-1.5 rounded border border-fg-info/30 bg-bg-info px-2.5 py-2 text-xs text-fg-secondary">

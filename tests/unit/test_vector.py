@@ -35,6 +35,17 @@ def _embed_result(text: str) -> MagicMock:
     return m
 
 
+def _empty_hashes() -> MagicMock:
+    """청크 INSERT 직전의 '기존 본문 해시 조회' 응답 - 중복 없음.
+
+    색인기는 근거로 못 쓰는 청크(보일러플레이트·내용 중복)를 metadata.excluded로
+    표시하려고 세션 #2에서 해시를 한 번 읽는다(_boilerplate.excluded_metadata).
+    """
+    result = MagicMock()
+    result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    return result
+
+
 def _fake_session_maker(session_mock: MagicMock) -> MagicMock:
     """Return an async_sessionmaker stub that yields the same session per call."""
     maker = MagicMock()
@@ -145,6 +156,7 @@ class TestPipelineOrdering:
         session2 = MagicMock()
         session2.commit = AsyncMock()
         session2.add_all = MagicMock()
+        session2.execute = AsyncMock(return_value=_empty_hashes())
 
         maker_call_count = {"n": 0}
 
@@ -174,10 +186,13 @@ class TestPipelineOrdering:
             )
         )
 
-        # 세션 2개 사용: upsert+delete 1개, insert 1개.
-        assert maker_call_count["n"] == 2
-        # 임베딩은 두 세션 사이에 청크 콘텐츠 순서대로 호출된다.
-        embed.embed_batch.assert_awaited_once_with(["hello world"])
+        # 세션 4개 사용: upsert+delete 1개, insert 1개, 대목 벡터(store_quietly) 1개,
+        # 용어 채굴(terms.mine_and_store_quietly) 1개 — 모의 세션이라 읽기에서 조기
+        # 종료되지만(비치명 계약) 세션은 연다.
+        assert maker_call_count["n"] == 4
+        # 임베딩은 두 세션 사이에 청크 콘텐츠 순서대로 호출된다. 두 번째 호출은
+        # 대목 벡터(store_quietly)의 것 - 첫 호출의 인자만 계약이다.
+        assert embed.embed_batch.await_args_list[0].args == (["hello world"],)
         # 청킹은 upsert가 반환한 source_id를 받는다.
         chunking.chunk_markdown.assert_awaited_once()
         assert chunking.chunk_markdown.call_args.args[1] == source_id
@@ -279,6 +294,7 @@ class TestEmbeddingOrderAlignment:
         session2 = MagicMock()
         session2.commit = AsyncMock()
         session2.add_all = MagicMock(side_effect=_capture)
+        session2.execute = AsyncMock(return_value=_empty_hashes())
 
         calls = iter([session1, session2])
 
@@ -356,6 +372,7 @@ class TestDeleteBeforeInsertOrdering:
         session1.commit = AsyncMock(side_effect=lambda: call_log.append("commit1"))
 
         session2 = MagicMock()
+        session2.execute = AsyncMock(return_value=_empty_hashes())
         session2.add_all = MagicMock(side_effect=lambda _rows: call_log.append("add_all"))
         session2.commit = AsyncMock(side_effect=lambda: call_log.append("commit2"))
 

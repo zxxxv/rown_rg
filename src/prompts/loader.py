@@ -43,6 +43,10 @@ class AnalystSpec(BaseModel):
     queries: list[str] = []
     prompt: str
     volume_target: VolumeTarget | None = None
+    # 남이 만들어 공개한 개인 에이전트인지 — 파일 카탈로그·내 개인 에이전트는 False.
+    # 선택 화면이 "누구 것인지"를 보여줘야 같은 이름 둘을 구분할 수 있다.
+    shared: bool = False
+    owner_name: str | None = None
 
 
 class PresetSection(BaseModel):
@@ -52,6 +56,12 @@ class PresetSection(BaseModel):
     direction: str
     key_points: list[str] = []
     agents: list[str] = []
+    # 의존 계약("4.1"|"4.1(지표)"|"4.*") — 의존형 프리셋(예타 등)만 사전 작성한다.
+    builds_on: list[str] = []
+    # 이 절만의 분량 목표(자) — 시사점·제언처럼 짧아야 하는 자리에만 채운다.
+    # 비우면 담당 에이전트의 volume_target을 쓴다(2026-08-24 지시).
+    min_chars: int | None = None
+    max_chars: int | None = None
 
 
 class PresetChapter(BaseModel):
@@ -107,6 +117,11 @@ def catalog_file_stat(kind: str, ref: str) -> tuple[int, float] | None:
     """
     if kind == "rule":
         path = _COMPONENTS_DIR / f"{ref}.md"
+    elif kind == "preset":
+        # 프리셋 파일명은 name과 같다("예비타당성조사.json") — id로도 폴백 탐색.
+        path = _PRESETS_DIR / f"{ref}.json"
+        if not path.is_file():
+            path = next((p for p in _indexed_files(_PRESETS_DIR) if p.stem == ref), None)
     else:
         path = next(
             (p for p in _indexed_files(_ANALYSTS_DIR) if p.stem.startswith(f"{ref}_")), None

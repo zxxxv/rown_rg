@@ -7,10 +7,11 @@ import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<ProjectStatus, string> = {
   created: "생성됨",
+  planning: "설계 검토",
   researching: "자료 수집",
   indexing: "인덱싱",
   writing: "작성 중",
-  reviewing: "조립·검증 중",
+  reviewing: "검토 중",
   completed: "완료",
   archived: "보관",
   cancelled: "취소됨",
@@ -18,6 +19,7 @@ const STATUS_LABEL: Record<ProjectStatus, string> = {
 
 const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
   created: "tertiary",
+  planning: "warning",
   researching: "info",
   indexing: "info",
   writing: "info",
@@ -31,6 +33,7 @@ const STATUS_KIND: Record<ProjectStatus, StatusKind> = {
 // (실백엔드) 상태에서 유도한다. 완료·보관은 100%.
 const STATUS_PERCENT: Record<ProjectStatus, number> = {
   created: 0,
+  planning: 5,
   researching: 20,
   indexing: 40,
   writing: 60,
@@ -50,6 +53,12 @@ export function ProjectCard({ project, onClick, className }: ProjectCardProps) {
   const interactive = Boolean(onClick);
   // 목록 카드는 프로젝트 상태가 진실(완료=100%). project.progress는 실백엔드엔 없음.
   const progress = Math.max(0, Math.min(100, project.progress ?? STATUS_PERCENT[project.status]));
+  // 조립이 끝났어도 **확정 전이면 "검토 중"**이다 - 목록 필터가 그 기준으로 가르므로
+  // (완료 칸 = finalized_at 있는 것만) 배지가 다르게 말하면 같은 화면이 서로 어긋난다:
+  // 진행 중 칸에 "완료" 배지가 달린 카드가 놓인다(2026-08-26 배포 점검에서 발견).
+  const unsigned = project.status === "completed" && !project.finalized_at;
+  const label = unsigned ? "검토 중" : STATUS_LABEL[project.status];
+  const kind = unsigned ? "warning" : STATUS_KIND[project.status];
 
   return (
     <article
@@ -73,7 +82,7 @@ export function ProjectCard({ project, onClick, className }: ProjectCardProps) {
         <Badge variant="secondary" className="font-mono text-xs">
           {presetLabel(project.preset)}
         </Badge>
-        <StatusDot kind={STATUS_KIND[project.status]} label={STATUS_LABEL[project.status]} />
+        <StatusDot kind={kind} label={label} />
       </header>
 
       <h3 className="line-clamp-2 text-base font-semibold text-fg">{project.title}</h3>

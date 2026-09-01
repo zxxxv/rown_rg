@@ -75,18 +75,40 @@ class TestListQuotaSettings:
 
 
 class TestUpdateQuotaSettings:
-    async def test_admin_forbidden(
+    async def test_admin_can_update(
         self,
         test_client: AsyncClient,
         test_session: AsyncSession,
         admin_token: str,
     ) -> None:
+        """admin도 조직 한도를 고친다(2026-08-26 결정 — 종전 super_admin 전용).
+
+        결재선을 줄이는 대신, 개인 한도를 실제 가드로 돌려놓은
+        `_assert_role_defaults_within_org`와 감사 이력이 안전망이다.
+        """
         await _seed_setting(test_session, "ORG_MONTHLY_COST_LIMIT_USD", "3000")
 
         response = await test_client.patch(
             "/api/v1/admin/quota-settings",
             json={"ORG_MONTHLY_COST_LIMIT_USD": "4000"},
             headers=_auth(admin_token),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()[0]["value"] == "4000"
+
+    async def test_worker_still_forbidden(
+        self,
+        test_client: AsyncClient,
+        test_session: AsyncSession,
+        worker_token: str,
+    ) -> None:
+        """넓힌 것은 admin까지다 — 그 아래는 그대로 막힌다."""
+        await _seed_setting(test_session, "ORG_MONTHLY_COST_LIMIT_USD", "3000")
+
+        response = await test_client.patch(
+            "/api/v1/admin/quota-settings",
+            json={"ORG_MONTHLY_COST_LIMIT_USD": "4000"},
+            headers=_auth(worker_token),
         )
         assert response.status_code == 403
 

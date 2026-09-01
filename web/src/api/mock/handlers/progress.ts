@@ -200,6 +200,8 @@ export const progressHandlers = [
             project_id: projectId,
             status,
             pending_gate: null,
+            // 살아 있는 실행 태스크 없음 - 화면이 스피너 대신 상태 패널을 그린다.
+            runner_alive: false,
             percent: STAGE_PERCENT[status] ?? 0,
             tokens_used: 0,
             cost_usd: 0,
@@ -228,6 +230,8 @@ export const progressHandlers = [
           project_id: projectId,
           status,
           pending_gate,
+          // 게이트 대기가 아니고 아직 안 끝났으면 태스크가 살아 있다.
+          runner_alive: !state.finished && !state.pending_checkpoint_id,
           percent: STAGE_PERCENT[status] ?? 0,
           tokens_used: state.tokens_used,
           cost_usd: state.cost_usd,

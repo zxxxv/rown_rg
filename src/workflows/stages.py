@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
+from functools import lru_cache
 from pathlib import Path
 from uuid import UUID
 
@@ -22,15 +23,19 @@ import structlog
 from src.clients.llm.base import LLMClient
 from src.clients.llm.exceptions import LLMClientError
 from src.clients.llm.token_tracker import token_context
+from src.clients.parser.base import strip_replacement_chars
 from src.core import app_settings
 from src.core.config import settings
+from src.core.exceptions import IncompleteReportError
 from src.core.state import ProjectState
 from src.core.types import SectionPlan, SourceRef, SourceType
 from src.services.generation.planner import plan_from_outline, plan_sections
 from src.services.indexing.raptor import RaptorBuilder, build_raptor_builder
 from src.services.indexing.web import WebSourceIndexer, build_web_source_indexer
 from src.services.research import ResearchResult, ResearchSpec, WebResearchService
+from src.services.research.web_research import collection_topic
 from src.services.retrieval.section import SectionRetriever
+from src.workflows import cancel
 from src.workflows.events import emit_phase, emit_step
 from src.workflows.write_loop import (
     auto_select_survivors,
@@ -55,8 +60,30 @@ def strip_web_frontmatter(md: str) -> str:
 
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
-# 링크·URL·구두점만으로 이뤄진 줄(내비게이션 메뉴·로고 등) — 본문 문장이 없다
-_LINK_ONLY_LINE_RE = re.compile(r"^\s*(?:\[[^\]]*\]\([^)]*\)|https?://\S+|[\s>*#|:•·—–×✕✖-])+\s*$")
+# 링크·URL·구두점만으로 이뤄진 줄(내비게이션 메뉴·로고 등) — 본문 문장이 없다.
+# 정규식으로 링크 전체를 한 번에 매칭하려 하면 링크 텍스트 안의 대괄호에 걸려 실패한다
+# (실측: "[https://twitter.com/intent/tweet?text=...%20[New...]](...)" 형태의 공유 링크가
+# 통과해 1,074자짜리 URL 덩어리가 그대로 임베딩됐고, 보고서가 그걸 6번 인용했다).
+# 링크와 URL을 먼저 걷어낸 뒤 글자가 남는지 보는 편이 튼튼하다. 링크 텍스트는 최소
+# 매칭으로 잡는다 - "](" + URL 이 나올 때까지 밀고 가므로 텍스트 안에 대괄호가 있어도
+# 링크 전체를 삼킨다.
+_MD_LINK_RE = re.compile(r"\[[^\n]*?\]\([^\s)]*\)")
+_URL_RE = re.compile(r"https?://\S+")
+_MD_SYNTAX_RE = re.compile(r"[\s>*#|:•·—–×✕✖\-\[\]()!]+")
+_WORD_RE = re.compile(r"[A-Za-z0-9가-힣]")
+
+
+def _is_link_only(line: str) -> bool:
+    """링크·URL·마크다운 기호를 걷어낸 뒤 글자가 하나도 안 남으면 본문이 아니다.
+
+    링크 라벨까지 함께 지우는 게 핵심이다 - "[홈](/) [소개](/about)" 같은 메뉴 줄은
+    라벨만 남기면 본문처럼 보인다. 반대로 "자세한 내용은 [보고서](url)에서"는 링크를
+    걷어내도 문장이 남아 살아남는다.
+    """
+    rest = _URL_RE.sub(" ", _MD_LINK_RE.sub(" ", line))
+    return not _WORD_RE.search(_MD_SYNTAX_RE.sub("", rest))
+
+
 # 사이트 공통 배너 문구 — 이 마커가 든 줄은 본문이 아니다(정부 누리집 안내 배너,
 # JS 렌더 사이트의 메뉴 자리표시자 'Loading…' 등)
 _BOILERPLATE_MARKERS = (
@@ -87,18 +114,31 @@ def clean_web_markdown(md: str) -> str:
     추적 스크립트(GTM iframe) 잔재가 본문 앞에 붙는다(2026-08-03 실측). 머리말을
     벗기고, 이미지와 링크만으로 이뤄진 줄을 걷어내 문장이 있는 줄만 남긴다.
     """
-    md = strip_web_frontmatter(md)
+    md = strip_replacement_chars(strip_web_frontmatter(md))
     kept: list[str] = []
     for line in md.splitlines():
         if any(marker in line for marker in _BOILERPLATE_MARKERS):
             continue
         no_img = _MD_IMAGE_RE.sub("", line)
-        if not no_img.strip():
-            continue
-        if _LINK_ONLY_LINE_RE.match(no_img):
+        # 빈 줄은 문단 경계로 남긴다 - 청킹이 문단을 보고 자를 수 있어야 본문과
+        # 페이지 가구가 한 청크에 안 섞인다.
+        if not no_img.strip() or _is_link_only(no_img):
+            if kept and kept[-1] != "":
+                kept.append("")
             continue
         kept.append(no_img)
     return "\n".join(kept).strip()
+
+
+# 문단 단위로 껍데기를 지워 임베딩 전에 빼는 안은 **실측 후 폐기했다**(2026-08-12).
+# 인용됐던 청크 110개로 검사했더니 12개가 사라졌고, 그중 5개가 진짜 기사 본문이었다 -
+# 해외 규제 동향("덴마크·뉴질랜드 규제 논의", "호주 청소년 SNS 470만 계정 폐쇄")과
+# 국내 플랫폼 생태계 기사가 "알림/로그인/글자크기 설정" 같은 페이지 가구와 같은 문단
+# 덩어리 안에 있었다. 되돌릴 수 없는 제거에서 11% 손실은 받을 수 없다.
+#
+# 여기 남긴 줄 단위 제거(링크·URL·이미지만 있는 줄)는 판정이 명확하고 손실이 관측된
+# 적이 없다. 애매한 것은 색인 뒤 metadata.excluded 표시로 돌린다 - 원본 행이 남아
+# 되돌릴 수 있고, 오탐이 나도 원문 대조 화면이 모델이 받은 것을 그대로 보여준다.
 
 
 def has_usable_content(content_md: str | None) -> bool:
@@ -194,16 +234,39 @@ _ECONOMY_WRITE_MODEL = "gpt-5.4-mini-2026-03-17"
 # 1콜·600토큰이라 비용이 무시할 수준이라, 절약 모드에서도 상위 모델을 쓴다.
 # (Sonnet 5는 같은 역할에서 계획 실패 1/2회 관측 — 안정성 때문에 4.6 유지)
 _PLAN_MODEL = "claude-sonnet-4-6"
+# 고급 모드 — 수집은 표준과 같은 Haiku로 환원(2026-08-14 결정, 절감 -$6.5/런).
+# 같은 주제 고급/표준 쌍 실측($33.84 분해)에서 Sonnet 수집의 품질 이득이 확인되지
+# 않았다: 두 런 모두 20절 완주·분량 동등, Sonnet이 회수 본문을 1.8배 긁었지만 인용
+# 기여는 업로드 자료가 지배(고급 런 인용의 77%)라 회수량이 본문 품질로 이어지지
+# 않았다. 부실 수집의 하방은 표준과 동일하게 작성 앞의 자료 검토 게이트가 막는다.
+# 본문은 모델 품질이 그대로 문장에 남는 구간이라 Opus 유지.
+_PREMIUM_RESEARCH_MODEL = "claude-haiku-4-5"
+# 목차 설계·pm_verify는 Sonnet 유지 — 런당 콜 수가 적어(설계 1콜·검증 챕터당 1콜)
+# 절감 실익이 없고, 구조·판정 품질은 지키는 쪽이 이득.
+_PREMIUM_SUPPORT_MODEL = "claude-sonnet-4-6"
+_PREMIUM_WRITE_MODEL = "claude-opus-5"
+# 고급 모드는 파트 계획도 Opus로 쓴다(사용자 결정 2026-08-11). 절당 1콜·수백 토큰이라
+# 비용 영향은 미미한데, 파트 소주제 구성이 문서 구조를 그대로 좌우한다.
+_PREMIUM_PLAN_MODEL = "claude-opus-5"
 
 
 def _models_for(state: ProjectState) -> dict[str, str]:
     """프로젝트 품질 모드(config.model_mode) → 역할별 모델.
 
-    economy: 수집·검증은 Haiku, 본문은 gpt-5.4-mini(비용 우선). standard: 전역 설정
-    (DB 오버라이드→env, 기본 Sonnet 4.6). 두 모드 모두 파트 계획만 _PLAN_MODEL.
-    RAPTOR(gemini)·임베딩은 모드와 무관.
+    premium: 수집은 Haiku(표준과 동일), 목차 설계·검증은 Sonnet 4.6, 본문·파트
+    계획은 Opus 5(품질 우선). economy: 수집·검증은 Haiku, 본문은 gpt-5.4-mini
+    (비용 우선). standard: 전역 설정(DB 오버라이드→env, 기본 Sonnet 4.6).
+    economy·standard는 파트 계획만 _PLAN_MODEL. RAPTOR(gemini)·임베딩은 모드와 무관.
     """
     mode = state.options.get("model_mode") if isinstance(state.options, dict) else None
+    if mode == "premium":
+        return {
+            "planner": _PREMIUM_SUPPORT_MODEL,
+            "research": _PREMIUM_RESEARCH_MODEL,
+            "write": _PREMIUM_WRITE_MODEL,
+            "write_plan": _PREMIUM_PLAN_MODEL,
+            "verify": _PREMIUM_SUPPORT_MODEL,
+        }
     if mode == "economy":
         return {
             "planner": _ECONOMY_MODEL,
@@ -221,15 +284,51 @@ def _models_for(state: ProjectState) -> dict[str, str]:
     }
 
 
+@lru_cache(maxsize=1)
+def _analyst_query_catalog() -> dict[str, list[str]]:
+    """에이전트 이름 → 검색 질의 템플릿. 수집 브리프 렌더링용(파일 카탈로그 1회 로드)."""
+    from src.prompts import list_analysts
+
+    return {a.name: list(a.queries or []) for a in list_analysts()}
+
+
+# 절 브리프에 실을 관점 질의 상한 — 다관점 절(최대 5명×2)에서 브리프가 검색어
+# 나열로 비대해지지 않게 자른다. 앞 순서 에이전트가 절의 주 관점이다.
+_BRIEF_ANALYST_QUERIES_MAX = 6
+
+
 def _section_brief(sec: SectionPlan) -> str:
-    """검색 질의용 절 브리프 — 제목만으론 못 찾는 절(예산·경제성)에 방향·관점을 실어준다."""
-    parts = [f"{sec.chapter_number}.{sec.section_number} {sec.title}"]
+    """검색 질의용 절 브리프 — 제목만으론 못 찾는 절(예산·경제성)에 방향·관점을 실어준다.
+
+    장 제목을 함께 싣는다 — 비교형 목차에서는 '개요'·'시사점' 같은 절 제목이 장마다
+    반복되므로, 장을 모르면 수집기가 네 장에 같은 검색을 돈다(2026-08-14 실측).
+    """
+    head = f"{sec.chapter_number}.{sec.section_number} {sec.title}"
+    if sec.chapter_title and sec.chapter_title.lower() not in sec.title.lower():
+        head += f" ({sec.chapter_title})"
+    parts = [head]
     if sec.direction:
         parts.append(sec.direction)
     if sec.key_points:
         parts.append("핵심: " + ", ".join(sec.key_points[:4]))
     if sec.analysts:
         parts.append("관점: " + ", ".join(sec.analysts))
+        # 관점의 검색 질의 템플릿을 수집기에 실어 보낸다(2026-08-31 전수 조사) —
+        # 이름만 나열하면 수집기는 그 관점이 요구하는 데이터(특허 출원 통계 등)를
+        # 검색할 이유를 모른다. 철강 실사고: 특허분석 에이전트의 "patent analysis"
+        # 질의가 수집·검색 어디에서도 발화되지 않아 특허 자료가 코퍼스에 0건이었고,
+        # 4.3절은 통계 없는 계획서가 됐다.
+        anchor = " ".join(f"{sec.chapter_title} {sec.title}".split())
+        rendered: list[str] = []
+        for name in sec.analysts:
+            for template in _analyst_query_catalog().get(name, [])[:2]:
+                if not isinstance(template, str):
+                    continue
+                q = " ".join(template.replace("{topic}", anchor).split())
+                if q and q not in rendered:
+                    rendered.append(q)
+        if rendered:
+            parts.append("필수 검색어: " + " / ".join(rendered[:_BRIEF_ANALYST_QUERIES_MAX]))
     return " — ".join(parts)
 
 
@@ -238,6 +337,9 @@ def _chapter_groups(state: ProjectState) -> list[tuple[int, str, list[str]]]:
 
     챕터 제목은 SectionPlan에 없어 config.outline에서 위치로 가져오고, 없으면
     'N장' 폴백(질의 topic 결합용이라 근사면 충분).
+
+    plan에 chapter_title이 실려 오면 그쪽이 우선이다 — config.outline 폴백은 이 필드가
+    없던 시절 게이트 payload에서 복원된 옛 런을 위해 남겨 둔다.
     """
     titles: dict[int, str] = {}
     outline = state.options.get("outline") if isinstance(state.options, dict) else None
@@ -245,6 +347,9 @@ def _chapter_groups(state: ProjectState) -> list[tuple[int, str, list[str]]]:
         for i, ch in enumerate(outline.get("chapters") or [], start=1):
             if isinstance(ch, dict) and isinstance(ch.get("title"), str) and ch["title"].strip():
                 titles[i] = ch["title"].strip()
+    for s in state.section_plan:
+        if s.chapter_title:
+            titles[s.chapter_number] = s.chapter_title
     groups: dict[int, list[str]] = {}
     for s in state.section_plan:
         groups.setdefault(s.chapter_number, []).append(s.title)
@@ -256,8 +361,19 @@ def _chapter_groups(state: ProjectState) -> list[tuple[int, str, list[str]]]:
 _PDF_PAGE_LIMIT_SIGNAL = "maximum of 100 pdf pages"
 
 
+# 서버 도구 루프가 쌓아 올린 대화가 모델 입력 상한을 넘겼을 때의 신호. pause_turn
+# 재전송은 직전 턴까지를 통째로 다시 보내므로 회수한 페이지 본문이 계속 누적된다 —
+# base64 PDF는 재전송에서 걷어내지만(adapters/anthropic._scrub_base64_sources) HTML
+# 본문 텍스트는 그대로 쌓인다. 2026-08-19 스모크 실측: 1,136,960 토큰 > 200,000.
+_CONTEXT_OVERFLOW_SIGNAL = "prompt is too long"
+
+
 def _is_pdf_page_limit_error(exc: Exception) -> bool:
     return _PDF_PAGE_LIMIT_SIGNAL in str(exc).lower()
+
+
+def _is_context_overflow_error(exc: Exception) -> bool:
+    return _CONTEXT_OVERFLOW_SIGNAL in str(exc).lower()
 
 
 async def _collect_chapter(
@@ -267,10 +383,19 @@ async def _collect_chapter(
     project_id: UUID,
     chapter: int,
 ) -> ResearchResult:
-    """챕터 1개 수집 — PDF 100페이지 400이면 회수 횟수를 1로 줄여 1회 재시도.
+    """챕터 1개 수집 — 회수(web_fetch)가 원인인 400이면 회수 횟수를 1로 줄여 1회 재시도.
 
-    재시도가 없으면 큰 PDF 하나가 챕터를 통째로 0건으로 만든다(2026-08-06 실측:
-    12콜 중 6콜 전멸 → 자료 6건). 재시도는 1회로 캡해 무한성을 유지한다.
+    두 가지가 같은 처방을 쓴다:
+    - PDF 100페이지 400: 재시도가 없으면 큰 PDF 하나가 챕터를 통째로 0건으로 만든다
+      (2026-08-06 실측: 12콜 중 6콜 전멸 → 자료 6건).
+    - 입력 상한 초과: 회수한 페이지 본문이 pause_turn 재전송에 누적돼 터진다
+      (2026-08-19 스모크: 1,136,960 > 200,000 토큰으로 1장이 통째로 실패, 자료 2건).
+
+    재호출은 요청을 처음부터 새로 만들므로 누적분이 사라지고, 회수를 1회로 줄여
+    다시 쌓이지 않게 한다. 재시도는 1회로 캡해 무한성을 유지한다.
+
+    회수 횟수 자체를 낮추는 처방은 이미 실패했다 — 2로 조였더니 HTML 회수가 목 졸려
+    자료가 18건에서 9건으로 반토막 났다(config.research_max_fetch_uses 주석).
     """
     service = _research_service_factory()
     try:
@@ -282,12 +407,14 @@ async def _collect_chapter(
             max_tokens=settings.research_max_tokens,
         )
     except LLMClientError as exc:
-        if not _is_pdf_page_limit_error(exc):
+        overflow = _is_context_overflow_error(exc)
+        if not (_is_pdf_page_limit_error(exc) or overflow):
             raise
         logger.warning(
-            "research.pdf_page_limit_retry",
+            "research.fetch_limit_retry",
             project_id=str(project_id),
             chapter=chapter,
+            reason="context_overflow" if overflow else "pdf_page_limit",
             fetch_uses=settings.research_max_fetch_uses,
         )
         return await service.collect(
@@ -297,6 +424,19 @@ async def _collect_chapter(
             max_fetch_uses=1,
             max_tokens=settings.research_max_tokens,
         )
+
+
+def _search_scope(state: ProjectState) -> str:
+    """검색 범위(국내/해외/모두) — 프로젝트 옵션에서 온다.
+
+    국내 제도·통계가 본질인 보고서와 해외 기술 동향이 본질인 보고서는 정답이 달라
+    한쪽으로 고정할 수 없다(2026-08-11). 값이 없거나 모르면 '모두'(개편 전 기본과
+    같은 행동 — 신규 프로젝트는 폼이 항상 값을 쓴다).
+    """
+    from src.services.research.web_research import DEFAULT_SEARCH_SCOPE, SEARCH_SCOPES
+
+    raw = state.options.get("search_scope") if isinstance(state.options, dict) else None
+    return raw if raw in SEARCH_SCOPES else DEFAULT_SEARCH_SCOPE
 
 
 async def _collect_sources(
@@ -327,7 +467,10 @@ async def _collect_sources(
     직접 원인이었다(2026-08-09). 겨냥할 절이 없으면 전 챕터로 되돌린다.
     """
     pid = state.project_id
-    indexer = _web_indexer_factory()
+    # 첫 호출은 BGE-M3 ONNX 로드(수 초, CPU)다 — 단일 워커 루프에서 그대로 돌리면
+    # 그동안 모든 HTTP 응답이 멈춘다(2026-08-15 실측: 승인 직후 화면이 몇 초 '버퍼링').
+    # 스레드로 내보내 로드 중에도 API가 살아 있게 한다(이후 호출은 싱글턴이라 즉시).
+    indexer = await asyncio.to_thread(_web_indexer_factory)
     refs: list[SourceRef] = []
     seen: set[str] = set(exclude_keys)
     chapters = _chapter_groups(state)
@@ -359,12 +502,10 @@ async def _collect_sources(
                 break
             label = f"자료 수집 · {ch_num}장 {ch_title}" + (" (보충)" if pass_no > 1 else "")
             emit_step(pid, "research", label, "started")
-            topic = f"{state.topic} — {ch_title}"
-            if supplement:
-                topic += " (추가 심화 자료: 통계·사례·상반된 관점)"
             spec = ResearchSpec(
-                topic=topic,
+                topic=collection_topic(state.topic, ch_title, supplement=supplement),
                 report_type=state.preset or "blank",
+                scope=_search_scope(state),
                 outline=section_titles,
                 briefs=[
                     _section_brief(sec)
@@ -479,6 +620,123 @@ def source_dedup_key(url: str | None, title: str | None) -> str:
     return (url or title or "").strip().lower()
 
 
+def _with_brief_queries(state: ProjectState, ai_plan: dict | None) -> ProjectState:
+    """AI 계획의 절별 search_queries를 section_plan에 병합한다.
+
+    계획이 없거나(콜 실패) 질의가 비면 plan은 그대로다 — 검색은 절 제목·핵심 포인트로
+    돌아가고 실행이 막히지 않는다. 게이트에서 사람이 목차를 고쳐 replan하면 이 함수가
+    다시 돌아 질의도 새 목차 기준으로 갈린다.
+    """
+    if not isinstance(ai_plan, dict):
+        return state
+    by_label = {
+        f"{s.get('chapter')}.{s.get('section')}": s.get("search_queries") or []
+        for s in (ai_plan.get("sections") or [])
+        if isinstance(s, dict)
+    }
+    if not any(by_label.values()):
+        return state
+    updated = [
+        sec.model_copy(
+            update={
+                "search_queries": [
+                    str(q) for q in by_label.get(f"{sec.chapter_number}.{sec.section_number}", [])
+                ]
+            }
+        )
+        for sec in state.section_plan
+    ]
+    n = sum(len(sec.search_queries) for sec in updated)
+    logger.info("brief.section_queries", n_queries=n, n_sections=len(updated))
+    return state.with_section_plan(updated)
+
+
+async def plan_brief(state: ProjectState) -> ProjectState:
+    """설계 브리프 단계 — 목차를 실행 계획(section_plan)으로 확정한다. **수집 전**.
+
+    LLM을 쓰지 않는다. 사용자가 확정한 목차를 그대로 옮기고, 브리프가 보여줄 검색
+    질의는 검색기와 같은 함수로 계산한다 — 이 게이트가 보여줄 것은 '우리가 실제로 할
+    일'이지 그것에 대한 LLM의 서술이 아니다. 화면과 실행이 갈라지면 게이트는 안심시키는
+    장식이 된다(services/generation/design_brief 참조).
+
+    진행 이벤트는 'research' 단계의 세부 스텝으로 낸다 — 프론트 phase는 고정 enum이라
+    새 이름을 넣으면 메시지 파싱이 깨진다(ws-messages.ts). 게이트 화면 분기는 phase가
+    아니라 pending_gate.gate 문자열이 한다.
+    """
+    pid = state.project_id
+    emit_phase(pid, "research", "started")
+    emit_step(pid, "research", "설계 브리프 작성", "started")
+    if not state.section_plan:
+        outline = state.options.get("outline") if isinstance(state.options, dict) else None
+        if outline:
+            # 사용자가 생성 화면에서 확정한 목차 — LLM 생략, 본 그대로 실행된다.
+            state = state.with_section_plan(plan_from_outline(outline))
+        else:
+            state = state.with_section_plan(
+                await plan_sections(
+                    state.topic,
+                    state.preset or "blank",
+                    model=_models_for(state)["planner"],
+                    client=_plan_client,
+                    user_id=state.user_id,
+                    project_id=state.project_id,
+                )
+            )
+    # 분량 목표는 개인 에이전트까지 해석해야 실제 작성과 같은 값이 나온다 — 카탈로그
+    # 없이 만들면 개인 에이전트 절이 전부 '목표 없음'으로 보이는 거짓 화면이 된다.
+    from src.services.generation.brief_ai import generate_ai_plan
+    from src.services.generation.design_brief import build_design_brief
+
+    catalog = await _analyst_catalog(state.user_id, state.options)
+    mode = state.options.get("model_mode") if isinstance(state.options, dict) else None
+    # 프리셋 도메인 맥락 — 개인 프리셋("u:")·자유 주제는 카탈로그에 없어 빈 값.
+    domain_context = ""
+    if state.preset:
+        try:
+            from src.prompts import load_preset
+
+            domain_context = load_preset(state.preset).domain_context
+        except KeyError:
+            pass
+    brief = build_design_brief(
+        state.section_plan,
+        topic=state.topic,
+        catalog=catalog,
+        model_mode=mode,
+        domain_context=domain_context,
+    )
+    # (업로드 목록 주입은 폐지 — 2026-08-21. 설계 시점의 자료명 배정은 자료 검토에서
+    # 제외될 파일을 가리킬 수 있는 유령 배정이었다. 자료명 수준은 코퍼스 확정 후
+    # source_canon(정본 배정)이 맡고, 설계 브리프는 구조 수준만 다룬다.)
+    # 예상 비용 옆에 '남은 한도'를 같이 보여준다 — 부족해도 **차단하지 않는다**
+    # (2026-08-15 사용자 결정: 경고만). 사람이 게이트에서 숫자 두 개를 보고 판단한다.
+    from src.clients.llm.quota_gate import remaining_budget
+
+    remaining = await remaining_budget(state.user_id)
+    if remaining is not None and isinstance(brief.get("estimate"), dict):
+        brief["estimate"]["remaining_limit_usd"] = round(remaining, 1)
+    emit_step(pid, "research", "설계 브리프 작성", "completed")
+    # AI 실행 계획 — 절별 목표·자료 전략·작성 구성 + 절 간 흐름(LLM 1콜, 제안 전용).
+    # 실패해도 게이트는 결정적 브리프만으로 뜬다(계획이 게이트를 막으면 안 된다).
+    emit_step(pid, "research", "AI 실행 계획", "started")
+    ai_plan = await generate_ai_plan(
+        brief,
+        model=_models_for(state)["planner"],
+        user_id=state.user_id,
+        project_id=state.project_id,
+        client=_brief_client,
+    )
+    brief["ai_plan"] = ai_plan
+    # 계획이 만든 절별 검색 질의를 plan에 싣는다 — 검색 질의를 사람이 쓰게 하면 대부분
+    # 비워 둔다(개인 에이전트 spec.queries가 전부 빈 배열이었던 이유). 기계가 기본값을
+    # 만들고 사람은 게이트 화면에서 보고 고친다. plan에 실어야 config._section_plan으로
+    # 영속되어 재개·작성까지 같은 질의를 쓴다.
+    state = _with_brief_queries(state, ai_plan)
+    emit_step(pid, "research", "AI 실행 계획", "completed" if ai_plan else "failed")
+    state = state.model_copy(update={"design_brief": brief})
+    return state
+
+
 async def collect(state: ProjectState) -> ProjectState:
     """목차 확인 → 챕터 단위 웹 수집 → 출처 스테이징(원문 저장). SOURCE_POOL 게이트 직전까지.
 
@@ -543,15 +801,36 @@ async def index(state: ProjectState) -> ProjectState:
     pid = state.project_id
     emit_phase(pid, "indexing", "started")
     emit_step(pid, "indexing", "청킹·임베딩·색인", "started")
-    indexer = _web_indexer_factory()
+    # 파일 소스(업로드·라이브러리) 색인 — 업로드 시점 색인을 유예한 자료(2026-08-20
+    # 사용자 결정: 색인 소유자를 런 색인 단계 하나로)와, 어떤 이유로든 청크가 없는
+    # 파일 자료를 여기서 파싱·색인한다. 종전엔 이 단계가 웹 본문(content_md)만 알아서
+    # 업로드 청크가 사라지면 재색인 경로가 없었다(v5c 1차 사고: 업로드 13건 0청크로
+    # 웹만 갖고 진행). 순차 처리 — docling 파싱이 파일당 수 GB를 쓴다(동시 색인 OOM 실측).
+    await _index_pending_file_sources(state.project_id)
+    # 모델 첫 로드를 루프 밖으로 — _collect_sources와 같은 이유(단일 워커 API 생존).
+    indexer = await asyncio.to_thread(_web_indexer_factory)
     staged = await indexer.load_included(state.project_id)
+    # 증분 색인 — 이미 청크가 있는 자료는 건너뛴다. index_existing은 무조건 INSERT라
+    # 재실행(크래시 재개·리허설 공백의 자료 게이트 재개방 후 재색인)이 같은 자료를
+    # 두 번 색인하면 청크가 중복돼 검색 결과까지 오염된다. 재수집으로 본문이 바뀐
+    # 자료는 잡지 못하는 한계가 있지만, 중복 오염보다 낫다(본문 교체는 드문 경로).
+    already = await _chunked_source_ids(state.project_id)
     # 색인·RAPTOR는 수 분짜리 단계다 — 자료별/클러스터별 진행을 세부 단계로 발행해
     # 스테퍼가 "멈춘 것처럼" 보이지 않게 한다(2026-08-07 실사용 보고).
     usable = [s for s in staged if has_usable_content(s.content_md)]
-    indexed: list[UUID] = []
-    for i, src in enumerate(usable, start=1):
+    todo = [s for s in usable if s.source_id not in already]
+    if len(todo) < len(usable):
+        logger.info(
+            "indexing.incremental_skip",
+            project_id=str(pid),
+            skipped=len(usable) - len(todo),
+            total=len(usable),
+        )
+    indexed: list[UUID] = [s.source_id for s in usable if s.source_id in already]
+    for i, src in enumerate(todo, start=1):
+        cancel.raise_if_cancelled(pid)  # 자료 단위 취소 지점(파일 색인 루프와 같은 이유)
         title = f" · {src.title[:24]}" if src.title else ""
-        emit_step(pid, "indexing", f"청킹·임베딩 {i}/{len(usable)}{title}", "started")
+        emit_step(pid, "indexing", f"청킹·임베딩 {i}/{len(todo)}{title}", "started")
         result = await indexer.index_existing(
             project_id=state.project_id,
             source_id=src.source_id,
@@ -561,6 +840,19 @@ async def index(state: ProjectState) -> ProjectState:
         )
         if result.chunks_created:
             indexed.append(src.source_id)
+    # 0청크로 끝난 출처(빈 본문·회수 실패 잔재)는 인용될 수 없다 — 채택으로 남기면
+    # 전역 인용 번호 자리를 차지해 출처장에 유령 항목이 실린다. 재수집이 본문을
+    # 채우면 stage()가 자동 제외를 되돌린다.
+    from src.services.indexing.exclusion import auto_exclude_chunkless
+    from src.services.retrieval.rehearsal import bump_index_version
+
+    n_excluded = await auto_exclude_chunkless(
+        state.project_id, [s.source_id for s in staged if s.source_id not in set(indexed)]
+    )
+    new_chunks = len(indexed) > len(already & {s.source_id for s in usable})
+    if new_chunks or n_excluded:
+        # 청크 구성이 변했다 — 리허설 캐시 전체 무효(신규 색인 시 프로젝트 전체 무효 규칙).
+        await bump_index_version(state.project_id)
     logger.info(
         "indexing.done",
         project_id=str(state.project_id),
@@ -568,7 +860,9 @@ async def index(state: ProjectState) -> ProjectState:
         n_indexed=len(indexed),
     )
     emit_step(pid, "indexing", "청킹·임베딩·색인", "completed")
-    if settings.raptor_enabled and indexed:
+    if settings.raptor_enabled and indexed and (new_chunks or not await _has_raptor_tree(pid)):
+        # 새 청크가 없고 트리도 이미 있으면 재구축하지 않는다 — 재개방 후 재색인이
+        # 자료 변화 없이 돌아왔을 때 수백 콜짜리 요약을 다시 사지 않기 위함.
         emit_step(pid, "indexing", "배경 요약 트리(RAPTOR)", "started")
         try:
             n_nodes = await _raptor_builder_factory().build(
@@ -583,24 +877,475 @@ async def index(state: ProjectState) -> ProjectState:
             # RAPTOR는 품질 부스터지 필수 경로가 아니다 — 실패해도 파이프라인은 계속 간다.
             logger.warning("raptor.build_failed", project_id=str(state.project_id), exc_info=True)
             emit_step(pid, "indexing", "배경 요약 트리(RAPTOR)", "failed")
+    state = await _rehearser(state)
     emit_phase(pid, "indexing", "completed")
     return state.mark_indexed(indexed)
 
 
-def _ensure_section_plan(state: ProjectState) -> ProjectState:
-    """섹션 계획이 없으면 최소 계획으로 폴백.
+async def _index_pending_file_sources(project_id: UUID) -> None:
+    """청크 없는 파일 소스(업로드·라이브러리)를 파싱·색인한다 — 런 색인 단계 소유.
 
-    정상 경로는 research의 플래너가 계획을 만든다. 이 폴백은 계획 없이 write에
-    진입한 비정상 흐름(레거시 데이터·테스트)에서 루프를 관통시키는 안전망이다.
+    실패는 자료 단위 격리 — 행 메타에 index_error를 남기고 계속 간다. 0청크 잔존분은
+    호출부의 auto_exclude_chunkless가 걷어내고, 리허설 공백이면 자료 게이트가 재개방된다.
+    """
+    from pathlib import Path
+
+    from sqlalchemy import select
+
+    from src.db.models.chunk import Chunk
+    from src.db.models.library_node import LibraryNode
+    from src.db.models.project_source import ProjectSource
+    from src.db.session import async_session_maker
+    from src.services.indexing.exclusion import apply_index_outcome
+    from src.services.indexing.vector import SourceInput, build_vector_indexing_service
+
+    async with async_session_maker() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(ProjectSource).where(
+                        ProjectSource.project_id == project_id,
+                        # 라이브러리도 받는다 — 실행 전 첨부는 attach 경로가 색인을
+                        # "런의 색인 단계로" 미루는데(index_deferred), 이 단계가 업로드만
+                        # 보면 그 유예를 아무도 안 받아 채택 자료가 0청크로 남는다
+                        # (2026-08-27 철강 런 실사고: 핵심 PDF가 통째로 빠졌다).
+                        ProjectSource.source_type.in_(("upload", "library")),
+                        ProjectSource.is_included.is_(True),
+                        ~ProjectSource.id.in_(
+                            select(Chunk.source_id).where(Chunk.project_id == project_id)
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        node_ids = [r.library_node_id for r in rows if r.library_node_id is not None]
+        node_paths: dict[UUID, str] = (
+            dict(
+                (
+                    await session.execute(
+                        select(LibraryNode.id, LibraryNode.file_path).where(
+                            LibraryNode.id.in_(node_ids), LibraryNode.file_path.is_not(None)
+                        )
+                    )
+                ).all()
+            )
+            if node_ids
+            else {}
+        )
+
+    def _file_of(r: ProjectSource) -> Path | None:
+        raw = r.upload_path if r.source_type == "upload" else node_paths.get(r.library_node_id)
+        return Path(raw) if raw else None
+
+    todo = [(r, p) for r in rows if (p := _file_of(r)) is not None and p.is_file()]
+    if not todo:
+        return
+    service = build_vector_indexing_service()
+    for i, (row, file_path) in enumerate(todo, start=1):
+        # 자료 단위 취소 지점 — 색인 단계에 체크포인트가 없어 취소가 2연속 무시됐다
+        # (2026-08-28 v7 실측: cancelling 상태로 4/13→5/13 계속 진행, 백엔드 킬로만
+        # 멈춤). 파일 하나가 끝날 때마다 관측한다.
+        cancel.raise_if_cancelled(project_id)
+        title = (row.title or "파일")[:24]
+        emit_step(project_id, "indexing", f"파일 색인 {i}/{len(todo)} · {title}", "started")
+        error: str | None = None
+        result = None
+        try:
+            result = await service.index_source(
+                SourceInput(
+                    project_id=project_id,
+                    source_type=row.source_type,
+                    file_path=file_path,
+                    upload_path=row.upload_path,
+                    library_node_id=row.library_node_id,
+                    title=row.title,
+                )
+            )
+        except Exception:
+            error = "자료를 색인하지 못했습니다. 파일이 손상되지 않았는지 확인해 주세요."
+            logger.warning(
+                "indexing.file_source_failed",
+                project_id=str(project_id),
+                title=title,
+                exc_info=True,
+            )
+        async with async_session_maker() as session:
+            fresh = await session.get(ProjectSource, row.id)
+            if fresh is None:
+                continue
+            meta = dict(fresh.metadata_ or {})
+            meta["indexing"] = False
+            meta.pop("index_deferred", None)
+            if error:
+                meta["index_error"] = error
+            else:
+                meta.pop("index_error", None)
+            if result is not None:
+                meta["origin"] = fresh.source_type
+                meta["chunks"] = result.chunks_created
+                if getattr(result, "page_count", None):
+                    meta["page_count"] = result.page_count
+                if fresh.upload_path and not meta.get("size_bytes"):
+                    try:
+                        meta["size_bytes"] = Path(fresh.upload_path).stat().st_size
+                    except OSError:
+                        pass
+            fresh.metadata_ = meta
+            apply_index_outcome(fresh, int(result.chunks_created) if result else 0)
+            await session.commit()
+        emit_step(
+            project_id,
+            "indexing",
+            f"파일 색인 {i}/{len(todo)} · {title}",
+            "completed" if result is not None else "failed",
+        )
+
+
+async def _chunked_source_ids(project_id: UUID) -> set[UUID]:
+    """이미 청크가 있는 자료 id — 증분 색인의 스킵 판정용."""
+    from sqlalchemy import select
+
+    from src.db.models.chunk import Chunk
+    from src.db.session import async_session_maker
+
+    async with async_session_maker() as session:
+        rows = (
+            await session.execute(
+                select(Chunk.source_id)
+                .where(Chunk.project_id == project_id, Chunk.track == "content")
+                .distinct()
+            )
+        ).all()
+    return {r[0] for r in rows if r[0] is not None}
+
+
+async def _has_raptor_tree(project_id: UUID) -> bool:
+    from sqlalchemy import select
+
+    from src.db.models.raptor_node import RaptorNode
+    from src.db.session import async_session_maker
+
+    async with async_session_maker() as session:
+        row = (
+            await session.execute(
+                select(RaptorNode.id).where(RaptorNode.project_id == project_id).limit(1)
+            )
+        ).scalar_one_or_none()
+    return row is not None
+
+
+async def _design_flows_inbound(project_id: UUID) -> dict[str, int]:
+    """AI 실행 계획 flows의 절별 수신 수 — '구성형 절'(앞 절 산출로 쓰는 절) 판정용.
+
+    수신이 많은 절은 검색으로 채우는 절이 아니라 앞 절 결과를 조립하는 절이다 —
+    리허설 공백을 자료 부족으로 오진하면 안 된다(builds_on 명시 계약 전까지의 근사).
+    flows는 게이트 payload의 AI 원안에서 읽는다(사람 수정본 decision.ai_plan에는
+    sections만 실린다).
+    """
+    from sqlalchemy import select
+
+    from src.db.models.review_point import ReviewPoint
+    from src.db.session import async_session_maker
+
+    try:
+        async with async_session_maker() as session:
+            row = (
+                await session.execute(
+                    select(ReviewPoint)
+                    .where(
+                        ReviewPoint.project_id == project_id,
+                        ReviewPoint.gate == "design_brief",
+                    )
+                    .order_by(ReviewPoint.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+    except Exception:
+        logger.warning("rehearsal.flows_load_failed", project_id=str(project_id))
+        return {}
+    ai = (row.payload or {}).get("ai_plan") if row is not None else None
+    flows = ai.get("flows") if isinstance(ai, dict) else None
+    inbound: dict[str, int] = {}
+    for f in flows if isinstance(flows, list) else []:
+        if isinstance(f, dict) and f.get("to"):
+            to = str(f["to"])
+            inbound[to] = inbound.get(to, 0) + 1
+    return inbound
+
+
+# 구성형 절 판정 하한 — flows 수신이 이 수 이상이면 '앞 절 산출로 쓰는 절'로 본다.
+_CONSTRUCTIVE_MIN_INFLOWS = 2
+# HyDE 남발 경고 비율 — 이 이상이면 부족이 아니라 질의 자체가 문제라는 신호(킬 기준).
+_HYDE_OVERUSE_RATIO = 0.75
+
+
+def _hyde_forced_retriever(state: ProjectState) -> SectionRetriever:
+    """HyDE를 강제로 켠 retriever — 리허설 부족 밴드의 재검색 1회용."""
+    opts = dict(state.options) if isinstance(state.options, dict) else {}
+    opts["hyde_enabled"] = True
+    return _retriever_factory(state.model_copy(update={"options": opts}))
+
+
+def _summary_probe(state: ProjectState):
+    """RAPTOR 클러스터 대조용 요약 검색기 — 트리가 꺼져 있으면 None.
+
+    임베딩 클라이언트는 첫 호출 시점에 만든다 — 공백 절이 없는 리허설이 모델 로드를
+    사지 않게(색인 경로에서 이미 로드돼 있으면 싱글턴이라 공짜다).
+    """
+    if not settings.raptor_enabled:
+        return None
+
+    async def probe(query: str):
+        from src.clients.embedding_factory import get_embedding_client
+        from src.db.session import async_session_maker
+        from src.services.retrieval._raptor import make_summary_fetcher
+
+        fetch = make_summary_fetcher(
+            async_session_maker,
+            get_embedding_client(),
+            state.project_id,
+            top_k=settings.raptor_top_k,
+            min_similarity=settings.raptor_min_similarity,
+        )
+        return await fetch(query)
+
+    return probe
+
+
+async def _rehearse(state: ProjectState) -> ProjectState:
+    """검색 리허설 + 계획 점검 — 색인 직후 자동 단계(게이트 아님).
+
+    절마다 **작성과 같은 검색**을 한 번 돌려 근거 충분성을 3밴드로 판정한다
+    (경계는 절 목표 분량에서 유도 — services/retrieval/rehearsal 참조):
+
+    - ok: 진행. hyde: HyDE 재검색 1회로 보강 시도(더 나은 쪽 채택, 그래도 부족하면
+      그대로 진행 — 작성이 scale_for_evidence로 분량을 깎는다).
+    - empty: 자료 게이트 재개방 사유. 단 구성형 절(AI 계획 flows 수신이 많은 절)은
+      검색으로 못 채우는 절이라 재개방 트리거에서 빼고 경고만 남긴다. RAPTOR
+      클러스터에도 유사 요약이 없으면 raptor_gap=True — '질의 문제'가 아니라
+      '자료 자체가 없음'이라는 뜻이라 보강 안내가 정확해진다.
+
+    결과 청크는 section_rehearsals에 영속된다 — 작성은 같은 index_version이면 이
+    목록을 재검색 없이 그대로 쓴다(리허설↔작성 동근거 계약, make_cached_retriever).
+
+    재개방은 프로젝트당 2회까지(config["_rehearsal_reopens"]) — 그 뒤에도 공백이면
+    경고를 남기고 진행한다(절 통합·삭제·성격 재지정은 사람이 취소 후 목차에서 한다).
+    """
+    from src.services.generation.writer_context import build_writer_context
+    from src.services.retrieval.rehearsal import (
+        BAND_EMPTY,
+        BAND_HYDE,
+        classify,
+        current_index_version,
+        empty_floor,
+        needed_evidence,
+        plan_fingerprint,
+        store_rehearsal,
+    )
+    from src.services.retrieval.section import _rerank_query
+
+    pid = state.project_id
+    if not state.section_plan:
+        return state
+    version = await current_index_version(pid)
+    catalog = await _analyst_catalog(state.user_id, state.options)
+    retrieve = _retriever_factory(state)
+    hyde_retrieve: SectionRetriever | None = None
+    flows_in = await _design_flows_inbound(pid)
+    probe = _summary_probe(state)
+    sections_report: list[dict] = []
+    n_total = len(state.section_plan)
+    n_hyde = 0
+    for i, section in enumerate(state.section_plan, start=1):
+        label = f"{section.chapter_number}.{section.section_number} {section.title}"
+        emit_step(pid, "indexing", f"검색 리허설 {i}/{n_total} · {label}", "started")
+        chunks = await retrieve(section)
+        citable = [c for c in chunks if not c.is_summary]
+        # 분량 목표가 없어 기본 창(200~4,000자)으로 떨어진 절은 '목표 없음'으로 본다 —
+        # 200자를 목표로 읽으면 근거 1건에도 ok 밴드가 나와 근거 공백 감지가 꺼진다.
+        _ctx = build_writer_context(section, catalog)
+        needed = needed_evidence(None if _ctx.volume_defaulted else _ctx.min_chars)
+        band = classify(len(citable), needed)
+        hyde_used = False
+        if band == BAND_HYDE:
+            n_hyde += 1
+            if hyde_retrieve is None:
+                hyde_retrieve = _hyde_forced_retriever(state)
+            try:
+                second = [c for c in await hyde_retrieve(section) if not c.is_summary]
+            except Exception:
+                logger.warning("rehearsal.hyde_retry_failed", project_id=str(pid), section=label)
+                second = []
+            if len(second) > len(citable):
+                citable = second
+                hyde_used = True
+            band = classify(len(citable), needed)
+        # 구성형 절 판정 — builds_on 명시 계약이 있으면 그게 정식이다(설계 확정:
+        # flows 수신 2+는 계약 전까지의 근사였다). 계약이 비어 있으면 근사 유지 —
+        # 자유주제·옛 프리셋은 builds_on이 없어 근사가 계속 일해야 한다.
+        constructive = bool(section.builds_on) or (
+            flows_in.get(f"{section.chapter_number}.{section.section_number}", 0)
+            >= _CONSTRUCTIVE_MIN_INFLOWS
+        )
+        raptor_gap = False
+        if band == BAND_EMPTY and probe is not None:
+            try:
+                raptor_gap = not await probe(_rerank_query(section, state.topic))
+            except Exception:
+                logger.warning("rehearsal.raptor_probe_failed", project_id=str(pid))
+        try:
+            await store_rehearsal(
+                pid,
+                section.section_id,
+                index_version=version,
+                chunks=citable,
+                band=band,
+                floor_passed=len(citable),
+                needed=needed,
+                hyde_used=hyde_used,
+                warnings={"constructive": constructive, "raptor_gap": raptor_gap},
+                plan_hash=plan_fingerprint(section),
+            )
+        except Exception:
+            # 영속 실패 → 작성이 실검색 폴백을 쓴다. 리허설이 색인을 막으면 안 된다.
+            logger.warning("rehearsal.store_failed", project_id=str(pid), exc_info=True)
+        emit_step(pid, "indexing", f"검색 리허설 {i}/{n_total} · {label}", "completed")
+        sections_report.append(
+            {
+                "section_id": str(section.section_id),
+                "label": label,
+                "band": band,
+                "floor_passed": len(citable),
+                "needed": needed,
+                "floor": empty_floor(needed),
+                "hyde_used": hyde_used,
+                "constructive": constructive,
+                "raptor_gap": raptor_gap,
+            }
+        )
+    if n_hyde and n_hyde / n_total > _HYDE_OVERUSE_RATIO:
+        # 부족 절이 이만큼 많으면 개별 절 보강이 아니라 질의 설계 문제다 — HyDE 킬 기준
+        # 판단(20절 중 15절 발동)에 쓰는 신호라 경고로 남긴다.
+        logger.warning("rehearsal.hyde_overuse", project_id=str(pid), n_hyde=n_hyde, total=n_total)
+    gap_sections = [s for s in sections_report if s["band"] == BAND_EMPTY and not s["constructive"]]
+    opts = state.options if isinstance(state.options, dict) else {}
+    try:
+        reopens = int(opts.get("_rehearsal_reopens") or 0)
+    except (TypeError, ValueError):
+        reopens = 0
+    reopen = bool(gap_sections) and reopens < 2
+    report = {
+        "index_version": version,
+        "sections": sections_report,
+        "n_hyde": n_hyde,
+        "reopen": reopen,
+        "reopens_used": reopens,
+        # 재개방 예산 소진 후에도 공백 — 경고만 남기고 진행한다(분량은 작성이 깎는다).
+        "escalated": bool(gap_sections) and reopens >= 2,
+    }
+    logger.info(
+        "rehearsal.done",
+        project_id=str(pid),
+        bands={
+            b: sum(1 for s in sections_report if s["band"] == b) for b in ("ok", "hyde", "empty")
+        },
+        n_hyde_used=sum(1 for s in sections_report if s["hyde_used"]),
+        reopen=reopen,
+    )
+    update: dict = {"rehearsal": report}
+    if reopen:
+        update["options"] = {**opts, "_rehearsal_reopens": reopens + 1}
+        if not state.sources:
+            # 재개방 게이트 payload에 자료 풀이 실리도록 채택 자료를 상태로 복원.
+            update["sources"] = await _adopted_source_refs(pid)
+    return state.model_copy(update=update)
+
+
+def _ensure_section_plan(state: ProjectState) -> ProjectState:
+    """섹션 계획이 없으면 **목차에서 다시 세우고**, 그것도 없을 때만 최소 계획으로 폴백.
+
+    정상 경로는 research의 플래너가 계획을 만들어 config에 남긴다(_section_plan). 그런데
+    그 키가 없는 옛 프로젝트가 있다 — 그때 곧장 2절짜리 폴백으로 떨어지면 **저장된 절이
+    전부 계획 밖으로 보여** 잔재 청소기가 본문을 통째로 지운다(2026-08-27 실사고: 35절
+    보고서가 다시 열기 후 0절이 됐다. 확정 스냅샷이 없었으면 복구도 못 했다).
+
+    config.outline은 사람이 확정한 목차이고 절 안정 id까지 들고 있어, 여기서 세운 계획은
+    저장된 행과 id로 그대로 맞는다(실측: 35/35 일치). 폴백은 목차조차 없을 때의 마지막
+    안전망으로만 남긴다.
     """
     if state.section_plan:
         return state
+    outline = state.options.get("outline") if isinstance(state.options, dict) else None
+    if isinstance(outline, dict) and outline.get("chapters"):
+        try:
+            from src.services.generation.planner import plan_from_outline
+
+            plan = plan_from_outline(outline)
+        except ValueError:  # 제목 없는 빈 목차
+            plan = []
+        if plan:
+            logger.info(
+                "write.plan_rebuilt_from_outline",
+                project_id=str(state.project_id),
+                n_sections=len(plan),
+            )
+            return state.with_section_plan(plan)
     logger.warning("write.plan_fallback", project_id=str(state.project_id))
     plan = [
         SectionPlan(chapter_number=1, section_number=1, title="개요"),
         SectionPlan(chapter_number=2, section_number=1, title="분석"),
     ]
     return state.with_section_plan(plan)
+
+
+async def _ensure_dependency_graph(state: ProjectState) -> ProjectState:
+    """의존 그래프가 비어 있으면 AI가 초안을 뽑아 채운다 — 순서와 이어받기는 한 질문이다.
+
+    작성 루프는 이미 이 그래프로 순서를 정한다(의존 있는 절은 대기, 없는 절끼리 병렬).
+    그래서 "어디를 순차로 쓸까"와 "어느 절이 앞 절을 이어받나"를 따로 물을 이유가 없다.
+    예전엔 사람이 목차 설계에서 일일이 등록해야 했고, 그래서 사실상 죽은 필드였다
+    (예타 프리셋 146절 중 5절, v6 런 주입 적립 0건).
+
+    **지금은 폴백이다**(2026-08-28) — 게이트에서 승인된 브리프 flows가 커밋 시점에
+    builds_on으로 이관되므로(runner._commit_design_plan), 여기는 브리프가 실패했거나
+    flows가 빈 런에서만 돈다. 사람이 본 흐름과 실행 순서가 갈리지 않게 하기 위함이다.
+
+    **이미 값이 있으면 손대지 않는다** — 프리셋이 손으로 적어 둔 것, 사람이 고친 것,
+    flows에서 이관된 것이 정본이다. AI는 빈칸을 메울 뿐이다.
+
+    실패·빈 결과는 그대로 진행한다(종전과 같은 평면 병렬). 여기서 막으면 그래프 하나
+    때문에 런이 죽는다.
+    """
+    plan = list(state.section_plan)
+    if not plan or any(s.builds_on for s in plan):
+        return state
+    from src.services.generation.dependency_graph import draft_builds_on
+
+    emit_step(state.project_id, "writing", "절 의존 그래프", "started")
+    graph = await draft_builds_on(
+        plan,
+        model=_models_for(state)["planner"],
+        user_id=state.user_id,
+        project_id=state.project_id,
+    )
+    emit_step(state.project_id, "writing", "절 의존 그래프", "completed")
+    if not graph:
+        return state
+    updated = [
+        s.model_copy(update={"builds_on": graph[f"{s.chapter_number}.{s.section_number}"]})
+        if f"{s.chapter_number}.{s.section_number}" in graph
+        else s
+        for s in plan
+    ]
+    logger.info(
+        "write.dependency_graph",
+        project_id=str(state.project_id),
+        n_linked=len(graph),
+        n_sections=len(plan),
+    )
+    return state.with_section_plan(updated)
 
 
 def _hyde_enabled_for(state: ProjectState) -> bool:
@@ -611,6 +1356,24 @@ def _hyde_enabled_for(state: ProjectState) -> bool:
     """
     opts = state.options if isinstance(state.options, dict) else {}
     return bool(opts.get("hyde_enabled", settings.hyde_enabled))
+
+
+def _sync_analyst_catalog(state: ProjectState) -> dict:
+    """DB 없이 조립하는 에이전트 카탈로그 — 동기 팩토리(_default_retriever_factory)용.
+
+    검색이 배정 에이전트의 질의(AnalystSpec.queries)를 쓰려면 카탈로그가 필요한데,
+    팩토리는 동기라 DB를 못 본다. 런 시작 스냅샷(config.analysts)과 파일 카탈로그만으로
+    만든다 — 스냅샷이 이미 그 런이 쓸 개인·공유 에이전트를 담고 있어 DB가 필요 없다.
+    스냅샷이 없는 옛 런·미리보기는 파일 카탈로그만으로 돌아간다(시스템 질의는 그대로).
+    """
+    from src.services.prompts import specs_from_snapshot
+
+    frozen = state.options.get("analysts") if isinstance(state.options, dict) else None
+    catalog: dict = {}
+    for spec in specs_from_snapshot(frozen if isinstance(frozen, list) else []):
+        catalog[spec.id] = spec
+        catalog[spec.name] = spec
+    return catalog
 
 
 def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
@@ -644,18 +1407,41 @@ def _default_retriever_factory(state: ProjectState) -> SectionRetriever:
 
         reranker = get_reranker_client()
 
+    # 다국어 검색 — 근거 풀에 외국어 자료가 있을 때만 번역 콜을 건다. 국내 자료만 있는
+    # 프로젝트가 대다수라 무조건 켜면 절마다 헛콜이 하나씩 붙는다. 판단은 첫 검색
+    # 시점에 한 번(여기는 동기 팩토리라 DB를 못 본다).
+    translator = None
+    if settings.multilingual_search_enabled:
+        from src.services.retrieval._multilingual import make_gated_translator
+
+        translator = make_gated_translator(
+            async_session_maker,
+            state.project_id,
+            model=settings.multilingual_query_model,
+            min_foreign_ratio=settings.multilingual_min_foreign_ratio,
+            user_id=state.user_id,
+        )
+
     summary_fetcher = None
-    if settings.raptor_enabled:
+    if settings.raptor_enabled and settings.raptor_write_inject:
+        # A/B의 A팔 — 기본 off. 트리 자체는 리허설의 클러스터 대조(_summary_probe)에
+        # 계속 쓰이므로 구축은 유지된다. 되돌리기는 raptor_write_inject 하나.
         from src.services.retrieval._raptor import make_summary_fetcher
 
         summary_fetcher = make_summary_fetcher(
-            async_session_maker, embedder, state.project_id, top_k=settings.raptor_top_k
+            async_session_maker,
+            embedder,
+            state.project_id,
+            top_k=settings.raptor_top_k,
+            min_similarity=settings.raptor_min_similarity,
         )
     return make_section_retriever(
         hybrid,
         state.project_id,
         reranker=reranker,
         summary_fetcher=summary_fetcher,
+        translate=translator,
+        analyst_catalog=_sync_analyst_catalog(state),
         # 주제 앵커 — 재채점·RAPTOR 검색이 절 제목만으로 표류하지 않게(주제 표류 실측 대응)
         topic=state.topic,
         # 절당 근거 공급량 — 분량의 1차 병목 레버(config.retrieval_top_k)
@@ -715,6 +1501,12 @@ async def _adopted_source_refs(project_id: UUID) -> list[SourceRef]:
             title=r.title or r.url or "(제목 없음)",
             url=r.url,
             reliability=r.reliability,
+            publisher=(r.metadata_ or {}).get("publisher"),
+            issue_label=(r.metadata_ or {}).get("issue_label"),
+            published_year=(r.metadata_ or {}).get("published_year")
+            if isinstance((r.metadata_ or {}).get("published_year"), int)
+            else None,
+            collected_at=r.created_at,
         )
         for r in rows
     ]
@@ -747,22 +1539,72 @@ async def _default_rule_texts(owner_id, selected: list) -> list[str]:
         return await resolve_rules(session, owner_id, selected)
 
 
-async def _default_analyst_catalog(owner_id) -> dict:
-    """개인→시스템 병합 에이전트 카탈로그(id·name 양쪽 키) — 작성기 주입용.
+async def _default_term_entries(project_id) -> list[dict] | None:
+    """색인이 적립한 프로젝트 용어표 — 작성 루프 주입용(generation/term_rules).
+
+    끄여 있거나(설정) 비었거나 로드가 실패하면 None — 용어 없이도 작성은 성립한다.
+    """
+    if not settings.term_injection:
+        return None
+    from src.services.generation.term_rules import load_project_terms
+
+    try:
+        return await load_project_terms(project_id) or None
+    except Exception:
+        logger.warning("write.term_load_failed", project_id=str(project_id), exc_info=True)
+        return None
+
+
+async def _default_analyst_catalog(owner_id, options: dict | None = None) -> dict:
+    """병합 에이전트 카탈로그(id·name 양쪽 키) — 작성기 주입용.
 
     작성기는 순수 모듈이라 DB를 못 읽는다. 실행 시작 시 한 번 만들어 넘겨야 사용자가
     만든 개인 에이전트가 실제 작성에 반영된다(그전엔 조용히 무시됐다).
+
+    options(=projects.config)에 런 시작 스냅샷이 있으면 그걸 쓴다 — 남이 공개한
+    에이전트는 라이브 참조라 런 도중 주인이 고치거나 내리면 절마다 다른 프롬프트로
+    쓰이게 된다(재개하면 더 벌어진다). 없으면(옛 런·미리보기) 지금 값을 읽는다.
     """
     from src.db.session import async_session_maker
-    from src.services.prompts import resolve_analysts
+    from src.services.prompts import resolve_analysts, specs_from_snapshot
 
-    async with async_session_maker() as session:
-        specs = await resolve_analysts(session, owner_id)
+    frozen = (options or {}).get("analysts") if isinstance(options, dict) else None
+    if isinstance(frozen, list) and frozen:
+        specs = specs_from_snapshot(frozen)
+    else:
+        async with async_session_maker() as session:
+            specs = await resolve_analysts(session, owner_id)
     catalog: dict = {}
     for spec in specs:
         catalog[spec.id] = spec
         catalog[spec.name] = spec
     return catalog
+
+
+async def _default_chunk_loader(chunk_ids: list) -> list:
+    """청크 id → RetrievedChunk. builds_on 주입이 앞 절 확정값의 원 청크를 의존 절
+    풀에 덧붙일 때 쓴다 — 인용 사슬이 원 근거로 해소되게(services/ledger 참조)."""
+    from sqlalchemy import select as _select
+
+    from src.core.types import RetrievedChunk
+    from src.db.models.chunk import Chunk
+    from src.db.session import async_session_maker
+
+    if not chunk_ids:
+        return []
+    async with async_session_maker() as session:
+        rows = (
+            (await session.execute(_select(Chunk).where(Chunk.id.in_(chunk_ids)))).scalars().all()
+        )
+    return [
+        RetrievedChunk(
+            chunk_id=r.id,
+            source_id=r.source_id,
+            content=r.content,
+            score=1.0,  # 주입 청크는 검색 점수가 없다 — 확정값의 근거라 항상 싣는다
+        )
+        for r in rows
+    ]
 
 
 async def _default_working_copy(project_id) -> dict:
@@ -797,12 +1639,37 @@ async def _default_pm_verifier(state: ProjectState) -> int:
     return await run_pm_verify(state, model=_models_for(state)["verify"])
 
 
+async def _default_retrieval_cacher(
+    retrieve: SectionRetriever, state: ProjectState
+) -> SectionRetriever:
+    """작성 검색에 리허설 캐시를 씌운다 — 리허설↔작성 동근거 계약의 소비자 쪽.
+
+    RAPTOR 주입(A팔)일 때는 캐시를 건너뛴다 — 캐시엔 요약이 없어(인용 불가 배경은
+    저장 안 함) 주입 계약이 조용히 깨진다. A팔은 실검색이 곧 계약이다.
+    """
+    if settings.raptor_enabled and settings.raptor_write_inject:
+        return retrieve
+    from src.services.retrieval.rehearsal import current_index_version, make_cached_retriever
+
+    return make_cached_retriever(
+        retrieve, state.project_id, await current_index_version(state.project_id)
+    )
+
+
 # 주입 지점 — 테스트는 이 전역들을 fake로 교체한다.
 _plan_client: LLMClient | None = None
+# AI 실행 계획(설계 브리프) 전용 주입 지점 — None이면 brief_ai가 기본 클라이언트 생성.
+_brief_client: LLMClient | None = None
 _research_service_factory: Callable[[], WebResearchService] = WebResearchService
 _web_indexer_factory: Callable[[], WebSourceIndexer] = build_web_source_indexer
 _raptor_builder_factory: Callable[[], RaptorBuilder] = build_raptor_builder
 _retriever_factory: Callable[[ProjectState], SectionRetriever] = _default_retriever_factory
+# 색인 끝 검색 리허설 — 인메모리 척추 테스트는 통과 함수로 교체한다(DB 필요).
+_rehearser: Callable[[ProjectState], Awaitable[ProjectState]] = _rehearse
+# 작성 검색의 리허설 캐시 래퍼 — 인메모리 테스트는 (r, s) → r 통과로 교체한다.
+_retrieval_cacher: Callable[[SectionRetriever, ProjectState], Awaitable[SectionRetriever]] = (
+    _default_retrieval_cacher
+)
 _write_client: LLMClient | None = None
 _exporter: Callable[[ProjectState, dict[str, dict[str, str]] | None], Path] = _default_exporter
 _section_store: Callable[[ProjectState], Awaitable[None]] = _default_section_store
@@ -810,7 +1677,10 @@ _draft_store = _default_draft_store
 _sections_cleaner = _default_sections_cleaner
 _working_copy = _default_working_copy
 _analyst_catalog = _default_analyst_catalog
+# builds_on 주입용 청크 로더 — 인메모리 척추 테스트는 빈 목록 반환으로 교체한다.
+_chunk_loader = _default_chunk_loader
 _rule_texts = _default_rule_texts
+_term_entries = _default_term_entries
 _pm_verifier: Callable[[ProjectState], Awaitable[int]] = _default_pm_verifier
 
 
@@ -836,14 +1706,91 @@ async def write(state: ProjectState) -> ProjectState:
     작성 중에도 완성분부터 보여준다 — 확정본 전량 교체는 여전히 assemble 몫.
     """
     state = _ensure_section_plan(state)
-    retrieve = _retriever_factory(state)
+    state = await _ensure_dependency_graph(state)
+    # 정본 배정(2층) — 자료 검토·색인이 끝나 코퍼스가 확정된 지금, 자료명 수준의
+    # 서술 담당을 배정해 설계(1층=구조 수준)의 owns/foreign_topics에 병합한다.
+    # 설계 시점 배정은 이후 제외될 자료를 가리키는 유령이 될 수 있었다(2026-08-21).
+    # 실패는 비치명 — 1층 배정만으로 작성을 계속한다.
+    try:
+        from src.services.generation.source_canon import refresh_source_canon
+
+        emit_step(state.project_id, "writing", "정본 배정(자료-절 담당)", "started")
+        n_canon = await refresh_source_canon(state, model=_models_for(state)["planner"])
+        emit_step(state.project_id, "writing", "정본 배정(자료-절 담당)", "completed")
+        if n_canon:
+            logger.info(
+                "write.source_canon", project_id=str(state.project_id), n_assignments=n_canon
+            )
+    except Exception:
+        logger.warning("write.source_canon_failed", project_id=str(state.project_id), exc_info=True)
+    # 리허설↔작성 동근거 계약 — 리허설이 영속해 둔 청크 목록을 같은 index_version이면
+    # 재검색 없이 그대로 쓴다. 캐시 미스(옛 런·버전 뒤바뀜)는 실검색 폴백.
+    retrieve = await _retrieval_cacher(_retriever_factory(state), state)
     emit_phase(state.project_id, "writing", "started")
-    await _sections_cleaner(state.project_id)  # 이전 런 잔재 제거(증분 초안과 혼재 방지)
+    # 증분 재개 — 이전 실행이 증분 저장해 둔 완성 절(본문 있는 행)은 건너뛴다.
+    # 죽은 런 재개가 완성 절까지 지우고 전부 다시 쓰면 그 비용이 그대로 재청구된다
+    # (2026-08-15 실측: 6절 $2어치를 지울 뻔). 건너뛴 절의 행은 assemble의
+    # overlay_working_copy가 합성 후보로 승격해 조립에 포함시킨다(기존 계약 재사용).
+    working = await _working_copy(state.project_id)
+    plan_ids = {s.section_id for s in state.section_plan}
+    done_ids = {sid for sid, row in working.items() if sid in plan_ids and row[0].strip()}
+    # 본문이 있는데 계획 밖으로 보이는 행 — 절 안정 id(0043) 이전 데이터이거나 계획이
+    # 어긋난 경우다. 이걸 그냥 두면 아래 청소기가 **멀쩡한 본문을 지운다**(2026-08-27
+    # 실사고: 35절이 0절이 됐다). 계획과 위치가 겹치면 완성으로 쳐 건너뛴다 —
+    # 미반영 판정이 같은 이유로 위치 폴백을 쓰는 것과 같은 판단이다.
+    orphans = {sid for sid, row in working.items() if sid not in plan_ids and row[0].strip()}
+    if orphans:
+        logger.warning(
+            "write.orphan_sections",
+            project_id=str(state.project_id),
+            n_orphans=len(orphans),
+            n_plan=len(plan_ids),
+        )
+    kept_meta: dict[UUID, dict] = {}
+    if done_ids:
+        logger.info(
+            "write.incremental_resume",
+            project_id=str(state.project_id),
+            skipped=len(done_ids),
+            total=len(state.section_plan),
+        )
+        # 보존 절의 지표(근거 추적·자료부족 배지)도 행에서 되살린다 — 안 하면 조립의
+        # 전량 교체가 그 절들의 meta를 빈 값으로 덮는다.
+        from sqlalchemy import select as _select
+
+        from src.db.models.section import Section as _Section
+        from src.db.session import async_session_maker as _asm
+
+        async with _asm() as _session:
+            rows = (
+                (await _session.execute(_select(_Section).where(_Section.id.in_(done_ids))))
+                .scalars()
+                .all()
+            )
+        kept_meta = {r.id: dict(r.meta or {}) for r in rows}
+    elif orphans:
+        # 본문 있는 행이 남아 있는데 계획과 id가 안 맞는다 — 지우면 사람이 손댄 결과가
+        # 사라진다. 잔재 청소는 "쓸 게 아무것도 없을 때"만 안전하다.
+        logger.warning(
+            "write.cleaner_skipped_for_orphans",
+            project_id=str(state.project_id),
+            n_orphans=len(orphans),
+        )
+    else:
+        await _sections_cleaner(state.project_id)  # 이전 런 잔재 제거(증분 초안과 혼재 방지)
     models = _models_for(state)
-    catalog = await _analyst_catalog(state.user_id)
+    catalog = await _analyst_catalog(state.user_id, state.options)
     rules = await _rule_texts(state.user_id, _selected_rule_ids(state))
+    remaining = [s for s in state.section_plan if s.section_id not in done_ids]
+    # 증분 재개 시 보존 절의 사실 대장을 루프에 시드한다 — 남은 절에 builds_on이
+    # 걸려 있으면 건너뛴 완성 절의 확정값을 받아야 한다(행 meta에서 복원).
+    loop_updates: dict = {}
+    if done_ids:
+        loop_updates["section_plan"] = remaining
+        loop_updates["section_meta"] = kept_meta
+    loop_state = state.model_copy(update=loop_updates) if loop_updates else state
     result = await run_write_loop(
-        state,
+        loop_state,
         retrieve=retrieve,
         client=_write_client,
         model=models["write"],
@@ -851,7 +1798,17 @@ async def write(state: ProjectState) -> ProjectState:
         draft_store=_draft_store,
         analyst_catalog=catalog,
         rules=rules,
+        chunk_loader=_chunk_loader,
+        term_entries=await _term_entries(state.project_id),
     )
+    if done_ids:
+        # 전체 계획 복원 + 보존 절 meta 병합 — 이후 단계(조립·저장)는 전체 절 기준.
+        result = result.model_copy(
+            update={
+                "section_plan": state.section_plan,
+                "section_meta": {**kept_meta, **result.section_meta},
+            }
+        )
     emit_phase(state.project_id, "writing", "completed")
     return auto_select_survivors(result)
 
@@ -873,13 +1830,30 @@ async def assemble(state: ProjectState) -> ProjectState:
     except Exception:
         logger.warning("assemble.working_copy_failed", project_id=str(pid), exc_info=True)
     # 인용 전역 번호화 — 절-로컬 [n]을 출처장 번호로 재작성(저장·검증·렌더 전부
-    # 전역 번호 기준이 되도록 가장 먼저). 실패는 비치명 — 로컬 번호로 계속한다.
+    # 전역 번호 기준). 반드시 **dedup보다 먼저** — 로컬 번호↔청크 매핑은 "본문 고유
+    # 번호의 첫 등장 순서 = cited_chunk_ids 순서"라는 위치 규약인데, dedup이 중복
+    # 문단을 지우면(마커 가드는 유입만 막고 삭제는 ⊆로 허용) 등장 순서가 밀려 뒤쪽
+    # 번호가 전부 옆 자료로 붙는다(2026-08-27 철강 6.2 실사고: 오귀속 25건 무더기,
+    # 본문 (출처 17)의 실제 원천이 전역 16). 전역 번호는 자료 절대 번호라 이후
+    # 삭제·재작성에 흔들리지 않는다. 실패는 비치명 — 로컬 번호로 계속한다.
     try:
         from src.services.sections.renumber import renumber_state
 
         state = await renumber_state(state)
     except Exception:
         logger.warning("assemble.renumber_failed", project_id=str(pid), exc_info=True)
+    # 3층 국소 재작성(로드맵 2026-08-20) — 절 간 중복 문단을 참조 전환으로 압축.
+    # renumber 뒤(위 규약). 실패·거부는 원문 유지라 비치명.
+    if settings.write_dedup_rewrite:
+        try:
+            from src.services.qa.dedup_rewrite import dedup_rewrite_state
+
+            emit_step(pid, "export", "중복 문단 압축", "started")
+            state, n_rw = await dedup_rewrite_state(state, model=_models_for(state)["verify"])
+            emit_step(pid, "export", "중복 문단 압축", "completed")
+            logger.info("assemble.dedup_rewrite", project_id=str(pid), n_rewritten=n_rw)
+        except Exception:
+            logger.warning("assemble.dedup_rewrite_failed", project_id=str(pid), exc_info=True)
     drafts, result = check_assembled(state)
     logger.info(
         "assemble.done",
@@ -891,6 +1865,21 @@ async def assemble(state: ProjectState) -> ProjectState:
     # 선택 확정 섹션을 정규 테이블에 저장 — 사후 조회·편집(/sections)의 원천.
     # 렌더 성공 여부와 무관하게 저장한다(부분 완성도 열람 가능해야 함).
     await _section_store(state)
+    if not result.passed or not drafts:
+        # 완성 게이트(2026-08-13) — 빈 절을 실은 채 completed로 마감된 실사고의 재발
+        # 방지. 완성분은 위에서 저장돼 미리보기로 열람·재작성할 수 있고, 실행 자체는
+        # 실패로 표면화한다(렌더·PM검증 생략 — 미완성 보고서에 비용을 쓰지 않는다).
+        detail = result.detail or "선택된 초안 없음"
+        emit_step(pid, "export", "통합·교정·HWPX 변환", "failed")
+        raise IncompleteReportError(f"보고서를 완성할 수 없습니다 — {detail}")
+    # 버전 스냅샷 — 완성 게이트를 지난 본문이 곧 한 버전이다(reason=assemble).
+    # 같은 내용의 재조립은 지문이 걸러 새 버전을 만들지 않는다. 실패는 비치명.
+    try:
+        from src.services.sections.versions import snapshot_report_standalone
+
+        await snapshot_report_standalone(pid, reason="assemble")
+    except Exception:
+        logger.warning("assemble.version_snapshot_failed", project_id=str(pid), exc_info=True)
     if settings.pm_verify_enabled and drafts:
         emit_step(pid, "export", "PM 검증 리포트", "started")
         try:
@@ -905,38 +1894,37 @@ async def assemble(state: ProjectState) -> ProjectState:
                 "assemble.pm_verify_failed", project_id=str(state.project_id), exc_info=True
             )
             emit_step(pid, "export", "PM 검증 리포트", "failed")
-    if result.passed and drafts:
-        # 출처 최종장 — 재개 복원 state는 sources가 비어 있어 렌더 직전 DB에서 채운다.
-        try:
-            refs = await _adopted_source_refs(state.project_id)
-            if refs and not state.sources:
-                state = state.model_copy(update={"sources": refs})
-        except Exception:
-            logger.warning("assemble.sources_load_failed", project_id=str(pid), exc_info=True)
-        # 약어 사전 — 설명 열을 LLM 1콜(최저가)로 채우고 영속화(다운로드 재렌더용).
-        glossary: dict[str, dict[str, str]] | None = None
-        try:
-            from src.services.export.glossary import build_glossary, persist_glossary
+    # 여기 도달 = 완성 게이트 통과(전 절 작성됨) — 렌더는 무조건 수행한다.
+    # 출처 최종장 — 재개 복원 state는 sources가 비어 있어 렌더 직전 DB에서 채운다.
+    try:
+        refs = await _adopted_source_refs(state.project_id)
+        if refs and not state.sources:
+            state = state.model_copy(update={"sources": refs})
+    except Exception:
+        logger.warning("assemble.sources_load_failed", project_id=str(pid), exc_info=True)
+    # 약어 사전 — 설명 열을 LLM 1콜(최저가)로 채우고 영속화(다운로드 재렌더용).
+    glossary: dict[str, dict[str, str]] | None = None
+    try:
+        from src.services.export.glossary import build_glossary, persist_glossary
 
-            glossary = await build_glossary(state)
-            await persist_glossary(state.project_id, glossary)
+        # 코루틴 상한 벨트 - LLM 호출이 응답 없이 영구 정지한 실사례(2026-08-21 v6
+        # 조립, 11분 무응답·비용 동결). 용어집은 장식이라 초과는 건너뛰는 게 정답.
+        glossary = await asyncio.wait_for(build_glossary(state), timeout=240)
+        await persist_glossary(state.project_id, glossary)
+    except Exception:
+        # 설명은 장식 — 실패해도 풀네임만으로 렌더를 계속한다.
+        logger.warning("assemble.glossary_failed", project_id=str(pid), exc_info=True)
+    # (표지 뒤 요약문 생성·렌더는 r6에서 제거 — 최종 산출물에 싣지 않기로 함, 2026-08-13.)
+    # 표지 작성자 — 소유자 이름. 실패해도 작성자 줄만 빠진다(렌더는 계속).
+    if not state.author:
+        try:
+            state = state.model_copy(update={"author": await _owner_name(state.user_id)})
         except Exception:
-            # 설명은 장식 — 실패해도 풀네임만으로 렌더를 계속한다.
-            logger.warning("assemble.glossary_failed", project_id=str(pid), exc_info=True)
-        # 표지 작성자 — 소유자 이름. 실패해도 작성자 줄만 빠진다(렌더는 계속).
-        if not state.author:
-            try:
-                state = state.model_copy(update={"author": await _owner_name(state.user_id)})
-            except Exception:
-                logger.warning("assemble.author_load_failed", project_id=str(pid), exc_info=True)
-        path = _exporter(state, glossary)
-        logger.info("assemble.exported", project_id=str(state.project_id), path=str(path))
-    else:
-        logger.warning(
-            "assemble.export_skipped",
-            project_id=str(state.project_id),
-            detail=result.detail or "선택된 초안 없음",
-        )
+            logger.warning("assemble.author_load_failed", project_id=str(pid), exc_info=True)
+    # HWPX 조립은 순수 파이썬 CPU 작업(수 초) — 루프에서 돌리면 그동안 모든 요청·
+    # WebSocket이 멈춘다(코어 수 무관, 루프는 싱글 스레드).
+    path = await asyncio.to_thread(_exporter, state, glossary)
+    logger.info("assemble.exported", project_id=str(state.project_id), path=str(path))
     emit_step(pid, "export", "통합·교정·HWPX 변환", "completed")
     # export/completed 가 프론트의 '완료' 신호(별도 done 프레임 없음).
     emit_phase(pid, "export", "completed")

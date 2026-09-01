@@ -1,14 +1,11 @@
-import { CloudUpload, FileText } from "lucide-react";
+import { CloudUpload } from "lucide-react";
 import { useCallback } from "react";
 import { useDropzone } from "react-dropzone";
+import { type UploadingFile, UploadProgressList } from "@/components/feedback/UploadProgressList";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export interface UploadingFile {
-  id: string;
-  name: string;
-  progress: number;
-}
+export type { UploadingFile };
 
 export interface UploadDropzoneProps {
   onFiles: (files: File[]) => void;
@@ -63,32 +60,7 @@ export function UploadDropzone({ onFiles, uploading, disabled }: UploadDropzoneP
         </Button>
       </section>
 
-      {uploading.length > 0 ? (
-        <ul className="flex flex-col gap-1.5">
-          {uploading.map((f) => (
-            <li
-              key={f.id}
-              className="flex items-center gap-3 rounded border border-border bg-bg p-2.5"
-            >
-              <FileText className="h-4 w-4 shrink-0 text-fg-tertiary" aria-hidden />
-              <span className="flex-1 truncate text-sm text-fg-secondary">{f.name}</span>
-              <span className="font-mono text-xs text-fg-tertiary">{f.progress}%</span>
-              <div
-                className="h-1.5 w-24 overflow-hidden rounded-full bg-bg-tertiary"
-                role="progressbar"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={f.progress}
-              >
-                <div
-                  className="h-full bg-accent transition-[width]"
-                  style={{ width: `${f.progress}%` }}
-                />
-              </div>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      <UploadProgressList uploading={uploading} />
     </div>
   );
 }

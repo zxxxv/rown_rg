@@ -50,6 +50,7 @@ def _web_tool_types(model: str) -> tuple[str, str]:
 
 # temperature를 받지 않는 모델 접두사 — 지정하면 400(deprecated for this model).
 _NO_TEMPERATURE_PREFIXES = (
+    "claude-fable-5",
     "claude-sonnet-5",
     "claude-opus-5",
     "claude-opus-4-8",
@@ -59,6 +60,23 @@ _NO_TEMPERATURE_PREFIXES = (
 
 def _accepts_temperature(model: str) -> bool:
     return not model.startswith(_NO_TEMPERATURE_PREFIXES)
+
+
+# output_config.effort를 받는 모델 접두사 — 그 외(Haiku 4.5 등)에 보내면 400.
+# effort는 추론(thinking) 깊이와 토큰 지출을 낮추는 GA 파라미터(베타 헤더 불요).
+_EFFORT_PREFIXES = (
+    "claude-fable-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+)
+
+
+def _accepts_effort(model: str) -> bool:
+    return model.startswith(_EFFORT_PREFIXES)
 
 
 # pause_turn 재전송에서 대형 PDF를 걷어낼 때 자리에 남기는 안내문.
@@ -76,6 +94,56 @@ def _is_base64_source(node: dict[str, Any]) -> bool:
     if node.get("type") == "base64":
         return True
     return "pdf" in str(node.get("media_type") or "").lower()
+
+
+# 재전송에서 회수 본문을 남겨 둘 길이와 자리 안내문. 우리 추출은 매 턴
+# _collect_sources가 끝내므로(본문은 그때 web_sources로 확보된다) 재전송분을 잘라도
+# **우리가 잃는 것은 없다** — PDF를 걷어내는 것과 같은 논리다. 모델은 앞머리와 URL로
+# 무엇이었는지 알아보고, 정말 필요하면 다시 회수한다.
+FETCH_RESEND_KEEP_CHARS = 1500
+FETCH_RESEND_NOTICE = "…[이하 본문 생략 — 재전송 누적 회피. 필요하면 URL로 다시 회수하라]"
+
+
+def _trim_long_text(node: Any, limit: int) -> tuple[Any, int]:
+    """중첩 구조를 재귀 순회하며 긴 문자열을 잘라낸다. → (치환본, 자른 건수)
+
+    호출부가 **도구 결과 블록 안에서만** 부른다 — 모델 자신의 텍스트(진행 메모·최종
+    매니페스트 JSON)를 자르면 매니페스트가 깨져 출처 매칭이 통째로 소실된다.
+    """
+    if isinstance(node, str):
+        if len(node) > limit:
+            return node[:limit] + FETCH_RESEND_NOTICE, 1
+        return node, 0
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        total = 0
+        for key, value in node.items():
+            out[key], n = _trim_long_text(value, limit)
+            total += n
+        return out, total
+    if isinstance(node, list):
+        items: list[Any] = []
+        total = 0
+        for value in node:
+            item, n = _trim_long_text(value, limit)
+            items.append(item)
+            total += n
+        return items, total
+    return node, 0
+
+
+def _trim_fetched_bodies(dumped: Any, limit: int = FETCH_RESEND_KEEP_CHARS) -> tuple[Any, int]:
+    """도구 결과 블록이면 그 안의 긴 본문을 자른다. 아니면 그대로 둔다.
+
+    블록 유형은 `..._tool_result`로 끝나는 형태를 통째로 본다 — web_fetch·web_search가
+    각각 다르고 도구 버전에 따라 또 바뀌므로 이름을 고정하지 않는다(경로를 고정했다가
+    세 번 재발한 _sanitize_for_resend의 교훈).
+    """
+    if not isinstance(dumped, dict):
+        return dumped, 0
+    if not str(dumped.get("type") or "").endswith("tool_result"):
+        return dumped, 0
+    return _trim_long_text(dumped, limit)
 
 
 def _scrub_base64_sources(node: Any) -> tuple[Any, int]:
@@ -233,6 +301,11 @@ class AnthropicAdapter(BaseLLMAdapter):
         # 거부 모델에선 후보 다양성·재생성 온도 상향이 무의미해진다(기본 샘플링만).
         if _accepts_temperature(request.model):
             kwargs["temperature"] = request.temperature
+        # 추론 예산: thinking 기본-on 모델(Opus 5)의 작성 콜은 추론이 출력으로 과금돼
+        # 비용 지배 구간이었다($33.84 런 실측: 출력 661k 중 본문 ~260k). 호출자가
+        # effort를 낮춰 보내면 그대로 전달 — 미지원 모델이면 400 예방 차원에서 생략.
+        if request.effort and _accepts_effort(request.model):
+            kwargs["output_config"] = {"effort": request.effort}
         if request.system:
             kwargs["system"] = self._cacheable_system(request.system)
 
@@ -290,6 +363,8 @@ class AnthropicAdapter(BaseLLMAdapter):
                 "max_tokens": request.max_tokens,
                 "tools": tools,
             }
+            if request.effort and _accepts_effort(request.model):
+                kwargs["output_config"] = {"effort": request.effort}
             if request.system:
                 kwargs["system"] = self._cacheable_system(request.system)
             # 동적 필터링 웹도구(비-Haiku)는 서버가 code_execution 컨테이너 안에서
@@ -440,7 +515,7 @@ class AnthropicAdapter(BaseLLMAdapter):
 
     @staticmethod
     def _sanitize_for_resend(blocks: Any) -> list[Any]:
-        """pause_turn 재전송에서 PDF 회수 결과를 안내 텍스트로 치환한다.
+        """pause_turn 재전송에서 회수 결과를 줄인다 — PDF는 치환, 긴 본문은 절단.
 
         web_fetch가 회수한 100페이지 초과 PDF는 재전송 시 API가 400으로 거부해
         챕터 수집 전체를 죽인다. 크기 임계값(500k)으로 거르던 1차 시도는 얇은
@@ -453,18 +528,27 @@ class AnthropicAdapter(BaseLLMAdapter):
         순회하며 base64 source를 전부 치환한다. 중첩 위치나 필드명이 바뀌어도
         걸린다. 우리 추출 경로는 PDF 본문을 쓰지 않아(_extract_doc_text가 PDF는
         None) 잃는 것이 없다.
+
+        HTML 본문은 치환이 아니라 **절단**한다. 걷어내지 않았더니 재전송마다 누적돼
+        입력 상한을 넘겼다(2026-08-19 스모크: 1,136,960 > 200,000 토큰으로 1장 수집이
+        통째로 실패, 자료 2건). 여기서도 잃는 것은 없다 — _collect_sources가 매 턴
+        돌아 본문을 web_sources로 이미 확보한 뒤에 이 함수가 불린다. 모델 자신의
+        텍스트(진행 메모·최종 매니페스트)는 도구 결과 블록이 아니라 건드리지 않는다.
         """
         out: list[Any] = []
         n_stripped = 0
+        n_trimmed = 0
         n_blocks = 0
         for b in blocks:
             n_blocks += 1
             try:
                 dumped = b.model_dump() if hasattr(b, "model_dump") else b
-                scrubbed, n = _scrub_base64_sources(dumped)
-                if n:
-                    out.append(scrubbed)
-                    n_stripped += n
+                scrubbed, n_pdf = _scrub_base64_sources(dumped)
+                trimmed, n_txt = _trim_fetched_bodies(scrubbed)
+                if n_pdf or n_txt:
+                    out.append(trimmed)
+                    n_stripped += n_pdf
+                    n_trimmed += n_txt
                     continue
             except Exception:
                 # 치환 실패는 원본 재전송으로 폴백하되 반드시 흔적을 남긴다 —
@@ -473,7 +557,12 @@ class AnthropicAdapter(BaseLLMAdapter):
             out.append(b)
         # 0건도 남긴다 — '치환기가 돌았지만 못 잡았다'와 'PDF가 없었다'를 로그로
         # 구분할 수 있어야 한다(2차 시도가 조용히 실패한 원인).
-        logger.info("anthropic.pdf_stripped_on_resend", n=n_stripped, n_blocks=n_blocks)
+        logger.info(
+            "anthropic.pdf_stripped_on_resend",
+            n=n_stripped,
+            n_trimmed=n_trimmed,
+            n_blocks=n_blocks,
+        )
         return out
 
     @staticmethod

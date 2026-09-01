@@ -47,7 +47,6 @@ export default function EditorPage() {
       <AppShell
         user={user ? { name: user.name, role: user.role } : null}
         onLogout={() => void logout()}
-        tokenUsage={{ used: 1_240_000, limit: 5_000_000 }}
       >
         <div className="flex h-[calc(100vh-120px)] flex-col gap-3">
           <Button

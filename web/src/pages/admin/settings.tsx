@@ -18,12 +18,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/useAuth";
 
-// 알림용 자격증명 그룹 - 로그인(SSO)엔 불필요라 기본 접어둔다.
-const COLLAPSED_BY_DEFAULT = new Set(["네이버웍스"]);
+// 그룹은 모두 접어 둔다(2026-08-27 지시) - 한 번 넣으면 오래 안 건드리는 값들이라,
+// 펼쳐 두면 첫 화면이 입력칸으로 가득 차 무엇이 있는지가 안 보인다. 볼 것만 편다.
 const GROUP_HINT: Record<string, string> = {
   네이버웍스: "알림 봇 전용 - 로그인(SSO)엔 불필요합니다. 알림을 쓸 때만 채우세요.",
+  SSO: "네이버웍스 로그인(SAML) - IdP 콘솔의 Identity Provider 정보에서 복사해 넣습니다. 위 '네이버웍스'(알림 봇)와 별개입니다.",
 };
 // 감출 설정 키. 절약 모드의 본문 작성이 gpt-5.4-mini라 OpenAI 키는 실제로 쓰인다 -
 // 숨기면 키를 못 넣어 그 모드가 통째로 죽는다(2026-08-10 되돌림).
@@ -33,7 +36,7 @@ function errMsg(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
 }
 
-const GROUP_ORDER = ["LLM", "네이버웍스"];
+const GROUP_ORDER = ["LLM", "SSO", "네이버웍스"];
 
 export default function AdminSettingsPage() {
   const { user, logout } = useAuth();
@@ -88,7 +91,7 @@ export default function AdminSettingsPage() {
 }
 
 function GroupCard({ group, items }: { group: string; items: SettingItem[] }) {
-  const [collapsed, setCollapsed] = useState(COLLAPSED_BY_DEFAULT.has(group));
+  const [collapsed, setCollapsed] = useState(true);
   const hint = GROUP_HINT[group];
   return (
     <Card>
@@ -121,24 +124,33 @@ function GroupCard({ group, items }: { group: string; items: SettingItem[] }) {
 
 function SettingRow({ item }: { item: SettingItem }) {
   const update = useUpdateSetting();
-  // 비밀 아닌 값은 현재 값을 프리필, 시크릿은 항상 빈칸에서 시작(되읽기 불가).
-  const [value, setValue] = useState(item.is_secret ? "" : (item.value ?? ""));
-  // 저장·해제 후 서버 값이 바뀌면 동기화(입력 중엔 refetch가 없어 방해 없음).
+  // 입력칸은 항상 빈칸에서 시작한다 - 설정된 값은 위에 읽기 전용으로 보여주고,
+  // 이 칸은 "새 값을 넣을 때만" 쓴다(시크릿과 같은 동선으로 통일, 2026-08-10).
+  const [value, setValue] = useState("");
+  // 서버 값이 바뀌면(저장·해제) 입력칸을 다시 비운다.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: item.value 변화가 트리거다
   useEffect(() => {
-    if (!item.is_secret) setValue(item.value ?? "");
-  }, [item.is_secret, item.value]);
+    setValue("");
+  }, [item.value]);
 
   const save = async (next: string) => {
     try {
       await update.mutateAsync({ key: item.key, value: next });
       toast.success(`${item.label} 저장됨`);
-      if (item.is_secret) setValue("");
+      setValue("");
     } catch (err) {
       toast.error("저장 실패", { description: errMsg(err, "값을 확인해 주세요.") });
     }
   };
 
   const onClear = () => void save("");
+  // 비밀값은 저장 후 칸이 비므로 '변경 있음'이 자명하다. 일반값은 값이 남아 있어
+  // 눌러도 화면이 그대로라 저장 여부를 알 수 없었다(2026-08-10 지적) - 바뀐 게
+  // 없으면 버튼을 잠가 "누를 게 없음"을 눈에 보이게 한다.
+  // 읽기 전용으로 보여줄 현재 값(시크릿은 되읽기 불가라 없음). 긴 값은 줄여서.
+  const current = item.is_secret || item.kind === "bool" ? null : (item.value ?? "");
+  const currentShort =
+    current && current.length > 88 ? `${current.slice(0, 60)}… (${current.length}자)` : current;
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -160,8 +172,24 @@ function SettingRow({ item }: { item: SettingItem }) {
         )}
         <span className="ml-auto font-mono text-[10px] text-fg-tertiary">{item.key}</span>
       </div>
+      {currentShort ? (
+        <p className="break-all font-mono text-[11px] text-fg-tertiary">현재: {currentShort}</p>
+      ) : null}
       <div className="flex items-center gap-2">
-        {item.kind === "enum" && item.options ? (
+        {item.kind === "bool" ? (
+          // 켜고 끄는 값 - 토글이 곧 의도라 선택 즉시 저장한다(드롭다운과 같은 규칙).
+          <div className="flex items-center gap-2">
+            <Switch
+              id={`set-${item.key}`}
+              checked={item.value === "true"}
+              disabled={update.isPending}
+              onCheckedChange={(on) => void save(on ? "true" : "false")}
+            />
+            <span className="text-sm text-fg-secondary">
+              {item.value === "true" ? "사용" : "사용 안 함"}
+            </span>
+          </div>
+        ) : item.kind === "enum" && item.options ? (
           // 드롭다운은 선택 즉시 저장(선택=의도). 자유입력·오타 방지.
           <Select
             value={value || undefined}
@@ -183,17 +211,29 @@ function SettingRow({ item }: { item: SettingItem }) {
           </Select>
         ) : (
           <>
-            <Input
-              id={`set-${item.key}`}
-              type={item.is_secret ? "password" : "text"}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder={
-                item.is_secret ? (item.configured ? "변경하려면 새 값 입력" : "값 입력") : "값 입력"
-              }
-              className="font-mono"
-              autoComplete="off"
-            />
+            {item.kind === "text" ? (
+              // 인증서처럼 긴 값 - 한 줄 입력으론 확인도 수정도 안 된다.
+              <Textarea
+                id={`set-${item.key}`}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder={
+                  item.configured ? "변경하려면 새 값 입력(BEGIN/END 줄 제외)" : "값 입력"
+                }
+                className="min-h-[96px] font-mono text-xs"
+                autoComplete="off"
+              />
+            ) : (
+              <Input
+                id={`set-${item.key}`}
+                type={item.is_secret ? "password" : "text"}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder={item.configured ? "변경하려면 새 값 입력" : "값 입력"}
+                className="font-mono"
+                autoComplete="off"
+              />
+            )}
             <Button
               size="sm"
               onClick={() => void save(value)}
@@ -204,7 +244,7 @@ function SettingRow({ item }: { item: SettingItem }) {
             </Button>
           </>
         )}
-        {item.source === "db" ? (
+        {item.source === "db" && item.kind !== "bool" ? (
           <Button
             variant="ghost"
             size="sm"

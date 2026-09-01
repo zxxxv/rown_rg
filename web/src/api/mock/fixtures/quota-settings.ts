@@ -6,7 +6,6 @@ const SEED: Record<string, string> = {
   DEFAULT_LIMIT_SUPER_ADMIN_USD: "500",
   DEFAULT_LIMIT_ADMIN_USD: "300",
   DEFAULT_LIMIT_WORKER_USD: "200",
-  DEFAULT_LIMIT_VIEWER_USD: "50",
 };
 
 // 인메모리 상태 - mock 세션 동안 PATCH가 누적 반영된다.

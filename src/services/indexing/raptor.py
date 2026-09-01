@@ -15,6 +15,7 @@ scikit-learn 의존을 새로 들이지 않기 위한 자체 구현이며, 시�
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -177,14 +178,13 @@ class RaptorBuilder:
             groups = group_by_label(kmeans_cosine(vectors, k))
             if on_progress:
                 on_progress(f"배경 요약 {level}층 · 클러스터 {len(groups)}개 요약 시작")
-            next_nodes: list[_Node] = []
-            for gi, member_idxs in enumerate(groups, start=1):
-                members = [current[i] for i in member_idxs]
-                node = await self._summarize_cluster(project_id, level, members, user_id=user_id)
-                next_nodes.append(node)
-                created += 1
-                if on_progress and (gi % 10 == 0 or gi == len(groups)):
-                    on_progress(f"배경 요약 {level}층 · {gi}/{len(groups)} 클러스터")
+            next_nodes = await self._summarize_level(
+                project_id, level, current, groups, user_id=user_id, on_progress=on_progress
+            )
+            created += len(next_nodes)
+            if not next_nodes:
+                logger.warning("raptor.level_empty", project_id=str(project_id), level=level)
+                break
             # 굵기 자가 보고 — 클러스터당 평균이 목표(6)를 크게 넘으면 캡이 물려
             # 요약이 일반론으로 뭉개지고 있다는 신호다(2026-08-06 캡 12 실측 사고).
             avg_size = round(sum(len(g) for g in groups) / max(1, len(groups)), 1)
@@ -198,6 +198,52 @@ class RaptorBuilder:
             )
             current = next_nodes
         return created
+
+    async def _summarize_level(
+        self,
+        project_id: UUID,
+        level: int,
+        current: list[_Node],
+        groups: list[list[int]],
+        *,
+        user_id: UUID | None,
+        on_progress: Callable[[str], None] | None,
+    ) -> list[_Node]:
+        """한 층의 클러스터 요약을 동시 실행한다(순서 보존).
+
+        요약은 클러스터마다 독립된 LLM 1콜 + 임베딩 1회다. 순차로 돌리면 예타 런
+        기준 224콜(L1 192 + L2 32)을 줄 세워 기다려 인덱싱에 10~15분이 그냥 쌓였다
+        (2026-08-10 실측). 동시 실행 상한은 DB 커넥션 풀·API 한도를 고려해 설정값으로 둔다.
+
+        한 클러스터 실패는 그 클러스터만 버린다 — RAPTOR는 인용 불가한 배경 맥락이라
+        하나 때문에 트리 전체를 잃는 게 더 나쁘다.
+        """
+        semaphore = asyncio.Semaphore(max(1, settings.raptor_summary_concurrency))
+        done = 0
+        total = len(groups)
+
+        async def _one(member_idxs: list[int]) -> _Node:
+            nonlocal done
+            async with semaphore:
+                node = await self._summarize_cluster(
+                    project_id, level, [current[i] for i in member_idxs], user_id=user_id
+                )
+            done += 1
+            if on_progress and (done % 10 == 0 or done == total):
+                on_progress(f"배경 요약 {level}층 · {done}/{total} 클러스터")
+            return node
+
+        results = await asyncio.gather(*(_one(g) for g in groups), return_exceptions=True)
+        nodes = [r for r in results if isinstance(r, _Node)]
+        if len(nodes) != total:
+            logger.warning(
+                "raptor.cluster_failed",
+                project_id=str(project_id),
+                level=level,
+                failed=total - len(nodes),
+                total=total,
+            )
+        return nodes
 
     async def _load_leaves(self, project_id: UUID) -> list[_Node]:
         """content 트랙 leaf 청크(임베딩 보유분)를 빌드 입력으로 로드.

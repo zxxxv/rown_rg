@@ -14,6 +14,7 @@ GET files/{id}/download, PATCH nodes/{id}/visibility.
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,7 +29,7 @@ from sqlalchemy.orm import selectinload
 
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
-from src.api.dependencies.permissions import ADMINS, require_role
+from src.api.dependencies.permissions import ADMINS, require_role, require_writer
 from src.api.schemas.library_node import (
     FolderCreateRequest,
     LibraryFileMeta,
@@ -44,16 +45,18 @@ from src.api.uploads import read_validated_upload
 from src.core.config import settings
 from src.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from src.core.types import Role
+from src.db.models.chunk import Chunk
 from src.db.models.library_node import LibraryNode
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.user import User
-from src.prompts import catalog_file_stat, list_analysts, list_components
-from src.services.prompts import list_personal
+from src.prompts import catalog_file_stat, list_analysts, list_components, list_presets
+from src.services.export.report import export_filename
+from src.services.prompts import list_personal, list_public_agents
+from src.services.user_presets import list_public_presets, list_user_presets
 
 router = APIRouter(prefix="/library", tags=["library"])
 
-WRITERS: tuple[Role, ...] = (Role.SUPER_ADMIN, Role.ADMIN, Role.WORKER)
 ALL_ROLES: list[str] = [r.value for r in Role]
 VALID_SOURCE_KINDS = {"gov", "academic", "media", "library", "upload", "web_search"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -122,7 +125,29 @@ _SOURCE_GROUPS: list[tuple[str, str, str]] = [
 _REGISTERED_BY = {"web_search": "AI 수집", "library": "라이브러리 참조"}
 
 
-def _source_file(src: ProjectSource, pid: UUID, owner_name: str) -> LibraryTreeFile:
+def _source_size(src: ProjectSource, content_md: str, node_sizes: dict[UUID, int]) -> int:
+    """자료 1건의 표시 크기.
+
+    ① 색인 때 기록한 값 ② 업로드 파일이면 디스크에서 즉시 측정 ③ 라이브러리 참조면
+    원본 노드의 크기 ④ 웹 수집이면 본문 바이트 길이. ②③은 옛 자료(기록 없음)도
+    재색인 없이 보이게 하려는 폴백이다.
+    """
+    recorded = int((src.metadata_ or {}).get("size_bytes") or 0)
+    if recorded:
+        return recorded
+    if src.upload_path:
+        try:
+            return Path(src.upload_path).stat().st_size
+        except OSError:
+            return 0
+    if src.library_node_id is not None:
+        return node_sizes.get(src.library_node_id, 0)
+    return len(content_md.encode("utf-8"))
+
+
+def _source_file(
+    src: ProjectSource, pid: UUID, owner_name: str, node_sizes: dict[UUID, int] | None = None
+) -> LibraryTreeFile:
     """project_sources 1건 → 가상 파일 노드(읽기전용). 원본 복사 없이 참조만."""
     name = src.title or src.url or f"{src.source_type} 자료"
     # AI 수집 자료의 원문(content_md)은 수집 시점 metadata_에 저장돼 있다(web.py stage()).
@@ -143,8 +168,11 @@ def _source_file(src: ProjectSource, pid: UUID, owner_name: str) -> LibraryTreeF
         download_url=download_url,
         content_url=content_url,
         file_meta=LibraryFileMeta(
-            # 물리 파일이 없으므로 수집 본문의 UTF-8 바이트 길이를 크기로 쓴다(0 하드코딩 폐지).
-            size_bytes=len(content_md.encode("utf-8")),
+            # 웹 수집은 물리 파일이 없어 본문 바이트 길이를, 업로드·라이브러리 참조는
+            # 색인 때 기록한 실제 파일 크기를 쓴다. 후자를 안 쓰면 목록이 0 B로 뜨고
+            # 상위 폴더 합계까지 0이 된다(2026-08-10 지적).
+            size_bytes=_source_size(src, content_md, node_sizes or {}),
+            page_count=(src.metadata_ or {}).get("page_count"),
             registered_at=src.created_at,
             registered_by=_REGISTERED_BY.get(src.source_type, owner_name),
             source_kind=src.source_type,
@@ -160,13 +188,14 @@ def _project_folder(
     updated_at: datetime,
     sources: list[ProjectSource],
     owner_name: str,
+    node_sizes: dict[UUID, int] | None = None,
 ) -> LibraryTreeFolder:
     """프로젝트 1건 → 가상 폴더(완성본 + AI수집/업로드/참조). project_sources·export 합성."""
     base = f"proj-{pid}"
     children: list[LibraryTreeFolder | LibraryTreeFile] = []
 
-    # 완성본 — export가 렌더된 프로젝트만(결정적 경로 <export_dir>/<id>.hwpx).
-    export_path = Path(settings.export_dir) / f"{pid}.hwpx"
+    # 완성본 — export가 렌더된 프로젝트만(결정적 경로 <export_dir>/<id>.r<버전>.hwpx).
+    export_path = Path(settings.export_dir) / export_filename(pid)
     if export_path.is_file():
         children.append(
             LibraryTreeFile(
@@ -187,13 +216,23 @@ def _project_folder(
 
     for source_type, suffix, label in _SOURCE_GROUPS:
         files: list[LibraryTreeFolder | LibraryTreeFile] = [
-            _source_file(s, pid, owner_name) for s in sources if s.source_type == source_type
+            _source_file(s, pid, owner_name, node_sizes)
+            for s in sources
+            if s.source_type == source_type
         ]
         children.append(
-            LibraryTreeFolder(id=f"{base}-{suffix}", name=label, virtual=True, children=files)
+            LibraryTreeFolder(
+                id=f"{base}-{suffix}",
+                name=label,
+                virtual=True,
+                owner_name=owner_name,
+                children=files,
+            )
         )
 
-    return LibraryTreeFolder(id=base, name=title, virtual=True, children=children)
+    return LibraryTreeFolder(
+        id=base, name=title, virtual=True, owner_name=owner_name, children=children
+    )
 
 
 async def _build_projects_folder(
@@ -212,7 +251,13 @@ async def _build_projects_folder(
             .order_by(Project.created_at.desc())
         )
     ).all()
-    empty = LibraryTreeFolder(id=f"{prefix}-projects", name="프로젝트", virtual=True, children=[])
+    empty = LibraryTreeFolder(
+        id=f"{prefix}-projects",
+        name="프로젝트",
+        virtual=True,
+        owner_name=user_name,
+        children=[],
+    )
     if not projs:
         return empty
 
@@ -232,8 +277,19 @@ async def _build_projects_folder(
     for s in srcs:
         by_proj[s.project_id].append(s)
 
+    # 라이브러리 참조 자료는 원본 노드가 크기를 안다 — 한 번에 모아 온다(N+1 방지).
+    ref_ids = {s.library_node_id for s in srcs if s.library_node_id is not None}
+    node_sizes: dict[UUID, int] = {}
+    if ref_ids:
+        rows = (
+            await session.execute(
+                select(LibraryNode.id, LibraryNode.file_size).where(LibraryNode.id.in_(ref_ids))
+            )
+        ).all()
+        node_sizes = {nid: int(size or 0) for nid, size in rows}
+
     empty.children = [
-        _project_folder(pid, title, updated_at, by_proj[pid], user_name)
+        _project_folder(pid, title, updated_at, by_proj[pid], user_name, node_sizes)
         for pid, title, updated_at in projs
     ]
     return empty
@@ -269,12 +325,19 @@ def _prompt_file(
 
 
 async def _build_prompts_folder(
-    session: AsyncSession, user_id: UUID, user_name: str, *, prefix: str = "me"
+    session: AsyncSession,
+    user_id: UUID,
+    user_name: str,
+    *,
+    prefix: str = "me",
+    editable: bool = True,
 ) -> LibraryTreeFolder:
     """개인 루트의 '프롬프트' 폴더 — 해당 사용자의 에이전트/작성 규칙(개인 DB).
 
     prefix로 폴더 id를 네임스페이스한다(사용자별 자료 뷰 중복 방지). 프롬프트 파일 id는
-    개인 프롬프트 UUID라 사용자 간 충돌하지 않는다.
+    개인 프롬프트 UUID라 사용자 간 충돌하지 않는다. editable=False는 관리자 미러 —
+    열람만 되고 수정 경로는 소유자 전용이라, 편집 가능으로 내리면 저장에서 404가 난다.
+    크기는 본문 바이트 수 — 0 B 고정으로 보이던 문제(2026-08-20 운영 지적).
     """
     personals = await list_personal(session, user_id)
 
@@ -282,9 +345,10 @@ async def _build_prompts_folder(
         return _prompt_file(
             f"uprompt-{p.id}",  # type: ignore[attr-defined]
             p.name,  # type: ignore[attr-defined]
-            PromptRef(scope="personal", kind=p.kind, ref=str(p.id), editable=True),  # type: ignore[attr-defined]
+            PromptRef(scope="personal", kind=p.kind, ref=str(p.id), editable=editable),  # type: ignore[attr-defined]
             user_name,
             p.updated_at,  # type: ignore[attr-defined]
+            size_bytes=len((p.content or "").encode("utf-8")),  # type: ignore[attr-defined]
         )
 
     agents: list[LibraryTreeFolder | LibraryTreeFile] = [
@@ -292,6 +356,17 @@ async def _build_prompts_folder(
     ]
     rules: list[LibraryTreeFolder | LibraryTreeFile] = [
         node(p) for p in personals if p.kind == "rule"
+    ]
+    presets: list[LibraryTreeFolder | LibraryTreeFile] = [
+        _prompt_file(
+            f"upreset-{row.id}",
+            row.name,
+            PromptRef(scope="personal", kind="preset", ref=str(row.id), editable=editable),
+            user_name,
+            row.updated_at,
+            size_bytes=len(json.dumps(row.outline or {}, ensure_ascii=False).encode("utf-8")),
+        )
+        for row in await list_user_presets(session, user_id)
     ]
     return LibraryTreeFolder(
         id=f"{prefix}-prompts",
@@ -303,6 +378,11 @@ async def _build_prompts_folder(
             ),
             LibraryTreeFolder(
                 id=f"{prefix}-rules", name="내 작성 규칙", virtual=True, children=rules
+            ),
+            # 목차 프리셋도 '내가 만들어 재사용하는 자산'이라 같은 자리에 둔다 —
+            # 프롬프트 화면에서만 보이면 라이브러리가 개인 자산의 전체 그림이 못 된다.
+            LibraryTreeFolder(
+                id=f"{prefix}-presets", name="내 목차 프리셋", virtual=True, children=presets
             ),
         ],
     )
@@ -332,13 +412,97 @@ def _system_prompts_folder() -> LibraryTreeFolder:
     rules: list[LibraryTreeFolder | LibraryTreeFile] = [
         _sys(f"syscomp-{name}", name, "rule", name) for name in list_components()
     ]
+    presets: list[LibraryTreeFolder | LibraryTreeFile] = []
+    for p in list_presets():
+        # 파일명은 name과 같다 — id로 stat이 안 잡히면 name으로 한 번 더.
+        stat = catalog_file_stat("preset", p.id) or catalog_file_stat("preset", p.name)
+        presets.append(
+            _prompt_file(
+                f"syspreset-{p.id}",
+                p.name,
+                PromptRef(scope="system", kind="preset", ref=p.id, editable=False),
+                "시스템",
+                datetime.fromtimestamp(stat[1], tz=UTC) if stat else _PROMPT_EPOCH,
+                size_bytes=stat[0] if stat else 0,
+            )
+        )
     return LibraryTreeFolder(
         id="sys-prompts",
         name="시스템 프롬프트",
         virtual=True,
         children=[
-            LibraryTreeFolder(id="sys-agents", name="에이전트", virtual=True, children=agents),
-            LibraryTreeFolder(id="sys-rules", name="작성 규칙", virtual=True, children=rules),
+            LibraryTreeFolder(
+                id="sys-agents", name="에이전트", virtual=True, owner_name="시스템", children=agents
+            ),
+            LibraryTreeFolder(
+                id="sys-rules", name="작성 규칙", virtual=True, owner_name="시스템", children=rules
+            ),
+            LibraryTreeFolder(
+                id="sys-presets",
+                name="목차 프리셋",
+                virtual=True,
+                owner_name="시스템",
+                children=presets,
+            ),
+        ],
+    )
+
+
+async def _shared_folder(session: AsyncSession, viewer_id: UUID) -> LibraryTreeFolder:
+    """회사 공유의 '동료 공개' 폴더 — 남이 공개 토글을 켠 개인 자산(읽기 전용).
+
+    종류별로 묶는다(2026-08-19 사용자 결정) — 시스템 프롬프트 폴더와 같은 모양이라
+    "무엇을 찾을 때 어디를 여는가"가 하나로 통일된다. 사람별로 묶으면 사람이 늘수록
+    폴더가 길어진다.
+
+    여기서는 고칠 수 없다(editable=False). 고치려면 '내 것으로 가져오기'로 복제한다 —
+    남의 자산을 라이브러리에서 직접 고칠 수 있으면 공유가 아니라 공용 편집이 된다.
+    """
+    agents: list[LibraryTreeFolder | LibraryTreeFile] = [
+        _prompt_file(
+            f"shared-agent-{row.id}",
+            row.name,
+            PromptRef(
+                scope="shared",
+                kind="agent",
+                ref=str(row.id),
+                editable=False,
+                owner_name=owner_name,
+                importable=True,
+            ),
+            owner_name,
+            row.updated_at,
+            size_bytes=len((row.content or "").encode("utf-8")),
+        )
+        for row, owner_name in await list_public_agents(session, viewer_id)
+    ]
+    presets: list[LibraryTreeFolder | LibraryTreeFile] = [
+        _prompt_file(
+            f"shared-preset-{row.id}",
+            row.name,
+            PromptRef(
+                scope="shared",
+                kind="preset",
+                ref=str(row.id),
+                editable=False,
+                owner_name=owner_name,
+                importable=True,
+            ),
+            owner_name,
+            row.updated_at,
+            size_bytes=len(json.dumps(row.outline or {}, ensure_ascii=False).encode("utf-8")),
+        )
+        for row, owner_name in await list_public_presets(session, viewer_id)
+    ]
+    return LibraryTreeFolder(
+        id="shared-prompts",
+        name="동료 공개",
+        virtual=True,
+        children=[
+            LibraryTreeFolder(id="shared-agents", name="에이전트", virtual=True, children=agents),
+            LibraryTreeFolder(
+                id="shared-presets", name="목차 프리셋", virtual=True, children=presets
+            ),
         ],
     )
 
@@ -378,9 +542,11 @@ async def get_tree(
             )
         children = [built for c in children_map[n.id] if (built := build(c)) is not None]
         scope: Literal["personal", "company"] = "personal" if n.is_personal else "company"
+        creator = n.__dict__.get("creator")
         return LibraryTreeFolder(
             id=str(n.id),
             name=n.name,
+            owner_name=creator.name if creator is not None else None,
             children=children,
             writable=WritableTarget(parent_id=str(n.id), scope=scope),
         )
@@ -416,11 +582,16 @@ async def get_tree(
             for uid, name, is_active in user_rows:
                 prefix = f"u{uid}"
                 projects_f = await _build_projects_folder(session, uid, name, prefix=prefix)
-                prompts_f = await _build_prompts_folder(session, uid, name, prefix=prefix)
+                # 미러는 열람 전용 — editable로 내리면 편집기가 열리고 저장에서 404가 난다
+                # (수정 경로는 소유자 전용 유지).
+                prompts_f = await _build_prompts_folder(
+                    session, uid, name, prefix=prefix, editable=False
+                )
                 files_f = LibraryTreeFolder(
                     id=f"{prefix}-files",
                     name="내 자료",
                     virtual=True,
+                    owner_name=name,
                     children=[b for n in nodes_by_user.get(uid, []) if (b := build(n)) is not None],
                 )
                 user_folders.append(
@@ -428,6 +599,7 @@ async def get_tree(
                         id=f"admin-user-{uid}",
                         name=f"{name}{'' if is_active else ' (비활성)'}",
                         virtual=True,
+                        owner_name=name,
                         children=[projects_f, prompts_f, files_f],
                     )
                 )
@@ -463,7 +635,11 @@ async def get_tree(
         virtual=True,
         writable=WritableTarget(parent_id=None, scope="company"),
         # 실 공유 노드(seed 포함) + 시스템 프롬프트(읽기전용) 카탈로그.
-        children=[*company_roots, _system_prompts_folder()],
+        children=[
+            *company_roots,
+            _system_prompts_folder(),
+            await _shared_folder(session, current_user.id),
+        ],
     )
 
     tree: list[LibraryTreeFolder | LibraryTreeFile] = [me_root, company_root]
@@ -481,7 +657,7 @@ async def get_tree(
 async def create_folder(
     data: FolderCreateRequest,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(require_role(*WRITERS))],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> LibraryTreeFolder:
     parent = await _get_parent_folder(session, data.parent_id)
     # 상위 폴더가 있으면 개인/공유 성격을 상속, 최상위면 요청값(개인 루트=True/회사=False).
@@ -514,7 +690,7 @@ async def create_folder(
 async def upload_file(
     file: UploadFile,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(require_role(*WRITERS))],
+    current_user: Annotated[User, Depends(require_writer)],
     parent_id: Annotated[UUID | None, Form()] = None,
     is_personal: Annotated[bool, Form()] = False,
 ) -> LibraryTreeFile:
@@ -577,9 +753,10 @@ async def get_source_content(
     """AI 수집 자료(웹 소스)의 수집 원문(content_md)을 반환 — 라이브러리 인라인 뷰어용.
 
     원문은 project_sources.metadata_[content_md]에 수집 시점 저장된다(web.py stage()).
-    가시성: 소속 프로젝트 소유자만 — 라이브러리 프로젝트 뷰가 소유자 스코프라 관리자도
-    타인 프로젝트를 트리에서 못 보므로, 여기서도 admin 우회 없이 owner로만 한정한다.
-    타인 자료·미존재는 존재 은닉을 위해 모두 404로 통일한다.
+    가시성: 소속 프로젝트 소유자 + 관리자. '사용자별 자료' 미러가 타인 프로젝트 트리를
+    관리자에게 보여주므로, 여기만 소유자 전용이면 트리엔 보이는데 원문만 404가 나
+    화면에선 "안 보인다"가 된다(2026-08-20 사용자 결정: 관리자는 전부 열람).
+    그 외 타인 자료·미존재는 존재 은닉을 위해 모두 404로 통일한다.
     """
     row = (
         await session.execute(
@@ -591,13 +768,45 @@ async def get_source_content(
     if row is None:
         raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
     src, owner_id = row
-    if owner_id != current_user.id:
+    if owner_id != current_user.id and not _is_admin(current_user):
         raise NotFoundError(message="자료를 찾을 수 없습니다", code="SOURCE_NOT_FOUND")
     content_md = (src.metadata_ or {}).get("content_md") or ""
     if not content_md.strip():
         raise NotFoundError(
             message="수집된 본문이 없습니다(메타데이터만 있는 자료)", code="SOURCE_BODY_MISSING"
         )
+    # 화면은 **색인된 것과 같은 것**을 보여준다. 종전엔 수집 원문을 날것으로 돌려줘
+    # 댓글 폼·푸터·저작권이 그대로 보였다 - 실제로는 색인 때 배제된 대목인데 화면만
+    # 보고 "이런 게 다 들어가는구나"로 읽힌다(2026-08-27 사용자 지적).
+    # 청크가 있으면 배제되지 않은 것만 이어 붙이고, 아직 색인 전이면 줄 단위 청소만 한다.
+    from src.workflows.stages import clean_web_markdown
+
+    chunk_rows = (
+        await session.execute(
+            select(Chunk.content, Chunk.metadata_)
+            .where(Chunk.source_id == source_id)
+            .order_by(Chunk.chunk_index)
+        )
+    ).all()
+    excluded_kinds: list[str] = []
+    excluded_chars = 0
+    if chunk_rows:
+        kept: list[str] = []
+        for content, meta in chunk_rows:
+            reason = (meta or {}).get("excluded")
+            if reason:
+                excluded_chars += len(content or "")
+                if reason not in excluded_kinds:
+                    excluded_kinds.append(str(reason))
+                continue
+            kept.append(content or "")
+        body = (chr(10) * 2).join(x for x in kept if x.strip())
+        # 전부 배제된 자료는 원문을 보여준다 - 빈 화면보다 "왜 다 빠졌는지"를 보고
+        # 판단할 수 있어야 한다(필터 오판을 사람이 잡는 유일한 자리다).
+        content_md = body or clean_web_markdown(content_md)
+    else:
+        content_md = clean_web_markdown(content_md) or content_md
+
     return SourceContentResponse(
         title=src.title,
         url=src.url,
@@ -605,6 +814,8 @@ async def get_source_content(
         content_md=content_md,
         char_count=len(content_md),
         byte_count=len(content_md.encode("utf-8")),
+        excluded_kinds=excluded_kinds,
+        excluded_chars=excluded_chars,
     )
 
 
@@ -612,7 +823,7 @@ async def get_source_content(
 async def delete_node(
     node_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(require_role(*WRITERS))],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> None:
     """노드 삭제(폴더는 하위 전체 포함 — DB FK CASCADE). 관리자 또는 생성자만."""
     node = await _get_node(session, node_id)

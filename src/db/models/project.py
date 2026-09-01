@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     event,
@@ -51,9 +52,15 @@ class Project(Base):
     # 조립 시 생성한 약어 사전({약어: {full, desc}}) — 다운로드 재렌더(순수 코드)가
     # 약어 정리표의 설명을 채우는 원천. LLM 실패 시 None(설명 없이 렌더).
     glossary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # type: ignore[assignment]
+    # 조립 시 생성한 시사점 2~3쪽 요약({content, source_sections, model}) — 웹 /insights
+    # 전용이고 HWPX에는 싣지 않는다(2026-08-25 결정). LLM 실패 시 None(화면이 빈 상태).
+    insights: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # type: ignore[assignment]
     status: Mapped[str] = mapped_column(
         String(20), server_default="created", nullable=False, index=True
     )
+    # 검색 결과가 달라질 수 있는 청크 변화(색인·0청크 자동 제외·채택 토글)마다 +1.
+    # 리허설 캐시(section_rehearsals)의 무효화 키 — 값 자체에 의미는 없다.
+    index_version: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     depth_mode: Mapped[str] = mapped_column(
         String(20), server_default="full_report", nullable=False
     )
@@ -75,6 +82,9 @@ class Project(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    # 납품 확정 선언(사람이 누른 시각) — completed는 '사이클 완료'일 뿐이고, NULL이면
+    # 아직 "검토 중"이다. 재개로 completed를 떠나면 리스너가 함께 해제한다(0045).
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     @property
     def owner_name(self) -> str | None:
@@ -124,6 +134,8 @@ def _sync_completed_at(mapper: Mapper, connection: Connection, target: Project) 
         target.completed_at = datetime.now(UTC)
     elif previous_status == ProjectStage.COMPLETED.value:
         target.completed_at = None
+        # 다시 열린 보고서는 더 이상 확정본이 아니다 — 선언도 함께 내린다.
+        target.finalized_at = None
 
 
 event.listen(Project, "before_insert", _sync_completed_at)

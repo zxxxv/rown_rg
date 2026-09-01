@@ -10,6 +10,7 @@ import { RequireAuth } from "@/components/auth/RequireAuth";
 import { Toaster } from "@/components/ui/sonner";
 import ForbiddenPage from "@/pages/403";
 import AdminDashboardPage from "@/pages/admin/dashboard";
+import AdminGpuPage from "@/pages/admin/gpu";
 import AdminIpPage from "@/pages/admin/ip";
 import AdminSettingsPage from "@/pages/admin/settings";
 import AdminTokensPage from "@/pages/admin/tokens";
@@ -19,6 +20,8 @@ import LibraryPage from "@/pages/library";
 import LoginPage from "@/pages/login";
 import ProfilePage from "@/pages/profile";
 import ProjectsPage from "@/pages/projects";
+import BriefPage from "@/pages/projects/[id]/brief";
+import InsightsPage from "@/pages/projects/[id]/insights";
 import OverviewPage from "@/pages/projects/[id]/overview";
 import PreviewPage from "@/pages/projects/[id]/preview";
 import QaSelectPage from "@/pages/projects/[id]/qa-select";
@@ -104,6 +107,14 @@ const routes = [
     ),
   },
   {
+    path: "/projects/:id/brief",
+    element: (
+      <RequireAuth>
+        <BriefPage />
+      </RequireAuth>
+    ),
+  },
+  {
     path: "/projects/:id/sources",
     element: (
       <RequireAuth>
@@ -144,6 +155,14 @@ const routes = [
     ),
   },
   {
+    path: "/projects/:id/insights",
+    element: (
+      <RequireAuth>
+        <InsightsPage />
+      </RequireAuth>
+    ),
+  },
+  {
     path: "/projects/:id/progress",
     element: (
       <RequireAuth>
@@ -156,6 +175,14 @@ const routes = [
     element: (
       <RequireAuth minRole="admin">
         <AdminDashboardPage />
+      </RequireAuth>
+    ),
+  },
+  {
+    path: "/admin/gpu",
+    element: (
+      <RequireAuth minRole="super_admin">
+        <AdminGpuPage />
       </RequireAuth>
     ),
   },

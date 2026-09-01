@@ -3,11 +3,15 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import {
+  type UserPreset,
+  useDeleteUserPreset,
+  usePresets,
+  useSetPresetVisibility,
+} from "@/api/presets";
+import {
   type PersonalPrompt,
   type PromptKind,
-  type PromptSpecInput,
   type SystemPrompt,
-  useCreatePersonalPrompt,
   useDeletePersonalPrompt,
   useListPersonalPrompts,
   useListSystemPrompts,
@@ -26,11 +30,72 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { PresetEditorDialog } from "@/features/project-config/PresetEditorDialog";
+import { PromptDialog, SECTION_FIELDS } from "@/features/prompts/PromptDialog";
 import { useAuth } from "@/hooks/useAuth";
-import { cn } from "@/lib/utils";
+
+/** 목록에서 바로 켜고 끄는 공개 스위치(에이전트) - 편집을 열지 않아도 된다(2026-08-20). */
+function AgentPublicToggle({ prompt }: { prompt: PersonalPrompt }) {
+  const update = useUpdatePersonalPrompt(prompt.id);
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-fg-secondary">
+      공개
+      <Switch
+        checked={prompt.is_public}
+        disabled={update.isPending}
+        onCheckedChange={(on) =>
+          update.mutate(
+            { is_public: on },
+            {
+              onSuccess: () =>
+                toast.success(on ? "회사 전체에 공개했습니다" : "공개를 껐습니다", {
+                  description: on
+                    ? "동료의 에이전트 선택 목록과 라이브러리 동료 공개에 바로 뜹니다."
+                    : "진행 중이던 런은 시작 시점 내용으로 계속됩니다.",
+                }),
+              onError: (err) =>
+                toast.error("공개 설정 실패", {
+                  description: err instanceof ApiError ? err.message : "다시 시도해 주세요.",
+                }),
+            },
+          )
+        }
+      />
+    </span>
+  );
+}
+
+/** 목록에서 바로 켜고 끄는 공개 스위치(목차 프리셋). */
+function PresetPublicToggle({ id, isPublic }: { id: string; isPublic: boolean }) {
+  const update = useSetPresetVisibility();
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-fg-secondary">
+      공개
+      <Switch
+        checked={isPublic}
+        disabled={update.isPending}
+        onCheckedChange={(on) =>
+          update.mutate(
+            { id, isPublic: on },
+            {
+              onSuccess: () =>
+                toast.success(on ? "회사 전체에 공개했습니다" : "공개를 껐습니다", {
+                  description: on
+                    ? "동료의 보고서 유형 선택지와 라이브러리 동료 공개에 바로 뜹니다."
+                    : undefined,
+                }),
+              onError: (err) =>
+                toast.error("공개 설정 실패", {
+                  description: err instanceof ApiError ? err.message : "다시 시도해 주세요.",
+                }),
+            },
+          )
+        }
+      />
+    </span>
+  );
+}
 
 const KIND_META: Record<PromptKind, { title: string; desc: string; placeholder: string }> = {
   agent: {
@@ -70,8 +135,104 @@ export default function PromptsPage() {
 
         <KindSection kind="agent" />
         <KindSection kind="rule" />
+        <MyPresetsSection />
       </div>
     </AppShell>
+  );
+}
+
+/** 내 목차 프리셋 - 보고서 구성(장·절·에이전트 배정)을 미리 만들어 두고
+ * 프로젝트 생성 화면의 보고서 유형에서 불러온다(2026-08-12 QA 2번의 확장). */
+function MyPresetsSection() {
+  const presets = usePresets();
+  const del = useDeleteUserPreset();
+  const [editing, setEditing] = useState<UserPreset | null>(null);
+  const [creating, setCreating] = useState(false);
+  const mine = (presets.data ?? []).filter((p) => p.scope === "personal");
+
+  const onDelete = (id: string, name: string) => {
+    del.mutate(id, {
+      onSuccess: () => toast.success(`"${name}" 삭제됨`),
+      onError: (err) =>
+        toast.error("삭제 실패", { description: errMsg(err, "다시 시도해 주세요.") }),
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+        <div>
+          <CardTitle className="text-base">내 목차 프리셋</CardTitle>
+          <CardDescription>
+            보고서 구성(장·절·방향·에이전트 배정)을 저장해 두면 프로젝트 생성 화면의 보고서 유형에서
+            불러올 수 있습니다. 같은 구성으로 여러 정책을 분석할 때 씁니다.
+          </CardDescription>
+        </div>
+        <Button size="sm" onClick={() => setCreating(true)}>
+          <FilePlus2 className="mr-1 h-4 w-4" />
+          새로 만들기
+        </Button>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        {presets.isLoading ? (
+          <LoadingSkeleton variant="row" count={2} />
+        ) : mine.length > 0 ? (
+          mine.map((p) => (
+            <div
+              key={p.id}
+              className="flex items-center gap-2 rounded border border-border bg-bg px-3 py-2"
+            >
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="flex items-center gap-2">
+                  <span className="truncate text-sm font-medium text-fg">{p.name}</span>
+                  <Badge variant="outline" className="shrink-0 text-[10px]">
+                    {p.n_chapters}장 {p.n_sections}절
+                  </Badge>
+                </span>
+                <span className="truncate text-[11px] text-fg-tertiary">{p.desc}</span>
+              </div>
+              <PresetPublicToggle id={p.id.replace(/^u:/, "")} isPublic={p.is_public} />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setEditing({
+                    id: p.id.replace(/^u:/, ""),
+                    key: p.id,
+                    name: p.name,
+                    description: p.desc,
+                    is_public: p.is_public,
+                    n_chapters: p.n_chapters,
+                    n_sections: p.n_sections,
+                    updated_at: p.updated_at ?? "",
+                  })
+                }
+              >
+                <Pencil className="mr-1 h-3.5 w-3.5" />
+                편집
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-fg-danger"
+                onClick={() => onDelete(p.id.replace(/^u:/, ""), p.name)}
+                disabled={del.isPending}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))
+        ) : (
+          <p className="rounded border border-dashed border-border bg-bg-secondary px-3 py-3 text-xs text-fg-tertiary">
+            아직 저장한 목차 프리셋이 없습니다. "새로 만들기"로 미리 구성하거나, 프로젝트 생성
+            화면의 목차 설계에서 "내 프리셋으로 저장"을 누르세요.
+          </p>
+        )}
+      </CardContent>
+
+      {creating ? <PresetEditorDialog onClose={() => setCreating(false)} /> : null}
+      {editing ? <PresetEditorDialog existing={editing} onClose={() => setEditing(null)} /> : null}
+    </Card>
   );
 }
 
@@ -116,7 +277,7 @@ function KindSection({ kind }: { kind: PromptKind }) {
                   <span className="truncate text-sm font-medium text-fg">{p.name}</span>
                   {p.base_ref ? (
                     <Badge variant="secondary" className="shrink-0 text-[10px]">
-                      {p.base_ref} 덮어씀
+                      {p.base_ref}에서 복사
                     </Badge>
                   ) : (
                     <Badge variant="outline" className="shrink-0 text-[10px]">
@@ -128,6 +289,9 @@ function KindSection({ kind }: { kind: PromptKind }) {
                   변경 {p.updated_at.slice(0, 10)}
                 </span>
               </div>
+              {/* 공개는 목록에서 바로 켜고 끈다(2026-08-20) - 편집을 열어야만 보이면
+                  열어 둔 걸 잊는다. 작성 규칙은 공개 대상이 아니라 스위치가 없다. */}
+              {kind === "agent" ? <AgentPublicToggle prompt={p} /> : null}
               <Button variant="ghost" size="sm" onClick={() => setEditing(p)}>
                 <Pencil className="mr-1 h-3.5 w-3.5" />
                 편집
@@ -240,314 +404,5 @@ function SystemReference({ kind }: { kind: PromptKind }) {
         </Dialog>
       ) : null}
     </div>
-  );
-}
-
-/** 에이전트 프롬프트의 칸 - 백엔드 composer.SECTION_FIELDS와 같은 순서·라벨.
- * 서버가 이 칸들로 프롬프트 한 장을 조합한다(제목 줄·분량 문구는 자동). */
-const SECTION_FIELDS: [string, string, string][] = [
-  ["mission", "임무", "이 에이전트가 무엇을 하는 전문가인지 - 담당 범위와 산출 목적"],
-  [
-    "method",
-    "분석 방법론",
-    "어떤 절차·기준으로 분석하는지 - 번호 목록으로 적으면 본문 구조가 됩니다",
-  ],
-  ["deliverables", "핵심 산출물", "반드시 만들어야 할 표·그래프·소결 - 줄마다 하나"],
-];
-
-/** 작성 규칙이 꽂히는 자리. 시스템 조각과 1:1이고, 고르지 않으면 기존 규칙 뒤에 덧붙는다. */
-const RULE_SLOTS = [
-  { ref: "agent_source_rules", label: "출처 규칙" },
-  { ref: "agent_visual_rules", label: "시각자료 규칙" },
-  { ref: "agent_writing_style", label: "문체 규칙" },
-];
-
-function PromptDialog({
-  kind,
-  existing,
-  onClose,
-}: {
-  kind: PromptKind;
-  existing?: PersonalPrompt;
-  onClose: () => void;
-}) {
-  const meta = KIND_META[kind];
-  const create = useCreatePersonalPrompt();
-  const update = useUpdatePersonalPrompt(existing?.id ?? "");
-  const system = useListSystemPrompts(kind);
-  const [name, setName] = useState(existing?.name ?? "");
-  const [content, setContent] = useState(existing?.content ?? "");
-  // 에이전트는 칸으로 받아 서버가 한 장으로 조합한다. 21종이 모두 같은 골격
-  // (임무·분석 방법론·핵심 산출물)이라 빈 화면에 통째로 쓰게 할 이유가 없다.
-  const [sections, setSections] = useState<Record<string, string>>(existing?.spec?.sections ?? {});
-  const [freeform, setFreeform] = useState(
-    kind === "rule" || Object.keys(existing?.spec?.sections ?? {}).length === 0,
-  );
-  const [cat, setCat] = useState(existing?.cat ?? "");
-  const [description, setDescription] = useState(existing?.description ?? "");
-  // 빈 칸 = 지정 없음. 시스템 에이전트를 덮어쓸 때 분량까지 건드리면 원본 값
-  // (특허분석 2만~6만자 등)이 조용히 깎이므로, 안 적으면 원본을 그대로 승계한다.
-  const [minChars, setMinChars] = useState<string>(
-    existing?.spec?.min_chars ? String(existing.spec.min_chars) : "",
-  );
-  const [maxChars, setMaxChars] = useState<string>(
-    existing?.spec?.max_chars ? String(existing.spec.max_chars) : "",
-  );
-  // 무엇을 덮어쓸지는 만들 때만 정한다(생성 시 확정, 이후 불변).
-  const [baseRef, setBaseRef] = useState<string>(existing?.base_ref ?? "");
-  const pending = create.isPending || update.isPending;
-  const hasSections = Object.values(sections).some((v) => v.trim());
-  const valid = name.trim() !== "" && (freeform ? content.trim() !== "" : hasSections);
-
-  /** 시스템 원문을 폼에 채워 넣는다. 빈 칸에서 페르소나를 쓰라는 건 무리다. */
-  const copyFrom = (ref: string) => {
-    const found = system.data?.find((x) => x.ref === ref);
-    if (!found) return;
-    setContent(found.content);
-    if (Object.keys(found.sections).length > 0) {
-      setSections(found.sections);
-      setFreeform(false);
-    }
-    if (found.min_chars && found.max_chars) {
-      setMinChars(String(found.min_chars));
-      setMaxChars(String(found.max_chars));
-    }
-    if (!name.trim()) setName(kind === "agent" ? `${found.name} (내 버전)` : found.name);
-    if (kind === "agent" && !cat) setCat(found.cat ?? "");
-  };
-
-  const baseOptions =
-    kind === "rule"
-      ? RULE_SLOTS.map((x) => ({ ref: x.ref, label: x.label }))
-      : (system.data ?? []).map((x) => ({ ref: x.ref, label: x.name }));
-
-  const save = async () => {
-    if (!valid) return;
-    const lo = Number(minChars);
-    const hi = Number(maxChars);
-    const spec: PromptSpecInput = {};
-    if (kind === "agent" && lo > 0 && hi > 0) {
-      spec.min_chars = lo;
-      spec.max_chars = hi;
-    }
-    // 칸을 쓰면 서버가 그걸로 본문을 조합한다(자유 편집이면 content 원문 그대로).
-    if (kind === "agent" && !freeform && hasSections) spec.sections = sections;
-    try {
-      if (existing) {
-        await update.mutateAsync({
-          name: name.trim(),
-          content: content.trim(),
-          cat: cat.trim() || null,
-          description: description.trim() || null,
-          spec,
-        });
-        toast.success(`${name.trim()} 저장됨`);
-      } else {
-        await create.mutateAsync({
-          kind,
-          name: name.trim(),
-          content: content.trim(),
-          base_ref: baseRef || null,
-          cat: cat.trim() || null,
-          description: description.trim() || null,
-          spec,
-        });
-        toast.success(`${name.trim()} 만들어짐`);
-      }
-      onClose();
-    } catch (err) {
-      toast.error("저장 실패", { description: errMsg(err, "값을 확인해 주세요.") });
-    }
-  };
-
-  return (
-    <Dialog open onOpenChange={(o) => (!o ? onClose() : undefined)}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>
-            {existing ? "편집" : "새로 만들기"} - {meta.title}
-          </DialogTitle>
-          <DialogDescription>
-            {kind === "agent"
-              ? "여기서 만든 에이전트는 프로젝트 생성 화면의 목차에서 절에 배정하면 적용됩니다."
-              : "작성 규칙은 프로젝트 생성 화면에서 선택해야 그 보고서에 적용됩니다."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-3">
-          {!existing ? (
-            <div className="flex flex-col gap-1.5">
-              <Label>{kind === "agent" ? "시스템 에이전트 덮어쓰기" : "대체할 자리"}</Label>
-              <p className="text-xs text-fg-tertiary">
-                {kind === "agent"
-                  ? "고르면 그 에이전트를 내 버전으로 대체하고 원문이 아래에 채워집니다. 비워두면 새 에이전트로 추가됩니다."
-                  : "고른 자리의 회사 표준 규칙을 대체하고 원문이 아래에 채워집니다. 비워두면 기존 규칙 뒤에 추가됩니다."}
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setBaseRef("")}
-                  className={cn(
-                    "rounded-full border px-2.5 py-1 text-xs",
-                    baseRef === ""
-                      ? "border-accent bg-bg-info font-medium text-fg"
-                      : "border-border bg-bg text-fg-secondary hover:border-fg-tertiary",
-                  )}
-                >
-                  {kind === "agent" ? "새로 만들기" : "추가 규칙"}
-                </button>
-                {baseOptions.map((opt) => (
-                  <button
-                    key={opt.ref}
-                    type="button"
-                    onClick={() => {
-                      setBaseRef(opt.ref);
-                      copyFrom(opt.ref);
-                    }}
-                    className={cn(
-                      "rounded-full border px-2.5 py-1 text-xs",
-                      baseRef === opt.ref
-                        ? "border-accent bg-bg-info font-medium text-fg"
-                        : "border-border bg-bg text-fg-secondary hover:border-fg-tertiary",
-                    )}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="prompt-name">이름</Label>
-            <Input
-              id="prompt-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={meta.placeholder}
-              disabled={pending}
-            />
-          </div>
-          {kind === "agent" ? (
-            <>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="prompt-min">목표 분량 (자)</Label>
-                <p className="text-xs text-fg-tertiary">
-                  이 에이전트를 배정한 절의 목표 분량이고 분할 작성 파트 수도 여기서 정해집니다.
-                  비워두면{" "}
-                  {baseRef ? "덮어쓴 에이전트의 원래 분량을 그대로 씁니다" : "기본값을 씁니다"}.
-                </p>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="prompt-min"
-                    type="number"
-                    min={1000}
-                    max={60000}
-                    step={1000}
-                    value={minChars}
-                    onChange={(e) => setMinChars(e.target.value)}
-                    placeholder="15000"
-                    className="w-32"
-                    disabled={pending}
-                  />
-                  <span className="text-sm text-fg-tertiary">~</span>
-                  <Input
-                    type="number"
-                    min={1000}
-                    max={60000}
-                    step={1000}
-                    value={maxChars}
-                    onChange={(e) => setMaxChars(e.target.value)}
-                    placeholder="22500"
-                    className="w-32"
-                    disabled={pending}
-                  />
-                  <span className="text-xs text-fg-tertiary">
-                    {Number(minChars) > 0 && Number(maxChars) > Number(minChars)
-                      ? `A4 ${Math.max(1, Math.floor(Number(minChars) / 1500))}~${Math.max(1, Math.floor(Number(maxChars) / 1500))}페이지`
-                      : "최소·최대를 함께 적어주세요"}
-                  </span>
-                </div>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="prompt-cat">분류</Label>
-                <Input
-                  id="prompt-cat"
-                  value={cat}
-                  onChange={(e) => setCat(e.target.value)}
-                  placeholder="예: 정책, 시장, 기술"
-                  disabled={pending}
-                />
-              </div>
-            </>
-          ) : null}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="prompt-desc">한 줄 설명</Label>
-            <Input
-              id="prompt-desc"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="목록에서 이 항목을 알아볼 설명"
-              disabled={pending}
-            />
-          </div>
-          {kind === "agent" && !freeform ? (
-            <div className="flex flex-col gap-3">
-              {SECTION_FIELDS.map(([key, label, hint]) => (
-                <div key={key} className="flex flex-col gap-1.5">
-                  <Label htmlFor={`prompt-${key}`}>{label}</Label>
-                  <p className="text-xs text-fg-tertiary">{hint}</p>
-                  <Textarea
-                    id={`prompt-${key}`}
-                    value={sections[key] ?? ""}
-                    onChange={(e) => setSections({ ...sections, [key]: e.target.value })}
-                    className="min-h-[110px] text-sm"
-                    disabled={pending}
-                  />
-                </div>
-              ))}
-              <button
-                type="button"
-                className="self-start text-xs text-fg-tertiary underline"
-                onClick={() => setFreeform(true)}
-              >
-                칸 대신 전체 원문을 직접 쓰기
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="prompt-content">프롬프트 내용</Label>
-              <Textarea
-                id="prompt-content"
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                className="min-h-[240px] font-mono text-sm"
-                placeholder={
-                  kind === "agent"
-                    ? "이 분석가의 전문성·관점·작성 지침을 적으세요."
-                    : "적용할 문체·서식 규칙을 적으세요."
-                }
-                disabled={pending}
-              />
-              {kind === "agent" ? (
-                <button
-                  type="button"
-                  className="self-start text-xs text-fg-tertiary underline"
-                  onClick={() => setFreeform(false)}
-                >
-                  칸(임무·분석 방법론·핵심 산출물)으로 나눠 쓰기
-                </button>
-              ) : null}
-            </div>
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={pending}>
-            취소
-          </Button>
-          <Button onClick={() => void save()} disabled={!valid || pending}>
-            {pending ? "저장 중…" : "저장"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

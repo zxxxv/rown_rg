@@ -27,11 +27,13 @@ from uuid import UUID
 
 import structlog
 
-from src.clients.llm.base import CompletionRequest, LLMClient, Message
+from src.clients.llm.base import CompletionRequest, LLMClient, Message, incomplete_stop
 from src.clients.llm.token_tracker import token_context
+from src.core.citations import numbers_in_order
 from src.core.config import settings
 from src.core.types import RetrievedChunk, SectionDraft, SectionPlan
 from src.services.generation.candidates import _build_prompt, _extract_cited_ids
+from src.services.generation.effort import write_effort
 from src.services.generation.writer_context import WriterContext
 
 if TYPE_CHECKING:
@@ -40,10 +42,12 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 PART_MAX_TOKENS = 10_000  # 파트 출력 상한 — 실측 파트 산출 2~3.3천자(3~5천 토큰)의 헤드룸
-PLAN_MAX_TOKENS = 600
+# 계획 출력 상한 — 600은 Sonnet 기준이었다. Opus는 소제목을 1.7배 길게 써서 6개를
+# 넘기다 상한에 잘렸고, 잘린 JSON은 파서가 통째로 버려 분할이 무너졌다(2026-08-11 실측:
+# 출력 정확히 600 = 상한). 계획은 절당 1콜이라 상한을 올려도 비용이 무의미하다.
+PLAN_MAX_TOKENS = 1_200
 MIN_CHUNKS_PER_PART = 3  # 배정 근거가 이보다 적은 파트는 병합(빈약 파트가 침범 유혹의 원천)
 _NUM_TOKEN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
-_CITE_RE = re.compile(r"\[(\d+)\]")
 
 _PLAN_SYSTEM = (
     "너는 보고서 절 설계자다. 주어진 절 제목·작성 방향·핵심 포인트·근거 미리보기로 "
@@ -128,6 +132,25 @@ def _headers(text_block: str, limit: int = 20) -> list[str]:
     return out[:limit]
 
 
+_ENTITY_INTRO_RE = re.compile(r"([가-힣A-Za-z0-9·\s]{2,25})\(([A-Za-z][A-Za-z0-9 .,&\-]{2,40})\)")
+
+
+def _entities_introduced(texts: Sequence[str], limit: int = 15) -> list[str]:
+    """앞 파트들이 괄호 영문 표기로 소개한 용어·기관 — 재소개 금지 부정 목록.
+
+    v5c-2 정독 실측: "클라이밋 그룹(Climate Group)" 소개가 한 절 안 두 파트에 반복.
+    소제목·수치 부정 목록은 이 유형을 못 잡는다(소개 문장은 소제목도 수치도 아니다).
+    """
+    seen: list[str] = []
+    for t in texts:
+        for m in _ENTITY_INTRO_RE.finditer(t):
+            name = m.group(1).strip().split()[-1] if m.group(1).strip() else ""
+            token = f"{name}({m.group(2).strip()})"
+            if name and token not in seen:
+                seen.append(token)
+    return seen[:limit]
+
+
 def _numbers_used(texts: Sequence[str], limit: int = 40) -> list[str]:
     """앞 파트들의 수치 토큰(유니크·등장순) — 재서술 금지 부정 목록용."""
     seen: list[str] = []
@@ -150,11 +173,12 @@ def _part_tail(
     allowed: Sequence[int],
     prev_headers: Sequence[str],
     used_numbers: Sequence[str],
+    introduced: Sequence[str] = (),
     per_part_goal: int | None = None,
 ) -> str:
     """파트별 가변 지시 — 공유 프리픽스 뒤에 별도 메시지로 붙는다(캐시 경계 밖)."""
     others = ", ".join(f"'{t}'" for t in all_titles if t != title)
-    allowed_s = "".join(f"[{n}]" for n in allowed)
+    allowed_s = ", ".join(str(n) for n in allowed)
     # 파트당 목표는 절 목표를 실제 파트 수로 나눈 값이다. 고정값을 쓰면 파트 수가
     # 요청보다 적게 계획됐을 때 그 곱이 곧 천장이 된다 — 실측(2026-08-10): 목표
     # 20,000자 절이 6파트로 계획되자 6×2,250=13,500자에서 정확히 멈췄다.
@@ -165,8 +189,9 @@ def _part_tail(
         f" — 소주제 '{title}'만 {per_part_goal:,}자 안팎으로 집중 작성하라.",
         f"절 전체의 구조나 요약을 만들지 마라. 다른 소주제({others})는 다른 파트가 쓴다"
         " — 그 영역을 침범하거나 미리 요약하지 마라.",
-        f"이 파트에서 인용할 수 있는 근거는 {allowed_s} 뿐이다. 목록에 없는 번호는 인용하지 마라."
-        " 여러 근거를 함께 달 때는 번호를 오름차순으로 쓴다.",
+        f"이 파트에서 쓸 수 있는 근거는 {allowed_s}번 뿐이다. 목록에 없는 번호는 쓰지 마라."
+        " 출처는 문장 끝에 (출처 n)으로 달고, 여러 근거를 함께 달 때는 (출처 n, m)처럼"
+        " 한 괄호에 오름차순으로 모아라.",
         "형식은 절 본문과 동일한 개조식(□ 대주제 → ㅇ 소주제 → - 세부)을 유지하라.",
         # 아래 4줄은 산출물 실독(2026-08-08) 결함 교정 — 지표(형식·무근거)는 통과하는데
         # 심사자가 먼저 지적할 항목들이다.
@@ -181,12 +206,18 @@ def _part_tail(
         " 독자는 근거 꾸러미를 보지 못한다 — 확인된 사실만 단정해서 쓴다.",
         "전문용어·약어는 첫 등장에 한글(영문 원어, 약어) 형식으로 병기하라.",
         "분석 결과는 가능하면 이 파트에 표 1개로 정리하라(마크다운 표, 헤더 포함)."
-        " 표 바로 아래 줄에 '* 출처: [n][m]'를 붙이고, 표 앞에 'table' 같은 표식은 쓰지 마라.",
+        " 표 바로 윗줄에 '표: 제목'을 쓰고 바로 아래 줄에 '* 출처: (출처 n, m)'을 붙여라."
+        " 표 앞에 'table' 같은 표식은 쓰지 마라.",
     ]
     if idx == 1:
         lines.append("절 제목 헤딩과 2~3문장 도입은 이 파트에만 포함하라.")
     else:
         lines.append("절 제목 헤딩·도입·전환 문단 없이 곧바로 '□' 대주제 블록으로 시작하라.")
+        lines.append(
+            "도입에서 이 절의 범위를 예고한다면 실제 파트 구성("
+            + ", ".join(f"'{t}'" for t in all_titles)
+            + ")과 일치시켜라 — 예고에 없는 범위를 본문이 다루거나 그 반대가 되면 안 된다."
+        )
     if idx < n_parts:
         lines.append("종합·마무리·결론 문단을 쓰지 마라(마지막 파트의 몫이다).")
     else:
@@ -203,11 +234,7 @@ def _part_tail(
 def _cite_violations(part_text: str, allowed: Sequence[int], n_citable: int) -> int:
     """허용 목록 밖 인용 수 — 배타 배정 준수 진단(로그 전용, 게이트 아님)."""
     allowed_set = set(allowed)
-    return sum(
-        1
-        for m in _CITE_RE.finditer(part_text)
-        if int(m.group(1)) <= n_citable and int(m.group(1)) not in allowed_set
-    )
+    return sum(1 for n in numbers_in_order(part_text) if n <= n_citable and n not in allowed_set)
 
 
 async def _plan_subtopics(
@@ -222,7 +249,7 @@ async def _plan_subtopics(
     previews = "\n".join(f"- {c.content[:80]}" for c in citable[:8])
     key_points = ", ".join(section.key_points) or "(없음)"
     prompt = (
-        f"절 제목: {section.chapter_number}.{section.section_number} {section.title}\n"
+        f"절 제목: {section.prompt_label()}\n"
         f"작성 방향: {section.direction or '(없음)'}\n"
         f"핵심 포인트: {key_points}\n\n근거 미리보기:\n{previews}"
     )
@@ -234,14 +261,31 @@ async def _plan_subtopics(
         max_tokens=PLAN_MAX_TOKENS,
     )
     response = await client.complete(request)
-    m = re.search(r"\[.*\]", response.content, re.DOTALL)
-    if m is None:
+    return parse_plan_titles(response.content, n_parts)
+
+
+# 잘린 JSON에서도 완성된 항목은 건진다 — 닫는 대괄호를 못 찾으면 통째로 버리던 파서가
+# 상한에 걸린 응답을 0개로 만들었고, 절 하나가 단일 호출로 떨어졌다. 상한을 올려도
+# 언젠가 또 걸리므로 파서 쪽이 근본이다.
+_QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+
+def parse_plan_titles(content: str, n_parts: int) -> list[str]:
+    """계획 응답 → 소주제 목록. JSON이 온전하면 그대로, 잘렸으면 완성된 문자열만."""
+    m = re.search(r"\[.*\]", content, re.DOTALL)
+    if m is not None:
+        try:
+            parsed = json.loads(m.group())
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return [p.strip() for p in parsed if isinstance(p, str) and p.strip()][:n_parts]
+    start = content.find("[")
+    if start < 0:
         return []
-    try:
-        parsed = json.loads(m.group())
-    except json.JSONDecodeError:
-        return []
-    return [p.strip() for p in parsed if isinstance(p, str) and p.strip()][:n_parts]
+    # 마지막 항목은 따옴표가 안 닫혀 잘렸을 수 있다 — 닫힌 것만 취한다.
+    titles = [t.strip() for t in _QUOTED_RE.findall(content[start:]) if t.strip()]
+    return titles[:n_parts]
 
 
 async def _load_chunk_vectors(
@@ -358,6 +402,7 @@ async def generate_section_split(
                 groups[i - 1],
                 headers,
                 _numbers_used(parts),
+                introduced=_entities_introduced(parts),
                 per_part_goal=goal_per_part,
             )
             request = CompletionRequest(
@@ -370,8 +415,30 @@ async def generate_section_split(
                 temperature=base_temperature,
                 max_tokens=PART_MAX_TOKENS,
                 cache_prefix_messages=1,  # 프리픽스 공유 — 파트 2+부터 캐시 읽기
+                effort=write_effort(model, synthesis=bool(section.builds_on)),
             )
             response = await client.complete(request)
+            # 파트 미완결(max_tokens 컷·refusal 등)은 결합본 중간에 문장 토막을 심는다
+            # — 같은 호출 1회 재시도, 그래도 미완결이면 분할 포기(None) → 단일 호출
+            # 폴백. 폴백 초안의 미완결은 후보 게이트(check_complete)가 다시 본다.
+            reason = incomplete_stop(response.stop_reason)
+            if reason:
+                logger.warning(
+                    "split_writer.part_incomplete",
+                    section=f"{section.chapter_number}.{section.section_number}",
+                    part=i,
+                    stop_reason=reason,
+                )
+                response = await client.complete(request)
+                reason = incomplete_stop(response.stop_reason)
+                if reason:
+                    logger.warning(
+                        "split_writer.part_incomplete_giving_up",
+                        section=f"{section.chapter_number}.{section.section_number}",
+                        part=i,
+                        stop_reason=reason,
+                    )
+                    return None
             part = response.content.strip()
             parts.append(part)
             headers += _headers(part)
@@ -386,8 +453,16 @@ async def generate_section_split(
         total_chars=len(combined),
         cite_violations=violations,
     )
-    return SectionDraft(
-        section_id=section.section_id,
-        content=combined,
-        cited_chunk_ids=_extract_cited_ids(combined, citable),
+    # 저장 직전 결정층(2026-09-01) — 마커 3상태 교정+절 내 소거. 단일 후보 경로와
+    # 같은 함수를 써 두 경로의 산출 규약이 같게 한다.
+    from src.services.generation.candidates import _repaired
+
+    return _repaired(
+        SectionDraft(
+            section_id=section.section_id,
+            content=combined,
+            cited_chunk_ids=_extract_cited_ids(combined, citable),
+            pool_chunk_ids=[c.chunk_id for c in citable],
+        ),
+        citable,
     )

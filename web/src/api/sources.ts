@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
 import type { Source, SourceListResponse } from "@/api/types";
+import { uploadWithProgress } from "@/api/upload";
 
 // ─── 실계약: /projects/{id}/sources ──────────────────────────────────────
 // project_sources 행 + metadata 신호(웹 수집은 indexer가, 파일 소스는 업로드/불러오기가 영속화).
@@ -21,7 +22,19 @@ export const SourceItemSchema = z.object({
   has_content: z.boolean(),
   // 라이브러리에서 불러온 자료면 원본 노드 id - 트리에서 '추가됨' 표시에 쓴다
   library_node_id: z.string().nullish(),
+  /** 색인이 뒤에서 도는 중 - 목록은 이 값이 있는 동안 자동 새로고침한다 */
+  indexing: z.boolean().default(false),
+  /** 실행 전 업로드는 색인이 런의 색인 단계로 미뤄진다(2026-08-20) - 실패가 아니다 */
+  index_deferred: z.boolean().default(false),
+  index_error: z.string().nullish(),
+  /** 파일 자료의 실물 신호 - 목록에서 "올라갔나·본문이 들어갔나"를 눈으로 가른다.
+   * 조각 0이면 파일은 있는데 본문을 못 뽑은 것이다(2026-08-20 동시 색인 사고). */
+  size_bytes: z.number().int().nullish(),
+  page_count: z.number().int().nullish(),
+  n_chunks: z.number().int().nullish(),
   created_at: z.string(),
+  /** 자료 발간연도(색인 추출 또는 page_age 파생) - '24년 이후' 기준 판단용, null=미상 */
+  published_year: z.number().int().nullish(),
 });
 export type SourceItem = z.infer<typeof SourceItemSchema>;
 
@@ -45,13 +58,20 @@ function toLegacySource(projectId: string, s: SourceItem): Source {
     source: host || (s.source_type === "web_search" ? "웹 검색" : s.source_type),
     source_kind: s.source_type,
     url: s.url ?? undefined,
-    published_at: s.page_age ?? undefined,
+    // 발간연도가 확정되면 그걸 보여준다 - page_age("3 days ago"류)보다 판단에 유용
+    published_at: s.published_year ? `${s.published_year}년 발간` : (s.page_age ?? undefined),
     reliability: s.reliability ? (RELIABILITY_NUM[s.reliability] ?? 0.5) : 0.5,
     summary: s.preview ?? (s.has_content ? "" : "본문 회수 실패 - 검색 근거로 쓰이지 않습니다."),
     is_included: s.is_included,
     preview: s.preview ?? undefined,
     matched_sections: s.matched_sections,
     library_file_id: s.library_node_id ?? undefined,
+    indexing: s.indexing,
+    index_deferred: s.index_deferred,
+    index_error: s.index_error ?? undefined,
+    size_bytes: s.size_bytes ?? undefined,
+    page_count: s.page_count ?? undefined,
+    n_chunks: s.n_chunks ?? undefined,
   };
 }
 
@@ -72,7 +92,13 @@ export function useProjectSources(projectId: string, opts?: { refetchInterval?: 
     queryFn: () => getProjectSources(projectId),
     enabled: Boolean(projectId),
     // 추가 검색이 백그라운드에서 도는 동안 목록을 폴링으로 따라잡는 용도.
-    refetchInterval: opts?.refetchInterval ?? false,
+    // 색인 중인 자료가 있으면(업로드 직후) 끝날 때까지 스스로 따라간다 -
+    // "올리고 새로고침하세요"를 사용자에게 시키지 않는다.
+    refetchInterval: (query) => {
+      const items = query.state.data?.items;
+      if (items?.some((s) => s.indexing)) return 4000;
+      return opts?.refetchInterval ?? false;
+    },
   });
 }
 
@@ -125,15 +151,22 @@ export function useDeleteSource(projectId: string) {
   });
 }
 
+export interface UploadSourceInput {
+  file: File;
+  /** 실제 전송 진행률(0~100) - 로딩바가 가짜 50%에 멈춰 보이던 것을 대체. */
+  onProgress?: (percent: number) => void;
+}
+
 // 직접 업로드 자료 - 파일 저장 + 즉시 색인(백엔드). 성공 시 자료 목록 갱신.
+// 색인은 뒤에서 도므로 이 요청은 파일 전송 + 자리 행 생성까지만 기다린다.
 export function useUploadProjectSource(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (file: File) => {
+    mutationFn: async ({ file, onProgress }: UploadSourceInput) => {
       const fd = new FormData();
       fd.append("file", file);
-      const data = await apiClient.post<unknown>(`projects/${projectId}/sources/upload`, {
-        body: fd,
+      const data = await uploadWithProgress<unknown>(`projects/${projectId}/sources/upload`, fd, {
+        onProgress,
       });
       return toLegacySource(projectId, SourceItemSchema.parse(data));
     },
@@ -157,4 +190,70 @@ export function useAttachLibrarySource(projectId: string) {
       void qc.invalidateQueries({ queryKey: sourceKeys.list(projectId) });
     },
   });
+}
+
+// ─── 자료 더 모으기 ───
+// 게이트와 무관하게 언제든 누를 수 있다. 예전엔 이 요청이 게이트 결정 API(/decide)를
+// 통해 나가서, 게이트가 없으면 버튼이 사라지고 누르면 검토 상태가 함께 소비됐다
+// (2026-08-26 행동·게이트 분리).
+
+export function useCollectMore(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...sourceKeys.list(projectId), "collect-more"],
+    mutationFn: () => apiClient.post<unknown>(`projects/${projectId}/collect-more`, { json: {} }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: sourceKeys.list(projectId) });
+    },
+  });
+}
+
+// ─── 제외 영향 미리보기 ───
+// 자료 제외는 조용한 파괴다. 누르는 순간 인용이 다시 매겨지고 그 자료를 근거로 쓴 절은
+// 근거를 잃는다. 되돌리려면 다시 채택하고 그 절들을 다시 써야 하는데, 절당 실측
+// $0.4~$1.3짜리 되돌리기다. 그래서 누르기 전에 무엇이 걸려 있는지 보여준다.
+
+export const ImpactedSectionSchema = z.object({
+  section_id: z.string(),
+  label: z.string(),
+  n_citations: z.number().int().default(0),
+  /** 이 자료를 빼면 이 절의 근거가 0이 된다 - 가장 아픈 경우 */
+  sole: z.boolean().default(false),
+  locked: z.boolean().default(false),
+});
+
+export const SourceImpactSchema = z.object({
+  n_sections: z.number().int().default(0),
+  n_citations: z.number().int().default(0),
+  n_sole: z.number().int().default(0),
+  sections: z.array(ImpactedSectionSchema).default([]),
+});
+export type SourceImpact = z.infer<typeof SourceImpactSchema>;
+
+const impactQuery = (projectId: string, sourceId: string) => ({
+  queryKey: [...sourceKeys.list(projectId), "impact", sourceId],
+  queryFn: async () => {
+    const data = await apiClient.get<unknown>(`projects/${projectId}/sources/${sourceId}/impact`);
+    return SourceImpactSchema.parse(data);
+  },
+  staleTime: 30_000,
+});
+
+export function useSourceImpact(projectId: string, sourceId: string | null) {
+  return useQuery({
+    ...impactQuery(projectId, sourceId ?? ""),
+    enabled: Boolean(projectId) && Boolean(sourceId),
+  });
+}
+
+/** 제외를 누른 **순간** 영향을 확인한다 - 걸린 절이 없으면 확인창 없이 그냥 뺀다.
+ *
+ *  아무것도 안 걸린 제외까지 창을 띄우면 창이 소음이 되고, 소음이 된 확인창은 읽지 않고
+ *  눌린다. 같은 쿼리 키를 쓰므로 이어 열리는 창은 캐시를 그대로 읽는다. */
+export function fetchSourceImpact(
+  qc: ReturnType<typeof useQueryClient>,
+  projectId: string,
+  sourceId: string,
+): Promise<SourceImpact> {
+  return qc.fetchQuery(impactQuery(projectId, sourceId));
 }

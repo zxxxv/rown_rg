@@ -44,7 +44,8 @@ const SECTION_SPECS: NodeSpec[] = [
     status: "pending",
     children: [
       { id: "4.1", title: "정책 일관성", status: "pending" },
-      { id: "4.2", title: "지역균형", status: "pending" },
+      // 작성 실패 시나리오 - 빈 절 재작성 진입점(열어서 다시 쓰기) 확인용
+      { id: "4.2", title: "지역균형", status: "failed" },
       { id: "4.3", title: "환경 영향", status: "writing" },
     ],
   },

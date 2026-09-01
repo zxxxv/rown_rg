@@ -1,8 +1,9 @@
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Lock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useCreateProject, useRunProject } from "@/api/projects";
+import { EmptyState } from "@/components/feedback/EmptyState";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import { ProjectConfigForm } from "@/features/project-config/ProjectConfigForm";
@@ -14,6 +15,24 @@ export default function NewProjectPage() {
   const { user, logout } = useAuth();
   const createProject = useCreateProject();
   const runProject = useRunProject();
+
+  // 뷰어는 열람 전용 - URL 직접 진입도 폼 대신 사유를 보여준다(백엔드도 403으로 막는다).
+  if (user?.role === "viewer") {
+    return (
+      <AppShell user={{ name: user.name, role: user.role }} onLogout={() => void logout()}>
+        <EmptyState
+          icon={Lock}
+          title="프로젝트 생성 권한이 필요합니다"
+          description="지금 계정은 열람 전용(viewer)입니다 - 관리자에게 권한 상향을 문의하세요."
+          action={
+            <Button variant="outline" onClick={() => navigate("/projects")}>
+              프로젝트 목록으로
+            </Button>
+          }
+        />
+      </AppShell>
+    );
+  }
 
   const handleSubmit = async (values: ProjectFormValues) => {
     try {
@@ -32,14 +51,22 @@ export default function NewProjectPage() {
       navigate(`/projects/${project.id}/overview`, { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
-        // 에러코드는 개발자용 - 사용자에겐 백엔드가 준 사람이 읽을 이유(message)만 보여준다.
-        const title =
-          err.status === 422
-            ? "입력값을 다시 확인해 주세요."
-            : err.status === 429
-              ? "한도 초과 - 프로젝트를 만들 수 없습니다"
-              : "프로젝트 생성 실패";
-        toast.error(title, { description: err.message });
+        // 사유가 본문이다 - 설명줄에 넣으면 놓친다(2026-08-14 실사용 지적: UNKNOWN_ANALYST
+        // 사유가 안 보였음). 백엔드 메시지를 제목으로 올리고, 없을 때만 일반 문구를 쓴다.
+        const reason = err.message?.trim();
+        if (err.status === 422) {
+          toast.error(reason || "입력값을 다시 확인해 주세요.", {
+            description: reason ? "입력값을 고친 뒤 다시 시도해 주세요." : `code: ${err.code}`,
+            duration: 10_000,
+          });
+        } else if (err.status === 429) {
+          toast.error("한도 초과 - 프로젝트를 만들 수 없습니다", { description: reason });
+        } else {
+          toast.error("프로젝트 생성 실패", {
+            description: reason || `code: ${err.code}`,
+            duration: 10_000,
+          });
+        }
       } else {
         toast.error("프로젝트 생성 중 알 수 없는 오류가 발생했습니다.");
       }
@@ -50,7 +77,6 @@ export default function NewProjectPage() {
     <AppShell
       user={user ? { name: user.name, role: user.role } : null}
       onLogout={() => void logout()}
-      tokenUsage={{ used: 1_240_000, limit: 5_000_000 }}
     >
       <div className="flex flex-col gap-6">
         <header className="flex flex-col gap-2">

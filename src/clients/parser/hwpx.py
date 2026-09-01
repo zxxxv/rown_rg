@@ -22,6 +22,7 @@ from src.clients.parser.base import (
     _filter_empty_tables,
     _measure_markdown,
     _strip_page_numbers,
+    strip_replacement_chars,
 )
 
 logger = structlog.get_logger(__name__)
@@ -96,6 +97,7 @@ class HwpxParser(ParserClient):
 
         result = ParseResult(
             source_path=path,
+            parser_name="hwpx",
             markdown=markdown,
             metadata=ParseMetadata(
                 page_count=None,
@@ -143,7 +145,7 @@ class HwpxParser(ParserClient):
 
     @staticmethod
     def _postprocess_markdown(markdown: str) -> str:
-        markdown = _strip_page_numbers(markdown)
+        markdown = strip_replacement_chars(_strip_page_numbers(markdown))
         lines = markdown.split("\n")
         lines = _apply_heading_rules(lines)
         markdown = "\n".join(lines)

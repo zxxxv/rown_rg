@@ -1,0 +1,24 @@
+# 모델 내보내기 전용 일회성 이미지 — GPU 박스에 파이썬 환경을 안 만들어도 되게 한다.
+# 추론 이미지(Dockerfile)와 분리한 이유: optimum·torch는 내보내기에만 필요하고
+# 수 GB짜리다. 추론 컨테이너에 그걸 넣으면 매 배포마다 그 무게를 진다.
+FROM python:3.12-slim
+
+# --index-url 이어야 한다. --extra-index-url 은 기본 PyPI를 막지 않아서 pip이
+# CUDA 빌드 torch를 고르고 nvidia-* 의존성으로 2.5~3GB가 더 붙는다(1.85GB -> 5GB).
+# 내보내기는 CPU로만 도는 경로라 기능 차이가 없다. 2026-08-20.
+RUN pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple \
+        torch \
+        "optimum[exporters,onnxruntime]>=2.0" \
+        onnx \
+        "transformers>=4.44" \
+        sentencepiece
+
+WORKDIR /app
+COPY src/__init__.py src/__init__.py
+COPY src/clients/__init__.py src/clients/onnx_cross_encoder.py src/clients/onnx_text_embedder.py src/clients/
+COPY gpu_service gpu_service
+
+ENV PYTHONPATH=/app PYTHONUNBUFFERED=1
+ENTRYPOINT ["python", "gpu_service/scripts/export_reranker_onnx.py"]

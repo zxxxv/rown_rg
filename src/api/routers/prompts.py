@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
+from src.api.dependencies.permissions import require_writer
 from src.api.schemas.prompt import (
     PersonalPromptCreate,
     PersonalPromptRead,
@@ -29,7 +30,8 @@ from src.prompts import list_analysts, list_components, load_analyst, load_compo
 from src.services.prompts import (
     create_personal,
     delete_personal,
-    get_personal,
+    get_personal_readable,
+    import_public_agent,
     list_personal,
     resolve_analysts,
     resolve_rules,
@@ -41,7 +43,10 @@ router = APIRouter(prefix="/prompts", tags=["prompts"])
 
 
 def _validate_base_ref(kind: str, base_ref: str | None) -> None:
-    """base_ref가 실제 시스템 항목을 가리키는지 확인(댕글링 오버라이드 방지)."""
+    """base_ref가 실제 시스템 항목을 가리키는지 확인(가리키는 곳 없는 참조 방지).
+
+    에이전트는 '복사해 온 원본'(사본이 값을 물려받는 출신), 규칙은 '대체할 슬롯'이다.
+    """
     if base_ref is None:
         return
     if kind == "agent":
@@ -77,7 +82,7 @@ async def list_my_prompts(
 async def create_my_prompt(
     data: PersonalPromptCreate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> PersonalPromptRead:
     _validate_base_ref(data.kind, data.base_ref)
     row = await create_personal(
@@ -90,6 +95,7 @@ async def create_my_prompt(
         cat=data.cat,
         description=data.description,
         spec=data.spec.model_dump(exclude_none=True),
+        is_public=data.is_public,
     )
     return PersonalPromptRead.model_validate(row)
 
@@ -100,7 +106,14 @@ async def get_my_prompt(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> PersonalPromptRead:
-    row = await get_personal(session, current_user.id, prompt_id)
+    # 열람은 소유자·공개·관리자까지(라이브러리 '사용자별 자료' 미러) — 수정·삭제는
+    # 아래 엔드포인트들이 get_personal(소유자 전용)으로 그대로 막는다.
+    row = await get_personal_readable(
+        session,
+        current_user.id,
+        prompt_id,
+        is_admin=current_user.role in ("admin", "super_admin"),
+    )
     return PersonalPromptRead.model_validate(row)
 
 
@@ -109,7 +122,7 @@ async def update_my_prompt(
     prompt_id: UUID,
     data: PersonalPromptUpdate,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> PersonalPromptRead:
     row = await update_personal(
         session,
@@ -120,7 +133,28 @@ async def update_my_prompt(
         cat=data.cat,
         description=data.description,
         spec=data.spec.model_dump(exclude_none=True) if data.spec is not None else None,
+        is_public=data.is_public,
     )
+    return PersonalPromptRead.model_validate(row)
+
+
+@router.post(
+    "/personal/import/{source_id}",
+    response_model=PersonalPromptRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_shared_prompt(
+    source_id: UUID,
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    current_user: Annotated[User, Depends(require_writer)],
+) -> PersonalPromptRead:
+    """공개된 남의 에이전트를 내 것으로 가져온다(복제).
+
+    "바로 쓰기"는 이미 된다(3층 병합으로 목록에 뜬다). 가져오기는 **고쳐 쓰고 싶을 때**를
+    위한 것이다 — 남의 자산을 직접 고칠 수 있으면 공유가 아니라 공용 편집이 된다.
+    복사본은 base_ref 없이, 비공개로 만들어진다(services/prompts/personal 참조).
+    """
+    row = await import_public_agent(session, current_user.id, source_id)
     return PersonalPromptRead.model_validate(row)
 
 
@@ -128,7 +162,7 @@ async def update_my_prompt(
 async def delete_my_prompt(
     prompt_id: UUID,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_writer)],
 ) -> None:
     await delete_personal(session, current_user.id, prompt_id)
 
@@ -150,6 +184,7 @@ def _system_agent(a) -> SystemPromptRead:
         sections=parse_agent_prompt(a.prompt),
         min_chars=v.min_chars if v else None,
         max_chars=v.max_chars if v else None,
+        queries=list(a.queries or []),
     )
 
 

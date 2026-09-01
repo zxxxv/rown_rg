@@ -85,6 +85,32 @@ class TestBuildPrompt:
         # UUID는 프롬프트에 절대 노출되지 않아야 (모델이 복제 못 하므로).
         assert str(chunks[0].chunk_id) not in prompt
 
+    def test_published_year_in_label_and_dating_rule(self):
+        # 발간연도 라벨(D2) - 옛 자료 통계의 무연도 현재형 서술을 막는 재료.
+        chunk = RetrievedChunk(
+            chunk_id=uuid4(),
+            source_id=uuid4(),
+            content="REC 거래는 총 30건이었다",
+            score=0.9,
+            source_title="전기저널 기고",
+            published_year=2022,
+        )
+        prompt = _build_prompt(_section(), [chunk])
+        assert "전기저널 기고 · 2022년 발간" in prompt
+        assert "현재형으로 단정하지 마라" in prompt
+
+    def test_unknown_year_label_omitted(self):
+        # 미상이면 라벨에 안 붙는다 - 전 청크 '미상'은 소음이다.
+        prompt = _build_prompt(_section(), _chunks(1))
+        assert "발간" not in prompt.split("근거 자료:")[1].split("\n")[1]
+
+    def test_recency_preference_rule_with_targeting_exception(self):
+        # 최신 우선 규칙(2026-08-27) - 신구 자료 병존 시 최신을 기준으로 삼되,
+        # 특정 시점·자료를 겨냥한 절은 그 지시가 우선이다(사용자 결정).
+        prompt = _build_prompt(_section(), _chunks(1))
+        assert "발간연도가 가장 최신인 근거" in prompt
+        assert "그 지시가 우선이다" in prompt
+
 
 # ---------- RAPTOR 요약 분리 (배경 맥락 — 인용 불가) ----------
 

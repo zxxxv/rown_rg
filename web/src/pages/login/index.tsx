@@ -3,6 +3,7 @@ import { AlertCircle } from "lucide-react";
 import { type KeyboardEvent, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useSsoStatus } from "@/api/auth";
 import { ApiError } from "@/api/client";
 import { type LoginInput, LoginInputSchema } from "@/api/types";
 import { BrandMark } from "@/components/BrandMark";
@@ -23,6 +24,9 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [ssoLoading, setSsoLoading] = useState(false);
+  const { data: sso } = useSsoStatus();
+  // 상태를 모르는 동안(로딩)엔 숨긴다 - 잠깐 보였다 사라지는 깜빡임이 더 어색하다.
+  const ssoEnabled = sso?.enabled ?? false;
 
   const {
     control,
@@ -104,26 +108,32 @@ export default function LoginPage() {
             </Alert>
           ) : null}
 
-          <Button
-            type="button"
-            className="w-full bg-[#00C300] text-white hover:bg-[#00a800]"
-            onClick={() => void onNaverWorks()}
-            disabled={busy}
-          >
-            <span
-              aria-hidden
-              className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-sm bg-white font-bold text-[#00C300] text-xs"
+          {/* SSO가 꺼져 있거나 IdP 값이 비면 버튼을 숨긴다 - 눌러도 실패하는
+              버튼을 보여주는 게 더 나쁘다(상태는 인증 없이 조회). */}
+          {ssoEnabled ? (
+            <Button
+              type="button"
+              className="w-full bg-[#00C300] text-white hover:bg-[#00a800]"
+              onClick={() => void onNaverWorks()}
+              disabled={busy}
             >
-              W
-            </span>
-            {ssoLoading ? "네이버웍스 연결 중…" : "네이버웍스로 로그인"}
-          </Button>
+              <span
+                aria-hidden
+                className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-sm bg-white font-bold text-[#00C300] text-xs"
+              >
+                W
+              </span>
+              {ssoLoading ? "네이버웍스 연결 중…" : "네이버웍스로 로그인"}
+            </Button>
+          ) : null}
 
-          <div className="flex items-center gap-3">
-            <span className="h-px flex-1 bg-border" />
-            <span className="text-xs text-fg-tertiary">또는 계정으로 로그인</span>
-            <span className="h-px flex-1 bg-border" />
-          </div>
+          {ssoEnabled ? (
+            <div className="flex items-center gap-3">
+              <span className="h-px flex-1 bg-border" />
+              <span className="text-xs text-fg-tertiary">또는 계정으로 로그인</span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+          ) : null}
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="login-id">이메일 또는 아이디</Label>

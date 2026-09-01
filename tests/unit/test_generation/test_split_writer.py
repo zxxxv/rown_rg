@@ -63,6 +63,18 @@ class FakeLLM:
         )
 
 
+class _FakeLLMWithStops(FakeLLM):
+    """콜 순서별 stop_reason을 지정 — 파트 절단(미완결) 시나리오용."""
+
+    def __init__(self, responses: list[str], stops: list[str]) -> None:
+        super().__init__(responses)
+        self._stops = stops
+
+    async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        response = await super().complete(request)
+        return response.model_copy(update={"stop_reason": self._stops[len(self.requests) - 1]})
+
+
 class FakeEmbedder:
     """제목 텍스트에 심은 축 마커(axis0/axis1)로 결정적 단위 벡터를 돌려준다."""
 
@@ -135,7 +147,7 @@ class TestPartTail:
             ["이미 다룬 소제목"],
             ["45.52", "9.21%"],
         )
-        assert "[3][7]" in tail
+        assert "3, 7번" in tail  # 허용 근거 목록 - 출처 표기는 (출처 n)이라 대괄호를 안 쓴다
         assert "파트 2/3" in tail
         assert "이미 다룬 소제목" in tail
         assert "45.52" in tail
@@ -242,6 +254,33 @@ class TestGenerateSectionSplit:
         draft, _ = await self._run(monkeypatch, fake, n_chunks=4)  # < 3*2
         assert draft is None
         assert fake.requests == []  # 계획 콜도 안 나감
+
+    async def test_truncated_part_retried_once(self, monkeypatch):
+        """파트 미완결(max_tokens 컷)은 같은 호출 1회 재시도 — 성공하면 결합 계속."""
+        fake = _FakeLLMWithStops(
+            [
+                '["axis0 소주제", "axis1 소주제"]',
+                "□ 끊긴 파트1 (출처 ",  # max_tokens 컷
+                "□ 완결된 파트1 [1]",  # 재시도 성공
+                "□ 파트2 [4]",
+            ],
+            ["end_turn", "max_tokens", "end_turn", "end_turn"],
+        )
+        draft, _ = await self._run(monkeypatch, fake)
+        assert draft is not None
+        assert "완결된 파트1" in draft.content
+        assert "끊긴 파트1" not in draft.content
+        assert len(fake.requests) == 4  # 계획 + 파트1 + 파트1 재시도 + 파트2
+
+    async def test_truncated_part_twice_falls_back(self, monkeypatch):
+        """재시도도 미완결이면 분할 포기(None) — 토막을 결합본에 심지 않는다."""
+        fake = _FakeLLMWithStops(
+            ['["axis0 소주제", "axis1 소주제"]', "□ 끊긴 (출처 ", "□ 또 끊긴 (출처 "],
+            ["end_turn", "max_tokens", "max_tokens"],
+        )
+        draft, _ = await self._run(monkeypatch, fake)
+        assert draft is None
+        assert len(fake.requests) == 3  # 계획 + 파트1 + 파트1 재시도에서 중단
 
     async def test_merged_single_part_falls_back(self, monkeypatch):
         # 두 소주제가 모두 axis0 → 한 파트로 병합 → None 폴백

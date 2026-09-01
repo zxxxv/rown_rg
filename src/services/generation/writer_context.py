@@ -25,6 +25,10 @@ from src.core.config import settings
 from src.core.types import SectionPlan
 from src.prompts import AnalystSpec, load_analyst, load_component
 
+# 게이트가 쓰는 기본 길이 창을 그대로 가져온다 — 프롬프트·토큰 상한·판정이 같은
+# 상수를 봐야 "쓰라고 한 분량"과 "통과시키는 분량"이 어긋나지 않는다.
+from src.services.qa.gate import DEFAULT_MAX_CHARS, DEFAULT_MIN_CHARS
+
 logger = structlog.get_logger(__name__)
 
 # 기본 작성 규칙 — 정체성 + 무관용 사실 원칙(agent_global_system의 핵심을 흡수).
@@ -33,7 +37,7 @@ logger = structlog.get_logger(__name__)
 BASE_SYSTEM = (
     "너는 (주)로운인사이트의 정부·공공·R&D 기획 보고서의 한 섹션을 작성하는 전문 작성자다. "
     "무관용 사실 원칙을 지켜라: 반드시 제공된 근거 자료만 사용하고, 모든 데이터·수치·고유명사·"
-    "주장의 끝에 근거를 [번호]로 인용하라. 근거에 없는 내용은 절대 지어내지 마라(환각 금지). "
+    "주장의 끝에 근거를 (출처 번호)로 표기하라. 근거에 없는 내용은 절대 지어내지 마라(환각 금지). "
     "신뢰할 근거를 찾을 수 없으면 그럴듯하게 채우지 말고, 해당 항목을 생략하거나 한계를 명시하라."
 )
 
@@ -46,6 +50,14 @@ DEFAULT_MAX_TOKENS = 2048
 _VOLUME_PREFIX = "목표 분량:"
 # 페이지 환산 계수(자/페이지) — 카탈로그 표기와 같은 기준.
 _CHARS_PER_PAGE = 1500
+
+
+# 절 단위로 분량을 눌러 놓은 자리에 붙이는 지시 — 본론과 같은 두께로 쓰면 앞 내용을
+# 되풀이하게 되므로, 무엇을 덜어낼지 먼저 정하게 한다(2026-08-24 사용자 지시).
+_CONDENSE_HINT = (
+    "이 절은 분량을 눌러 놓은 자리다. 앞 절들의 서술을 다시 늘어놓지 말고 "
+    "판단·함의로 좁혀라 — 중요한 것만 남기고 근거는 핵심 수치 위주로 인용하라."
+)
 
 
 def _volume_line(min_chars: int | None, max_chars: int | None) -> str:
@@ -89,9 +101,13 @@ class WriterContext:
     system: str
     guidance: str  # 유저 프롬프트에 붙일 방향·핵심포인트 블록 ("" 가능)
     max_tokens: int
-    # 정적 게이트 길이 경계 — None이면 게이트 기본값 사용
+    # 정적 게이트 길이 경계 — 목표가 없으면 게이트 기본 창을 그대로 채워 넣는다
+    # (아래 build_writer_context 참조). None은 이제 '지정 안 됨'이 아니라 예외 경로다.
     min_chars: int | None
     max_chars: int | None
+    # 분량 목표가 없어 기본 창으로 떨어졌는가 — 화면·채점이 "이 절은 목표 없이 쓰였다"를
+    # 구분할 수 있어야 한다(에이전트 미배정의 흔적).
+    volume_defaulted: bool = False
 
 
 @lru_cache(maxsize=1)
@@ -192,11 +208,30 @@ def build_writer_context(
     system = "\n\n".join(parts)
 
     guidance_lines: list[str] = []
+    # 개요 절 역할 규칙 — X.1 '개요'가 상세 절과 같은 통계를 반복해 '같은 절 2회전'이
+    # 되는 실측(2026-08-15 검증런: 1.1↔1.2 대량 중복, 4개 장 공통) 예방. 제목 기반
+    # 결정적 판정이라 프리셋·자유주제 모두에 걸린다.
+    if "개요" in section.title:
+        guidance_lines.append(
+            "이 절은 '개요'다 — 장 전체를 조감하고 뒤 절들이 무엇을 다루는지 안내하는 역할만 한다. "
+            "세부 통계의 나열, 상세 표, 개별 수치 분석은 뒤 절의 몫이므로 여기 쓰지 마라. "
+            "꼭 필요한 대표 수치는 3~4개 이내로 제한하고, 뒤 절에 실릴 표를 미리 만들지 마라."
+        )
     if section.direction:
         guidance_lines.append(f"작성 방향: {section.direction}")
     if section.key_points:
         points = "\n".join(f"- {k}" for k in section.key_points)
-        guidance_lines.append(f"반드시 다룰 핵심 포인트:\n{points}")
+        # "반드시 다룰"만으로는 항목이 조용히 빠졌다 — 3차 런 실측: 근거 자료가 있는데도
+        # 안 쓴 항목 7건(목차 지시 미반영 29건 중). 각 항목을 소제목·문단으로 대응시키고,
+        # 근거가 없어 못 쓰는 항목은 침묵 대신 한 줄로 밝히게 한다 — 빠뜨림과 자료
+        # 부재를 사람이 구분할 수 있어야 게이트에서 자료를 보강한다.
+        guidance_lines.append(
+            "반드시 다룰 핵심 포인트 — 항목마다 대응하는 소제목이나 문단이 있어야 한다:\n"
+            f"{points}\n"
+            "근거 자료에서 해당 내용을 찾을 수 없는 항목만 본문 말미에 "
+            '"(다음 항목은 확보된 자료에 관련 내용이 없어 다루지 못함: …)" 한 줄로 밝혀라. '
+            "관련 근거가 있는 항목을 빠뜨리는 것은 허용되지 않는다."
+        )
 
     max_tokens = DEFAULT_MAX_TOKENS
     min_chars: int | None = None
@@ -205,15 +240,40 @@ def build_writer_context(
     if volumes:
         min_chars = max(v.min_chars for v in volumes)
         max_chars = max(v.max_chars for v in volumes)
-        volume = max(volumes, key=lambda v: v.max_chars)
+    # 절 단위 지정이 있으면 그것이 정본이다 — 에이전트는 여러 절이 공유하므로
+    # 시사점처럼 짧아야 하는 절을 위해 그쪽 값을 고치면 남의 절까지 짧아진다.
+    if section.min_chars:
+        min_chars = section.min_chars
+    if section.max_chars:
+        max_chars = section.max_chars
+    # 목표가 어디에도 없으면 게이트 기본 창을 계약으로 삼는다 — 이게 없으면 프롬프트엔
+    # 분량 지시가 아예 안 실리는데(_volume_line은 빈 문자열) 상한만 2048로 남아,
+    # 모델은 절 하나를 다 쓰려 하고 시스템은 중간에서 자른다. 그 절은 온도를 바꿔
+    # 다시 생성해도 같은 벽에 부딪혀 **반드시** 실패하고, 완성 게이트가 런 전체를
+    # 세운다(2026-08-25 실사고: 에이전트 미배정 절 하나가 $12짜리 런을 조립 직전에
+    # 무산시킴). 게이트가 이미 같은 상수로 판정하므로, 여기서 채워야 프롬프트·토큰
+    # 상한·게이트가 같은 계약 하나를 본다.
+    volume_defaulted = min_chars is None and max_chars is None
+    if volume_defaulted:
+        min_chars, max_chars = DEFAULT_MIN_CHARS, DEFAULT_MAX_CHARS
+        logger.info(
+            "writer_context.volume_defaulted",
+            section=f"{section.chapter_number}.{section.section_number}",
+            n_analysts=len(specs),
+            min_chars=min_chars,
+            max_chars=max_chars,
+        )
+    if max_chars:
         # 한국어 1문자≈1토큰을 상한 근사로 잡고 설정 캡 적용 — 운영 품질 모드에서만
         # WRITE_MAX_TOKENS를 올려 전체 분량 목표를 실현한다.
-        max_tokens = max(DEFAULT_MAX_TOKENS, min(volume.max_chars, settings.write_max_tokens))
+        max_tokens = max(DEFAULT_MAX_TOKENS, min(max_chars, settings.write_max_tokens))
 
     # 분량 지시는 volume_target에서 만들어 싣는다 — 에이전트 프롬프트 본문의
     # "## 분량 가이드"는 제거했다(필드와 21종 전부 값이 어긋나 있었다).
     volume_line = _volume_line(min_chars, max_chars)
     if volume_line:
+        if section.max_chars:
+            volume_line = f"{volume_line} {_CONDENSE_HINT}"
         guidance_lines.append(volume_line)
 
     return WriterContext(
@@ -222,4 +282,5 @@ def build_writer_context(
         max_tokens=max_tokens,
         min_chars=min_chars,
         max_chars=max_chars,
+        volume_defaulted=volume_defaulted,
     )

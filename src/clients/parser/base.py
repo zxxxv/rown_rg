@@ -18,6 +18,11 @@ from pydantic import BaseModel, Field
 
 logger = structlog.get_logger(__name__)
 
+# 페이지 경계 마커 - PDF 파서가 페이지 사이에 심고, 색인이 읽어 청크에 페이지 번호를
+# 단 뒤 제거한다(services/indexing/_pages.py). 청크·화면·프롬프트에는 절대 남지 않는다.
+# HTML 주석 꼴이라 _strip_page_numbers(숫자 단독 줄)·표 필터에 걸리지 않는다.
+PAGE_BREAK_MARKER = "<!-- rown:page-break -->"
+
 
 _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$", re.MULTILINE)
 _TABLE_LINE = re.compile(r"^\s*\|.*\|\s*$")
@@ -44,6 +49,11 @@ class ParseResult(BaseModel):
     metadata: ParseMetadata = Field(default_factory=ParseMetadata)
     warnings: list[str] = Field(default_factory=list)
     cached: bool = False
+    # 어느 파서가 이 결과를 만들었나 - "docling-remote" | "docling-local" | "pymupdf" |
+    # "hwpx" 등. 두 군데서 읽는다: (1) 색인이 project_sources 메타로 영속해 화면에
+    # 저품질 파싱을 드러내고, (2) 캐시 히트 시 pymupdf 결과면 재파싱 자격을 판단한다.
+    # 빈 문자열은 v3 이전 캐시본(발생하면 그대로 신뢰).
+    parser_name: str = ""
 
 
 class ParserError(Exception):
@@ -86,6 +96,31 @@ def _measure_markdown(markdown: str) -> tuple[int, int, int]:
 
 def _strip_page_numbers(markdown: str) -> str:
     return _PAGE_NUMBER_LINE.sub("", markdown)
+
+
+# 글리프를 유니코드로 못 되돌린 자리에 남는 대체 문자(U+FFFD, ). PDF 추출에서
+# 흔하다(실측 2026-08-10: 정부 PDF 본문의 최대 2.4%). 화면에 보기 흉할 뿐 아니라
+# 임베딩·인용 원문에도 그대로 들어가므로 파싱 단계에서 걷어낸다.
+_REPLACEMENT_CHAR = "�"
+# 한 줄이 이 비율 이상 깨졌으면 남은 글자도 못 믿는다 — 줄째로 버린다.
+_LINE_GARBLED_RATIO = 0.3
+
+
+def strip_replacement_chars(markdown: str) -> str:
+    """대체 문자 제거. 심하게 깨진 줄은 통째로 버린다(부분 제거는 단어를 뭉갠다)."""
+    if _REPLACEMENT_CHAR not in markdown:
+        return markdown
+    out: list[str] = []
+    for line in markdown.split(chr(10)):
+        bad = line.count(_REPLACEMENT_CHAR)
+        if not bad:
+            out.append(line)
+            continue
+        stripped = line.strip()
+        if stripped and bad / len(stripped) >= _LINE_GARBLED_RATIO:
+            continue
+        out.append(line.replace(_REPLACEMENT_CHAR, ""))
+    return chr(10).join(out)
 
 
 def _extract_cells(line: str) -> list[str]:
@@ -143,11 +178,20 @@ class ParseCache:
     def __init__(self, root: Path = Path("./cache/parsed")) -> None:
         self.root = root
 
+    # 파서 출력 규약이 바뀌면 올린다 - 키에 섞여 옛 캐시를 자연 무효화한다.
+    # v2: PDF 페이지 경계 마커 도입(2026-08-14). 마커 없는 캐시본이 재색인에 쓰이면
+    # 그 자료만 페이지 없이 색인돼 "왜 이 자료만 점프가 안 되나"가 된다.
+    # v3: parser_name 기록(2026-08-20). pymupdf 폴백 결과가 캐시에 박혀 docling이
+    # 가능해진 뒤에도 저품질본이 영원히 재사용되던 구멍을 막는 전제 - 정체가
+    # 없는 v2 캐시본으로는 재파싱 자격을 판단할 수 없다. hwpx/docx 캐시가 함께
+    # 1회 무효화되는 비용은 감수한다(클래스 공유 상수).
+    _VERSION = "v3"
+
     @staticmethod
     def _key(file_path: Path) -> str:
         abs_path = str(file_path.resolve())
         mtime = file_path.stat().st_mtime_ns
-        raw = f"{abs_path}:{mtime}".encode()
+        raw = f"{abs_path}:{mtime}:{ParseCache._VERSION}".encode()
         return hashlib.sha256(raw).hexdigest()[:16]
 
     def _path_for(self, key: str) -> Path:

@@ -12,6 +12,27 @@ from src.db.models.user import User
 # 엔드포인트 곳곳에 ("super_admin", "admin") 리터럴을 흩뿌리지 않고 이 이름 하나로 참조한다.
 ADMINS: tuple[Role, ...] = (Role.SUPER_ADMIN, Role.ADMIN)
 
+# 쓰기 작업(프로젝트 생성·실행·편집·업로드·프롬프트 관리) 허용 역할 - 뷰어는 열람 전용.
+# SSO JIT 가입이 viewer로 떨어지므로 뷰어가 쓰기를 시도하는 일은 일상적이다.
+WRITERS: tuple[Role, ...] = (Role.SUPER_ADMIN, Role.ADMIN, Role.WORKER)
+
+
+async def require_writer(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> User:
+    """뷰어(열람 전용) 차단 - 사유를 사람이 읽고 행동할 수 있게 명시한다.
+
+    전에는 쓰기 엔드포인트가 역할을 안 봐서 뷰어도 프로젝트를 만들 수 있었고,
+    막더라도 조용히 실패하면 사용자가 버그로 오해한다(2026-08-14 사용자 결정:
+    막힌 이유를 확실히 띄운다). 코드가 고유해 프론트가 안내 UI로 구분할 수 있다.
+    """
+    if current_user.role not in WRITERS:
+        raise AuthorizationError(
+            message="이 작업에는 작성 권한이 필요합니다 - 관리자에게 권한 상향을 문의하세요",
+            code="WRITE_ROLE_REQUIRED",
+        )
+    return current_user
+
 
 def require_role(*roles: str) -> Callable[..., Coroutine[Any, Any, User]]:
     async def _checker(

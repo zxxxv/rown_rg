@@ -5,8 +5,9 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.db import get_async_session
@@ -23,6 +24,7 @@ from src.api.schemas.admin import (
     IpWhitelistUpdateInput,
     LimitDecisionInput,
     LimitRequestRead,
+    OnlineUserRead,
     QuotaSettingRead,
     QuotaSettingsPatchBody,
     ResetPasswordInput,
@@ -44,7 +46,7 @@ from src.core.quota_settings import (
     parse_quota_setting_key,
     validate_quota_setting_value,
 )
-from src.core.types import Role
+from src.core.types import ProjectStage, Role
 from src.db.models.ip_whitelist import IpWhitelist
 from src.db.models.limit_request import LimitRequest
 from src.db.models.project import Project
@@ -60,10 +62,18 @@ from src.services.quota_settings import (
     invalidate_quota_setting_cache,
 )
 
+logger = structlog.get_logger(__name__)
+
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-# DB의 ProjectStage 값 기준 '진행 중' 상태 (created/completed/archived 제외)
+# DB의 ProjectStage 값 기준 '진행 중' 상태 (created/completed/archived 제외).
+# 조립까지 끝났어도 **확정 전이면 진행 중**이라, 아래 질의가 그 경우를 따로 얹는다
+# (2026-08-27: 목록의 '완료 = 최종 확정' 규칙과 대시보드가 어긋나 있었다).
 _ACTIVE_PROJECT_STATUSES = ("researching", "indexing", "writing", "reviewing")
+
+# '현재 접속중' 판정 창 — 하트비트(last_seen_at)가 이 시간 내면 접속중으로 센다.
+# 하트비트 갱신이 60초 스로틀이므로 창은 그보다 넉넉해야 한다.
+_ONLINE_WINDOW = timedelta(minutes=5)
 
 
 def _resolve_period_range(
@@ -107,13 +117,14 @@ def _resolve_period_range(
 async def get_admin_dashboard(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     _: Annotated[User, Depends(require_role(*ADMINS))],
-    period: Annotated[DashboardPeriod, Query()] = DashboardPeriod.LAST_30_DAYS,
+    period: Annotated[DashboardPeriod, Query()] = DashboardPeriod.THIS_MONTH,
     start: Annotated[date | None, Query()] = None,
     end: Annotated[date | None, Query()] = None,
 ) -> AdminDashboardData:
     """관리자 대시보드 — KPI·일별 비용·사용자별 사용량·증액 요청을 한 번에 집계한다.
 
-    기본 기간은 최근 30일. period=custom + start/end로 임의 구간을 조회한다.
+    기본 기간은 이번 달(월 한도와 같은 창, 월이 바뀌면 0부터 다시 누적).
+    period=custom + start/end로 임의 구간을 조회한다.
     """
     today = now()
     range_start, range_end = _resolve_period_range(period, today, start, end)
@@ -123,6 +134,29 @@ async def get_admin_dashboard(
         await session.execute(
             select(func.coalesce(func.sum(TokenUsage.cost_usd), 0)).where(
                 TokenUsage.created_at >= range_start, TokenUsage.created_at < range_end
+            )
+        )
+    ).scalar_one()
+    # 명단까지 함께 - 카드 호버가 '몇 명'에서 '누구'로 답하게(2026-08-28 지시).
+    # 수는 명단 길이가 아니라 별도 카운트다(상한 50에 잘려도 수는 참값).
+    online_rows = (
+        await session.execute(
+            select(User.name, User.email, User.last_seen_at)
+            .where(
+                User.is_active.is_(True),
+                User.last_seen_at >= today - _ONLINE_WINDOW,
+            )
+            .order_by(User.last_seen_at.desc())
+            .limit(50)
+        )
+    ).all()
+    online_users = (
+        await session.execute(
+            select(func.count())
+            .select_from(User)
+            .where(
+                User.is_active.is_(True),
+                User.last_seen_at >= today - _ONLINE_WINDOW,
             )
         )
     ).scalar_one()
@@ -141,16 +175,26 @@ async def get_admin_dashboard(
         await session.execute(
             select(func.count())
             .select_from(Project)
-            .where(Project.status.in_(_ACTIVE_PROJECT_STATUSES))
+            .where(
+                or_(
+                    Project.status.in_(_ACTIVE_PROJECT_STATUSES),
+                    and_(
+                        Project.status == ProjectStage.COMPLETED.value,
+                        Project.finalized_at.is_(None),
+                    ),
+                )
+            )
         )
     ).scalar_one()
+    # 완료 = **최종 확정**. completed_at은 조립이 끝난 시각이라, 그걸로 세면 아직
+    # 손보는 중인 보고서가 '완료'로 집계된다(목록 필터와 같은 기준으로 맞춘다).
     completed_reports = (
         await session.execute(
             select(func.count())
             .select_from(Project)
             .where(
-                Project.completed_at >= range_start,
-                Project.completed_at < range_end,
+                Project.finalized_at >= range_start,
+                Project.finalized_at < range_end,
             )
         )
     ).scalar_one()
@@ -160,9 +204,15 @@ async def get_admin_dashboard(
         QuotaSettingKey.ORG_MONTHLY_COST_LIMIT_USD,
         default=int(settings.org_monthly_cost_limit_usd),
     )
+    allocated_limit_usd = await _allocated_limit_total(session)
     kpis = AdminKPI(
         total_cost_usd=float(total_cost),
         cost_limit_usd=float(org_cost_limit_usd),
+        allocated_limit_usd=float(allocated_limit_usd),
+        online_users=online_users,
+        online_list=[
+            OnlineUserRead(name=n or e, email=e, last_seen_at=ts) for n, e, ts in online_rows
+        ],
         active_users=active_users,
         active_projects=active_projects,
         completed_reports=completed_reports,
@@ -527,9 +577,102 @@ async def decide_limit_request(
         else:
             user_limit.monthly_limit_usd = user_limit.monthly_limit_usd + req.amount_usd
             user_limit.updated_by = current_user.id
+        await session.flush()
+        # 승인은 막지 않되 흔적은 남긴다 — 조직 한도가 공유 실링이라, 배정 합계가 그걸
+        # 넘으면 늘려 준 몫을 실제로는 못 쓴다(조직 한도에서 먼저 막힌다). 관리자가
+        # "늘려줬다"고 알고 있는 것과 사용자가 겪는 것이 갈리는 자리다.
+        allocated = await _allocated_limit_total(session)
+        org_limit = await get_quota_setting_int(
+            session,
+            QuotaSettingKey.ORG_MONTHLY_COST_LIMIT_USD,
+            default=int(settings.org_monthly_cost_limit_usd),
+        )
+        if allocated > org_limit:
+            logger.warning(
+                "quota.over_allocated",
+                allocated_usd=float(allocated),
+                org_limit_usd=org_limit,
+                approved_for=str(req.user_id),
+                amount_usd=float(req.amount_usd),
+            )
 
     await session.flush()
     return _to_limit_request_read(req, target.name)
+
+
+async def _allocated_limit_total(session: AsyncSession) -> Decimal:
+    """활성 사용자에게 배정된 개인 한도의 합. 전용 한도가 없으면 역할 기본값을 센다.
+
+    조직 한도와 나란히 봐야 "배분해 준 것"과 "실제로 쓸 수 있는 것"의 차이가 보인다 —
+    승인 경로에 조직 한도 대조가 없어서 초과 배정이 조용히 쌓인다.
+    viewer는 LLM 비용 경로가 없어 $0 고정이라 뺀다(core.limit과 같은 판단).
+    """
+    rows = (
+        await session.execute(
+            select(User.role, UserLimit.monthly_limit_usd)
+            .outerjoin(UserLimit, UserLimit.user_id == User.id)
+            .where(User.is_active, User.role != "viewer")
+        )
+    ).all()
+    # 역할 기본값은 역할 수만큼만 조회한다(사용자마다 부르면 N+1).
+    defaults = {
+        role: await get_role_default_limit_usd(session, role) for role in {r for r, _ in rows}
+    }
+    return sum((custom or defaults[role] for role, custom in rows), Decimal(0))
+
+
+_ROLE_DEFAULT_KEYS = (
+    QuotaSettingKey.DEFAULT_LIMIT_SUPER_ADMIN_USD,
+    QuotaSettingKey.DEFAULT_LIMIT_ADMIN_USD,
+    QuotaSettingKey.DEFAULT_LIMIT_WORKER_USD,
+)
+
+
+async def _assert_role_defaults_within_org(
+    session: AsyncSession, parsed_values: dict[str, int]
+) -> None:
+    """역할 기본 한도는 조직 한도를 넘을 수 없다.
+
+    개인 한도가 조직 한도보다 크거나 같으면 **개인 한도는 아무 일도 하지 않는다** —
+    개인 한도에 닿기 전에 조직 한도에 먼저 걸리기 때문이다(quota_gate가 조직을 먼저
+    본다). 그 상태에서는 한 사람이 조직 예산 전체를 혼자 태워도 막을 수단이 없다
+    (2026-08-26 실측: 조직 $500인데 역할 기본값도 전부 $500 = 12명 × $500 배정).
+
+    조직 한도를 내리는 수정과 역할 기본값을 올리는 수정이 한 배치에 같이 올 수 있으므로,
+    배치 반영 **후**의 값으로 판정한다.
+    """
+    org_key = QuotaSettingKey.ORG_MONTHLY_COST_LIMIT_USD.value
+    org_after = parsed_values.get(org_key)
+    if org_after is None:
+        org_after = await get_quota_setting_int(
+            session,
+            QuotaSettingKey.ORG_MONTHLY_COST_LIMIT_USD,
+            default=int(settings.org_monthly_cost_limit_usd),
+        )
+
+    offenders: list[str] = []
+    for key in _ROLE_DEFAULT_KEYS:
+        after = parsed_values.get(key.value)
+        if after is None:
+            # 이 배치가 안 건드린 역할도 본다 — 조직 한도만 내려도 역전될 수 있다.
+            after = int(await get_role_default_limit_usd(session, _ROLE_OF_KEY[key]))
+        if after > org_after:
+            offenders.append(f"{key.value}=${after:,}")
+    if offenders:
+        raise ValidationError(
+            message=(
+                f"역할 기본 한도가 조직 한도(${org_after:,})를 넘습니다: {', '.join(offenders)}"
+                " - 조직 한도를 먼저 올리거나 역할 기본값을 낮추세요"
+            ),
+            code="ROLE_LIMIT_EXCEEDS_ORG",
+        )
+
+
+_ROLE_OF_KEY = {
+    QuotaSettingKey.DEFAULT_LIMIT_SUPER_ADMIN_USD: "super_admin",
+    QuotaSettingKey.DEFAULT_LIMIT_ADMIN_USD: "admin",
+    QuotaSettingKey.DEFAULT_LIMIT_WORKER_USD: "worker",
+}
 
 
 @router.get("/quota-settings", response_model=list[QuotaSettingRead])
@@ -548,9 +691,15 @@ async def list_quota_settings(
 async def update_quota_settings(
     body: QuotaSettingsPatchBody,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-    current_user: Annotated[User, Depends(require_role("super_admin"))],
+    current_user: Annotated[User, Depends(require_role(*ADMINS))],
 ) -> list[QuotaSettings]:
     """quota_settings를 배치로 수정한다(단일 트랜잭션, 실패 시 전체 롤백).
+
+    **admin도 수정할 수 있다**(2026-08-26 사용자 결정 — 종전 super_admin 전용).
+    조직 한도는 회사 지출의 실링이라 권한을 넓히면 마지막 방어선이 얇아지는데,
+    같은 배포에 들어간 `_assert_role_defaults_within_org`가 "역할 기본값 ≤ 조직 한도"를
+    강제해 개인 한도가 실제 가드로 돌아왔으므로 조직 한도가 유일한 수단은 아니다.
+    변경은 건마다 quota_settings_history에 남는다(누가·언제·무엇을).
 
     수정 대상 row는 SELECT ... FOR UPDATE로 잠근 뒤 처리하고, 변경 건마다
     quota_settings_history에 감사 로그를 남긴다. 성공 시 해당 key들의
@@ -593,6 +742,8 @@ async def update_quota_settings(
             message=f"존재하지 않는 quota_settings key입니다: {sorted(missing)}",
             code="QUOTA_SETTING_NOT_FOUND",
         )
+
+    await _assert_role_defaults_within_org(session, parsed_values)
 
     changed_at = now()
     for key, parsed in parsed_values.items():

@@ -65,7 +65,7 @@ class TestPersonalPrompts:
         assert gone.status_code == 404
 
     async def test_owner_isolation(
-        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+        self, test_client: AsyncClient, worker_token: str, viewer_token: str
     ) -> None:
         created = await test_client.post(
             "/api/v1/prompts/personal",
@@ -73,9 +73,10 @@ class TestPersonalPrompts:
             json={"kind": "rule", "name": "내 문체", "content": "간결하게."},
         )
         pid = created.json()["id"]
-        # 다른 사용자는 접근 불가(404)
+        # 비관리자 동료에게는 보이지 않는다(404). 관리자 열람은 대리 조작을 위해
+        # 열려 있으므로 여기서 다른 사용자 대역으로 쓰지 않는다.
         other = await test_client.get(
-            f"/api/v1/prompts/personal/{pid}", headers=_auth(super_admin_token)
+            f"/api/v1/prompts/personal/{pid}", headers=_auth(viewer_token)
         )
         assert other.status_code == 404
 
@@ -121,6 +122,232 @@ class TestPersonalPrompts:
             },
         )
         assert resp.status_code == 422
+
+    async def test_sections_only_create_composes_content(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        """칸만 채운 저장 — content는 서버가 조합한다. min_length에 잘리던 결함 회귀 방지
+        (2026-08-12 QA: "저장 실패, 입력을 확인해주세요"만 뜨고 원인 표시 불가)."""
+        resp = await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={
+                "kind": "agent",
+                "name": "칸입력 에이전트",
+                "content": "",
+                "spec": {"sections": {"mission": "규제 동향을 추적한다", "method": "1. 수집"}},
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert "## 임무" in body["content"]
+        assert "규제 동향을 추적한다" in body["content"]
+        # 칸 값은 재편집용으로 spec에 남는다
+        assert body["spec"]["sections"]["mission"] == "규제 동향을 추적한다"
+
+
+class TestValidationErrorEnvelope:
+    """요청 검증 실패(422)가 우리 에러 봉투로, 한국어 필드 경로·이유와 함께 나가는지.
+
+    FastAPI 기본 {detail:[...]}로 새면 프론트 공통 클라이언트가 못 읽어
+    "요청을 처리할 수 없습니다"라는 정체불명 문구가 된다(2026-08-12 QA).
+    """
+
+    async def test_empty_body_names_reason_in_korean(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        resp = await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={"kind": "agent", "name": "빈 에이전트", "content": ""},
+        )
+        assert resp.status_code == 422
+        body = resp.json()
+        assert "detail" not in body
+        assert body["error"]["code"] == "VALIDATION_ERROR"
+        assert "본문 또는 칸" in body["error"]["message"]
+
+    async def test_volume_range_names_field_path(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        resp = await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={
+                "kind": "agent",
+                "name": "분량 오류",
+                "content": "본문",
+                "spec": {"min_chars": 500, "max_chars": 800},
+            },
+        )
+        assert resp.status_code == 422
+        body = resp.json()
+        msg = body["error"]["message"]
+        # 어느 필드가 왜 틀렸는지 문장에 실린다
+        assert "spec.min_chars" in msg
+        assert "1000 이상" in msg
+        fields = body["error"]["details"]["fields"]
+        assert {f["field"] for f in fields} == {"spec.min_chars", "spec.max_chars"}
+
+    async def test_min_over_max_uses_custom_korean_message(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        resp = await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={
+                "kind": "agent",
+                "name": "역전 분량",
+                "content": "본문",
+                "spec": {"min_chars": 20000, "max_chars": 15000},
+            },
+        )
+        assert resp.status_code == 422
+        msg = resp.json()["error"]["message"]
+        assert "최소는 최대보다 작아야" in msg
+        assert "Value error" not in msg
+
+
+class TestSharedAgents:
+    """공개 토글 — 잘 만든 개인 에이전트를 사내가 함께 쓴다(2026-08-19).
+
+    그전엔 owner_id 스코프라 같은 에이전트를 계정마다 손으로 심어야 했다.
+    """
+
+    async def _create_public(self, client: AsyncClient, token: str, name: str) -> str:
+        created = await client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(token),
+            json={
+                "kind": "agent",
+                "name": name,
+                "content": "너는 공개된 분석가다.",
+                "is_public": True,
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["is_public"] is True
+        return created.json()["id"]
+
+    async def test_public_agent_appears_for_other_user(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        await self._create_public(test_client, worker_token, "공개 탄소규제 분석가")
+        analysts = await test_client.get("/api/v1/analysts", headers=_auth(super_admin_token))
+        # 표시 이름에 소유자가 **언제나** 붙는다 - 겹칠 때만 붙이면 '민짜 이름'의
+        # 주인이 목록 순서로 정해져, 저장된 목차의 참조가 조용히 남의 에이전트로
+        # 옮겨간다(services/prompts/personal._shared_name, 실측 A→B).
+        hit = next(a for a in analysts.json() if a["name"].startswith("공개 탄소규제 분석가"))
+        assert hit["shared"] is True
+        assert hit["owner_name"]
+        assert hit["owner_name"] in hit["name"]
+
+    async def test_private_agent_stays_invisible(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={"kind": "agent", "name": "비공개 분석가", "content": "..."},
+        )
+        analysts = await test_client.get("/api/v1/analysts", headers=_auth(super_admin_token))
+        assert "비공개 분석가" not in [a["name"] for a in analysts.json()]
+
+    async def test_owner_sees_own_agent_once_not_twice(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        """공개 층에서 자기 것을 또 넣으면 목록에 두 벌 뜬다 - 개인 층에서만 나와야 한다."""
+        await self._create_public(test_client, worker_token, "내가 공개한 분석가")
+        analysts = await test_client.get("/api/v1/analysts", headers=_auth(worker_token))
+        names = [a["name"] for a in analysts.json()]
+        assert names.count("내가 공개한 분석가") == 1
+        mine = next(a for a in analysts.json() if a["name"] == "내가 공개한 분석가")
+        assert mine["shared"] is False
+
+    async def test_toggle_off_removes_from_others(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        pid = await self._create_public(test_client, worker_token, "잠깐 공개한 분석가")
+        patched = await test_client.patch(
+            f"/api/v1/prompts/personal/{pid}",
+            headers=_auth(worker_token),
+            json={"is_public": False},
+        )
+        assert patched.status_code == 200
+        assert patched.json()["is_public"] is False
+        analysts = await test_client.get("/api/v1/analysts", headers=_auth(super_admin_token))
+        assert "잠깐 공개한 분석가" not in [a["name"] for a in analysts.json()]
+
+    async def test_others_cannot_toggle_my_agent(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        pid = await self._create_public(test_client, worker_token, "남이 못 건드릴 분석가")
+        resp = await test_client.patch(
+            f"/api/v1/prompts/personal/{pid}",
+            headers=_auth(super_admin_token),
+            json={"is_public": False},
+        )
+        assert resp.status_code == 404
+
+    async def test_rule_cannot_be_public(self, test_client: AsyncClient, worker_token: str) -> None:
+        resp = await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(worker_token),
+            json={"kind": "rule", "name": "공개 규칙", "content": "간결하게.", "is_public": True},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"]["code"] == "PROMPT_NOT_SHAREABLE"
+
+    async def test_name_collision_is_disambiguated_by_owner(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        """같은 이름이 둘이면 배정이 어느 쪽인지 갈린다 - 겹칠 때만 소유자를 덧붙인다."""
+        await self._create_public(test_client, worker_token, "겹치는 이름")
+        await test_client.post(
+            "/api/v1/prompts/personal",
+            headers=_auth(super_admin_token),
+            json={"kind": "agent", "name": "겹치는 이름", "content": "내 것."},
+        )
+        analysts = await test_client.get("/api/v1/analysts", headers=_auth(super_admin_token))
+        names = [a["name"] for a in analysts.json()]
+        assert "겹치는 이름" in names  # 내 것이 원래 이름을 지킨다
+        assert any(n.startswith("겹치는 이름 (") for n in names)  # 공개분은 소유자로 갈린다
+        assert len(names) == len(set(names))
+
+    async def test_public_agent_is_assignable_in_outline(
+        self, test_client: AsyncClient, worker_token: str, super_admin_token: str
+    ) -> None:
+        """UNKNOWN_ANALYST 422가 나던 자리 - 공개 에이전트는 남의 목차에서도 통과해야 한다."""
+        await self._create_public(test_client, worker_token, "목차에 배정할 공개 분석가")
+        # 목차는 에이전트를 **표시 이름**으로 참조한다 - 공유 항목은 소유자가 붙는다.
+        listed = await test_client.get("/api/v1/analysts", headers=_auth(super_admin_token))
+        shared_name = next(
+            a["name"] for a in listed.json() if a["name"].startswith("목차에 배정할 공개 분석가")
+        )
+        resp = await test_client.post(
+            "/api/v1/projects",
+            headers=_auth(super_admin_token),
+            json={
+                "title": "공유 에이전트 배정",
+                "topic": "공개 에이전트를 남의 계정 목차에 배정한다",
+                "config": {
+                    "outline": {
+                        "chapters": [
+                            {
+                                "title": "1장",
+                                "sections": [
+                                    {
+                                        "title": "1.1",
+                                        "analysts": [shared_name],
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                },
+            },
+        )
+        assert resp.status_code == 201, resp.text
 
 
 class TestSystemCatalog:

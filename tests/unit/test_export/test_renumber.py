@@ -37,3 +37,31 @@ class TestRenumberContent:
 
     def test_no_markers_returns_content_unchanged(self):
         assert renumber_content("인용 없는 본문", [], {}) == "인용 없는 본문"
+
+
+class TestLostEvidenceParagraphs:
+    """마커가 지워진 자리를 남긴다 — 지워진 마커는 흔적이 없어 나중에는 알 수 없다."""
+
+    def test_only_paragraphs_that_actually_lost_markers(self):
+        from src.services.sections.renumber import lost_evidence_paragraphs
+
+        before = "첫 문단 [1].\n\n둘째 문단 [1][2].\n\n셋째 문단 [2]."
+        after = "첫 문단.\n\n둘째 문단 [1].\n\n셋째 문단 [1]."
+        lost = lost_evidence_paragraphs(before, after)
+        # 셋째는 번호만 당겨졌다 — 근거를 잃지 않았으므로 짚으면 거짓말이다.
+        assert [p["text"] for p in lost] == ["첫 문단.", "둘째 문단 [1]."]
+        assert [p["n_markers"] for p in lost] == [1, 1]
+
+    def test_paragraph_count_mismatch_records_nothing(self):
+        """다른 편집이 겹쳐 자리가 어긋나면 아무것도 기록하지 않는다.
+
+        틀린 자리를 짚느니 안 짚는 게 낫다 — 사람이 멀쩡한 문단을 다시 쓰게 된다.
+        """
+        from src.services.sections.renumber import lost_evidence_paragraphs
+
+        assert lost_evidence_paragraphs("가 [1].\n\n나 [1].", "가.") == []
+
+    def test_no_change_records_nothing(self):
+        from src.services.sections.renumber import lost_evidence_paragraphs
+
+        assert lost_evidence_paragraphs("가 [1].", "가 [1].") == []

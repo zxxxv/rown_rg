@@ -13,7 +13,8 @@ import {
 } from "@floating-ui/react";
 import { ExternalLink } from "lucide-react";
 import { useState } from "react";
-import type { SectionCitation } from "@/api/types";
+import type { EvidenceChunk, SectionCitation } from "@/api/types";
+import { SourceMarkdown } from "./SourceMarkdown";
 
 const RELIABILITY_LABEL: Record<string, string> = {
   high: "신뢰도 높음",
@@ -26,10 +27,12 @@ export interface CitationHoverCardProps {
   number: number;
   /** 이 번호가 가리키는 출처 - 섹션 응답의 citations에서 옴(추가 fetch 없음) */
   citation: SectionCitation;
+  /** 이 번호가 실제로 가리킨 근거 원문(청크) - 있으면 카드에서 바로 대조할 수 있다 */
+  evidence?: EvidenceChunk;
 }
 
 /** 본문 [N] 마커 자리에 렌더되는 인용 배지 + 호버 출처 카드. */
-export function CitationHoverCard({ number, citation }: CitationHoverCardProps) {
+export function CitationHoverCard({ number, citation, evidence }: CitationHoverCardProps) {
   const [open, setOpen] = useState(false);
   const { refs, floatingStyles, context } = useFloating({
     open,
@@ -76,6 +79,20 @@ export function CitationHoverCard({ number, citation }: CitationHoverCardProps) 
                   </span>
                 ) : null}
               </header>
+              {evidence ? (
+                // 출처 이름만으로는 검증이 안 된다 - 모델이 실제로 받은 대목을 그대로 보여준다.
+                <div className="flex flex-col gap-1">
+                  {evidence.header_path.length > 0 ? (
+                    <p className="truncate text-[11px] text-fg-tertiary">
+                      {evidence.header_path.join(" > ")}
+                    </p>
+                  ) : null}
+                  {/* 발췌도 렌더한다 - 표가 파이프 줄로 보이면 숫자를 대조할 수 없다. */}
+                  <div className="max-h-48 overflow-y-auto rounded bg-bg-secondary px-2 py-1.5">
+                    <SourceMarkdown content={evidence.content} />
+                  </div>
+                </div>
+              ) : null}
               {citation.url ? (
                 <a
                   href={citation.url}

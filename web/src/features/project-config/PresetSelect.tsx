@@ -29,68 +29,96 @@ export function PresetSelect({ onPresetChange, disabled }: PresetSelectProps) {
     return <LoadingSkeleton variant="card" count={3} />;
   }
 
-  const options: PresetOption[] = [
-    ...(presetsQuery.data ?? []).map((p) => ({
-      value: p.id,
-      label: p.name,
-      description: `${p.desc} · ${p.n_chapters}챕터 ${p.n_sections}섹션 골격`,
-    })),
-    FREE_TOPIC_OPTION,
-  ];
+  const rows = presetsQuery.data ?? [];
+  const toOption = (p: (typeof rows)[number]): PresetOption => ({
+    value: p.id,
+    label: p.name,
+    // 무엇에 쓰는 유형인지가 먼저다(summary). desc가 개수 문자열("7챕터 34섹션")인
+    // 시스템 프리셋이 있어 그대로 이으면 같은 말을 두 번 한다(2026-08-25 전수 조사).
+    // 공유는 누구 것인지 앞에 박는다 - 같은 이름의 프리셋이 사람마다 있을 수 있다.
+    description: [
+      p.scope === "shared" && p.owner_name ? `${p.owner_name} 공개` : "",
+      p.summary?.trim() || (/^\s*\d+\s*챕터/.test(p.desc) ? "" : p.desc),
+      `${p.n_chapters}장 ${p.n_sections}절 골격`,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  });
+  // 내가 저장한 목차 구성은 시스템 프리셋과 동급 선택지 - 같은 구성으로 여러
+  // 정책을 분석하는 재사용 동선(2026-08-12 QA 2번 확장). 자유 주제는 빈 목차 시작.
+  // 동료 공개는 시스템에 뭉치지 않고 제 그룹으로 - 출처가 보여야 고를 수 있다(2026-08-20).
+  const groups: { title: string | null; options: PresetOption[] }[] = [
+    { title: "시스템 프리셋", options: rows.filter((p) => p.scope === "system").map(toOption) },
+    {
+      title: "내 프리셋 (저장한 목차 구성 불러오기)",
+      options: rows.filter((p) => p.scope === "personal").map(toOption),
+    },
+    {
+      title: "동료 공개 (다른 사용자가 공개한 구성)",
+      options: rows.filter((p) => p.scope === "shared").map(toOption),
+    },
+    { title: null, options: [FREE_TOPIC_OPTION] },
+  ].filter((g) => g.options.length > 0);
 
   return (
     <Controller
       name="config.preset"
       control={control}
       render={({ field }) => (
-        <fieldset
-          disabled={disabled}
-          className="grid grid-cols-1 gap-3 border-0 p-0 sm:grid-cols-2 xl:grid-cols-3"
-        >
+        <fieldset disabled={disabled} className="flex flex-col gap-4 border-0 p-0">
           <legend className="sr-only">보고서 유형</legend>
-          {options.map((opt) => {
-            const checked = field.value === opt.value;
-            const inputId = `preset-${opt.value ?? "free"}`;
-            return (
-              <label
-                key={opt.value ?? "free"}
-                htmlFor={inputId}
-                className={cn(
-                  "relative flex cursor-pointer flex-col items-start gap-2 rounded-lg border p-4 text-left transition-colors",
-                  "focus-within:ring-2 focus-within:ring-accent focus-within:ring-offset-2",
-                  checked
-                    ? "border-accent bg-bg-info"
-                    : "border-border bg-bg hover:border-border-strong hover:bg-bg-secondary",
-                  disabled && "cursor-not-allowed opacity-60",
-                )}
-              >
-                <input
-                  id={inputId}
-                  type="radio"
-                  name={field.name}
-                  value={opt.value ?? ""}
-                  checked={checked}
-                  disabled={disabled}
-                  onChange={() => {
-                    field.onChange(opt.value);
-                    onPresetChange(opt.value);
-                  }}
-                  className="sr-only"
-                />
-                <div className="flex w-full items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-fg">{opt.label}</span>
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "h-3 w-3 rounded-full border",
-                      checked ? "border-accent bg-accent" : "border-border-strong bg-bg",
-                    )}
-                  />
-                </div>
-                <p className="text-xs leading-relaxed text-fg-secondary">{opt.description}</p>
-              </label>
-            );
-          })}
+          {groups.map((group) => (
+            <div key={group.title ?? "free"} className="flex flex-col gap-2">
+              {group.title ? (
+                <p className="text-xs font-medium text-fg-secondary">{group.title}</p>
+              ) : null}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {group.options.map((opt) => {
+                  const checked = field.value === opt.value;
+                  const inputId = `preset-${opt.value ?? "free"}`;
+                  return (
+                    <label
+                      key={opt.value ?? "free"}
+                      htmlFor={inputId}
+                      className={cn(
+                        "relative flex cursor-pointer flex-col items-start gap-2 rounded-lg border p-4 text-left transition-colors",
+                        "focus-within:ring-2 focus-within:ring-accent focus-within:ring-offset-2",
+                        checked
+                          ? "border-accent bg-bg-info"
+                          : "border-border bg-bg hover:border-border-strong hover:bg-bg-secondary",
+                        disabled && "cursor-not-allowed opacity-60",
+                      )}
+                    >
+                      <input
+                        id={inputId}
+                        type="radio"
+                        name={field.name}
+                        value={opt.value ?? ""}
+                        checked={checked}
+                        disabled={disabled}
+                        onChange={() => {
+                          field.onChange(opt.value);
+                          onPresetChange(opt.value);
+                        }}
+                        className="sr-only"
+                      />
+                      <div className="flex w-full items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-fg">{opt.label}</span>
+                        <span
+                          aria-hidden
+                          className={cn(
+                            "h-3 w-3 rounded-full border",
+                            checked ? "border-accent bg-accent" : "border-border-strong bg-bg",
+                          )}
+                        />
+                      </div>
+                      <p className="text-xs leading-relaxed text-fg-secondary">{opt.description}</p>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </fieldset>
       )}
     />

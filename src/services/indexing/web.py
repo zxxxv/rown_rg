@@ -26,7 +26,12 @@ from sqlalchemy import select
 
 from src.db.models.chunk import Chunk as ChunkModel
 from src.db.models.project_source import ProjectSource
+from src.services.indexing._boilerplate import excluded_metadata
+from src.services.indexing.exclusion import AUTO_EXCLUDED_KEY
+from src.services.indexing.published_year import extract_published_year, year_from_page_age
+from src.services.indexing.terms import mine_and_store_quietly
 from src.services.indexing.vector import IndexingResult
+from src.services.qa.span_vectors import store_quietly
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -109,6 +114,11 @@ class WebSourceIndexer:
                             matched_sections or meta.get("matched_sections") or []
                         )
                         meta["page_age"] = page_age or meta.get("page_age")
+                        # 0청크라 자동 제외됐던 껍데기가 실자료로 승격되면 채택도 복구한다
+                        # (사람이 제외한 행에는 auto_excluded가 없어 그대로 남는다).
+                        if (content_md or "").strip() and meta.pop(AUTO_EXCLUDED_KEY, None):
+                            meta.pop("index_error", None)
+                            existing.is_included = True
                         existing.metadata_ = meta
                         existing.title = title or existing.title
                         existing.reliability = reliability or existing.reliability
@@ -190,21 +200,55 @@ class WebSourceIndexer:
         embed_results = await self._embedding.embed_batch([c.content for c in chunks])
 
         async with self._session_maker() as session:
-            session.add_all(
-                [
-                    ChunkModel(
-                        project_id=project_id,
-                        source_id=source_id,
-                        track=track,
-                        content=c.content,
-                        embedding=embed_results[i].embedding,
-                        chunk_index=c.chunk_index,
-                        metadata_=c.metadata,
-                    )
-                    for i, c in enumerate(chunks)
-                ]
+            metas = await excluded_metadata(session, project_id, chunks)
+            # 발간연도 — 수집이 준 page_age가 1순위, 없으면 제목·본문 머리에서 추출
+            # (업로드 색인과 같은 축, 2026-08-15). 웹 자료의 시점 미상 현재형 서술을
+            # 작성 주입·게이트 표시가 걸러낼 재료다.
+            src_row = await session.get(ProjectSource, source_id)
+            year = (
+                year_from_page_age((src_row.metadata_ or {}).get("page_age")) if src_row else None
             )
+            if year is None:
+                year = extract_published_year(src_row.title if src_row else None, content_md[:4000])
+            if year is not None:
+                for meta in metas:
+                    meta["published_year"] = year
+            models = [
+                ChunkModel(
+                    # id를 여기서 정한다 - 대목 벡터가 청크 id로 매이는데, DB가 만들게
+                    # 두면 id를 알려고 flush를 한 번 더 해야 한다. 값은 서버 기본값과
+                    # 같은 uuid4라 저장되는 것에 차이가 없다.
+                    id=uuid4(),
+                    project_id=project_id,
+                    source_id=source_id,
+                    track=track,
+                    content=c.content,
+                    embedding=embed_results[i].embedding,
+                    chunk_index=c.chunk_index,
+                    metadata_=metas[i],
+                )
+                for i, c in enumerate(chunks)
+            ]
+            session.add_all(models)
+            # 배제된 청크는 검색에 안 나오므로 근거가 될 일이 없다 - 대목 벡터도 안 만든다.
+            span_targets = [
+                (m.id, m.content)
+                for m, meta in zip(models, metas, strict=True)
+                if not meta.get("excluded")
+            ]
             await session.commit()
+
+        # 대목 벡터 - 근거 대조가 볼 때마다 다시 만들던 것을 여기서 한 번 만든다.
+        # 실패해도 색인은 성공이다(services/qa/span_vectors).
+        # (2026-08-27: self._embedding_client는 존재하지 않는 속성이었다 - 생성자는
+        #  self._embedding만 만든다. AttributeError로 웹 색인 런이 통째로 죽던 오타 -
+        #  실사용자 런 실패로 발견, project.run_failed 04:45Z.)
+        await store_quietly(self._session_maker, span_targets, client=self._embedding)
+
+        # 용어 채굴 - 웹 자료는 패턴만 캔다(자료 수가 많아 문서당 LLM 콜을 얹지 않는다).
+        await mine_and_store_quietly(
+            self._session_maker, source_id, content_md, project_id=project_id, use_llm=False
+        )
 
         elapsed = (time.perf_counter() - t0) * 1000
         logger.info(
@@ -219,6 +263,7 @@ class WebSourceIndexer:
             chunks_created=len(chunks),
             parse_cached=False,
             elapsed_ms=elapsed,
+            published_year=year,
         )
 
 

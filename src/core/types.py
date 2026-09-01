@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -30,6 +31,7 @@ class ProjectStage(StrEnum):
     """
 
     CREATED = "created"  # 생성 직후, 작업 시작 전
+    PLANNING = "planning"  # 설계 브리프 작성·검토 (수집 전)
     RESEARCHING = "researching"  # 자료 검색·수집
     INDEXING = "indexing"  # 청킹·임베딩, 벡터 인덱스 구축
     WRITING = "writing"  # 섹션별 초안 작성
@@ -54,6 +56,7 @@ class ReviewGate(StrEnum):
     사용자 검토 게이트
     """
 
+    DESIGN_BRIEF = "design_brief"  # 설계 브리프 확정 (수집 전 — 검색 질의·중복 확인)
     SOURCE_POOL = "source_pool"  # 자료 풀 확정
     CONTRADICTION = "contradiction"  # 모순 해결
     LEVEL_1 = "level_1"  # 전체 요약
@@ -82,6 +85,13 @@ class SourceRef(BaseModel):
     reliability: str | None = None  # high | medium | low
     matched_sections: list[str] = Field(default_factory=list)  # 이 출처가 뒷받침하는 목차 섹션
     page_age: str | None = None  # 콘텐츠 최신성(원문 게시 시점)
+    # 서지 조각(출처 표기용, 2026-08-27) - 미상이면 None으로 두고 표기에서 생략한다.
+    publisher: str | None = None  # 발행기관("국제무역통상연구원")
+    issue_label: str | None = None  # 호수("2024년 17호")
+    published_year: int | None = None  # 발행연도(호수 없을 때의 폴백 표기)
+    # 수집(검색) 시각 - 웹 출처의 참고문헌 표기에 "(YYYY.MM.DD HH:MM 검색)"으로
+    # 실린다(2026-08-28 지시). 저장은 UTC, KST 변환은 표시 계층(export) 몫.
+    collected_at: datetime | None = None
     preview: str | None = None  # 본문 앞부분 미리보기
     has_content: bool = True  # 본문 회수·색인 성공 여부(False면 검색에 안 잡힘)
 
@@ -107,6 +117,16 @@ class RetrievedChunk(BaseModel):
     source_id: UUID
     content: str
     score: float
+    # 이 근거가 '무엇의 어디'인지 - 프롬프트에 함께 실어 모델이 귀속을 정확히 하게 한다.
+    # 본문만 주면 모델은 근거 8이 정부 발표문인지 언론 요약인지 모른 채 인용한다
+    # (2026-08-11 실측: Sonnet 인용 20건 중 10건이 문장을 뒷받침하지 못했고, 그중
+    # 여럿이 없는 날짜·기관을 붙인 귀속 오류였다).
+    source_title: str = ""
+    header_path: list[str] = Field(default_factory=list)
+    # 자료 발간연도(색인 시 추출, chunk.metadata.published_year) — 프롬프트 라벨에
+    # 실어 옛 자료('21~'22)의 통계가 무연도 현재형으로 서술되는 것을 막는 재료.
+    # 검증런 2회 연속의 주 감점 축이었다(2026-08-15). None=미상.
+    published_year: int | None = None
     # RAPTOR 요약 노드 여부 — True면 프롬프트에서 '배경 맥락'으로만 쓰이고
     # [번호] 인용 풀에서 제외된다(인용 무결성은 leaf 청크 계약 유지).
     is_summary: bool = False
@@ -133,9 +153,43 @@ class SectionPlan(BaseModel):
     chapter_number: int
     section_number: int
     title: str
+    # 이 절이 속한 장의 제목. 검색·작성이 "2.3이 EU CBAM 장 소속"임을 알아야 한다 —
+    # 없던 시절엔 장 제목이 config.outline에만 있어 검색 질의와 작성 프롬프트 어디에도
+    # 안 실렸고, 4개 장에 같은 절 제목이 반복되면 네 절이 같은 자료를 인용했다
+    # (2026-08-14 탄소규제 런 실측: 1.3과 2.3의 인용 자료 집합이 완전 동일).
+    chapter_title: str = ""
     direction: str = ""
     key_points: list[str] = Field(default_factory=list)
     analysts: list[str] = Field(default_factory=list)
+    # 이 절을 자료 풀에서 찾을 검색 질의 — 설계 브리프 단계에서 LLM이 절마다 만들어
+    # 넣는다(brief_ai). 검색 질의를 사람이 쓰게 하면 대부분 비워 두므로(개인 에이전트
+    # spec.queries가 전부 빈 배열이었던 이유) 기본값을 기계가 만든다. 사람은 브리프
+    # 게이트 화면에서 보고 고친다. 비어 있으면 절 제목·핵심 포인트만으로 검색한다.
+    search_queries: list[str] = Field(default_factory=list)
+    # 이 절이 앞 절의 확정값 위에서 쓰는 의존 계약 — 표기는 core/builds_on.parse_ref
+    # ("4.1" | "4.1(총사업비)" | "4.*"). 사람 소유(폼·프리셋), 자유주제만 플래너가
+    # 절 번호 한정으로 생성. 값 전달은 서술 요약이 아니라 사실 대장 엔트리로 한다
+    # (요약 체인은 무근거 +39% 실측 - services/ledger).
+    builds_on: list[str] = Field(default_factory=list)
+    # 이 절만의 분량 목표(자) — 없으면 에이전트 spec의 volume_target을 쓴다.
+    # 절마다 요구 분량이 다른 자리가 있다: 시사점·제언은 본론과 같은 두께로 쓰면
+    # 앞 내용을 되풀이하게 되므로 짧게 눌러야 한다(2026-08-24 사용자 지시:
+    # "시사점은 중요 내용 위주로 3~5페이지 이내"). 에이전트는 여러 절이 공유하니
+    # 그쪽 값을 고치면 남의 절까지 바뀐다 — 절 단위 상한이 필요한 이유다.
+    min_chars: int | None = None
+    max_chars: int | None = None
+
+    def prompt_label(self) -> str:
+        """프롬프트에 싣는 절 표기 — '2.3 국내 기업 대응수준 진단 (2장 EU CBAM)'.
+
+        장 맥락이 빠지면 비교형 목차에서 모델은 이 절이 어느 규제를 다루는지 알 방법이
+        없다. 2026-08-14 실측에서 2.3·3.3·4.3이 전부 '국내 기업 대응수준 진단 및
+        조사항목 도출'이라는 같은 제목만 받아 서로 구별되지 않는 글이 나왔다.
+        """
+        label = f"{self.chapter_number}.{self.section_number} {self.title}"
+        if self.chapter_title and self.chapter_title.lower() not in self.title.lower():
+            label += f" ({self.chapter_number}장 {self.chapter_title})"
+        return label
 
 
 class SectionDraft(BaseModel):
@@ -146,6 +200,24 @@ class SectionDraft(BaseModel):
     section_id: UUID
     content: str
     cited_chunk_ids: list[UUID]
+    # 프롬프트에 실린 인용 가능 청크(순서 = 절-로컬 [n] 번호). 인용한 것만 남기면
+    # "보고도 안 쓴 근거"와 "안 보고 쓴 주장"을 가를 수 없다. 재작성 경로도 이 값을
+    # 절 meta로 넘겨 근거 추적이 반쪽이 되지 않게 한다.
+    pool_chunk_ids: list[UUID] = Field(default_factory=list)
+    # 분할 계획이 무너져 단일 호출로 떨어졌는가. 그러면 절이 짧아지고 인용이 줄어드는데
+    # 지금까지 아무 신호가 없어 짧고 근거 얇은 절이 조용히 보고서에 실렸다(2026-08-11).
+    split_fallback: bool = False
+    # 재료 부족으로 분량 목표를 내려 썼는가 — 재작성 경로가 절 meta(volume_scaled)를
+    # 이 값으로 갱신한다. 안 갱신하면 자료를 채워 다시 써도 '자료 부족' 배지가 남는다.
+    volume_scaled: bool = False
+    # 생성이 완결되지 못한 이유(provider stop_reason). 빈 문자열이면 정상 완결.
+    # max_tokens 컷·refusal이 문장 중간에 멈춘 216자 토막을 '완성 절'로 통과시킨
+    # 실사고(2026-08-13, 7.1절) 재발 방지 — 게이트가 이 값으로 HARD 제외한다.
+    incomplete_reason: str = ""
+    # 저장 직전 결정층의 감사 기록(sections/citation_repair.audit()) — 지운 문장 쌍·
+    # 교정 마커·보류 수치·예산 소진. 결정적 삭제는 조용히 틀릴 수 있어(2026-09-01
+    # 검토) 절 meta로 실어 검증 카드가 노출해야 감사가 닫힌다.
+    repair_log: dict[str, Any] = Field(default_factory=dict)
 
 
 # QA 후보 검사 — AI는 후보만 생성, 합격/불합격은 정적 코드, 최종 선택은 사람.

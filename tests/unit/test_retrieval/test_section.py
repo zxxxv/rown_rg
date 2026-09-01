@@ -52,6 +52,14 @@ class TestHitToChunk:
         assert chunk.content == "본문"
         assert chunk.score == hit.score
 
+    def test_published_year_carried_from_metadata(self):
+        # 색인이 실은 발간연도(D1)가 검색을 거쳐 프롬프트 라벨(D2)까지 흘러야 한다.
+        hit = _hit("본문")
+        hit.metadata = {"published_year": 2022}
+        assert hit_to_chunk(hit).published_year == 2022
+        hit.metadata = {"published_year": "2022"}  # 형이 어긋나면 미상으로
+        assert hit_to_chunk(hit).published_year is None
+
 
 class TestRetrieveForSection:
     async def test_returns_retrieved_chunks(self):
@@ -136,10 +144,11 @@ class TestRerankerPath:
         assert client.calls[0][3] == 10
 
     async def test_topic_anchor_applies_to_rerank_not_recall(self):
-        """주제 앵커는 재채점 쿼리에만 — 1차 검색(pgroonga AND)은 절 제목 유지.
+        """주제 앵커는 재채점 쿼리에만 — 1차 검색은 짧게(dense 벡터 희석 방지).
 
         절 제목만으로 재채점하면 일반 제목이 주제 무관 청크를 상위로 올린다
-        (2026-08-03 주제 표류 실측). 앵커는 채점 단계에서만 결합한다.
+        (2026-08-03 주제 표류 실측). 앵커는 채점 단계에서만 결합하되, 변별력 순서로
+        뒤에 붙는다 — 주제문은 절마다 같아서 앞에 두면 절 간 차이를 지운다.
         """
         hits = [_hit("h0")]
         client = _FakeSearchClient(hits)
@@ -153,9 +162,52 @@ class TestRerankerPath:
             fetch_k=1,
             topic="원격/하이브리드 근무 형태와 조직 내 소통",
         )
-        # 1차 검색 쿼리는 절 제목 그대로(재현율 보호)
+        # 1차 검색 쿼리는 절 제목 그대로(장 제목이 없는 계획이므로)
         assert client.calls[0][0] == "국내외 시장 규모 및 구조"
-        # 재채점 쿼리에는 주제가 앞에 결합된다
+        # 재채점 쿼리는 절 제목이 앞, 주제 앵커가 뒤
         assert reranker.calls[0][0] == (
-            "원격/하이브리드 근무 형태와 조직 내 소통 — 국내외 시장 규모 및 구조"
+            "국내외 시장 규모 및 구조 — 원격/하이브리드 근무 형태와 조직 내 소통"
         )
+
+    async def test_chapter_title_joins_both_queries(self):
+        """장 제목이 있으면 1차 검색·재채점 모두에 실린다.
+
+        비교형 목차에서 '개요'·'시사점' 같은 절 제목은 장마다 반복된다 — 장을 안 실으면
+        네 장이 글자까지 같은 질의를 던져 같은 근거를 받는다(2026-08-14 실측:
+        1.3과 2.3의 인용 자료 집합이 완전 일치).
+        """
+        client = _FakeSearchClient([_hit("h0")])
+        reranker = _FakeReranker()
+        plan = _section("국내 기업 대응수준 진단 및 조사항목 도출").model_copy(
+            update={"chapter_title": "EU CBAM"}
+        )
+        await retrieve_for_section(
+            plan,
+            client=client,
+            project_id=uuid4(),
+            top_k=1,
+            reranker=reranker,  # type: ignore[arg-type]
+            fetch_k=1,
+            topic="글로벌 탄소규제의 도입 및 적용 동향",
+        )
+        assert client.calls[0][0] == "EU CBAM 국내 기업 대응수준 진단 및 조사항목 도출"
+        assert reranker.calls[0][0].startswith("EU CBAM 국내 기업 대응수준")
+
+    async def test_long_topic_is_capped_in_rerank_query(self):
+        """긴 주제문은 앵커 앞머리만 — 리랭커는 query를 안 자르고 passage만 자른다.
+
+        탄소규제 런의 topic은 383자(189토큰)였고, 512 창에서 근거 본문 몫이
+        240~300토큰밖에 안 남았다(청크 중앙값 518자 ≈ 340토큰).
+        """
+        client = _FakeSearchClient([_hit("h0")])
+        reranker = _FakeReranker()
+        await retrieve_for_section(
+            _section("개요"),
+            client=client,
+            project_id=uuid4(),
+            top_k=1,
+            reranker=reranker,  # type: ignore[arg-type]
+            fetch_k=1,
+            topic="목적: " + "글로벌 탄소규제 동향과 국내 기업 대응 수준 진단 " * 10,
+        )
+        assert len(reranker.calls[0][0]) <= 240

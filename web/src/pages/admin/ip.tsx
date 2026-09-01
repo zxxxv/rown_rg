@@ -273,7 +273,7 @@ function EntryRow({ entry, onDelete }: { entry: IpWhitelistEntry; onDelete: () =
       </TableCell>
       <TableCell>
         {entry.expires_at ? (
-          <span className="flex items-center gap-1.5 font-mono text-xs text-fg-tertiary">
+          <span className="flex items-center gap-1.5 whitespace-nowrap font-mono text-xs text-fg-tertiary">
             {fmtDateTime(entry.expires_at)}
             {expired ? <Badge variant="destructive">만료됨</Badge> : null}
           </span>

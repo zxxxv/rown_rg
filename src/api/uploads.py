@@ -44,4 +44,10 @@ async def read_validated_upload(file: UploadFile, *, max_bytes: int) -> tuple[st
             message=f"파일이 너무 큽니다(최대 {limit_mb}MB).",
             code="FILE_TOO_LARGE",
         )
+    # 빈 파일은 여기서 막는다. 프로젝트 자료 업로드에만 검사가 있고 라이브러리 업로드에는
+    # 없어서, 라이브러리로 올린 0바이트 파일이 자료로 등록됐다(2026-08-12 실측: 업로드 6건
+    # 중 2건이 0 B·쪽수 미상). 파싱은 실패하는데 목록에는 정상 자료처럼 보여 사람이
+    # "자료를 넣었다"고 믿는다. 같은 검증이 두 경로에 흩어져 있으면 또 어긋난다.
+    if not content:
+        raise ValidationError(message="빈 파일입니다.", code="EMPTY_UPLOAD")
     return safe_name, content

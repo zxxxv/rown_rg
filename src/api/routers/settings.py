@@ -34,7 +34,13 @@ def _item(d: SettingDef) -> SettingItem:
     overridden = app_settings.is_overridden(d.key)
     configured = app_settings.is_configured(d.key)
     source = "db" if overridden else ("env" if configured else "none")
-    value = None if d.secret else app_settings.get_str(d.key)
+    if d.secret:
+        value = None
+    elif d.kind == "bool":
+        # 파이썬 bool의 str()은 "True"라 화면에 그대로 노출됐다 — 계약을 소문자로 고정.
+        value = "true" if app_settings.get_bool(d.key) else "false"
+    else:
+        value = app_settings.get_str(d.key)
     options = (
         [SettingOption(value=v, label=lbl) for v, lbl in d.options] if d.kind == "enum" else None
     )

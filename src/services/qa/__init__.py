@@ -7,6 +7,7 @@
 from src.services.qa.gate import (
     check_bounds,
     check_citation_resolves,
+    check_complete,
     check_numeric_grounded,
     check_renderable,
     check_structure_complete,
@@ -17,6 +18,7 @@ from src.services.qa.gate import (
 __all__ = [
     "check_bounds",
     "check_citation_resolves",
+    "check_complete",
     "check_numeric_grounded",
     "check_renderable",
     "check_structure_complete",

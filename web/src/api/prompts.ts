@@ -32,6 +32,8 @@ export const PersonalPromptSchema = z.object({
   cat: z.string().nullish(),
   description: z.string().nullish(),
   spec: PromptSpecSchema.default({ queries: [], sections: {} }),
+  /** 켜면 전 계정의 에이전트 선택 목록에 뜬다. 에이전트만 켤 수 있다 */
+  is_public: z.boolean().default(false),
   updated_at: z.string(),
 });
 export type PersonalPrompt = z.infer<typeof PersonalPromptSchema>;
@@ -120,6 +122,7 @@ export interface CreatePersonalPromptBody {
   cat?: string | null;
   description?: string | null;
   spec?: PromptSpecInput;
+  is_public?: boolean;
 }
 
 /** 저장 시 보내는 구조화 설정 - sections를 주면 서버가 본문을 조합한다 */
@@ -152,8 +155,22 @@ export function useUpdatePersonalPrompt(id: string) {
       cat?: string | null;
       description?: string | null;
       spec?: PromptSpecInput;
+      is_public?: boolean;
     }) => {
       const data = await apiClient.patch<unknown>(`prompts/personal/${id}`, { json: body });
+      return PersonalPromptSchema.parse(data);
+    },
+    onSuccess: () => invalidatePrompts(qc),
+  });
+}
+
+/** 남이 공개한 에이전트를 내 것으로 복제한다(base_ref 없이, 비공개로). */
+export function useImportSharedPrompt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationKey: [...promptKeys.all, "import"],
+    mutationFn: async (sourceId: string) => {
+      const data = await apiClient.post<unknown>(`prompts/personal/import/${sourceId}`);
       return PersonalPromptSchema.parse(data);
     },
     onSuccess: () => invalidatePrompts(qc),
@@ -210,11 +227,16 @@ export interface PromptPreviewBody {
 /** 조립은 서버(작성 경로와 같은 함수)에서 한다 - 프론트가 흉내 내면 실제와 어긋난다. */
 export function usePromptPreview(body: PromptPreviewBody, enabled: boolean) {
   return useQuery({
+    // 키에 body를 그대로 싣는다 - 에이전트 배정·방향·핵심포인트가 바뀌면 곧바로
+    // 다시 조립해 보여준다(편집과 미리보기가 어긋나면 볼 이유가 없다).
     queryKey: [...promptKeys.all, "preview", body],
     enabled,
     queryFn: async () => {
       const data = await apiClient.post<unknown>("prompts/preview", { json: body });
       return PromptPreviewSchema.parse(data);
     },
+    // 새 조합을 받아오는 동안 이전 결과를 유지 - 타이핑할 때마다 화면이 비면 어지럽다.
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
   });
 }

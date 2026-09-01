@@ -21,11 +21,7 @@ export default function ComponentsGalleryPage() {
   const mockUser = { name: "최재웅", role: "admin" as const };
 
   return (
-    <AppShell
-      user={mockUser}
-      tokenUsage={{ used: 1_240_000, limit: 5_000_000 }}
-      onLogout={() => toast("로그아웃 (mock)")}
-    >
+    <AppShell user={mockUser} onLogout={() => toast("로그아웃 (mock)")}>
       <div className="flex flex-col gap-10">
         <header>
           <h1 className="text-3xl font-semibold text-fg">컴포넌트 갤러리</h1>

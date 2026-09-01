@@ -38,9 +38,12 @@ dependencies = [
     "httpx>=0.28",
     "python-dotenv>=1.0",
     "python-hwpx>=2.9",
+    # 차트 렌더 — 본문 차트 스펙을 PNG로 그려 HWPX에 그림으로 넣는다.
+    # 한글 라벨을 그리려면 컨테이너에 한글 폰트가 있어야 한다(Dockerfile: fonts-nanum).
+    "matplotlib>=3.9",
     "optimum[exporters,onnxruntime]>=2.0",
     "onnx>=1.17",
-    "docling>=1.0",
+    "docling==2.105.0",  # 파서 출력 재현성 - gpu_service/requirements.txt와 같은 핀
     "pymupdf>=1.24",
     "pymupdf4llm>=0.0.17",
     "langchain-experimental>=0.4.1",

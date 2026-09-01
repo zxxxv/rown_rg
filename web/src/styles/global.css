@@ -15,6 +15,27 @@
     height: 100%;
   }
 
+  /* 화면 폭에 따른 밀도 조절.
+     Tailwind의 간격·글자 크기는 rem이라 root 크기를 줄이면 UI 전체가 비례로 작아진다.
+     노트북(OS 배율 150% HiDPI)에서 100% 배율이면 CSS 폭이 1280px 남짓이라, 16px
+     기준으로 짜인 화면이 눌려 보였다(사용자가 브라우저를 67%로 낮춰 보던 이유).
+     글자가 읽히는 선에서만 줄인다 - 더 줄이면 본문이 아니라 눈이 고생한다. */
+  html {
+    font-size: 16px;
+  }
+
+  @media (max-width: 1599px) {
+    html {
+      font-size: 15px;
+    }
+  }
+
+  @media (max-width: 1279px) {
+    html {
+      font-size: 14px;
+    }
+  }
+
   body {
     margin: 0;
     background-color: var(--color-background-primary);

@@ -147,6 +147,20 @@
       "label": "위험분석",
       "builtIn": true,
       "order": 21
+    },
+    {
+      "id": "a22",
+      "file": "a22_성과분석.json",
+      "label": "성과분석",
+      "builtIn": true,
+      "order": 22
+    },
+    {
+      "id": "a23",
+      "file": "a23_입지분석.json",
+      "label": "입지분석",
+      "builtIn": true,
+      "order": 23
     }
   ]
 }

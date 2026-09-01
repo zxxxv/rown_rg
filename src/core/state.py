@@ -43,6 +43,16 @@ class ProjectState(BaseModel):
     section_plan: list[SectionPlan] = Field(default_factory=list)  # 섹션별 계획
     completed_section_ids: list[UUID] = Field(default_factory=list)  # 작성 완료 섹션 ID
 
+    # 설계 브리프(게이트 payload) — plan_brief 단계가 만든다. 게이트 함수는 순수라
+    # DB(개인 에이전트 카탈로그)를 못 보므로, async 단계가 여기 실어 나른다.
+    # 영속화 대상 아님(to_project_row에 없음) — 게이트 payload로 review_points에 남는다.
+    design_brief: dict | None = None
+
+    # 검색 리허설 리포트 — index 단계 끝의 _rehearse가 만든다. 게이트 함수(순수)가
+    # reopen 여부·공백 절 목록을 읽어 자료 게이트 재개방을 결정한다. 영속화 대상 아님
+    # — 절별 상세는 section_rehearsals 테이블이 진실이고 이건 이번 실행의 요약이다.
+    rehearsal: dict | None = None
+
     # 절별 생성 지표 — section_id → {evidence_count, volume_scaled, ...}. sections.meta로
     # 영속화돼 화면이 '자료 부족' 배지를 띄운다(본문에 메타 서술을 넣지 않기 위한 통로).
     section_meta: dict[UUID, dict] = Field(default_factory=dict)
@@ -168,9 +178,15 @@ class ProjectState(BaseModel):
         sources: list[SourceRef] | None = None,
         section_plan: list[SectionPlan] | None = None,
     ) -> Self:
+        """DB row에서 ProjectState 복원.
+
+        section_plan을 안 넘기면 config의 정본(``_section_plan``)에서 되살린다 —
+        plan 복원 경로가 여기 하나로 모이므로 호출부마다 게이트 payload를 뒤지거나
+        목차 위치 대응으로 재구성할 필요가 없다(core.section_plan 참조).
         """
-        DB row에서 ProjectState 복원
-        """
+        from src.core.section_plan import plan_from_config
+
+        config = project_row.get("config", {})
         return cls(
             project_id=project_row["id"],
             user_id=project_row["owner_id"],
@@ -180,22 +196,26 @@ class ProjectState(BaseModel):
             title=project_row.get("title") or "",
             preset=project_row["preset"],
             depth_mode=project_row.get("depth_mode") or "full_report",
-            options=project_row.get("config", {}),
+            options=config,
             current_stage=ProjectStage(project_row["status"]),
             sources=sources or [],
-            section_plan=section_plan or [],
+            section_plan=section_plan or plan_from_config(config),
         )
 
     def to_project_row(self) -> dict:
+        """projects 테이블 INSERT/UPDATE용 dict.
+
+        config에는 section_plan 정본을 함께 싣는다 — from_db가 거기서 되살리므로
+        둘이 어긋나면 복원이 조용히 옛 plan을 집는다.
         """
-        projects 테이블 INSERT/UPDATE용 dict
-        """
+        from src.core.section_plan import config_with_plan
+
         return {
             "id": self.project_id,
             "owner_id": self.user_id,
             "topic": self.topic,
             "preset": self.preset,
-            "config": self.options,
+            "config": config_with_plan(self.options, self.section_plan),
             "status": self.current_stage.value,
             "updated_at": self.updated_at,
         }

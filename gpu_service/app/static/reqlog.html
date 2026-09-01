@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU 요청 기록</title>
+<style>
+  /* 팔레트: 검증된 기본 3슬롯(rerank/embed/parse) + 상태색. 색은 여기서만 정의한다. */
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb; --page: #f9f9f7;
+    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --s-rerank: #2a78d6; --s-embed: #eb6834; --s-parse: #1baf7a;
+    --ok: #0ca30c; --warn: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface: #1a1a19; --page: #0d0d0d;
+      --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --s-rerank: #3987e5; --s-embed: #d95926; --s-parse: #199e70;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 20px; max-width: 1100px; margin: 0 auto;
+  }
+  h1 { font-size: 18px; font-weight: 650; }
+  .sub { color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+  .nav { display: flex; gap: 8px; align-items: center; margin: 16px 0; flex-wrap: wrap; }
+  .nav button, .nav select {
+    background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer;
+  }
+  .nav button:disabled { opacity: .4; cursor: default; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .tile .k { color: var(--ink-2); font-size: 12px; }
+  .tile .v { font-size: 24px; font-weight: 650; margin-top: 2px; }
+  .tile .d { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-top: 12px;
+  }
+  .card h2 { font-size: 14px; font-weight: 650; margin-bottom: 10px; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); margin-bottom: 10px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .chart { display: flex; align-items: flex-end; gap: 2px; height: 160px; border-bottom: 1px solid var(--axis); }
+  .hour { flex: 1; display: flex; flex-direction: column-reverse; gap: 2px; height: 100%; position: relative; cursor: default; }
+  .hour div { border-radius: 4px 4px 0 0; min-height: 2px; }
+  .hour:hover { outline: 2px solid var(--border); outline-offset: 1px; border-radius: 4px; }
+  .xlabels { display: flex; gap: 2px; margin-top: 4px; color: var(--muted); font-size: 11px; }
+  .xlabels span { flex: 1; text-align: center; }
+  .xlabels .err { color: var(--critical); font-weight: 650; }
+  #tip {
+    position: fixed; display: none; z-index: 10; pointer-events: none;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.18);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--ink-2); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--axis); }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  .ep i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; }
+  .st { font-weight: 600; }
+  .empty { color: var(--muted); padding: 24px 0; text-align: center; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1>GPU 요청 기록</h1>
+<div class="sub">리랭크·임베딩·파싱 요청이 언제 왔고 어떻게 처리됐는지 — 날짜별(KST)</div>
+
+<div class="nav">
+  <button id="prev">← 이전</button>
+  <select id="dates"></select>
+  <button id="next">다음 →</button>
+  <span id="autonote" class="note"></span>
+</div>
+
+<div class="tiles" id="tiles"></div>
+
+<div class="card">
+  <h2>시간대별 요청 수</h2>
+  <div class="legend">
+    <span><i style="background:var(--s-rerank)"></i>리랭크</span>
+    <span><i style="background:var(--s-embed)"></i>임베딩</span>
+    <span><i style="background:var(--s-parse)"></i>파싱</span>
+    <span><i style="background:var(--critical)"></i>시간 라벨의 붉은 숫자 = 실패 건수</span>
+  </div>
+  <div class="chart" id="chart"></div>
+  <div class="xlabels" id="xlabels"></div>
+</div>
+
+<div class="card">
+  <h2>요청 목록 <span id="tcount" style="color:var(--muted);font-weight:400"></span></h2>
+  <div style="overflow-x:auto">
+  <table>
+    <thead><tr><th>시각</th><th>종류</th><th>결과</th><th>소요</th><th>규모</th><th>장치</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  </div>
+  <div class="note" id="tablenote"></div>
+</div>
+
+<div id="tip"></div>
+
+<script>
+"use strict";
+const EP = {
+  rerank: { name: "리랭크", css: "--s-rerank" },
+  embed:  { name: "임베딩", css: "--s-embed" },
+  parse:  { name: "파싱",   css: "--s-parse" },
+};
+// 결과 분류: 색만으로 구분하지 않는다 - 라벨(글자)이 항상 함께 간다.
+function outcome(code) {
+  if (code < 400) return { label: "성공 " + code, css: "--ok" };
+  if (code === 429) return { label: "거절 429(대기 초과)", css: "--warn" };
+  if (code === 504) return { label: "시간 초과 504", css: "--critical" };
+  if (code >= 500) return { label: "오류 " + code, css: "--critical" };
+  return { label: "거부 " + code, css: "--serious" };
+}
+const fmtTime = new Intl.DateTimeFormat("ko-KR", {
+  timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+});
+const kstHour = t => Number(new Intl.DateTimeFormat("en", {
+  timeZone: "Asia/Seoul", hour: "2-digit", hour12: false }).format(new Date(t * 1000)));
+const todayKST = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date());
+function scale(ev) {
+  const p = [];
+  if (ev.n != null) p.push(ev.n + "건");
+  if (ev.chars != null) p.push(ev.chars.toLocaleString() + "자");
+  if (ev.bytes != null) p.push((ev.bytes / 1024 / 1024).toFixed(1) + "MB");
+  if (ev.pages != null) p.push(ev.pages + "쪽");
+  return p.join(" · ") || "–";
+}
+function fmtMs(ms) { return ms >= 1000 ? (ms / 1000).toFixed(1) + "초" : Math.round(ms) + "ms"; }
+const $ = id => document.getElementById(id);
+
+let days = [];      // /stats/days 응답 (최신이 앞)
+let current = null; // 보고 있는 날짜
+let timer = null;
+
+async function loadDays() {
+  const r = await fetch("/stats/days");
+  const body = await r.json();
+  days = body.days;
+  if (!body.enabled) {
+    $("tiles").innerHTML = '<div class="tile"><div class="k">기록 꺼짐</div>' +
+      '<div class="d">GPU_REQLOG_DIR가 비어 있습니다. compose의 볼륨·환경변수를 확인하세요.</div></div>';
+    return false;
+  }
+  return true;
+}
+
+function renderNav() {
+  const sel = $("dates");
+  sel.innerHTML = "";
+  const list = days.length ? days : [{ date: todayKST(), total: 0 }];
+  for (const d of list) {
+    const o = document.createElement("option");
+    o.value = d.date;
+    o.textContent = d.date + " (" + d.total + "건)";
+    sel.appendChild(o);
+  }
+  sel.value = current;
+  const i = list.findIndex(d => d.date === current);
+  // 목록은 최신이 앞이라 "이전 날"은 인덱스 +1 쪽이다.
+  $("prev").disabled = i < 0 || i >= list.length - 1;
+  $("next").disabled = i <= 0;
+}
+
+function render(events) {
+  const total = events.length;
+  const ok = events.filter(e => e.code < 400).length;
+  const busy = events.filter(e => e.code === 429).length;
+  const bad = total - ok - busy;
+  const okMs = events.filter(e => e.code < 400).map(e => e.ms);
+  const avg = okMs.length ? okMs.reduce((a, b) => a + b, 0) / okMs.length : 0;
+  $("tiles").innerHTML = [
+    ["총 요청", total, ""],
+    ["성공", ok, total ? Math.round(ok / total * 100) + "%" : ""],
+    ["거절(429)", busy, "대기 초과로 돌려보냄"],
+    ["실패", bad, "429 제외한 4xx·5xx"],
+    ["평균 처리", total ? fmtMs(avg) : "–", "성공 요청 기준"],
+  ].map(([k, v, d]) =>
+    `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`
+  ).join("");
+
+  // 시간대별 적층 막대 - 색은 종류(정체), 실패는 축 라벨의 숫자가 따로 나른다.
+  const hours = Array.from({ length: 24 }, () => ({ rerank: 0, embed: 0, parse: 0, err: 0 }));
+  for (const e of events) {
+    const h = hours[kstHour(e.t)];
+    if (h[e.endpoint] !== undefined) h[e.endpoint]++;
+    if (e.code >= 400) h.err++;
+  }
+  const max = Math.max(1, ...hours.map(h => h.rerank + h.embed + h.parse));
+  const chart = $("chart"); chart.innerHTML = "";
+  const xl = $("xlabels"); xl.innerHTML = "";
+  hours.forEach((h, i) => {
+    const col = document.createElement("div");
+    col.className = "hour";
+    for (const ep of ["rerank", "embed", "parse"]) {
+      if (!h[ep]) continue;
+      const seg = document.createElement("div");
+      seg.style.background = `var(${EP[ep].css})`;
+      seg.style.height = (h[ep] / max * 100) + "%";
+      col.appendChild(seg);
+    }
+    col.addEventListener("mousemove", ev => {
+      const tip = $("tip");
+      tip.style.display = "block";
+      tip.style.left = Math.min(ev.clientX + 12, innerWidth - 180) + "px";
+      tip.style.top = (ev.clientY + 12) + "px";
+      tip.innerHTML = `<b>${String(i).padStart(2, "0")}시</b><br>` +
+        ["rerank", "embed", "parse"].filter(ep => h[ep])
+          .map(ep => `${EP[ep].name} ${h[ep]}건`).join("<br>") +
+        (h.err ? `<br><span style="color:var(--critical)">실패 ${h.err}건</span>` : "") +
+        (h.rerank + h.embed + h.parse ? "" : "요청 없음");
+    });
+    col.addEventListener("mouseleave", () => { $("tip").style.display = "none"; });
+    chart.appendChild(col);
+    const lab = document.createElement("span");
+    lab.innerHTML = (i % 3 === 0 ? String(i).padStart(2, "0") : "&nbsp;") +
+      (h.err ? `<br><span class="err">${h.err}</span>` : "");
+    xl.appendChild(lab);
+  });
+
+  // 표: 최신이 위. 표가 접근성의 대체 경로라 차트와 같은 데이터를 전부 담되
+  // 화면 보호를 위해 500행에서 자른다(원본은 /stats/daily로 전량 조회 가능).
+  const CAP = 500;
+  const rows = events.slice(-CAP).reverse();
+  $("tcount").textContent = "(" + total + "건)";
+  $("rows").innerHTML = rows.map(e => {
+    const ep = EP[e.endpoint] || { name: e.endpoint, css: "--muted" };
+    const o = outcome(e.code);
+    return `<tr>
+      <td>${fmtTime.format(new Date(e.t * 1000))}</td>
+      <td class="ep"><i style="background:var(${ep.css})"></i>${ep.name}</td>
+      <td><span class="st" style="color:var(${o.css})">${o.label}</span></td>
+      <td>${fmtMs(e.ms)}</td>
+      <td>${scale(e)}</td>
+      <td>${e.device || "–"}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="6" class="empty">이 날짜에는 기록된 요청이 없습니다</td></tr>`;
+  $("tablenote").textContent = total > CAP ? `최근 ${CAP}건만 표시 (전체 ${total}건)` : "";
+}
+
+async function show(date) {
+  current = date;
+  renderNav();
+  const r = await fetch("/stats/daily?date=" + encodeURIComponent(date));
+  render((await r.json()).events);
+  // 오늘을 보는 동안만 30초마다 새로고침 - 지난 날짜는 변하지 않는다.
+  clearInterval(timer);
+  if (date === todayKST()) {
+    timer = setInterval(async () => {
+      await loadDays();
+      renderNav();
+      const rr = await fetch("/stats/daily?date=" + encodeURIComponent(date));
+      render((await rr.json()).events);
+    }, 30_000);
+    $("autonote").textContent = "오늘 — 30초마다 자동 갱신";
+  } else {
+    $("autonote").textContent = "";
+  }
+}
+
+$("dates").addEventListener("change", e => show(e.target.value));
+$("prev").addEventListener("click", () => {
+  const i = days.findIndex(d => d.date === current);
+  if (i >= 0 && i < days.length - 1) show(days[i + 1].date);
+});
+$("next").addEventListener("click", () => {
+  const i = days.findIndex(d => d.date === current);
+  if (i > 0) show(days[i - 1].date);
+});
+
+loadDays().then(enabled => { if (enabled) show(days.length ? days[0].date : todayKST()); });
+</script>
+</body>
+</html>

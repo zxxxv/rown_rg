@@ -10,7 +10,7 @@ import {
   ShieldHalf,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Controller, useForm } from "react-hook-form";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { Link } from "react-router-dom";
 import {
   Area,
@@ -28,6 +28,7 @@ import {
   type ChangePasswordInput,
   ChangePasswordInputSchema,
   type MyTokenUsage,
+  PASSWORD_RULES,
   type User,
 } from "@/api/types";
 import { hasRoleAtLeast } from "@/components/auth/RequireAuth";
@@ -52,6 +53,7 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/useAuth";
+import { cn } from "@/lib/utils";
 
 const ROLE_LABEL: Record<string, string> = {
   super_admin: "최고관리자",
@@ -435,6 +437,9 @@ function ChangePasswordCard({ user }: { user: User }) {
     mode: "onSubmit",
   });
 
+  // 규칙 충족 여부를 타이핑하는 동안 보여준다 - 제출해 봐야 아는 건 불친절하다.
+  const newPassword = useWatch({ control, name: "new_password" }) ?? "";
+
   const sinceChange = daysSince(user.password_changed_at);
   const overdue = sinceChange !== null && sinceChange >= PASSWORD_ROTATION_DAYS;
 
@@ -485,6 +490,7 @@ function ChangePasswordCard({ user }: { user: User }) {
           autoComplete="new-password"
           error={errors.new_password?.message}
         />
+        <PasswordRules value={newPassword} />
         <PasswordField
           control={control}
           name="confirm_password"
@@ -594,5 +600,31 @@ function SessionCard({ onLogout }: { onLogout: () => void }) {
         </Button>
       </CardContent>
     </Card>
+  );
+}
+
+/** 비밀번호 규칙 체크리스트 - 무엇이 부족한지 즉시 보인다(2026-08-10 요청). */
+function PasswordRules({ value }: { value: string }) {
+  if (!value) {
+    return (
+      <p className="text-xs text-fg-tertiary">
+        {PASSWORD_RULES.map((r) => r.label).join(" · ")}를 모두 포함해야 합니다.
+      </p>
+    );
+  }
+  return (
+    <ul className="flex flex-wrap gap-x-3 gap-y-1">
+      {PASSWORD_RULES.map((rule) => {
+        const ok = rule.test(value);
+        return (
+          <li
+            key={rule.label}
+            className={cn("text-xs", ok ? "text-fg-success" : "text-fg-tertiary")}
+          >
+            <span aria-hidden>{ok ? "v" : "-"}</span> {rule.label}
+          </li>
+        );
+      })}
+    </ul>
   );
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -8,6 +9,12 @@ from typing import TYPE_CHECKING, ClassVar
 import numpy as np
 import structlog
 
+from src.clients.onnx_cross_encoder import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_MAX_LENGTH,
+    OnnxCrossEncoder,
+    sigmoid,
+)
 from src.core.config import settings
 
 if TYPE_CHECKING:
@@ -23,13 +30,18 @@ class RerankerClient(ABC):
 
 
 class BgeRerankerV2M3Client(RerankerClient):
-    """BGE Reranker v2-m3 ONNX INT8 client."""
+    """BGE Reranker v2-m3 ONNX INT8 client.
+
+    토크나이즈·전방계산·시그모이드는 ``OnnxCrossEncoder``에 있다 — 원격 GPU 서비스가
+    같은 알맹이를 import해서 **점수가 두 벌로 갈라지지 않게** 하기 위해서다.
+    여기 남은 것은 앱 사정(설정 주입·이벤트 루프 양보·로깅)뿐이다.
+    """
 
     # XLM-RoBERTa 최대 입력. 한국어 800자 ≈ 400~500 토큰, 512에서 안전 절단.
-    MAX_LENGTH: ClassVar[int] = 512
+    MAX_LENGTH: ClassVar[int] = DEFAULT_MAX_LENGTH
     # cross-encoder는 쿼리당 1배치 latency가 지배 — 너무 큰 배치는 padding 손해.
     # 50쌍 × 512토큰 단발 batch가 측정 기준이라 BATCH_SIZE는 운영 토글로 노출 (settings).
-    DEFAULT_BATCH_SIZE: ClassVar[int] = 16
+    DEFAULT_BATCH_SIZE: ClassVar[int] = DEFAULT_BATCH_SIZE
 
     def __init__(
         self,
@@ -48,13 +60,7 @@ class BgeRerankerV2M3Client(RerankerClient):
             max_length: Override tokenizer truncation length. When None,
                 falls back to ``settings.reranker_max_length``.
         """
-        # 무거운 임포트는 인스턴스 생성 시점까지 미룸 — 모듈 import만으로 onnxruntime·
-        # transformers를 끌어오면 단위 테스트 수집 비용이 크게 늘어남.
-        import onnxruntime as ort
-        from transformers import AutoTokenizer
-
         resolved_path = Path(model_path or settings.reranker_model_path)
-        self._model_dir = resolved_path
         self._batch_size = batch_size or settings.reranker_batch_size
         self._max_length = max_length or settings.reranker_max_length
 
@@ -65,20 +71,21 @@ class BgeRerankerV2M3Client(RerankerClient):
             max_length=self._max_length,
         )
         t0 = time.perf_counter()
-        self._session = ort.InferenceSession(
-            str(resolved_path / "model.onnx"),
-            providers=["CPUExecutionProvider"],
+        self._encoder = OnnxCrossEncoder(
+            resolved_path,
+            batch_size=self._batch_size,
+            max_length=self._max_length,
         )
-        self._tokenizer = AutoTokenizer.from_pretrained(str(resolved_path))
         logger.info(
             "reranker.client.init.completed",
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
+            providers=self._encoder.providers,
         )
 
     @property
     def tokenizer(self) -> PreTrainedTokenizerBase:
         """Expose the HF tokenizer for downstream reuse (e.g. token counting)."""
-        return self._tokenizer
+        return self._encoder.tokenizer
 
     async def score_pairs(self, query: str, passages: list[str]) -> list[float]:
         """Score each ``(query, passage)`` pair and return sigmoid scores.
@@ -104,10 +111,17 @@ class BgeRerankerV2M3Client(RerankerClient):
         )
         t0 = time.perf_counter()
 
+        # ONNX 추론은 스레드로 내보낸다. 여기서 그냥 돌리면 절당 85~103초(실측,
+        # 패시지 64개) 동안 **이벤트 루프 전체가 멈춘다** - 절 단위 병렬 작성
+        # (write_section_concurrency)도, 다른 절의 LLM 응답 수신도 그 사이 아무것도
+        # 진행되지 않는다. 실제로 2026-08-12 검증 런의 리랭킹 로그가 완전히 직렬이었다.
+        # 임베딩 클라이언트는 처음부터 to_thread를 썼는데 여기만 빠져 있었다.
+        # ORT의 InferenceSession.run은 스레드 안전하고 추론 중 GIL을 놓는다.
+        # 배치마다 나가는 이유도 이것 — 배치 사이마다 루프에 제어가 돌아간다.
         scores: list[float] = []
         for start in range(0, len(passages), self._batch_size):
             chunk = passages[start : start + self._batch_size]
-            logits = self._score_batch(query, chunk)
+            logits = await asyncio.to_thread(self._score_batch, query, chunk)
             scores.extend(self._sigmoid(logits).tolist())
 
         logger.info(
@@ -125,31 +139,8 @@ class BgeRerankerV2M3Client(RerankerClient):
             1-D float32 array of length ``len(passages)`` — raw logits
             (no sigmoid applied).
         """
-        queries = [query] * len(passages)
-        enc = self._tokenizer(
-            queries,
-            passages,
-            padding=True,
-            # passage만 자르고 query는 보존 — cross-encoder에서 query 절단은 의미 손상이 큼.
-            truncation="only_second",
-            max_length=self._max_length,
-            return_tensors="np",
-        )
-        outputs = self._session.run(
-            None,
-            {
-                "input_ids": enc["input_ids"].astype(np.int64),
-                "attention_mask": enc["attention_mask"].astype(np.int64),
-            },
-        )
-        # logits shape: (batch, 1) → (batch,)
-        return outputs[0].squeeze(-1).astype(np.float32)
+        return self._encoder.score_batch(query, passages)
 
     @staticmethod
     def _sigmoid(x: np.ndarray) -> np.ndarray:
-        # 안정 변형: 항상 음수 지수만 평가해 overflow를 차단. x≥0이면 1/(1+exp(-x)),
-        # x<0이면 exp(x)/(1+exp(x)). np.where는 양쪽 분기를 모두 평가하므로 -|x|로
-        # 마스킹한 뒤 분기별 공식으로 합성한다.
-        neg_abs = -np.abs(x)
-        e = np.exp(neg_abs)
-        return np.where(x >= 0, 1.0 / (1.0 + e), e / (1.0 + e))
+        return sigmoid(x)

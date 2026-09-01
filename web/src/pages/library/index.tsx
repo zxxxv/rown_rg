@@ -1,12 +1,13 @@
 import { FolderPlus, Search, Upload, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { useCreateFolder, useLibraryTree, useUploadFile } from "@/api/library";
-import type { LibraryNode } from "@/api/types";
+import type { LibraryNode, WritableTarget } from "@/api/types";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
+import { type UploadingFile, UploadProgressList } from "@/components/feedback/UploadProgressList";
 import { AppShell } from "@/components/layout/AppShell";
 import { Button } from "@/components/ui/button";
 import {
@@ -81,7 +82,13 @@ export default function LibraryPage() {
   // (프로젝트·완성본 등)나 파일을 고르면 writable이 없어 업로드/폴더생성이 막힌다.
   const selectedFolder = lookup.node?.type === "folder" ? lookup.node : null;
   const writable = selectedFolder?.writable ?? null;
-  const canWrite = Boolean(writable);
+  // 뷰어는 열람 전용 - 쓰기 UI를 열어 두고 전송 끝에 403을 맞게 하지 않는다.
+  // 백엔드(require_writer)가 최종 차단하지만, 사유는 시도 전에 보여준다(2026-08-14).
+  const readOnly = user?.role === "viewer";
+  const canWrite = Boolean(writable) && !readOnly;
+  const writeBlockedReason = readOnly
+    ? "열람 전용 권한 - 업로드는 관리자에게 권한 상향을 문의하세요"
+    : "‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요";
   const targetName = selectedFolder?.name ?? "";
   const targetParentId = writable?.parent_id ?? null;
   const targetIsPersonal = writable?.scope === "personal";
@@ -91,6 +98,50 @@ export default function LibraryPage() {
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
   const [folderName, setFolderName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // 진행 중 업로드 - XHR 전송 바이트 실측(0~100). 버튼·드롭 두 경로가 같은 목록을 쓴다.
+  const [uploads, setUploads] = useState<UploadingFile[]>([]);
+  // 본문(상세) 영역에 파일을 끌어 올린 상태 - 선택한 폴더로 떨어진다는 표시.
+  const [detailDragOver, setDetailDragOver] = useState(false);
+
+  /** 파일들을 대상 폴더로 업로드 - 트리 드롭·본문 드롭·버튼 선택의 공통 경로. */
+  const uploadTo = (target: WritableTarget, folderLabel: string, files: File[]) => {
+    if (readOnly) {
+      // 드롭 경로의 최종 안전망 - 버튼은 비활성이지만 드래그는 이벤트로 들어올 수 있다.
+      toast.error("열람 전용 권한입니다", {
+        description: "자료 업로드는 관리자에게 권한 상향을 문의하세요.",
+      });
+      return;
+    }
+    for (const file of files) {
+      const rowId = `${folderLabel}:${file.name}-${file.size}-${file.lastModified}`;
+      setUploads((u) =>
+        u.some((f) => f.id === rowId) ? u : [...u, { id: rowId, name: file.name, progress: 0 }],
+      );
+      const onProgress = (percent: number) =>
+        setUploads((u) => u.map((f) => (f.id === rowId ? { ...f, progress: percent } : f)));
+      uploadFile.mutate(
+        {
+          file,
+          parent_id: target.parent_id ?? null,
+          is_personal: target.scope === "personal",
+          onProgress,
+        },
+        {
+          onSuccess: () => {
+            setUploads((u) => u.filter((f) => f.id !== rowId));
+            toast.success(`"${file.name}" 업로드 완료 (${folderLabel})`);
+          },
+          onError: (err: unknown) => {
+            setUploads((u) => u.filter((f) => f.id !== rowId));
+            const msg = err instanceof ApiError ? err.message : "업로드에 실패했습니다.";
+            toast.error(`"${file.name}" 업로드 실패`, { description: msg });
+          },
+        },
+      );
+    }
+  };
+
+  const draggingFiles = (e: DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
 
   const onCreateFolder = async () => {
     const name = folderName.trim();
@@ -110,29 +161,16 @@ export default function LibraryPage() {
     }
   };
 
-  const onPickFile = async (files: FileList | null) => {
-    const file = files?.[0];
-    if (!file || !writable) return;
-    try {
-      await uploadFile.mutateAsync({
-        file,
-        parent_id: targetParentId,
-        is_personal: targetIsPersonal,
-      });
-      toast.success(`"${file.name}" 업로드 완료 (${targetName})`);
-    } catch (err) {
-      const msg = err instanceof ApiError ? err.message : "업로드에 실패했습니다.";
-      toast.error("업로드 실패", { description: msg });
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
+  const onPickFile = (files: FileList | null) => {
+    if (!files?.length || !writable) return;
+    uploadTo(writable, targetName, Array.from(files));
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   return (
     <AppShell
       user={user ? { name: user.name, role: user.role } : null}
       onLogout={() => void logout()}
-      tokenUsage={{ used: 1_240_000, limit: 5_000_000 }}
     >
       <div className="flex flex-col gap-4">
         <header className="flex flex-col gap-3">
@@ -147,7 +185,9 @@ export default function LibraryPage() {
                   </span>
                 ) : (
                   <span className="text-fg-tertiary">
-                    업로드하려면 ‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요.
+                    {readOnly
+                      ? "열람 전용 권한입니다 - 업로드·폴더 추가는 관리자에게 권한 상향을 문의하세요."
+                      : "업로드하려면 ‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요."}
                   </span>
                 )}
               </p>
@@ -158,7 +198,7 @@ export default function LibraryPage() {
                 size="sm"
                 onClick={() => setFolderDialogOpen(true)}
                 disabled={createFolder.isPending || !canWrite}
-                title={canWrite ? undefined : "‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요"}
+                title={canWrite ? undefined : writeBlockedReason}
               >
                 <FolderPlus className="mr-1 h-4 w-4" />
                 폴더 추가
@@ -167,7 +207,7 @@ export default function LibraryPage() {
                 size="sm"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploadFile.isPending || !canWrite}
-                title={canWrite ? undefined : "‘내 자료’ 또는 ‘회사 공유’ 폴더를 선택하세요"}
+                title={canWrite ? undefined : writeBlockedReason}
               >
                 <Upload className="mr-1 h-4 w-4" />
                 {uploadFile.isPending ? "업로드 중…" : "파일 업로드"}
@@ -175,9 +215,10 @@ export default function LibraryPage() {
               <input
                 ref={fileInputRef}
                 type="file"
+                multiple
                 className="hidden"
                 aria-label="파일 선택"
-                onChange={(e) => void onPickFile(e.target.files)}
+                onChange={(e) => onPickFile(e.target.files)}
               />
             </div>
           </div>
@@ -221,17 +262,58 @@ export default function LibraryPage() {
             }
           />
         ) : (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
-            <ScrollArea className="h-[calc(100vh-260px)] rounded border border-border bg-bg">
-              <LibraryTree
-                tree={tree}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-                search={debouncedSearch}
-              />
-            </ScrollArea>
+          // biome-ignore lint/a11y/noStaticElementInteractions: 빗나간 드롭의 브라우저 기본 동작만 막는 껍데기 - 조작 대상이 아니다
+          <div
+            className="grid grid-cols-1 gap-4 lg:grid-cols-[300px_minmax(0,1fr)]"
+            // 드롭 대상을 빗나간 드롭이 브라우저 파일 열기로 새지 않게 페이지 수준에서 막는다.
+            onDragOver={(e) => {
+              if (draggingFiles(e)) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              if (draggingFiles(e)) e.preventDefault();
+            }}
+          >
+            <div className="flex flex-col gap-2">
+              <ScrollArea className="h-[calc(100vh-260px)] rounded border border-border bg-bg">
+                <LibraryTree
+                  tree={tree}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                  search={debouncedSearch}
+                  onDropFiles={
+                    // 뷰어에겐 드롭 대상 강조 자체를 끈다 - 열리는 것처럼 보이면 안 된다.
+                    readOnly ? undefined : (target, name, files) => uploadTo(target, name, files)
+                  }
+                />
+              </ScrollArea>
+              <UploadProgressList uploading={uploads} />
+            </div>
 
-            <main className="min-h-[400px] rounded border border-border bg-bg p-5">
+            <main
+              className={cn(
+                "min-h-[400px] rounded border border-border bg-bg p-5",
+                detailDragOver && canWrite && "border-accent ring-1 ring-inset ring-accent",
+              )}
+              // 본문 영역 드롭 = 지금 선택한 폴더로 업로드. 쓰기 불가 폴더면 반응하지 않는다.
+              onDragOver={(e) => {
+                if (!draggingFiles(e) || !canWrite) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+                setDetailDragOver(true);
+              }}
+              onDragLeave={(e) => {
+                if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                setDetailDragOver(false);
+              }}
+              onDrop={(e) => {
+                if (!draggingFiles(e)) return;
+                e.preventDefault();
+                setDetailDragOver(false);
+                if (!writable) return;
+                const files = Array.from(e.dataTransfer.files);
+                if (files.length > 0) uploadTo(writable, targetName, files);
+              }}
+            >
               <LibraryDetail
                 node={lookup.node}
                 path={lookup.path}

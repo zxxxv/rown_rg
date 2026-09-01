@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from src.clients.llm.base import CompletionRequest, LLMClient, Message, WebSearchConfig, WebSource
 from src.clients.llm.factory import create_llm_client
+from src.core.config import settings
 from src.services.research.pdf_fetch import PdfSourceFetcher, looks_like_pdf
 
 logger = structlog.get_logger(__name__)
@@ -35,6 +36,12 @@ SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
 - `section_briefs`가 있으면 그 절이 **무엇을 논증해야 하는지·어떤 분석 관점인지**가
   적혀 있다. 절 제목만으로 검색하지 말고 그 방향·관점의 어휘(예: 예산 산출이면 단가·
   적산 기준·유사사업 사업비, 경제성이면 편익 항목·할인율·B/C)를 질의에 넣어라.
+- 브리프의 **필수 검색어**는 그 절의 분석 관점이 요구하는 검색이다 — 각각을 최소
+  1회 web_search로 실제로 던져라(비슷한 다른 검색으로 대체 금지). 특허분석·시장분석
+  같은 관점은 그 데이터(출원 통계·시장 규모 수치)가 안 걷히면 절이 통째로 빈다.
+- 절 방향(direction)이 축을 가운뎃점(·)으로 열거하면(예: "사회·기술·경제·환경·정치
+  분석") 각 축마다 검색을 나눠 던져라 — 한 축도 안 덮이면 그 축은 본문에서 통째로
+  빠진다.
 - 유용한 페이지는 web_fetch로 **본문 전체를 회수**한다(요약·추측 금지, 실제 내용 근거).
 - **단 PDF는 web_fetch 하지 마라**. URL이 `.pdf`로 끝나거나 검색 결과가 PDF 문서임을
   나타내면 회수를 건너뛰고 매니페스트에 URL만 실어라 — 시스템이 따로 내려받아 처리한다.
@@ -47,21 +54,78 @@ SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
   * high — 정부·공공기관(통계청·부처·지자체 등), 학술지·대학·국책/공인 연구기관, 국제기구
   * medium — 주요 언론사 보도, 산업 협회·시장조사기관 리포트, 기업 공식 발표(IR·백서)
   * low — 개인 블로그·커뮤니티·위키, 출처 불명 집계 사이트, 광고성 콘텐츠
-- 한국 맥락이면 공식·정부·학술·주요 언론 등 권위 있는 출처를 우선한다.
-- 글로벌 비교가 필요하면 최소 3개국 이상의 사례를 수집한다.
+- {scope_rule}
+- 글로벌 비교·기술 동향·주요국 정책이 주제에 있으면 최소 3개국 이상의 1차 자료를 모은다.
 - 가능하면 최근 3년 이내 자료를 우선한다(최신성).
 
 작업을 마치면 **마지막 메시지에 아래 형식의 JSON만** 출력한다(설명 문장 없이):
 ```json
 {"sources": [
   {"url": "https://...", "title": "...", "reliability": "high|medium|low",
+   "published": "YYYY-MM",
    "sections": ["<입력 목차 항목과 정확히 같은 문자열>", "..."]}
 ]}
 ```
+- published는 그 페이지·문서의 **발간 시점**이다(본문·머리말에서 확인한 것만,
+  YYYY 또는 YYYY-MM). 확인 못 했으면 필드를 생략하라 — 추측 금지.
 - **매니페스트에는 web_fetch로 본문을 회수한 출처 + PDF URL만 싣는다** — 그 외에
   검색 결과로 보기만 한 URL은 넣지 마라(본문 없는 출처는 시스템이 사용하지 못한다).
   PDF는 회수하지 않아도 싣는다(시스템이 내려받는다). 최대 10개.
 - sections 값은 반드시 입력 목차의 항목 문자열과 정확히 일치시켜라."""
+
+
+# 검색 범위 — 프로젝트가 고른다(국내 제도·통계가 본질인 보고서와 해외 기술 동향이
+# 본질인 보고서는 정답이 다르다). (지역 힌트, 프롬프트 지시문).
+# 화면은 국내/해외 체크박스(다중 선택)다: 국내만=domestic, 해외만=global, 둘 다=all.
+SEARCH_SCOPES: dict[str, tuple[str | None, str]] = {
+    "domestic": (
+        "KR",
+        "국내 자료를 우선한다. 정부·공공기관·국책연구기관·주요 언론을 중심으로 모으고, "
+        "해외 자료는 비교가 꼭 필요할 때만 보조로 쓴다.",
+    ),
+    "all": (
+        None,
+        "국내와 해외 자료를 모두 폭넓게 모은다. **영어 질의를 절반가량 섞어라** — "
+        "주제가 한국어라고 한국어로만 검색하면 해외 1차 자료가 통째로 빠진다"
+        "(실측: 지역 설정을 풀어도 한국어 질의만 하면 10건 중 8건이 국내였다). "
+        "국내는 정부·공공기관·국책연구기관·주요 언론, 해외는 주요국 정부기관·"
+        "국제기구(OECD·IEA·EU·IEEE 등)·해외 학술지를 본다.",
+    ),
+    "global": (
+        None,
+        "해외 자료를 우선한다. **검색의 2/3 이상을 영어 질의로 하고** 주요국 정부기관·"
+        "국제기구·해외 학술지/시장조사기관의 1차 자료를 먼저 모은다. "
+        "국내 자료는 대조·적용 맥락으로 보조한다.",
+    ),
+}
+# '반반'(balanced)은 체크박스 개편(2026-08-13)으로 폐지 — 비율 지시가 아니라 '둘 다
+# 본다'가 실사용 의도였다. 개편 전에 저장된 프로젝트를 위해 별칭으로만 남긴다.
+SEARCH_SCOPES["balanced"] = SEARCH_SCOPES["all"]
+# 값이 없는 옛 프로젝트의 폴백 — 개편 전 기본(반반)과 같은 행동을 유지한다.
+# 신규 프로젝트는 폼이 항상 값을 쓰므로(기본 국내) 여기 오지 않는다.
+DEFAULT_SEARCH_SCOPE = "all"
+
+
+# 보충 라운드(2차 패스·추가 조사)에서 질의를 심화 쪽으로 트는 꼬리표. 같은 검색 결과가
+# 반복 회수돼 전부 dedup으로 버려지는 낭비를 줄인다.
+SUPPLEMENT_HINT = " (추가 심화 자료: 통계·사례·상반된 관점)"
+
+
+def collection_topic(topic: str, chapter_title: str, *, supplement: bool = False) -> str:
+    """챕터 1콜의 수집 질의 주제 — '보고서 주제문 — 장 제목'.
+
+    수집은 장 단위로 한 번씩 돈다. **보고서 주제문(projects.topic)의 주 무대가 여기다**
+    — 그 밖에는 설계 브리프의 절별 질의 생성(brief_ai)과 리랭커 앵커(retrieval.section
+    _rerank_query, 주제 표류 방지)가 참고할 뿐, 절별 검색 질의는 장·절 제목·핵심
+    포인트로 만들어지고 본문 작성 프롬프트는 주제문을 보지 않는다. 장 제목만으론
+    "무엇을 어떤 목적으로 모으는지"가 안 실린다(예: 'EU CBAM'은 알아도 '국내 기업
+    대응 수준 진단'이라는 틀은 모른다).
+
+    설계 브리프 화면이 이 함수를 그대로 불러 사람에게 보여준다 — 화면과 실행이 갈라지면
+    "무엇이 검색될지 미리 본다"는 게이트의 약속이 깨진다.
+    """
+    text = f"{topic} — {chapter_title}"
+    return text + SUPPLEMENT_HINT if supplement else text
 
 
 class ResearchSpec(BaseModel):
@@ -74,6 +138,8 @@ class ResearchSpec(BaseModel):
     # 싣고 매칭에는 쓰지 않는다 — 목차에 있는 방향·핵심포인트·분석 관점이 수집 단계로
     # 전달되지 않아 '예산 산출' 같은 절이 빈손으로 남던 문제(2026-08-09 실측).
     briefs: list[str] = []
+    # 검색 범위(domestic|balanced|global) — 프로젝트 설정에서 온다.
+    scope: str = DEFAULT_SEARCH_SCOPE
 
 
 class CollectedSource(BaseModel):
@@ -124,16 +190,17 @@ class WebResearchService:
             },
             ensure_ascii=False,
         )
+        country, scope_rule = SEARCH_SCOPES.get(spec.scope, SEARCH_SCOPES[DEFAULT_SEARCH_SCOPE])
         request = CompletionRequest(
             model=model,
-            system=SYSTEM_PROMPT,
+            system=SYSTEM_PROMPT.replace("{scope_rule}", scope_rule),
             messages=[Message(role="user", content=user)],
             max_tokens=max_tokens,
             web_search=WebSearchConfig(
                 max_uses=max_uses,
                 max_fetch_uses=max_fetch_uses,
                 fetch_pages=True,
-                user_country="KR",
+                user_country=settings.research_user_country or country,
                 allowed_domains=allowed_domains,
             ),
         )
@@ -228,6 +295,12 @@ def _merge_sources(
         if not url:
             continue
         ws = by_url.get(url)
+        # 발간 시점: 검색 API가 준 page_age가 1순위, 없으면 수집 LLM이 본문에서 확인한
+        # published(YYYY[-MM], 추측 금지 지시) — 자료 시점 축의 재료(2026-08-17).
+        published = item.get("published")
+        page_age = (ws.page_age if ws else None) or (
+            published if isinstance(published, str) and published[:4].isdigit() else None
+        )
         out.append(
             CollectedSource(
                 url=url,
@@ -235,7 +308,7 @@ def _merge_sources(
                 content_md=ws.content_md if ws else None,
                 reliability=_domain_reliability(url) or item.get("reliability"),
                 matched_sections=[s for s in (item.get("sections") or []) if s in outline_set],
-                page_age=ws.page_age if ws else None,
+                page_age=page_age,
             )
         )
         seen.add(url)

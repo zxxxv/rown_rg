@@ -117,7 +117,10 @@ class PdfSourceFetcher:
         self._timeout = timeout_s
         self._max_bytes = max_bytes
         # medium 상한 0 = 전부 large 취급 → docling 건너뛰고 pymupdf 직행.
-        self._parser = PdfParser(medium_pdf_max_bytes=0)
+        # remote_enabled=False: 웹에서 수집한 신뢰할 수 없는 PDF를 GPU 박스로
+        # 보내지 않는다 - 이 옵트아웃이 없으면 원격 상한(25MB) 미만 파일이
+        # 조용히 원격 경로를 타기 시작한다.
+        self._parser = PdfParser(medium_pdf_max_bytes=0, remote_enabled=False)
 
     async def fetch_many(self, urls: list[str]) -> dict[str, str]:
         """URL → 본문 마크다운. 회수·파싱에 성공한 것만 담아 돌려준다."""

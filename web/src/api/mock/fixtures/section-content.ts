@@ -17,6 +17,7 @@ export const RICH_2_3 = `## 2.3 인구·고령화 영향
 1. **출퇴근 수요 감소**: 생산가능인구의 감소는 광역교통망의 출퇴근 수요를 2030년 기준 약 8% 감소시킬 것으로 추정된다.
 2. **여가·의료 통행 증가**: 반면 고령자의 여가·의료 통행은 연 평균 12% 증가가 예상된다 [2].
 3. **수도권 집중 지속**: 지방소멸 위험지역이 전국 시·군·구의 **49.6%** [3]에 달하면서 수도권 통행은 지속 증가 추세.
+4. 정책 대응 방향: 세대별 통행 특성을 반영한 노선 운영 계획과 환승 체계 재편 검토
 
 > 본 사업의 비용편익 분석은 이러한 인구 구조 변화를 반영하여 수요 추정 모델을 보정해야 한다. 단순 외삽이 아닌 **세대별·통행 목적별 분해 모델**이 필요하다.
 `;
@@ -53,12 +54,23 @@ const PLACEHOLDER = (id: string, title: string) =>
 
 const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
   "2.3": {
+    locked: false,
+    // 자료를 뺐을 때 근거를 잃은 문단 - 그 블록만 다시 쓰는 경로를 눌러 보게 한다.
+    evidence_lost: [
+      { text: "본 사업의 수요는 수도권 인구 구조의 변화에 직접적인 영향을 받는다.", n_markers: 1 },
+    ],
     content: RICH_2_3,
     source_ids: ["src_kostat_2024", "src_kdi_aging", "src_audit_gtx"],
     qa_status: "passed",
     level: 2,
-    ungrounded: { count: 0, samples: [] },
-    evidence: { count: 24, scarce: false },
+    evidence: { count: 24, scarce: false, plan_failed: false },
+    figures: [
+      {
+        caption: "고령 인구 비중 추이",
+        description: "위 주제의 핵심 수치·구조를 요약한 도표 또는 그래프",
+        source_hints: ["2024 인구주택총조사 표본 집계 결과 (https://kostat.go.kr/)"],
+      },
+    ],
     citations: [
       {
         number: 1,
@@ -84,12 +96,14 @@ const CONTENTS: Record<string, Omit<SectionContentResponse, "id" | "title">> = {
     ],
   },
   "3.3": {
+    locked: false,
+    evidence_lost: [],
     content: RICH_3_3,
     source_ids: ["src_moef_preliminary", "src_bok_econ", "src_audit_gtx"],
     qa_status: "passed",
     level: 2,
-    ungrounded: { count: 0, samples: [] },
-    evidence: { count: 24, scarce: false },
+    figures: [],
+    evidence: { count: 24, scarce: false, plan_failed: false },
     citations: [
       {
         number: 1,
@@ -128,11 +142,13 @@ export function buildSectionContent(
     id: sectionId,
     title,
     content: PLACEHOLDER(sectionId, title),
+    locked: false,
+    evidence_lost: [],
     source_ids: [],
     qa_status: "passed",
     level: sectionId.includes(".") ? 2 : 1,
-    ungrounded: { count: 0, samples: [] },
-    evidence: { count: 24, scarce: false },
+    evidence: { count: 24, scarce: false, plan_failed: false },
     citations: [],
+    figures: [],
   };
 }

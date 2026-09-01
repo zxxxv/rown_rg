@@ -1,4 +1,4 @@
-import { Activity, DollarSign, FileCheck2, FolderKanban, Users } from "lucide-react";
+import { Activity, DollarSign, FileCheck2, FolderKanban, Users, Wifi } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   Area,
@@ -20,6 +20,12 @@ import {
   useUserUsageDetail,
 } from "@/api/admin";
 import { ApiError } from "@/api/client";
+import {
+  Tooltip as HoverTip,
+  TooltipContent as HoverTipContent,
+  TooltipProvider as HoverTipProvider,
+  TooltipTrigger as HoverTipTrigger,
+} from "@/components/ui/tooltip";
 import type {
   AdminDashboardData,
   AdminDashboardPeriod,
@@ -73,9 +79,16 @@ const PERIOD_LABEL: Record<AdminDashboardPeriod, string> = {
   custom: "구간 선택",
 };
 
+
+/** last_seen_at → "방금" | "n분 전" - 접속중 창이 5분이라 분 단위면 충분하다. */
+function minutesAgoLabel(iso: string): string {
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
+  return mins <= 0 ? "방금" : `${mins}분 전`;
+}
+
 export default function AdminDashboardPage() {
   const { user, logout } = useAuth();
-  const [period, setPeriod] = useState<AdminDashboardPeriod>("last_30_days");
+  const [period, setPeriod] = useState<AdminDashboardPeriod>("this_month");
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
   const [detailUserId, setDetailUserId] = useState<string | null>(null);
@@ -86,7 +99,6 @@ export default function AdminDashboardPage() {
     <AppShell
       user={user ? { name: user.name, role: user.role } : null}
       onLogout={() => void logout()}
-      tokenUsage={{ used: 1_240_000, limit: 5_000_000 }}
     >
       <div className="flex flex-col gap-6">
         <header className="flex flex-wrap items-end justify-between gap-3">
@@ -160,10 +172,10 @@ function PeriodSelect({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="last_30_days">최근 30일</SelectItem>
-          <SelectItem value="last_7_days">최근 7일</SelectItem>
           <SelectItem value="this_month">이번 달</SelectItem>
           <SelectItem value="last_month">지난 달</SelectItem>
+          <SelectItem value="last_7_days">최근 7일</SelectItem>
+          <SelectItem value="last_30_days">최근 30일</SelectItem>
           <SelectItem value="custom">구간 선택</SelectItem>
         </SelectContent>
       </Select>
@@ -201,11 +213,13 @@ function DashboardBody({
 }) {
   const costPct = (data.kpis.total_cost_usd / data.kpis.cost_limit_usd) * 100;
   const costTone = costPct >= 90 ? "danger" : costPct >= 70 ? "warning" : "default";
+  // 개인 한도 합계가 조직 한도를 넘은 상태 - 조직 한도가 공유 실링이라 먼저 막힌다.
+  const overAllocated = data.kpis.allocated_limit_usd > data.kpis.cost_limit_usd;
   const periodLabel = PERIOD_LABEL[data.period.type];
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard
           label={`${periodLabel} 총 비용`}
           value={`$${data.kpis.total_cost_usd.toLocaleString()}`}
@@ -215,6 +229,53 @@ function DashboardBody({
           progress={{ current: data.kpis.total_cost_usd, max: data.kpis.cost_limit_usd }}
         />
         <StatCard
+          label="배정 합계"
+          value={`$${data.kpis.allocated_limit_usd.toLocaleString()}`}
+          hint={
+            overAllocated
+              ? `조직 한도 $${data.kpis.cost_limit_usd.toLocaleString()}보다 많습니다 - 배정한 만큼 못 씁니다`
+              : `조직 한도 $${data.kpis.cost_limit_usd.toLocaleString()} 안`
+          }
+          icon={Users}
+          tone={overAllocated ? "warning" : "default"}
+        />
+        {/* 호버 = 명단(2026-08-28 지시). 수만 보이면 '누가 쓰고 있나'를 답하려고
+            사용자 목록 화면으로 건너가야 했다 - 그 질문을 카드 위에서 끝낸다. */}
+        <HoverTipProvider delayDuration={150}>
+          <HoverTip>
+            <HoverTipTrigger asChild>
+              <div className="cursor-default">
+                <StatCard
+                  label="현재 접속중"
+                  value={`${data.kpis.online_users}명`}
+                  hint="최근 5분 내 활동 - 올려서 명단 보기"
+                  icon={Wifi}
+                  tone="success"
+                />
+              </div>
+            </HoverTipTrigger>
+            <HoverTipContent side="bottom" className="max-w-64">
+              {data.kpis.online_list.length === 0 ? (
+                <p className="text-xs">지금 접속중인 사용자가 없습니다.</p>
+              ) : (
+                <ul className="flex flex-col gap-0.5 text-xs">
+                  {data.kpis.online_list.map((u) => (
+                    <li key={u.email} className="flex items-center justify-between gap-3">
+                      <span>{u.name}</span>
+                      <span className="text-fg-tertiary">{minutesAgoLabel(u.last_seen_at)}</span>
+                    </li>
+                  ))}
+                  {data.kpis.online_users > data.kpis.online_list.length ? (
+                    <li className="text-fg-tertiary">
+                      외 {data.kpis.online_users - data.kpis.online_list.length}명
+                    </li>
+                  ) : null}
+                </ul>
+              )}
+            </HoverTipContent>
+          </HoverTip>
+        </HoverTipProvider>
+        <StatCard
           label="활성 사용자"
           value={`${data.kpis.active_users}명`}
           hint={`${periodLabel} 1회 이상 로그인`}
@@ -223,64 +284,66 @@ function DashboardBody({
         <StatCard
           label="진행 중 프로젝트"
           value={`${data.kpis.active_projects}건`}
-          hint="status = researching / indexing / writing / reviewing"
+          hint="아직 확정하지 않은 보고서 - 작성 중이거나 검토 중"
           icon={Activity}
         />
         <StatCard
           label="완료된 보고서"
           value={`${data.kpis.completed_reports}건`}
-          hint={`${periodLabel} 완료`}
+          hint={`${periodLabel} 최종 확정`}
           icon={FileCheck2}
           tone="success"
         />
       </div>
 
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
-          <div>
-            <CardTitle className="text-base">일별 비용 추세 ({periodLabel})</CardTitle>
-            <CardDescription>USD 기준, 일별 총 사용 비용</CardDescription>
-          </div>
-          <span className="font-mono text-xs text-fg-tertiary">
-            평균 ${Math.round(data.kpis.total_cost_usd / data.daily_costs.length)}/일
-          </span>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-2">
-          <div className="flex items-center gap-4 text-xs text-fg-tertiary">
-            <span className="flex items-center gap-1.5">
-              <span
-                aria-hidden
-                className="inline-block w-5 shrink-0 border-t-2 border-solid"
-                style={{ borderColor: "var(--color-accent)" }}
-              />
-              비용 (USD, 실선)
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
+            <div>
+              <CardTitle className="text-base">일별 비용 추세 ({periodLabel})</CardTitle>
+              <CardDescription>USD 기준, 일별 총 사용 비용</CardDescription>
+            </div>
+            <span className="font-mono text-xs text-fg-tertiary">
+              평균 ${Math.round(data.kpis.total_cost_usd / data.daily_costs.length)}/일
             </span>
-            <span className="flex items-center gap-1.5">
-              <span
-                aria-hidden
-                className="inline-block w-5 shrink-0 border-t-2 border-dashed"
-                style={{ borderColor: "var(--color-text-warning)" }}
-              />
-              활성 사용자 수 (점선)
-            </span>
-          </div>
-          <div className="h-80 w-full">
-            <DailyCostChart points={data.daily_costs} />
-          </div>
-        </CardContent>
-      </Card>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            <div className="flex items-center gap-4 text-xs text-fg-tertiary">
+              <span className="flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="inline-block w-5 shrink-0 border-t-2 border-solid"
+                  style={{ borderColor: "var(--color-accent)" }}
+                />
+                비용 (USD, 실선)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="inline-block w-5 shrink-0 border-t-2 border-dashed"
+                  style={{ borderColor: "var(--color-text-warning)" }}
+                />
+                활성 사용자 수 (점선)
+              </span>
+            </div>
+            <div className="h-80 w-full">
+              <DailyCostChart points={data.daily_costs} />
+            </div>
+          </CardContent>
+        </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">날짜별 사용자 기여 ({periodLabel})</CardTitle>
-          <CardDescription>상위 6명 + 기타를 쌓아 '누가 언제 얼마나' 썼는지 표시</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="h-80 w-full">
-            <UserDailyChart series={data.user_daily} onSelectUser={onSelectUser} />
-          </div>
-        </CardContent>
-      </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">날짜별 사용자 기여 ({periodLabel})</CardTitle>
+            <CardDescription>상위 6명 + 기타를 쌓아 '누가 언제 얼마나' 썼는지 표시</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="h-80 w-full">
+              <UserDailyChart series={data.user_daily} onSelectUser={onSelectUser} />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <UsageTable rows={data.user_usage} periodLabel={periodLabel} onSelectUser={onSelectUser} />
@@ -469,6 +532,15 @@ function usageTone(pct: number): "default" | "warning" | "danger" {
   return "default";
 }
 
+function fmtDateTime(iso?: string | null): string {
+  if (!iso) return "-";
+  return new Date(iso).toLocaleString("ko-KR", {
+    timeZone: "Asia/Seoul",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 const ROLE_KIND: Record<string, StatusKind> = {
   admin: "info",
   super_admin: "info",
@@ -571,8 +643,8 @@ function UsageTable({
                       </span>
                     </div>
                   </TableCell>
-                  <TableCell className="font-mono text-xs text-fg-tertiary">
-                    {row.last_active.slice(0, 10)}
+                  <TableCell className="whitespace-nowrap font-mono text-xs text-fg-tertiary">
+                    {fmtDateTime(row.last_active)}
                   </TableCell>
                   <TableCell className="text-right">
                     <Button variant="ghost" size="sm" onClick={() => onSelectUser(row.user_id)}>

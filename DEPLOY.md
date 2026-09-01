@@ -98,9 +98,19 @@ Vite 빌드에 자동 반영된다 → `web/dist` 생성.
 
 ```bash
 cd ~/rown
-docker run --rm -v "$PWD/web":/w -w /w node:20-alpine \
+docker run --rm -e CI=true -v "$PWD/web":/w -w /w node:22-alpine \
   sh -c "corepack enable && pnpm install --frozen-lockfile && pnpm build"
 ```
+
+> **이미지·플래그를 바꾸지 마라**(2026-08-25 배포에서 둘 다에 막혔다).
+> - `node:22-alpine` — `web/package.json`의 `packageManager` 핀(pnpm 11)이 Node 22
+>   이상을 요구한다(`node:sqlite`). `node:20-alpine`이면 pnpm이 기동조차 못 한다.
+> - `-e CI=true` — pnpm이 다른 버전이 만든 `node_modules`를 지울지 물어보는데, 파이프
+>   실행엔 TTY가 없어 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`로 선다.
+>
+> pnpm 버전은 `packageManager`로 못 박혀 있다 — 핀이 없으면 corepack이 **매번 최신
+> pnpm**을 끌어와, 어제 되던 빌드가 오늘 Node 요구사항이 올라갔다는 이유로 깨진다.
+> 개발 PC와 서버가 같은 pnpm을 쓰게 하는 것이 핀의 목적이므로, 올릴 때는 둘을 같이 올린다.
 
 > 대안: 개발 PC에서 `cd web && pnpm build` 후 `web/dist`를 rsync로 전송해도 된다.
 

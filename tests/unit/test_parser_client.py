@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -376,8 +378,6 @@ class TestPdfParserSupports:
                 tmp_path / "missing.pdf"
             )
 
-        import asyncio
-
         with pytest.raises(FileNotFoundError):
             asyncio.run(_run())
 
@@ -392,6 +392,9 @@ class TestPdfParserFallback:
             cache=ParseCache(root=tmp_path / "cache"),
             # 합성 PDF는 small bucket(<1MB)이라 small_pdf_timeout_s만 0.001로 강제 → 즉시 timeout
             small_pdf_timeout_s=0.001,
+            # 개발 환경 .env에 원격 파서(GPU 박스)가 살아 있으면 원격이 성공해 폴백
+            # 경로가 아예 안 탄다(2026-08-24 실사고: 박스 복구 직후 이 테스트만 깨짐).
+            remote_enabled=False,
         )
 
     async def test_fallback_emits_timeout_warning(self, tmp_path: Path):
@@ -429,12 +432,27 @@ class TestPdfParserFallback:
             assert lonely_line not in result.markdown, f"단독 페이지 번호 '{n}' 남음"
 
     async def test_cache_hit_on_second_parse(self, tmp_path: Path):
+        """pymupdf 캐시본은 docling을 다시 시도할 수 없는 조건에서만 적중한다.
+
+        v3부터 pymupdf 결과는 "그때 docling이 안 됐다"의 기록이라, 지금 docling이
+        가능하면 캐시를 무시하고 재파싱한다. 여기서는 large 버킷(medium 상한 0)으로
+        docling 자격 자체를 없애 캐시 적중을 확인한다 - 재시도 동작 자체는
+        test_pdf_parser_remote.py의 캐시 판정 테스트가 검증한다.
+        """
+        from src.clients.parser import PdfParser
+
         pdf = tmp_path / "cache.pdf"
         _make_pdf(pdf, pages=2)
-        parser = self._make_force_fallback_parser(tmp_path)
+        parser = PdfParser(
+            cache=ParseCache(root=tmp_path / "cache"),
+            medium_pdf_max_bytes=0,
+            # 원격 파서가 살아 있으면 large 버킷도 원격이 받아 캐시 시나리오가 깨진다.
+            remote_enabled=False,
+        )
 
         first = await parser.parse(pdf)
         assert first.cached is False
+        assert first.parser_name == "pymupdf"
         second = await parser.parse(pdf)
         assert second.cached is True
         # 캐시 적중 시 메타데이터가 동일해야 함
@@ -453,6 +471,8 @@ class TestPdfParserSizeBuckets:
         parser = PdfParser(
             cache=ParseCache(root=tmp_path / "cache"),
             medium_pdf_max_bytes=0,
+            # 원격 파서가 살아 있으면 large 버킷도 원격이 받아 skip 시그널이 안 나온다.
+            remote_enabled=False,
         )
         result = await parser.parse(pdf)
         joined = " | ".join(result.warnings)
@@ -491,6 +511,8 @@ class TestPdfParserDoesNotHangAfterTimeout:
         parser = PdfParser(
             cache=ParseCache(root=tmp_path / "cache"),
             small_pdf_timeout_s=0.2,
+            # 원격 파서가 살아 있으면 monkeypatch한 로컬 docling을 아예 안 탄다.
+            remote_enabled=False,
         )
 
         t0 = _time.perf_counter()
@@ -519,3 +541,63 @@ class TestPdfParserIntegration:
         assert result.metadata.char_count > 100
         assert result.metadata.page_count is not None
         assert result.metadata.page_count >= 1
+
+
+class TestAbandonedDoclingWorker:
+    """타임아웃으로 버려진 docling 워커가 메모리를 붙들지 않는지.
+
+    2026-08-12: 서버가 완성된 런 이후에도 anon 29.3GB를 유지했다. 코드를 보니
+    타임아웃된 워커가 `_active_docling_workers`에서 안 빠지고(`not t.is_alive()`
+    조건), 결과 큐도 아무도 안 읽어 완성된 마크다운이 프로세스 내내 남았다.
+    "프로세스 종료 때 정리된다"는 전제가 서버에서는 성립하지 않는다.
+    """
+
+    @pytest.mark.asyncio
+    async def test_타임아웃된_워커가_추적목록에_안_남는다(self, monkeypatch) -> None:
+        import time as _time
+
+        from src.clients.parser import pdf as pdfmod
+
+        def slow(_path):
+            _time.sleep(0.5)
+            return ("결과", 1, 0)
+
+        monkeypatch.setattr(pdfmod, "_docling_convert", slow)
+        parser = pdfmod.PdfParser()
+
+        for _ in range(3):
+            with pytest.raises(TimeoutError):
+                await parser._docling_with_daemon_timeout(Path("pyproject.toml"), 0.05)
+
+        assert pdfmod._active_docling_workers == [], "타임아웃 워커가 목록에 남았다"
+
+    @pytest.mark.asyncio
+    async def test_버려진_워커의_결과가_큐에_쌓이지_않는다(self, monkeypatch) -> None:
+        """큐가 결과를 붙들면 완성된 마크다운이 통째로 남는다."""
+        import time as _time
+
+        from src.clients.parser import pdf as pdfmod
+
+        payload = "가" * 100_000
+
+        def slow(_path):
+            _time.sleep(0.3)
+            return (payload, 1, 0)
+
+        monkeypatch.setattr(pdfmod, "_docling_convert", slow)
+        parser = pdfmod.PdfParser()
+
+        before = {t.ident for t in threading.enumerate() if t.name == "pdf-docling-drain"}
+        with pytest.raises(TimeoutError):
+            await parser._docling_with_daemon_timeout(Path("pyproject.toml"), 0.05)
+
+        # 이 호출이 띄운 정리 스레드만 본다 - 다른 테스트의 잔여 스레드를 세면 안 된다.
+        mine = [
+            t
+            for t in threading.enumerate()
+            if t.name == "pdf-docling-drain" and t.ident not in before
+        ]
+        assert mine, "버려진 워커에 정리 스레드가 안 붙었다"
+        for t in mine:
+            t.join(timeout=3)
+            assert not t.is_alive(), "정리 스레드가 안 끝났다 - 큐가 비워지지 않았다"

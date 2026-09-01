@@ -47,6 +47,11 @@ class CompletionRequest(BaseModel):
     system: str | None = None
     # 설정 시 어댑터가 웹검색 도구를 켠다(provider-중립). 단발 호출엔 영향 없음.
     web_search: WebSearchConfig | None = None
+    # 추론(thinking) 깊이 힌트("low"|"medium"|"high"). thinking이 기본 켜지는 모델
+    # (Opus 5 등)에서 절 작성처럼 근거가 프롬프트에 다 있는 생성 작업의 추론 과금을
+    # 줄이는 레버다 — Anthropic 어댑터가 output_config.effort로 번역하고, 지원하지
+    # 않는 모델·provider는 조용히 무시한다. None이면 파라미터 자체를 보내지 않는다.
+    effort: str | None = None
     cache_key: str | None = Field(
         default=None,
         description="녹화·재생 시 캐셋 식별자. None이면 input_hash에서 자동 생성",
@@ -70,6 +75,21 @@ class CompletionResponse(BaseModel):
     stop_reason: str
     # web_search 사용 시 어댑터가 provider 응답을 정규화해 채운다.
     web_sources: list[WebSource] = []
+
+
+# 정상 완결로 인정하는 stop_reason — provider별 표기를 한곳에 모은다.
+# Anthropic: end_turn·stop_sequence / OpenAI(Responses): completed / Gemini: STOP /
+# 테스트 fake: stop. 화이트리스트 방식이라 미지의 값(max_tokens·refusal·SAFETY·
+# max_output_tokens 등)은 전부 미완결로 분류된다 — 절단이 조용히 통과하는 것보다
+# 재시도가 낫다(2026-08-13 실사고: 문장 중간 216자 토막이 완성 절로 조립됨).
+COMPLETE_STOP_REASONS: frozenset[str] = frozenset(
+    {"end_turn", "stop_sequence", "stop", "completed", "STOP"}
+)
+
+
+def incomplete_stop(stop_reason: str) -> str:
+    """미완결이면 그 이유(stop_reason)를, 정상 완결이면 빈 문자열을 돌려준다."""
+    return "" if stop_reason in COMPLETE_STOP_REASONS else stop_reason
 
 
 class LLMClient(Protocol):

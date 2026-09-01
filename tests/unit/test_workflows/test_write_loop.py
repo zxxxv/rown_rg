@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
+import pytest
+
 from src.clients.llm.base import CompletionRequest, CompletionResponse
+from src.core.config import settings
 from src.core.state import ProjectState
 from src.core.types import (
     CheckSeverity,
@@ -16,6 +20,8 @@ from src.core.types import (
     SectionPlan,
     StaticCheckReport,
 )
+from src.workflows import cancel
+from src.workflows.cancel import RunCancelled
 from src.workflows.write_loop import (
     apply_selection,
     check_assembled,
@@ -57,6 +63,131 @@ def _candset(section_id, n: int = 2) -> SectionCandidateSet:
         for i in range(n)
     ]
     return SectionCandidateSet(section_id=section_id, candidates=cands)
+
+
+# ---------- 사실 대장 + builds_on (적립·배치·주입) ----------
+
+
+class TestLedgerAndBuildsOn:
+    def _chunk(self) -> RetrievedChunk:
+        return RetrievedChunk(
+            chunk_id=uuid4(), source_id=uuid4(), content="근거 본문 " * 60, score=0.9
+        )
+
+    async def test_completed_section_accrues_ledger_entries(self):
+        """절 완료 직후 확정값이 meta.ledger_entries로 적립된다 - 마커는 로컬 번호."""
+        s1 = SectionPlan(chapter_number=4, section_number=1, title="예산")
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[s1])
+        chunk = self._chunk()
+
+        async def retrieve(section):
+            return [chunk]
+
+        body = (
+            "본문 서술이 길게 이어집니다. " * 20
+            + "\n| 구분 | 값 |\n|---|---|\n| 총사업비 | 1.2조 원 (출처 1) |\n"
+        )
+        result = await run_write_loop(state, retrieve=retrieve, client=_StubClient(body), n=1)
+        meta = result.section_meta[s1.section_id]
+        entries = meta.get("ledger_entries") or []
+        assert any(e["metric"] == "총사업비" and e["value"] == "1.2" for e in entries)
+        # 로컬 마커 1 -> 풀의 첫 청크 id로 해소
+        target = next(e for e in entries if e["metric"] == "총사업비")
+        assert str(chunk.chunk_id) in target["chunk_ids"]
+
+    async def test_dependent_section_receives_injection(self):
+        """builds_on 절은 앞 배치의 확정값을 guidance로 받고, 원 청크가 풀에 덧붙는다."""
+        s1 = SectionPlan(chapter_number=4, section_number=1, title="예산")
+        s5 = SectionPlan(chapter_number=4, section_number=5, title="시사점", builds_on=["4.1"])
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[s1, s5])
+        base = self._chunk()
+        loaded: list[list] = []
+
+        async def retrieve(section):
+            return [base] if section.section_number == 1 else [self._chunk()]
+
+        async def chunk_loader(ids):
+            loaded.append(list(ids))
+            return [
+                RetrievedChunk(chunk_id=i, source_id=uuid4(), content="원 근거", score=1.0)
+                for i in ids
+            ]
+
+        class _CapturingClient(_StubClient):
+            def __init__(self, text):
+                super().__init__(text)
+                self.systems: dict[str, str] = {}
+
+        body = (
+            "본문 서술이 길게 이어집니다. " * 20
+            + "\n| 구분 | 값 |\n|---|---|\n| 총사업비 | 1.2조 원 (출처 1) |\n"
+        )
+        stub = _CapturingClient(body)
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=stub, n=1, chunk_loader=chunk_loader
+        )
+        assert len(result.section_candidates) == 2
+        # 주입 블록이 프롬프트 어딘가에 실렸다 - 확정값 문구로 확인
+        joined = "\n".join(
+            (r.system or "") + "\n" + "\n".join(m.content for m in r.messages) for r in stub.calls
+        )
+        assert "앞 절에서 확정된 값" in joined
+        assert "총사업비: 1.2조원" in joined.replace("1.2조 원", "1.2조원") or "총사업비" in joined
+        # 원 청크 로드가 실제로 일어났다(같은 풀에 있으면 생략될 수 있어 base 기준)
+        assert loaded and str(base.chunk_id) in [str(x) for x in loaded[0]]
+
+    async def test_missing_dependency_warns_but_proceeds(self):
+        """대상 절이 확정값을 못 남겨도 의존 절은 막히지 않는다(절 격리 원칙)."""
+        s1 = SectionPlan(chapter_number=1, section_number=1, title="개요")
+        s2 = SectionPlan(chapter_number=1, section_number=2, title="종합", builds_on=["1.1"])
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[s1, s2])
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        # 표·명시 값이 없는 본문 -> 1.1의 대장이 빈다
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=_StubClient("서술만 있는 본문 [1] " * 30), n=1
+        )
+        assert len(result.section_candidates) == 2
+        meta = result.section_meta[s2.section_id]
+        assert meta.get("ledger_inject_warnings")
+
+    async def test_kept_meta_seeds_ledger_on_resume(self):
+        """증분 재개 - 건너뛴 완성 절의 대장이 state.section_meta로 들어와 주입된다."""
+        s5 = SectionPlan(chapter_number=4, section_number=5, title="시사점", builds_on=["4.1"])
+        kept_id = uuid4()
+        state = ProjectState(
+            user_id=uuid4(),
+            topic="주제",
+            section_plan=[s5],
+            section_meta={
+                kept_id: {
+                    "ledger_entries": [
+                        {
+                            "metric": "총사업비",
+                            "value": "1.2",
+                            "unit": "조원",
+                            "qualifiers": {},
+                            "section_ref": "4.1",
+                            "chunk_ids": [],
+                            "source_kind": "table",
+                        }
+                    ]
+                }
+            },
+        )
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        stub = _StubClient("본문 [1] " * 30)
+        result = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        assert len(result.section_candidates) == 1
+        joined = "\n".join(
+            (r.system or "") + "\n".join(m.content for m in r.messages) for r in stub.calls
+        )
+        assert "앞 절에서 확정된 값" in joined
 
 
 # ---------- run_write_loop (검색→생성→게이트 통합) ----------
@@ -116,6 +247,206 @@ class TestRunWriteLoop:
 
         result = await run_write_loop(state, retrieve=retrieve, client=_StubClient("x"), n=2)
         assert result.section_candidates == []
+
+
+# ---------- run_write_loop 병렬화 (순서·동일성·상한·취소) ----------
+
+
+def _mk_state(titles: list[str]) -> tuple[ProjectState, RetrievedChunk]:
+    plans = [
+        SectionPlan(chapter_number=i + 1, section_number=1, title=t) for i, t in enumerate(titles)
+    ]
+    state = ProjectState(user_id=uuid4(), topic="주제", section_plan=plans)
+    chunk = RetrievedChunk(
+        chunk_id=uuid4(), source_id=uuid4(), content="근거 본문 " * 60, score=0.9
+    )
+    return state, chunk
+
+
+class TestRunWriteLoopParallel:
+    async def test_output_in_plan_order_despite_reversed_completion(self):
+        """앞 절이 느려 완료 순서가 뒤집혀도 결과는 plan 순서 — gather 입력 순서 보존."""
+        state, chunk = _mk_state(["느린절", "빠른절"])
+        completed: list[str] = []
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            if section.title == "느린절":
+                await asyncio.sleep(0.05)
+            completed.append(section.title)
+            return [chunk]
+
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=_StubClient("본문입니다. [1] " * 30), n=1
+        )
+        assert completed == ["빠른절", "느린절"]  # 실제로 병렬로 돌았다
+        assert [cs.section_id for cs in result.section_candidates] == [
+            p.section_id for p in state.section_plan
+        ]
+        assert list(result.section_meta) == [p.section_id for p in state.section_plan]
+
+    async def test_parallel_result_equals_serial(self, monkeypatch):
+        """같은 입력이면 동시성 1(직렬)과 4(병렬)의 산출이 내용까지 동일하다."""
+        state, chunk = _mk_state(["개요", "분석", "전망"])
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            return [chunk]
+
+        stub = _StubClient("이 섹션의 본문입니다. [1] " * 30)
+
+        def _essence(result: ProjectState) -> list[tuple]:
+            return [
+                (
+                    cs.section_id,
+                    [c.draft.content for c in cs.candidates],
+                    [c.draft.cited_chunk_ids for c in cs.candidates],
+                )
+                for cs in result.section_candidates
+            ]
+
+        monkeypatch.setattr(settings, "write_section_concurrency", 1)
+        serial = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        monkeypatch.setattr(settings, "write_section_concurrency", 4)
+        parallel = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+
+        assert _essence(serial) == _essence(parallel)
+        assert serial.section_meta == parallel.section_meta
+
+    async def test_semaphore_caps_concurrency(self, monkeypatch):
+        """동시 실행 절 수가 write_section_concurrency를 넘지 않는다(그리고 병렬이긴 하다)."""
+        monkeypatch.setattr(settings, "write_section_concurrency", 2)
+        state, chunk = _mk_state([f"{i}절" for i in range(6)])
+        active = 0
+        peak = 0
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return [chunk]
+
+        await run_write_loop(
+            state, retrieve=retrieve, client=_StubClient("본문입니다. [1] " * 30), n=1
+        )
+        assert peak == 2
+
+    async def test_cancel_stops_queued_sections(self, monkeypatch):
+        """작성 중 취소 — 큐에 있던 절은 시작 전에 멈추고 RunCancelled가 올라간다."""
+        monkeypatch.setattr(settings, "write_section_concurrency", 1)
+        state, chunk = _mk_state(["첫절", "둘째절", "셋째절"])
+        retrieved: list[str] = []
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            retrieved.append(section.title)
+            if section.title == "첫절":
+                cancel.request(state.project_id)
+            return [chunk]
+
+        try:
+            with pytest.raises(RunCancelled):
+                await run_write_loop(
+                    state, retrieve=retrieve, client=_StubClient("본문입니다. [1] " * 30), n=1
+                )
+        finally:
+            cancel.clear(state.project_id)
+        assert retrieved == ["첫절"]  # 뒤 절들은 시작조차 안 했다
+
+    async def test_cancel_aborts_inflight_sibling(self, monkeypatch):
+        """취소 전파 시 진행 중이던 다른 절 태스크도 실제로 중단(cancel)된다."""
+        monkeypatch.setattr(settings, "write_section_concurrency", 2)
+        state, chunk = _mk_state(["막힌절", "신호절", "대기절"])
+        blocked = asyncio.Event()
+        aborted = asyncio.Event()
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            if section.title == "막힌절":
+                blocked.set()
+                try:
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    aborted.set()
+                    raise
+            if section.title == "신호절":
+                await blocked.wait()
+                cancel.request(state.project_id)
+            return [chunk]
+
+        try:
+            with pytest.raises(RunCancelled):
+                await run_write_loop(
+                    state, retrieve=retrieve, client=_StubClient("본문입니다. [1] " * 30), n=1
+                )
+        finally:
+            cancel.clear(state.project_id)
+        assert aborted.is_set()
+
+
+# ---------- 절 단위 실패 비삼킴 (2026-08-13 실사고 재발 방지) ----------
+
+
+class TestSectionFailureSurfacing:
+    """빈 절·토막 절이 '완성' 뒤에 숨지 않는다 — 실패는 meta에 기록되고 절만 격리된다."""
+
+    async def test_llm_error_isolated_to_failed_section(self):
+        """한 절의 LLM 실패(백오프 소진)가 다른 절의 완성을 버리지 않는다."""
+        from src.clients.llm.exceptions import LLMAPIError
+
+        state, chunk = _mk_state(["정상절", "실패절"])
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            return [chunk]
+
+        class _FailOne(_StubClient):
+            async def complete(self, request: CompletionRequest) -> CompletionResponse:
+                if "실패절" in request.messages[0].content:
+                    raise LLMAPIError("overloaded (모의)")
+                return await super().complete(request)
+
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=_FailOne("본문입니다. [1] " * 30), n=1
+        )
+        ok_plan, bad_plan = state.section_plan
+        by_id = {cs.section_id: cs for cs in result.section_candidates}
+        assert by_id[ok_plan.section_id].survivors  # 정상 절은 산다
+        assert by_id[bad_plan.section_id].candidates == []  # 실패 절은 빈 묶음
+        meta = result.section_meta[bad_plan.section_id]
+        assert meta["write_failed"] is True
+        assert "LLM 호출 실패" in meta["fail_detail"]
+        # 조립 게이트가 이 상태를 실패로 본다 — completed로 못 넘어간다.
+        from src.workflows.write_loop import auto_select_survivors
+
+        _, gate = check_assembled(auto_select_survivors(result))
+        assert gate.passed is False
+
+    async def test_truncated_response_excluded_and_recorded(self):
+        """max_tokens 컷 토막은 후보에서 제외되고(재생성 1회 포함) 실패로 기록된다."""
+
+        class _Truncated(_StubClient):
+            async def complete(self, request: CompletionRequest) -> CompletionResponse:
+                self.calls.append(request)
+                return CompletionResponse(
+                    content="문장 중간에 끊긴 본문 (출처 ",
+                    input_tokens=1,
+                    output_tokens=1,
+                    model=request.model,
+                    stop_reason="max_tokens",
+                )
+
+        state, chunk = _mk_state(["절단절"])
+
+        async def retrieve(section: SectionPlan) -> list[RetrievedChunk]:
+            return [chunk]
+
+        stub = _Truncated("")
+        result = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        plan = state.section_plan[0]
+        cset = result.section_candidates[0]
+        assert cset.survivors == []  # 토막이 '완성 절'로 채택되지 않는다
+        assert len(stub.calls) == 2  # 원호출 + 재생성 1회
+        meta = result.section_meta[plan.section_id]
+        assert meta["write_failed"] is True
+        assert "미완결" in meta["fail_detail"]
 
 
 # ---------- qa_select_payload (survivors 필터 + 경고 노출) ----------
@@ -212,7 +543,8 @@ class TestSelectionAndAssembly:
         drafts, result = check_assembled(state)
         assert len(drafts) == 1
         assert result.passed is False
-        assert "누락 섹션 1개" in result.detail
+        assert "미작성 절 1개" in result.detail
+        assert "2.1" in result.detail
 
 
 # ---------- overlay_working_copy (검토 중 편집 → 조립 반영) ----------
@@ -253,3 +585,231 @@ class TestOverlayWorkingCopy:
         drafts, result = check_assembled(state)
         assert result.passed is True
         assert [d.content for d in drafts] == ["직접 채운 본문"]
+
+
+# ---------- 서사 사슬 (실험 C: 장 내 순차 + 요약 전달) ----------
+
+
+class TestNarrativeChain:
+    def _chunk(self) -> RetrievedChunk:
+        return RetrievedChunk(
+            chunk_id=uuid4(), source_id=uuid4(), content="근거 본문 " * 60, score=0.9
+        )
+
+    def _plan(self) -> list[SectionPlan]:
+        return [
+            SectionPlan(chapter_number=1, section_number=1, title="현황"),
+            SectionPlan(chapter_number=1, section_number=2, title="과제"),
+            SectionPlan(chapter_number=2, section_number=1, title="제도개요"),
+        ]
+
+    @staticmethod
+    async def _fake_summarize(*, label, title, content, **_kw):
+        return {"section": label, "title": title, "summary": f"{label} 요약문", "topics": [label]}
+
+    async def test_chapter_mode_passes_same_chapter_summaries_only(self, monkeypatch):
+        """1.2는 1.1 요약을 받고, 2.1(다른 장)은 1장 요약을 받지 않는다(장 간 병렬)."""
+        monkeypatch.setattr(settings, "write_narrative_chain", "chapter")
+        monkeypatch.setattr("src.workflows.write_loop.summarize_section", self._fake_summarize)
+        plan = self._plan()
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=plan)
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        stub = _StubClient("본문 서술이 길게 이어집니다. " * 30)
+        result = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+
+        with_chain = [str(c.messages) for c in stub.calls if "1.1 요약문" in str(c.messages)]
+        assert len(with_chain) == 1, "1.1 요약은 1.2 프롬프트에만 실려야 한다"
+        assert "과제" in with_chain[0]  # 받은 쪽이 1.2인지 확인
+        assert all(
+            "요약문" not in str(c.messages) or "1.1 요약문" in str(c.messages) for c in stub.calls
+        )
+        # 완료 절마다 사슬 엔트리가 meta에 적립된다(재개 복원용)
+        for s in plan:
+            assert result.section_meta[s.section_id].get("chain_summary", {}).get("section")
+
+    async def test_full_mode_crosses_chapters(self, monkeypatch):
+        """full 모드에선 2.1이 1장 요약(1.1·1.2)을 받는다 - 누적 전달."""
+        monkeypatch.setattr(settings, "write_narrative_chain", "full")
+        monkeypatch.setattr("src.workflows.write_loop.summarize_section", self._fake_summarize)
+        plan = self._plan()
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=plan)
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        stub = _StubClient("본문 서술이 길게 이어집니다. " * 30)
+        await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        crossing = [
+            str(c.messages)
+            for c in stub.calls
+            if "1.1 요약문" in str(c.messages) and "1.2 요약문" in str(c.messages)
+        ]
+        assert len(crossing) == 1, "1.1+1.2 요약을 함께 받는 건 2.1뿐이어야 한다"
+        assert "제도개요" in crossing[0]
+
+    async def test_off_mode_never_summarizes(self, monkeypatch):
+        """기본(off)에선 요약 호출도 주입도 없다 - A/B 기준선 보존."""
+        monkeypatch.setattr(settings, "write_narrative_chain", "off")
+        called = []
+
+        async def spy(**kw):
+            called.append(kw)
+            return None
+
+        monkeypatch.setattr("src.workflows.write_loop.summarize_section", spy)
+        plan = self._plan()
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=plan)
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        stub = _StubClient("본문 서술이 길게 이어집니다. " * 30)
+        result = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        assert called == []
+        assert all("chain_summary" not in result.section_meta[s.section_id] for s in plan)
+
+    async def test_summarize_failure_does_not_block(self, monkeypatch):
+        """요약이 전부 실패해도 작성은 완주한다 - 사슬은 보조 정보다."""
+        monkeypatch.setattr(settings, "write_narrative_chain", "chapter")
+
+        async def broken(**kw):
+            return None
+
+        monkeypatch.setattr("src.workflows.write_loop.summarize_section", broken)
+        plan = self._plan()
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=plan)
+
+        async def retrieve(section):
+            return [self._chunk()]
+
+        stub = _StubClient("본문 서술이 길게 이어집니다. " * 30)
+        result = await run_write_loop(state, retrieve=retrieve, client=stub, n=1)
+        assert len(result.section_candidates) == 3
+        assert all(cs.survivors for cs in result.section_candidates)
+
+
+# ---------- 용어 규칙 주입 (term_entries → guidance) ----------
+
+
+class TestTermInjection:
+    def _entry(self, source_id) -> dict:
+        return {
+            "ko": None,
+            "en": "operational commencement",
+            "abbr": None,
+            "definition": "Supply arrangement start year - equivalent to operational commencement",
+            "source_title": "RE100 reporting guidance",
+            "source_id": str(source_id),
+        }
+
+    async def test_matching_term_reaches_prompt_and_meta(self):
+        s1 = SectionPlan(chapter_number=1, section_number=1, title="개요")
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[s1])
+        sid = uuid4()
+        chunk = RetrievedChunk(
+            chunk_id=uuid4(),
+            source_id=sid,
+            content="claims with operational commencement before 2024 " * 10,
+            score=0.9,
+        )
+
+        async def retrieve(section):
+            return [chunk]
+
+        client = _StubClient("본문 (출처 1)")
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=client, n=1, term_entries=[self._entry(sid)]
+        )
+        prompts = [r.messages[0].content for r in client.calls]
+        assert any("용어 규칙" in p and "RE100 reporting guidance의 정의" in p for p in prompts)
+        meta = result.section_meta[s1.section_id]
+        assert meta.get("term_rules") == ["operational commencement"]
+
+    async def test_unmatched_term_stays_out(self):
+        s1 = SectionPlan(chapter_number=1, section_number=1, title="개요")
+        state = ProjectState(user_id=uuid4(), topic="주제", section_plan=[s1])
+        chunk = RetrievedChunk(
+            chunk_id=uuid4(), source_id=uuid4(), content="전혀 무관한 근거 본문 " * 20, score=0.9
+        )
+
+        async def retrieve(section):
+            return [chunk]
+
+        client = _StubClient("본문 (출처 1)")
+        result = await run_write_loop(
+            state, retrieve=retrieve, client=client, n=1, term_entries=[self._entry(uuid4())]
+        )
+        assert all("용어 규칙" not in r.messages[0].content for r in client.calls)
+        assert "term_rules" not in result.section_meta[s1.section_id]
+
+
+class TestAutoChartConversion:
+    """작성 직후 표 → 차트 변환 — 사람 없이도 그래프가 실리는 유일한 경로."""
+
+    _TABLE = """
+
+표: 주요국 투자 현황
+(단위: 억 달러)
+| 국가 | 투자액 |
+|---|---|
+| 미국 | 120 |
+| 중국 | 95 |
+| 한국 | 30 |
+"""
+
+    async def test_적합한_표는_차트가_되어_본문에_남는다(self):
+        state, chunk = _mk_state(["개요"])
+
+        async def retrieve(section):
+            return [chunk]
+
+        client = _StubClient("본문입니다. [1] " * 30 + self._TABLE)
+        result = await run_write_loop(state, retrieve=retrieve, client=client, n=1)
+
+        content = result.section_candidates[0].survivors[0].draft.content
+        assert "```chart" in content
+        assert "series: 투자액 = 120 | 95 | 30" in content  # 값은 표 셀 그대로
+        assert "| 미국 | 120 |" in content  # 원본 표는 펜스 안에 남는다
+        assert result.section_meta[state.section_plan[0].section_id]["auto_charts"] == ["bar"]
+
+    async def test_적합하지_않은_표는_그대로_둔다(self):
+        """서술 열뿐인 표 — 바꿀 게 없으면 본문도 meta도 건드리지 않는다."""
+        state, chunk = _mk_state(["개요"])
+
+        async def retrieve(section):
+            return [chunk]
+
+        narrative = """
+
+표: 주요국 동향
+| 구분 | 주요 동향 |
+|---|---|
+| EU | 수소환원제철 가속 |
+| 일본 | 시험설비 지원 확대 |
+| 한국 | 로드맵 추진 |
+"""
+        client = _StubClient("본문입니다. [1] " * 30 + narrative)
+        result = await run_write_loop(state, retrieve=retrieve, client=client, n=1)
+
+        content = result.section_candidates[0].survivors[0].draft.content
+        assert "```chart" not in content
+        assert "| EU | 수소환원제철 가속 |" in content
+        assert "auto_charts" not in result.section_meta[state.section_plan[0].section_id]
+
+    async def test_사실_대장은_차트가_생겨도_같은_값을_적립한다(self):
+        """적립은 변환 전 표를 읽는다 — 스펙 줄이 'series'라는 지표로 쌓이면 안 된다."""
+        state, chunk = _mk_state(["개요"])
+
+        async def retrieve(section):
+            return [chunk]
+
+        client = _StubClient("본문입니다. [1] " * 30 + self._TABLE)
+        result = await run_write_loop(state, retrieve=retrieve, client=client, n=1)
+
+        entries = result.section_meta[state.section_plan[0].section_id]["ledger_entries"]
+        metrics = {e["metric"] for e in entries}
+        assert "series" not in metrics
+        assert {"미국", "중국", "한국"} <= metrics

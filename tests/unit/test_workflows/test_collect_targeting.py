@@ -43,6 +43,23 @@ class TestSectionBrief:
     def test_bare_section_is_title_only(self):
         assert _section_brief(_plan(1, 1, "개요")) == "1.1 개요"
 
+    def test_관점_질의_템플릿이_필수_검색어로_실린다(self):
+        """철강 실사고(2026-08-31 전수 조사): 특허분석 에이전트의 'patent analysis'
+        질의가 수집에 전달되지 않아 특허 자료가 코퍼스 0건이었다. 이름 나열만으론
+        수집기가 그 관점의 데이터를 검색할 이유를 모른다."""
+        brief = _section_brief(
+            _plan(4, 3, "특허분석", chapter_title="기술 및 특허 분석", analysts=["특허분석"])
+        )
+        assert "필수 검색어:" in brief
+        assert "patent analysis" in brief
+        # {topic} 자리에는 장+절 맥락이 들어간다 - 주제 통짜면 절 간 질의가 또 같아진다.
+        assert "기술 및 특허 분석" in brief
+
+    def test_모르는_에이전트는_조용히_건너뛴다(self):
+        brief = _section_brief(_plan(4, 3, "특허분석", analysts=["없는관점"]))
+        assert "필수 검색어" not in brief
+        assert "없는관점" in brief
+
 
 class TestChapterFocus:
     """_collect_sources의 focus 필터와 같은 규칙(챕터 그룹 → 겨냥 절만)."""

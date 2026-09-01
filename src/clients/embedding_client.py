@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import hashlib
+import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -19,6 +20,7 @@ import psutil
 import structlog
 from pydantic import BaseModel
 
+from src.clients.onnx_text_embedder import OnnxTextEmbedder, chars_budget_for_bytes
 from src.core.config import settings
 
 if TYPE_CHECKING:
@@ -64,19 +66,35 @@ class EmbeddingClient(ABC):
 
 
 class EmbeddingCache:
-    """Disk cache for embeddings, keyed by SHA-256 of the input text.
+    """Disk cache for embeddings, keyed by SHA-256 of (모델 지문 + 입력 텍스트).
 
     Files are sharded into 256 subdirectories using the first two hex chars
     of the key, so a single directory does not accumulate millions of files
     (which would slow down ext4 listings and inflate inode usage).
+
+    **지문이 키에 들어가는 이유.** 벡터는 텍스트만으로 결정되지 않는다 - 어느 모델을
+    어느 dtype으로 돌렸는지가 같이 결정한다. 지문 없이 텍스트만 해싱하면, 모델을
+    바꾸고 전량 재색인을 돌려도 **캐시에 있는 텍스트는 옛 벡터가 그대로 나온다**.
+    새 모델을 부르지도 않는다. 그러면 색인이 두 공간에 걸쳐 섞이고, 에러는 하나도
+    안 난다. 운영 캐시에 15,465건이 쌓여 있던 상태라 실제로 밟을 뻔했다(2026-08-20).
+
+    지문이 바뀌면 옛 항목은 그냥 매칭되지 않는다 - 지울 필요가 없고, 되돌리면 다시
+    쓰인다. 디스크만 차지하므로 한가할 때 청소하면 된다.
     """
 
-    def __init__(self, root: Path | str = "./cache/embeddings") -> None:
+    def __init__(self, root: Path | str = "./cache/embeddings", *, fingerprint: str = "") -> None:
         self.root = Path(root)
+        self._fingerprint = fingerprint
 
-    @staticmethod
-    def _key(text: str) -> str:
-        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    def _key(self, text: str) -> str:
+        # 길이 접두사로 지문과 본문을 구분한다 - 단순 이어붙이기는 다른 (지문, 텍스트)
+        # 쌍이 같은 문자열로 접히는 이론적 충돌이 있다.
+        h = hashlib.sha256()
+        fp = self._fingerprint.encode("utf-8")
+        h.update(len(fp).to_bytes(4, "big"))
+        h.update(fp)
+        h.update(text.encode("utf-8"))
+        return h.hexdigest()
 
     def _path_for(self, key: str) -> Path:
         return self.root / key[:2] / f"{key}.npy"
@@ -169,15 +187,14 @@ class BgeM3Client(EmbeddingClient):
                 host's total RAM.
             max_length: Override tokenizer truncation length.
         """
-        # 무거운 외부 임포트는 인스턴스 생성 시점까지 미룸 — 모듈 import만으로
-        # onnxruntime·transformers를 끌어오면 단위 테스트 콜렉션 비용이 크게 늘어남.
-        import onnxruntime as ort
-        from transformers import AutoTokenizer
-
         resolved_path = Path(model_path or settings.embedding_model_path)
         self._model_dir = resolved_path
         self._device = device
-        self._cache = cache or EmbeddingCache(root=settings.embedding_cache_dir)
+        # 지문은 모델 디렉터리 이름이다 - int8/fp16 폴더가 갈리므로 dtype까지 구분된다.
+        # 이게 없으면 모델을 바꿔도 캐시가 옛 벡터를 그대로 돌려준다(EmbeddingCache 참조).
+        self._cache = cache or EmbeddingCache(
+            root=settings.embedding_cache_dir, fingerprint=resolved_path.name
+        )
         self._max_length = max_length or self.MAX_LENGTH
 
         # 호스트 RAM에 따라 동적 배치 상한 자동 조정. 외부에서도 같은 값을 참조할 수
@@ -217,15 +234,23 @@ class BgeM3Client(EmbeddingClient):
             else ["CPUExecutionProvider"]
         )
         t0 = time.perf_counter()
-        self._session = ort.InferenceSession(
-            str(resolved_path / "model.onnx"),
+        # 추론 알맹이는 onnx_text_embedder 한 벌만 쓴다 - GPU 서비스도 같은 파일을
+        # import하므로 토크나이즈·풀링·정규화가 양쪽에서 갈라질 수 없다.
+        self._embedder = OnnxTextEmbedder(
+            resolved_path,
+            max_length=self._max_length,
+            max_chars_per_batch=self._max_chars_per_batch,
             providers=providers,
         )
-        self._tokenizer = AutoTokenizer.from_pretrained(str(resolved_path))
         logger.info(
             "embedding.client.init.completed",
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
         )
+
+    @property
+    def tokenizer_lock(self) -> threading.Lock:
+        """토크나이저 직렬화 락 — 이 토크나이저를 쓰는 모든 곳이 같은 락을 잡아야 한다."""
+        return self._embedder.tokenizer_lock
 
     @property
     def tokenizer(self) -> PreTrainedTokenizerBase:
@@ -235,7 +260,7 @@ class BgeM3Client(EmbeddingClient):
         twice and ensures truncation/special-token handling stays consistent
         across embedding and any tokenizer-based estimators.
         """
-        return self._tokenizer
+        return self._embedder.tokenizer
 
     @staticmethod
     def auto_max_chars_per_batch() -> int:
@@ -249,12 +274,9 @@ class BgeM3Client(EmbeddingClient):
         definition) can scale their own parameters to the host without
         duplicating the tier table.
         """
-        total_ram_gb = psutil.virtual_memory().total / 1024**3
-        if total_ram_gb >= 30:
-            return 128_000
-        if total_ram_gb >= 14:
-            return BgeM3Client.MAX_CHARS_PER_BATCH
-        return 16_000
+        # 티어 표는 chars_budget_for_bytes 한 곳에만 둔다 - GPU 서비스는 같은 함수에
+        # VRAM 여유분을 넣는다. 표가 두 벌이 되면 한쪽만 고쳐지고 다른 쪽이 OOM 난다.
+        return chars_budget_for_bytes(psutil.virtual_memory().total)
 
     @staticmethod
     def _make_dynamic_batches(texts: list[str], max_chars: int) -> list[list[str]]:
@@ -410,24 +432,8 @@ class BgeM3Client(EmbeddingClient):
         return [r for r in results if r is not None]
 
     def _encode(self, texts: list[str]) -> np.ndarray:
-        """Run one ONNX forward pass and return (N, DIMENSION) L2-normalized vectors."""
-        enc = self._tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            return_tensors="np",
-            max_length=self._max_length,
-        )
-        outputs = self._session.run(
-            None,
-            {
-                "input_ids": enc["input_ids"].astype(np.int64),
-                "attention_mask": enc["attention_mask"].astype(np.int64),
-            },
-        )
-        token_embeddings = outputs[0]  # (batch, seq, hidden)
-        cls = token_embeddings[:, 0, :]
-        # 코사인 유사도 검색용 — clip으로 0-벡터(이론상 발생 안 함)에서 ZeroDivisionError 방어.
-        norms = np.linalg.norm(cls, axis=1, keepdims=True)
-        normalized = cls / np.clip(norms, a_min=1e-12, a_max=None)
-        return normalized.astype(np.float32)
+        """한 번의 ONNX 전방계산 — (N, DIMENSION) L2 정규화 벡터.
+
+        배치 분할은 호출부(embed_batch)가 이미 했으므로 여기서는 그대로 넘긴다.
+        """
+        return self._embedder.encode_batch(texts)

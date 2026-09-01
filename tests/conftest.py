@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
 
@@ -21,7 +22,13 @@ from src.db.models.user import User
 from src.infrastructure.auth.password_handler import hash_password
 from src.main import app
 
-TEST_DB_NAME = "rown_test"
+# 테스트 DB 이름은 **프로세스마다 다르다**. 예전엔 "rown_test" 하나를 공유해서 두 세션이
+# 동시에 pytest를 돌리면 뒤에 시작한 쪽의 DROP DATABASE ... WITH (FORCE)가 앞 세션의 DB를
+# 통째로 날렸다. 결과는 느려지는 정도가 아니라 **없는 실패를 만들어 내는 것**이었다
+# (2026-08-25~26 실측: 유닛 스위트가 4분 → 17~30분, 매번 다른 테스트가 무작위로 실패).
+# 이름을 갈라 두면 동시 실행이 서로를 밟지 않는다. CI가 이름을 고정하고 싶으면 env로 준다.
+TEST_DB_NAME = os.environ.get("ROWN_TEST_DB") or f"rown_test_{os.getpid()}"
+_STALE_PREFIX = "rown_test_"
 
 
 @pytest.fixture(autouse=True)
@@ -40,12 +47,37 @@ def _swap_db_name(url: str, dbname: str) -> str:
     return f"{base}/{dbname}"
 
 
+async def _drop_orphan_test_databases(conn) -> None:
+    """죽은 pytest 프로세스가 남긴 rown_test_* DB만 걷어낸다.
+
+    프로세스별 이름을 쓰면 강제 종료된 런의 DB가 쌓인다. **살아 있는 프로세스의 것은
+    절대 건드리지 않는다** — 이름 뒤의 pid가 지금 살아 있는지로 판정한다(연결 수로
+    판정하면 테스트 사이에 연결이 잠깐 0인 세션의 DB를 날린다).
+    """
+    import psutil
+
+    rows = (
+        await conn.execute(
+            text("SELECT datname FROM pg_database WHERE datname LIKE :p"),
+            {"p": f"{_STALE_PREFIX}%"},
+        )
+    ).all()
+    for (name,) in rows:
+        if name == TEST_DB_NAME:
+            continue
+        suffix = name[len(_STALE_PREFIX) :]
+        if not suffix.isdigit() or psutil.pid_exists(int(suffix)):
+            continue
+        await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+
+
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def _ensure_test_database() -> AsyncIterator[None]:
-    """Create the rown_test database (drop if exists) for the test session."""
+    """이 프로세스 전용 테스트 DB를 만든다(있으면 지우고 새로)."""
     admin_url = _swap_db_name(settings.database_url, "postgres")
     admin_engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
     async with admin_engine.connect() as conn:
+        await _drop_orphan_test_databases(conn)
         await conn.execute(text(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}" WITH (FORCE)'))
         await conn.execute(text(f'CREATE DATABASE "{TEST_DB_NAME}"'))
     await admin_engine.dispose()

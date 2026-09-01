@@ -24,7 +24,16 @@ export const promptsHandlers = [
 
   http.post(url("prompts/personal"), async ({ request }) => {
     const body = (await request.json()) as Partial<PersonalPrompt>;
-    if (!body.kind || !body.name?.trim() || !body.content?.trim()) {
+    // 실백엔드 계약과 동일: 에이전트는 칸(spec.sections)만 채워도 저장된다(서버가 조합).
+    const sections = Object.entries(body.spec?.sections ?? {}).filter(([, v]) => v.trim());
+    const composed =
+      body.kind === "agent" && sections.length > 0
+        ? [`# ${body.name ?? ""} 전문 에이전트`, ...sections.map(([k, v]) => `## ${k}\n${v}`)].join(
+            "\n\n",
+          )
+        : "";
+    const content = body.content?.trim() ? body.content : composed;
+    if (!body.kind || !body.name?.trim() || !content) {
       return HttpResponse.json(
         { error: { code: "VALIDATION_ERROR", message: "kind·name·content가 필요합니다." } },
         { status: 422 },
@@ -34,11 +43,12 @@ export const promptsHandlers = [
       id: nextPromptId(),
       kind: body.kind,
       name: body.name.trim(),
-      content: body.content,
+      content,
       base_ref: body.base_ref ?? null,
       cat: body.cat ?? null,
       description: body.description ?? null,
       spec: { queries: [], sections: {}, ...(body.spec ?? {}) },
+      is_public: false,
       updated_at: new Date().toISOString(),
     };
     PERSONAL_PROMPTS.unshift(created);

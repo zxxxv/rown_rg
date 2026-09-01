@@ -10,8 +10,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from functools import lru_cache
+from typing import NamedTuple
 from uuid import UUID
 
+import structlog
+
+from src.core.citations import MARK_RE, numbers_in_order
 from src.core.types import (
     CheckSeverity,
     GateResult,
@@ -22,6 +27,8 @@ from src.core.types import (
     SectionPlan,
     StaticCheckReport,
 )
+
+logger = structlog.get_logger(__name__)
 
 # 기본 길이 경계 (문자 수) — 필요하면 호출 시 오버라이드.
 DEFAULT_MIN_CHARS = 200
@@ -36,6 +43,8 @@ _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
 # 비표준 인용 마커 — 대괄호 표기 중 정상 [n]이 아닌 것(2026-08-05 실측:
 # '[배경자료 제공됨]', '[배경 맥락]', '[근거 없음 - …]' 등 모델이 발명한 표기).
 # 마크다운 링크 [텍스트](url)와 그림/표 캡션([그림 1-1])은 정상 표기라 제외한다.
+# [n]은 직접 인용 표기라 계속 허용한다 — 참고 표기는 (출처 n)으로 따로 쓴다
+# (src/core/citations.py). 대괄호 남용은 아래 check_quote_marks가 따로 본다.
 _BRACKET_RE = re.compile(r"\[([^\[\]\n]{1,40})\](?!\()")
 _ALLOWED_BRACKET_RE = re.compile(r"^(?:\d+|그림\s?[\d\-. ]+|표\s?[\d\-. ]+)$")
 
@@ -56,6 +65,22 @@ def check_citation_resolves(draft: SectionDraft, valid_chunk_ids: set[UUID]) -> 
         severity=CheckSeverity.HARD,
         passed=passed,
         detail=detail,
+    )
+
+
+def check_complete(draft: SectionDraft) -> GateResult:
+    """생성이 정상 종료로 완결됐는지 — max_tokens 컷·refusal 등은 HARD 제외.
+
+    길이 검사(bounds)는 SOFT라 문장 중간에 끊긴 토막도 통과한다 — 216자 토막이
+    '완성 절'로 조립된 실사고(2026-08-13, 7.1절)의 구멍. 미완결 초안은 후보에서
+    제외해 write 루프의 재생성을 태우고, 그래도 실패하면 절 누락으로 표면화된다.
+    """
+    passed = not draft.incomplete_reason
+    return GateResult(
+        check="complete",
+        severity=CheckSeverity.HARD,
+        passed=passed,
+        detail=None if passed else f"생성 미완결 (stop_reason={draft.incomplete_reason})",
     )
 
 
@@ -84,8 +109,341 @@ def check_renderable(draft: SectionDraft) -> GateResult:
 
 
 def _normalize_number(token: str) -> str:
-    """콤마 제거 + 후행 % 제거 — 매칭용 정규화."""
-    return token.replace(",", "").rstrip("%")
+    """콤마·공백 제거 + 후행 % 제거 — 매칭용 정규화."""
+    return token.replace(",", "").replace(" ", "").rstrip("%")
+
+
+# ── 한↔영 자릿수 환산 ──────────────────────────────────────────────────────
+# 영문 코퍼스에서 수치 검출기가 통째로 무력해진 원인(2026-08-24 COMPA 실측:
+# 정밀도 14.8%). 본문은 "70.5억 달러"라고 쓰고 근거는 "USD 7.05 billion"이라 적는다.
+# 콤마만 지우는 부분문자열 대조로는 영영 만나지 못해 전부 '무근거'로 떨어졌다.
+_KOR_SCALE: dict[str, int] = {
+    "조": 10**12,
+    # 기계번역 페이지는 billion을 "십억"으로 직역한다("USD 252.5 십억" — 2026-08-27
+    # 철강 런 특수강 자료 실측). 이 단위가 어휘에 없으면 억 단위 본문과 영영 못 만난다.
+    "십억": 10**9,
+    "억": 10**8,
+    # 합성 단위 — "9천만"을 "9천"으로 읽으면 1,826억대 수가 1,826.500009억이 되어
+    # 코퍼스의 "1,826.59 Billion"과 영영 못 만난다(2026-08-27 철강 런 실측 3건).
+    "천만": 10**7,
+    "백만": 10**6,
+    "십만": 10**5,
+    "만": 10**4,
+    "천": 10**3,
+}
+_KOR_UNIT_ALT = r"천만|백만|십만|십억|[조억만천]"
+_KOR_NUM_PART = rf"\d[\d,]*(?:\.\d+)?\s*(?:{_KOR_UNIT_ALT})"
+# 자리 단위를 이어 쓴 합성 표기("2억 450만")까지 한 토큰으로 본다 — 쪼개 읽으면
+# 2와 450이 되어 코퍼스의 "204.5 million"과 절대 안 맞고, 450은 주입 의심으로 샌다.
+_KOR_NUMBER_RE = re.compile(rf"{_KOR_NUM_PART}(?:\s*{_KOR_NUM_PART})*")
+# 영문 자릿수 표기 — 값을 이 단위로 환산한 가수(mantissa)를 후보로 만든다.
+_EN_SCALES: tuple[float, ...] = (10**12, 10**9, 10**6, 10**3)
+# 각 자릿수를 근거가 적는 낱말 — 짧은 가수는 이게 붙어야 인정한다(아래).
+_SCALE_WORDS: dict[float, str] = {
+    10**12: r"trillion|tn",
+    10**9: r"billion|bn",
+    10**6: r"million|mn",
+    10**3: r"thousand|k",
+}
+# 가수가 이보다 짧으면 그 자체로는 변별력이 없다 — "10억"의 가수는 "1"이라
+# 숫자가 하나라도 든 아무 글에나 붙는다(2026-08-27 실측, 아래 number_in_text 참조).
+_MIN_MANTISSA_DIGITS = 3
+# 가수 상한 — 시장 보고서는 "$ 1,826.59 Billion"처럼 4자리 billion을 그대로 쓴다.
+# 1000에서 끊으면 조 단위 한국어 표기("1조 8,265억…")가 그 원문과 못 만난다
+# (2026-08-27 철강 런 실측 5건: 1,004.9·1,308.7·1,826.59·1,890.01·2,658.85).
+_MAX_MANTISSA = 10**4
+
+
+def korean_magnitude(token: str) -> float | None:
+    """한국어 큰 수 표기의 값 — "2억 450만" → 204500000.0. 아니면 None."""
+    text = token.replace(",", "")
+    total, last, found = 0.0, None, False
+    for m in re.finditer(rf"(\d+(?:\.\d+)?)\s*({_KOR_UNIT_ALT})", text):
+        scale = _KOR_SCALE[m.group(2)]
+        if last is not None and scale >= last:
+            return None  # 자리 단위가 내림차순이 아니면 한 수가 아니다
+        total += float(m.group(1)) * scale
+        last, found = scale, True
+    return total if found else None
+
+
+def _trim(value: float) -> str:
+    """소수 꼬리 0을 걷은 표기 — 7.05·46.1·204.5처럼 근거에 적히는 꼴."""
+    text = f"{value:.4f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def number_variants(token: str) -> list[str]:
+    """이 수치가 근거에 적혔을 만한 표기들(정규화된 문자열).
+
+    한국어 큰 수는 영문 자릿수로 환산한 가수까지 후보에 넣는다: "70.5억"이면
+    7.05(billion)·70500000000, "4,610만"이면 46.1(million)·46100000.
+    """
+    norm = _normalize_number(token)
+    out = [norm]
+    value = korean_magnitude(token)
+    if value is None:
+        return out
+    out.append(_trim(value))  # 자리 단위를 푼 온전한 숫자
+    for scale in _EN_SCALES:
+        mantissa = value / scale
+        # 짧은 가수는 맨 문자열로 내보내지 않는다 — 낱말을 요구하는 쪽은
+        # number_in_text가 맡는다(SQL LIKE 선별은 좁게 가는 편이 안전하다).
+        if (
+            0.1 <= mantissa < _MAX_MANTISSA
+            and len(_trim(mantissa).replace(".", "")) >= _MIN_MANTISSA_DIGITS
+        ):
+            out.append(_trim(mantissa))
+    # 자리 단위 재표기 — 원문은 "1조 6,901억"을 "16,901 억원"으로(PDF 표),
+    # "6,700만"을 "67백만톤"으로(통계 자료), "2,443.2억"을 "USD 244.32 십억"으로
+    # (기계번역 페이지) 적는다(2026-08-27 철강 런 전수 실측). 콤마는 대조 눈금이
+    # 걷어내므로 맨 숫자+단위만 만든다. 소수는 두 자리까지(십억 환산은 억의 소수
+    # 한 자리가 두 자리가 된다: 2,443.2억 → 244.32십억).
+    for unit, unit_scale in (
+        ("조", 10**12),
+        ("십억", 10**9),
+        ("억", 10**8),
+        ("백만", 10**6),
+        ("만", 10**4),
+    ):
+        flat = round(value / unit_scale, 2)
+        if 1 <= flat < 10**8 and abs(value / unit_scale - flat) < 1e-6:
+            text = _trim(flat)
+            if f"{text}{unit}" != norm:
+                out.append(f"{text}{unit}")
+                out.append(f"{text} {unit}")
+    # 소수 → 합성 표기 — "2,443.2억"을 원문(특수강 번역 페이지 실측)은
+    # "2443억 2천만 달러"로 적는다. 소수 한 자리만: .1억=1천만, .1조=1천억.
+    m_dec = re.match(r"^(\d+)\.(\d)(조|억)$", norm)
+    if m_dec and m_dec.group(2) != "0":
+        whole, frac, unit = m_dec.groups()
+        sub = "천억" if unit == "조" else "천만"
+        out.append(f"{whole}{unit} {frac}{sub}")
+        out.append(f"{whole}{unit}{frac}{sub}")
+    # 공백을 넣어 쓴 한국어 표기도 근거에 있을 수 있다("2억 450만").
+    spaced = re.sub(r"([조억만천])(\d)", r"\1 \2", norm)
+    if spaced != norm:
+        out.append(spaced)
+    # 숫자와 자리 단위 사이 공백 - PDF 조판이 "974 억원"처럼 갈라 놓는다(2026-08-27
+    # v6 최종 3건 정독: 실재하는 974억이 이 공백 하나로 무근거에 남았다).
+    unit_spaced = re.sub(r"(\d)\s*([조억만천])", r"\1 \2", norm)
+    if unit_spaced != norm:
+        out.append(unit_spaced)
+    return list(dict.fromkeys(out))
+
+
+@lru_cache(maxsize=2048)
+def _short_mantissa_patterns(token: str) -> tuple[re.Pattern[str], ...]:
+    """짧은 가수를 자릿수 낱말과 함께 찾는 패턴 — "10억"이면 `1 billion`.
+
+    가수가 1~2자리면 맨 부분문자열 대조가 무너진다: "10억"의 가수 "1"은 "제1장"에도
+    "2018"에도 들어 있어, **딱 떨어지는 큰 수는 숫자가 하나라도 든 아무 글에나 붙었다**
+    (2026-08-27 실측 — AI 암 진단 시장 "10억 달러" 주장이 영문 그림 캡션
+    "Fig. 31 Others market, 2018 - 2030 (USD Million)"에 근거 있음으로 판정됐고,
+    무근거 경고가 0건이라 화면에는 아무 표시도 안 떴다).
+
+    그렇다고 환산을 버리면 코퍼스의 8할이 영문인 지금 "USD 1 billion"을 영영 못 만난다.
+    그래서 버리는 대신 **낱말을 요구한다** — 자릿수 낱말이 바로 뒤에 오면 그 "1"은
+    우연이 아니다. `1.0 billion`처럼 소수 꼬리를 붙여 쓴 표기도 받는다.
+    """
+    value = korean_magnitude(token)
+    if value is None:
+        return ()
+    out: list[re.Pattern[str]] = []
+    for scale, words in _SCALE_WORDS.items():
+        mantissa = value / scale
+        if not 0.1 <= mantissa < 1000:
+            continue
+        text = _trim(mantissa)
+        if len(text.replace(".", "")) >= _MIN_MANTISSA_DIGITS:
+            continue  # 변별력이 있어 number_variants가 이미 맨 문자열로 내보냈다
+        out.append(re.compile(rf"(?<!\d){re.escape(text)}(?:\.0+)?\s*(?:{words})\b", re.IGNORECASE))
+    return tuple(out)
+
+
+@lru_cache(maxsize=4096)
+def _variant_patterns(token: str) -> tuple[re.Pattern[str], ...]:
+    """표기 후보를 **자릿수 경계와 함께** 찾는 패턴.
+
+    맨 `in` 대조는 수를 토막으로 만난다: "4,610만"의 가수 46.1이 "46.15 million"에,
+    "1,623억"의 162.3이 "2162.3"에 걸린다(2026-08-27 실측). 앞뒤로 숫자가 붙으면
+    다른 수다. 소수 뒤의 0은 같은 수라 받는다("46.1"↔"46.10").
+    """
+    out: list[re.Pattern[str]] = []
+    for v in number_variants(token):
+        if not v:
+            continue
+        tail = r"0*(?!\d)" if "." in v else r"(?!\d)"
+        out.append(re.compile(rf"(?<!\d){re.escape(v)}{tail}"))
+        # 소수 꼬리가 전부 0인 표기("50.0")는 근거의 정수 표기("50%")와 같은 수다
+        # (2026-08-28 v7 심판 실측 3건: 석유화학 50.0%가 근거 50%를 못 만나 무근거로
+        # 남았다). 정수형도 후보에 넣되, "50.5"를 50으로 오인하지 않게 소수점+숫자
+        # 연속은 경계에서 금지한다("50.0" 자체는 위 원 패턴이 이미 받는다).
+        head, dot, frac = v.partition(".")
+        if dot and frac and set(frac) == {"0"} and head.lstrip("-").isdigit():
+            out.append(re.compile(rf"(?<!\d){re.escape(head)}(?!\d|\.\d)"))
+    return tuple(out)
+
+
+def match_patterns(token: str) -> tuple[re.Pattern[str], ...]:
+    """이 수치의 모든 표기를 찾는 패턴 전부 — 경계 있는 변형 + 낱말 요구 짧은 가수.
+
+    number_in_text와 같은 눈금의 **위치 탐색용**. 코퍼스 재검색(_locate_tokens)이
+    _variant_patterns만 쓰면 "91억"의 가수 9.1이 목록에 없어(짧은 가수 규칙)
+    "USD 9.1 billion"을 영영 못 찾고, 실재하는 수치가 critical 창작으로 부활한다
+    (2026-08-27 v6 실측: 91억·72억 2건이 정확히 이 회귀였다).
+    """
+    return _variant_patterns(token) + _short_mantissa_patterns(token)
+
+
+def locate_probes(token: str) -> list[str]:
+    """SQL LIKE 사전 선별용 문자열 — 자릿수 환산 표기를 포함한다.
+
+    짧은 가수를 맨 문자열로 내보내면 안 된다 — "100만"의 가수 "1"은 LIKE %1%가
+    되어 사실상 모든 청크에 맞고, 후보 상한(limit)이 쓰레기로 차서 진짜 "100만"
+    청크가 밀려난다(2026-08-27 실측: 같은 문장의 610·19.8%는 흡수되는데 100만만
+    무근거로 남았다). 짧은 가수는 자릿수 낱말과 붙인 결합 프로브("1 million")로
+    내보낸다 — 확인 쪽(_short_mantissa_patterns)과 같은 눈금이다.
+    """
+    out = list(number_variants(token))
+    value = korean_magnitude(token)
+    if value is not None:
+        for scale, words in _SCALE_WORDS.items():
+            mantissa = value / scale
+            if not 0.1 <= mantissa < _MAX_MANTISSA:
+                continue
+            text = _trim(mantissa)
+            if len(text.replace(".", "")) >= _MIN_MANTISSA_DIGITS:
+                if text not in out:
+                    out.append(text)
+            else:
+                for word in words.split("|"):
+                    for w in (word, word.capitalize()):
+                        probe = f"{text} {w}"
+                        if probe not in out:
+                            out.append(probe)
+    return out
+
+
+def short_mantissas(token: str) -> list[str]:
+    """자릿수 낱말 없이는 안 쓰는 짧은 가수 텍스트 — 같은 자료 스코프 전용.
+
+    코퍼스 전체에서 맨 "5.2"를 허용하면 홍수가 나지만, **인용한 자료 한 권 안**은
+    후보가 몇십 청크라 안전하다. 원문 표가 "$5.2 billion"을 맨 셀 "5.2"로 적는
+    것이 실측 무늬다(2026-08-27 v6 최후 1건: 관세수입 표의 5.2·5.7·18.3).
+    """
+    value = korean_magnitude(token)
+    if value is None:
+        return []
+    out: list[str] = []
+    for scale in _EN_SCALES:
+        mantissa = value / scale
+        if 0.1 <= mantissa < 1000:
+            text = _trim(mantissa)
+            if len(text.replace(".", "")) < _MIN_MANTISSA_DIGITS:
+                out.append(text)
+    # 한국어 자리 단위의 짧은 평탄값도 같은 자료 스코프에서는 잇는다 - 원문 표가
+    # 머리에 "(백만톤)"을 한 번 적고 셀엔 맨 수("일본(89)")만 두는 표기 실측
+    # (2026-08-28 철강 6.2: 89백만·81백만·72백만 3건이 이 무늬로 무근거 잔존).
+    for unit_scale in (10**8, 10**6, 10**4):
+        flat = value / unit_scale
+        if 1 <= flat < 100 and abs(flat - round(flat)) < 1e-9:
+            text = _trim(round(flat))
+            if text not in out:
+                out.append(text)
+    return list(dict.fromkeys(out))
+
+
+@lru_cache(maxsize=2048)
+def short_mantissa_bare_patterns(token: str) -> tuple[re.Pattern[str], ...]:
+    """짧은 가수의 경계 패턴(낱말 요구 없음) — short_mantissas와 짝, 같은 자료 전용."""
+    out = []
+    for text in short_mantissas(token):
+        tail = r"0*(?!\d)" if "." in text else r"(?!\d)"
+        out.append(re.compile(r"(?<!\d)" + re.escape(text) + tail))
+    return tuple(out)
+
+
+def number_in_text(token: str, haystack_norm: str) -> bool:
+    """수치가 근거(정규화 문자열)에 있는가 — 자릿수 환산 표기까지 본다."""
+    if any(p.search(haystack_norm) for p in _variant_patterns(token)):
+        return True
+    return any(p.search(haystack_norm) for p in _short_mantissa_patterns(token))
+
+
+def normalize_haystack(text: str) -> str:
+    """근거 대조용 정규화 — 콤마·강조 기호를 걷는다(공백은 남긴다)."""
+    return text.replace(",", "").replace("*", "")
+
+
+def numeric_mentions(text: str) -> list[str]:
+    """근거 대조에 쓸 수치 표기 — 한국어 큰 수는 자리 단위까지 한 덩이로 본다.
+
+    significant_numbers는 맨 숫자만 돌려준다(표 검사·정렬 표시가 그 규약을 쓴다).
+    근거 대조는 자리 단위를 알아야 환산이 되므로 여기서 따로 집는다: "2억 450만"을
+    2와 450으로 쪼개 읽으면 근거의 "204.5 million"과 영영 못 만나고, 남은 450은
+    엉뚱한 자료에 붙어 주입 의심으로 샌다(2026-08-24 COMPA 실측).
+    """
+    out: list[str] = []
+    # 한국어 큰 수를 먼저 집고 그 자리를 공백으로 덮는다 — 남은 글에서 맨 숫자를
+    # 평소 규칙대로 뽑되(앞뒤 문맥 규칙이 그대로 산다) 큰 수의 조각은 빠진다.
+    masked = list(text)
+    for m in _KOR_NUMBER_RE.finditer(text):
+        # "제21조"는 21조 원이 아니라 법조문이다(2026-08-27 실측: CBAM 규정 제21조가
+        # 무근거 '21조'로 남았다). '제'가 바로 앞에 붙은 큰 수 표기는 조문·회차라
+        # 수치 주장이 아니다 - 절·장·항 번호 제외와 같은 계열.
+        if m.start() > 0 and text[m.start() - 1] == "제":
+            # 자리도 덮는다 - 안 덮으면 아래 맨 숫자 추출이 '21'을 도로 줍는다.
+            for i in range(m.start(), m.end()):
+                masked[i] = " "
+            continue
+        token = m.group().strip()
+        if token not in out:
+            out.append(token)
+        for i in range(m.start(), m.end()):
+            masked[i] = " "
+    for token in _significant_numbers("".join(masked)):
+        if token not in out:
+            out.append(token)
+    return out
+
+
+def _is_year(token: str) -> bool:
+    """1900~2099의 네 자리 정수 — 연도 표기로 본다."""
+    if "." in token or "%" in token:
+        return False
+    digits = token.replace(",", "")
+    return len(digits) == 4 and digits.isdigit() and 1900 <= int(digits) <= 2099
+
+
+_YEAR_TOKEN_RE = re.compile(r"(?:19|20)\d{2}")
+
+
+def claim_years(text: str) -> tuple[str, ...]:
+    """주장 단위 속 명시 연도(1900~2099, 등장 순서·중복 제거).
+
+    수치 검사에서 빠지는 연도를 여기서만 되집는다 — 사전지식 주입 가드의 짝.
+    '2024년 기준 428개사'의 2024를 집어, 428이 코퍼스에서 그 연도 곁에 실재하는지
+    볼 수 있게 한다(연도 없는 수치 창작은 다른 검출기 몫).
+    """
+    out: list[str] = []
+    for m in _YEAR_TOKEN_RE.finditer(text):
+        prev = text[m.start() - 1] if m.start() > 0 else ""
+        nxt = text[m.end()] if m.end() < len(text) else ""
+        # 더 긴 수의 조각(52024)이나 소수 꼬리(3.2024)는 연도가 아니다.
+        if prev.isdigit() or prev == "." or nxt.isdigit():
+            continue
+        if m.group() not in out:
+            out.append(m.group())
+    return tuple(out)
+
+
+# 연.월 표기 — "2019.12"·"2021.6". 소수 꼴이라 연도 제외를 비켜가 '무근거 수치'
+# 오탐의 최다 원천이었다(2026-08-14 실측: 탄소규제 런 critical 26건 중 표본 22건이
+# 오탐, 다수가 연월·아포스트로피 축약 연도).
+_YEAR_MONTH_RE = re.compile(r"^(?:19|20)\d{2}\.(?:1[0-2]|0?[1-9])$")
+# 축약 연도 표기의 접두 문자 — "’25"·"’25.10"의 25는 수치가 아니라 2025년이다.
+_DATE_PREFIXES = "’'‘′`"
 
 
 def _significant_numbers(text: str) -> list[str]:
@@ -93,13 +451,126 @@ def _significant_numbers(text: str) -> list[str]:
 
     구조적 소수(1개·2장 등 한 자리)는 오탐이 많아 건너뛰고, 두 자리 이상이거나
     소수/퍼센트를 포함한 토큰만 검사 대상으로 삼는다.
+
+    연도(2029)는 뺀다. 원문은 같은 해를 '29년·2029.·`24~`26처럼 다르게 적어 부분문자열
+    매칭이 자주 빗나가는데, 화면에는 "근거에 없는 수치"로 뜬다(2026-08-11 실측: 경고
+    5건 중 3건이 연도). 같은 이유로 연.월(2019.12)과 아포스트로피 축약(’25.10)도
+    뺀다 — 날짜는 수치 주장이 아니고, 날짜 창작은 근거 동봉 판정이 문맥으로 본다.
+    pm_verify가 중복 인용 검사에서 연도를 뺀 것과 같은 이유다.
     """
     out: list[str] = []
+    excluded: list[tuple[str, str]] = []
     for m in _NUMBER_RE.finditer(text):
         token = m.group()
         digits = _normalize_number(token).replace(".", "")
+        # 절·장·항 번호는 수치 주장이 아니라 문서 안 길찾기다("1.1절 참조").
+        tail = text[m.end() : m.end() + 1]
+        if tail in ("절", "장", "항") and not token.endswith("%"):
+            excluded.append((token, "section_ref"))
+            continue
+        if _is_year(token):
+            excluded.append((token, "year"))
+            continue
+        if _YEAR_MONTH_RE.match(token):
+            excluded.append((token, "year_month"))
+            continue
+        # ’25·’25.10 — 아포스트로피 바로 뒤 숫자는 축약 연도(연.월)다. %가 붙었으면 수치.
+        if m.start() > 0 and text[m.start() - 1] in _DATE_PREFIXES and not token.endswith("%"):
+            excluded.append((token, "apostrophe_date"))
+            continue
+        # 라틴 문자에 붙은 숫자는 식별자 조각(RE100·B2B·S2)이지 수치 주장이 아니다
+        # (2026-08-14 실측: 캡션 미포착 37건 중 36건이 'RE100'의 100).
+        prev = text[m.start() - 1] if m.start() > 0 else ""
+        if prev.isascii() and prev.isalpha():
+            excluded.append((token, "term_digit"))
+            continue
+        # '년'이 바로 붙는 숫자는 기간·연차 표기(10년차·30년간) — 연도류와 같은 이유.
+        nxt = text[m.end()] if m.end() < len(text) else ""
+        if nxt in ("년", "월", "일") and not token.endswith("%"):
+            # 월·일도 같은 이유다 - "2025년 12월 22일"의 12·22는 날짜지 수치 주장이
+            # 아닌데, 무근거 경고와 오귀속 제안("12 → 출처 3")에 날짜 조각이 섞여
+            # 진짜를 가렸다(2026-08-27 오귀속 표본). 기간 표기(30일간·3개월)도 날짜류.
+            excluded.append((token, "date_suffix"))
+            continue
+        # ── 서지·식별자 — 문헌을 가리키는 숫자는 수치 주장이 아니다(2026-08-27 실측:
+        # 무근거 경고 표본 8건 중 3건이 과제번호·권호였다. 경고가 헛돌면 진짜가 묻힌다).
+        # 하이픈으로 앞 글자·숫자에 붙은 토막 — "No.RS-2025-02263167"의 02263167.
+        # %가 붙었으면 수치다("10-20%"의 20%). "2018 - 2030"은 공백이라 안 걸린다.
+        if (
+            prev in "-–"
+            and m.start() > 1
+            and text[m.start() - 2].isalnum()
+            and not token.endswith("%")
+        ):
+            excluded.append((token, "identifier_fragment"))
+            continue
+        # 앞자리 0 — 수량은 0으로 시작해 적지 않는다("02263167"). 소수(0.3)는 수치다.
+        if token[0] == "0" and len(token) > 1 and token[1] not in ".,":
+            excluded.append((token, "leading_zero"))
+            continue
+        # 권·호가 바로 붙는 숫자는 서지 좌표다("IEEE 회보 105권 12호").
+        if nxt in ("권", "호") and not token.endswith("%"):
+            excluded.append((token, "volume_issue"))
+            continue
         if "." in token or "%" in token or len(digits) >= 2:
             out.append(token)
+    if excluded:
+        # 제외는 조용히 버리지 않는다 — 사유별 집계를 남겨야 나중에 "제외 패턴이 진짜
+        # 수치를 먹었는가"(미탐율)를 셀 수 있다(2026-08-14 회귀셋 라벨링 방침).
+        logger.debug(
+            "significant_numbers.excluded",
+            n=len(excluded),
+            samples=[f"{t}({r})" for t, r in excluded[:8]],
+        )
+    return out
+
+
+def significant_numbers(text: str) -> list[str]:
+    """공개 진입점 - 근거 위치 표시(alignment)가 무근거 판정과 같은 추출을 쓰게 한다."""
+    return _significant_numbers(text)
+
+
+def normalize_number(token: str) -> str:
+    """공개 진입점 - significant_numbers와 짝. 매칭은 반드시 이 정규화를 거친다."""
+    return _normalize_number(token)
+
+
+def _numeric_value(token: str) -> float | None:
+    """토큰의 수치 값 — 한국어 자리 단위·콤마·%를 푼다."""
+    value = korean_magnitude(token)
+    if value is not None:
+        return value
+    try:
+        return float(_normalize_number(token))
+    except ValueError:
+        return None
+
+
+# 파생치 허용 오차 — 본문은 "약 3.9배"처럼 반올림해 적는다(24.12÷6.16=3.916).
+_DERIVED_TOLERANCE = 0.02
+
+
+def derived_numbers(text: str) -> set[str]:
+    """같은 주장 안의 다른 두 수로 계산되는 수 — 근거에 없어도 창작이 아니다.
+
+    "CAGR 24.12%는 6.16% 대비 약 3.9배"의 3.9가 그렇다. 근거에는 24.12와 6.16만
+    있으므로 3.9는 늘 '무근거'로 떨어졌다(2026-08-24 COMPA 실측). 계산으로 설명되면
+    검사 대상에서 뺀다 — 계산이 맞는지는 산술 검증(arithmetic_suspects)의 몫이다.
+    """
+    tokens = numeric_mentions(text)
+    pairs = [(t, v) for t in tokens if (v := _numeric_value(t)) is not None]
+    out: set[str] = set()
+    for token, value in pairs:
+        if value == 0:
+            continue
+        for i, (ta, a) in enumerate(pairs):
+            for tb, b in pairs[i + 1 :]:
+                if token in (ta, tb) or a == 0 or b == 0:
+                    continue
+                for candidate in (a / b, b / a, a + b, a - b, b - a, a * b):
+                    if abs(candidate - value) <= abs(value) * _DERIVED_TOLERANCE:
+                        out.add(_normalize_number(token))
+                        break
     return out
 
 
@@ -110,16 +581,164 @@ def ungrounded_numbers(content: str, cited_content: str) -> list[str]:
     화면에서 "이 절의 근거 미확인 수치"를 그대로 보여주기 위함(2026-08-09).
     퍼지 매칭(콤마 정규화 후 부분문자열)이라 오탐 여지가 있어 경고용이다.
     """
-    haystack = cited_content.replace(",", "")
+    haystack = normalize_haystack(cited_content)
     out: list[str] = []
     seen: set[str] = set()
-    for token in _significant_numbers(content):
+    # 제목·표 줄은 주장이 아니다 - 소제목 번호("1.1 사업 배경")가 수치로 잡혀 화면에
+    # 올라왔다. 주장 단위로 좁혀 본다(근거 추적·미인용 검사와 같은 눈금).
+    # 인용 마커 자체도 걷어낸다 - "(출처 31)"의 31이 수치로 잡혀 "근거에서 확인되지
+    # 않는 수치 1개: 31"이 떴다(2026-08-12 검증 런 화면). 출처 번호는 주장이 아니고,
+    # 마커가 많이 붙은 절일수록 경고가 늘어 진짜 신호를 덮는다.
+    units = [MARK_RE.sub(" ", u) for u in claim_units(content)]
+    # 파생치는 주장 단위 안에서만 성립한다 — 절 전체를 섞으면 무관한 두 수의 우연한
+    # 비율이 실수치를 덮는다.
+    derived = {d for unit in units for d in derived_numbers(unit)}
+    joined = normalize_haystack("\n".join(units))
+    for token in numeric_mentions("\n".join(units)):
         norm = _normalize_number(token)
         if norm in seen:
             continue
         seen.add(norm)
-        if norm and norm not in haystack:
+        # 계산식이 명시된 산출값은 창작이 아니다 — "16,901억 ÷ 7년 = 2,414억"의
+        # 2,414는 근거에 없어도 본문이 셈을 보여준다(2026-08-27 철강 실측: 피연산자
+        # '7년'이 기간이라 수치 토큰에서 빠져 derived_numbers가 못 잡았다). 등호
+        # 바로 뒤의 그 수만 좁게 면제한다 — 셈이 맞는지는 산술 검증 몫.
+        if norm and re.search(rf"=\s*약?\s*{re.escape(norm)}(?!\d)", joined):
+            continue
+        if norm and norm not in derived and not number_in_text(token, haystack):
             out.append(token)
+    return out
+
+
+def misattributed_numbers(
+    content: str,
+    marker_chunks: dict[int, Sequence[UUID]],
+    chunk_texts: dict[UUID, str],
+) -> list[str]:
+    """마커가 가리킨 근거엔 없는 수치가 같은 풀의 다른 청크에 있는 경우 — 오귀속 신호.
+
+    유령 출처 검사(참고문헌 범위 밖 번호)는 '목록에 존재하는 번호로 잘못 가리키는'
+    마커를 통과시키고, claim_verify는 근거 집합을 마커와 무관하게 받아 도메인 밖이다
+    (2026-08-14 프로브 실증: 합성 오귀속 5건을 세 모델 전원이 supported로 통과, 0/5).
+    마커 dedup 147건·이중 색인 재번호·유령 출처 실측이 전부 번호가 어긋날 수 있다는
+    증거라 실제 위험이다. 문장 단위로 "인용 청크에 없는 수치가 풀의 다른 청크에는
+    있다"를 결정적으로 대조한다 — 어디에도 없으면 무근거(다른 검사 몫), 다른 데
+    있으면 마커가 엉뚱한 곳을 가리킨다는 뜻이다.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    pool = {cid: normalize_haystack(t or "") for cid, t in chunk_texts.items()}
+    for unit in claim_units(content):
+        marks = numbers_in_order(unit)
+        if not marks:
+            continue
+        cited_ids = {cid for n in marks for cid in marker_chunks.get(n, ())}
+        if not cited_ids:
+            continue
+        bare = MARK_RE.sub(" ", unit)
+        cited_text = "\n".join(pool.get(c, "") for c in cited_ids)
+        # 인용 근거가 외국어면 어휘로 '없다'를 선언할 수 없다(단위 환산 - 72억 vs
+        # $7.2B). 그 축의 원칙 그대로 오귀속 판정도 건너뛴다.
+        if cited_text.strip() and not _HANGUL_RE.search(cited_text):
+            continue
+        derived = derived_numbers(bare)
+        for tok in numeric_mentions(bare):
+            norm = _normalize_number(tok)
+            if not norm or norm in seen or norm in derived or number_in_text(tok, cited_text):
+                continue
+            elsewhere = next(
+                (
+                    cid
+                    for cid, text in pool.items()
+                    if cid not in cited_ids and number_in_text(tok, text)
+                ),
+                None,
+            )
+            if elsewhere is not None:
+                seen.add(norm)
+                mark_s = ", ".join(str(n) for n in sorted(set(marks))[:3])
+                out.append(f"{tok} — 인용(출처 {mark_s})엔 없고 풀의 다른 근거에 있음")
+    return out
+
+
+# ── 산술 검증 — 파생 계산은 근거 검사에서 빼는 게 아니라 계산 자체를 검증한다 ──
+# (2026-08-14 방침: "30.6+18.1을 합한 48.7%"를 근거 검사에서 제외만 하면, 합을
+# 틀리거나 합치면 안 되는 값을 더한 경우가 조용히 통과한다. 정밀도 우선 — 피연산자와
+# 결과가 같은 주장 단위에 함께 있을 때만 판정한다.)
+
+# "A(단위)에서 B(단위)로 p% 증가/감소" — 실측 결함(2026-08-14 탄소규제 런 1.2):
+# "전년 240TWh에서 289TWh로 30% 증가"는 실제 +20.4%다. %p 표기는 뒤에 p가 붙어
+# dir 매칭이 깨지므로 자동으로 제외된다(퍼센트포인트는 이 산식이 아니다).
+_RATE_CLAIM_RE = re.compile(
+    r"(?P<a>\d[\d,]*(?:\.\d+)?)\s*(?P<unit>[%A-Za-z가-힣]{0,6})\s*에서\s*"
+    r"(?P<b>\d[\d,]*(?:\.\d+)?)\s*(?P=unit)?[^\d\n]{0,12}?(?:로|으로)\s*"
+    r"[^\d\n]{0,16}?(?P<p>\d[\d,]*(?:\.\d+)?)\s*%\s*(?:가까이\s*|이상\s*|넘게\s*)?"
+    r"(?P<dir>증가|성장|상승|확대|늘|감소|줄|하락|축소)"
+)
+_SUM_KEYWORD_RE = re.compile(r"합한|합치면|합하면|더한")
+_SUM_RESULT_WINDOW = 30  # 키워드 뒤 이 거리 안의 첫 숫자를 '합산 결과'로 본다
+
+
+def _to_float(token: str) -> float | None:
+    try:
+        return float(_normalize_number(token))
+    except ValueError:
+        return None
+
+
+def _sum_subset_matches(operands: list[float], target: float) -> bool:
+    """피연산자 2~3개의 합이 target과 맞는 조합이 있는가 (반올림 오차 허용)."""
+    tol = max(0.11, abs(target) * 0.005)
+    n = len(operands)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if abs(operands[i] + operands[j] - target) <= tol:
+                return True
+            for k in range(j + 1, n):
+                if abs(operands[i] + operands[j] + operands[k] - target) <= tol:
+                    return True
+    return False
+
+
+def arithmetic_suspects(content: str) -> list[str]:
+    """주장 단위 안의 파생 계산이 스스로와 맞는지 — 틀린 곳의 설명 목록 (순수 함수).
+
+    증가율: "A에서 B로 p% 증가"의 p를 (B-A)/A와 대조(허용 오차 max(2%p, p의 10%)).
+    합산: "…를 합한 C"의 C가 같은 문장 피연산자 2~3개 합과 맞는지. 결과·피연산자가
+    한 문장에 함께 없으면 판정하지 않는다(정밀도 우선).
+    """
+    out: list[str] = []
+    for unit in claim_units(content):
+        bare = MARK_RE.sub(" ", unit)
+        for m in _RATE_CLAIM_RE.finditer(bare):
+            a, b, p = _to_float(m.group("a")), _to_float(m.group("b")), _to_float(m.group("p"))
+            if a is None or b is None or p is None or a == 0:
+                continue
+            change = (b - a) / a * 100.0
+            if m.group("dir") in ("감소", "줄", "하락", "축소"):
+                change = -change
+            if change < 0 or abs(change - p) > max(2.0, 0.1 * p):
+                out.append(
+                    f"{m.group('a')}→{m.group('b')}는 {change:+.1f}%인데 "
+                    f"{m.group('p')}% {m.group('dir')}로 서술"
+                )
+        kw = _SUM_KEYWORD_RE.search(bare)
+        if kw is None:
+            continue
+        after = bare[kw.end() : kw.end() + _SUM_RESULT_WINDOW]
+        result_m = _NUMBER_RE.search(after)
+        if result_m is None:
+            continue
+        target = _to_float(result_m.group())
+        if target is None:
+            continue
+        operands = [
+            v
+            for t in _significant_numbers(bare[: kw.start()])
+            if (v := _to_float(t)) is not None and v != target
+        ]
+        if len(operands) >= 2 and not _sum_subset_matches(operands, target):
+            out.append(f'합산 불일치 의심: "{unit.strip()[:40]}…"')
     return out
 
 
@@ -137,6 +756,333 @@ def check_numeric_grounded(draft: SectionDraft, cited_content: str) -> GateResul
         detail = f"근거에서 확인 안 되는 숫자 {len(ungrounded)}건: {preview}"
     return GateResult(
         check="numeric_grounded",
+        severity=CheckSeverity.SOFT,
+        passed=passed,
+        detail=detail,
+    )
+
+
+# 문장 분리 — 마침표·물음표·느낌표 뒤 공백. 개조식은 줄 자체가 한 단위라 줄 먼저 나눈다.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# 관공서 날짜 표기("2026. 5. 6." · "2025.12.31.") — 마침표+공백이라 문장 분리에 그대로
+# 물려 한 문장이 세 조각으로 갈렸다. 마커는 마지막 조각에만 붙으므로 앞 두 조각이
+# "인용 표기 없음"이 되고, **멀쩡한 인용 문장이 지어낸 글로 표시된다**(2026-08-26 지적).
+# 오탐 방향이 해로운 쪽이라 날짜 안에서는 쪼개지 않는다.
+_DATE_DOTS_RE = re.compile(r"\d{4}\s*\.\s*\d{1,2}\s*\.\s*(?:\d{1,2}\s*\.)?")
+
+
+def _split_sentences(text: str) -> list[str]:
+    """문장 분리 — 날짜 표기 안의 마침표는 경계로 보지 않는다."""
+    blocked: set[int] = set()
+    for m in _DATE_DOTS_RE.finditer(text):
+        blocked.update(range(m.start(), m.end()))
+    out: list[str] = []
+    last = 0
+    for m in _SENTENCE_SPLIT_RE.finditer(text):
+        # 경계 직전의 마침표가 날짜의 일부면 건너뛴다.
+        if m.start() - 1 in blocked:
+            continue
+        out.append(text[last : m.start()])
+        last = m.end()
+    out.append(text[last:])
+    return out
+
+
+# 본문이 아닌 줄: 제목·표·인용블록·구분선.
+_NON_CLAIM_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s|\||>|[-*_]{3,}\s*$)")
+# 캡션·표 메타 줄 — "표: …"·"그림 3-1: …"·"(단위: %)"는 주장이 아니라 분모를 오염시킨다
+# (2026-08-14 실측: 미포착 수치 111건 중 34건이 캡션). 번호부("표 3:"·"표 3-1:") 허용.
+_CAPTION_LINE_RE = re.compile(r"^\s*(?:(?:표|그림)\s*[\d\-. ]*[::]|\(단위)")
+# 캡션 수치 검사용 — (단위…)는 정의상 단위 선언이라 표·그림 캡션만 본다.
+_TABLE_FIGURE_CAPTION_RE = re.compile(r"^(?:표|그림)\s*[\d\-. ]*[::]")
+# 표·그림 밑의 출처 줄 — "(출처 5)"·"출처: (출처 1, 21)"·"\* 출처: (출처 28)(출처 14)".
+# 서술이 아니라 구조다. 종결형에서 떨어졌다고 "어떤 검사도 안 본 본문"으로 세면 화면의
+# 위험 신호가 부풀고, 실제로 그랬다 — 검사 제외 1,257줄의 **46%가 이것**이었다
+# (2026-08-27 실측). 캡션을 통에서 빼는 것과 같은 이유고 같은 자리다.
+_SOURCE_ONLY_LINE_RE = re.compile(
+    r"^\s*(?:\\?[-*•‣◦○□▪ㅇㅁ]\s*)?(?:출처\s*[::]\s*)?"
+    r"(?:[（(]\s*(?:출처|자료|참고)\s*\d[\d\s,]*[)）]\s*)+$"
+)
+# 글머리 기호(개조식) — 판정에서 떼어내고 길이를 잰다. 'ㅇ'·'ㅁ'은 한글 자모 마커다.
+_BULLET_RE = re.compile(r"^\s*(?:[-*•‣◦○□▪ㅇㅁ]|\d+[.)]|[가-힣][.)])\s+")
+# 주장으로 볼 최소 길이 — 이보다 짧은 줄은 소제목·나열 항목이라 인용을 요구하지 않는다.
+_MIN_CLAIM_CHARS = 25
+# 서술을 끝맺는 꼬리 — 개조식 소제목("…확보 전략 제언")과 주장("…취약성에서 발생하고 있음")을
+# 가르는 실측 기준(2026-08-11, 예타 6.2절). 제목은 명사로 끝나고 주장은 종결형으로 끝난다.
+# 이 검사는 사람에게 보내는 경고라 재현율보다 정밀도가 중요하다 — 애매하면 세지 않는다.
+_CLAIM_TAILS: tuple[str, ...] = (
+    "다",
+    "음",
+    "임",
+    "함",
+    "됨",
+    "짐",
+    "옴",  # "…분석이 나옴" — 명사형 어미 -ㅁ은 앞 모음에 따라 음/옴으로 갈린다
+    # "…30% 증가하였으며 … 5% 늘어남" 꼴이 통째로 주장에서 빠져 산술·근거 검사가
+    # 못 보던 구멍(2026-08-14 실측: 탄소규제 런 1.2). '남'은 "베트남"류 지명 소제목
+    # 오탐 여지가 있으나 나타남·늘어남·드러남 빈도가 압도적이라 받는다.
+    "남",
+    "듦",  # "…줄어듦"
+    "필요",
+    "전망",
+    "예상",
+    "우려",
+    "가능",
+    "요구",
+    "시급",
+    "중요",
+)
+_SENTENCE_END_RE = re.compile(r"[.!?]\s*$")
+
+
+def _candidate_units(content: str) -> list[tuple[str, str]]:
+    """주장 후보 (원문, 마커 뗀 문장) 목록 — 제목·표·펜스·짧은 나열만 거른 상태.
+
+    여기서 살아남은 뒤 종결형 검사에서 떨어지는 문장이 '검출 파이프라인에서 증발한
+    분모'다 — claim_units와 claim_coverage가 같은 후보를 봐야 커버리지가 성립한다.
+    """
+    out: list[tuple[str, str]] = []
+    in_fence = False
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if line.startswith("```"):
+            # 코드펜스(차트 스펙 등) 안은 본문이 아니다 — 'type: bar' 같은 줄을
+            # 주장으로 세면 근거 없는 주장 경고가 헛돈다.
+            in_fence = not in_fence
+            continue
+        if (
+            in_fence
+            or not line
+            or _NON_CLAIM_LINE_RE.match(line)
+            or _CAPTION_LINE_RE.match(line)
+            or _SOURCE_ONLY_LINE_RE.match(line)
+        ):
+            continue
+        body = _BULLET_RE.sub("", line)
+        for unit in _split_sentences(body):
+            unit = unit.strip()
+            # 판정은 마커를 뗀 문장으로 한다 — 개조식은 "…성장했음 [3]"처럼 마커로
+            # 끝나는 줄이 대부분이라, 원문 그대로 보면 종결형 검사에서 전부 탈락한다
+            # (2026-08-11 실측: 인용 340개짜리 절의 주장이 0건으로 잡혔다).
+            bare = MARK_RE.sub("", unit).strip()
+            if len(bare) < _MIN_CLAIM_CHARS and not _short_but_checkable(unit, bare):
+                continue
+            out.append((unit, bare))
+    return out
+
+
+# 절 번호로 시작하는 줄("2.1 기술 현황"·"3 결론") — 짧아도 예외로 들이면 안 되는 소제목.
+# 숫자가 있어서 수치 조건을 통과해 버리므로 패턴으로 먼저 막는다.
+_SECTION_NUMBER_RE = re.compile(r"^\d+(?:\.\d+)*\s")
+
+
+def _short_but_checkable(unit: str, bare: str) -> bool:
+    """25자 미만이라도 검사 대상으로 들일 줄인가.
+
+    길이 컷은 소제목·나열을 막는 유일한 장치인데, **짧은 개조식 줄이 바로 수치가 사는
+    자리다** — "액체생검 시장 3.2배 성장"은 25자 미만이라 통째로 증발한다. 종결형
+    화이트리스트가 -ㅁ을 낱개로 열거해 새던 것과 같은 종류의 구멍이라, 임계를 낮추는
+    대신 조건부로 연다(2026-08-26).
+
+    조건: 인용 마커가 있거나(그 줄은 근거를 주장하고 있다) 유의미 수치가 있다(그 줄은
+    검산 대상이다). 소제목은 보통 둘 다 없어 딸려 오지 않고, 절 번호로 시작하는
+    "2.1 기술 현황"류만 따로 막으면 남는 오탐이 거의 없다.
+    """
+    if _SECTION_NUMBER_RE.match(bare):
+        return False
+    return bool(MARK_RE.search(unit)) or bool(_significant_numbers(bare))
+
+
+# 문장 끝의 짧은 보조 괄호 — "…나타남(복수응답)"·"…됨(’23년 기준)"이 꼬리 검사를
+# 비켜가지 않게 벗기고 다시 본다.
+_TRAILING_PAREN_RE = re.compile(r"\([^()]{1,30}\)$")
+_HANGUL_RE = re.compile(r"[가-힣]")
+
+
+# 한글 음절의 종성 인덱스 — ㅁ(16)·ㄻ(10)이면 명사형 어미 -ㅁ으로 끝난 것으로 본다.
+# (듦=ㄻ. 유니코드 음절 = 0xAC00 + (초성*21 + 중성)*28 + 종성)
+_M_JONGSEONG = (10, 16)
+
+
+def _ends_with_m_nominal(bare: str) -> bool:
+    """마지막 글자가 -ㅁ 명사형으로 끝나는가(나뉨·갖춤·이룸·세움·됨·함…)."""
+    ch = bare[-1] if bare else ""
+    if not ("가" <= ch <= "힣"):
+        return False
+    return (ord(ch) - 0xAC00) % 28 in _M_JONGSEONG
+
+
+def _is_claim(bare: str, cited: bool = False) -> bool:
+    # 저자가 인용 표기를 단 줄은 "자료를 보고 쓴 서술"이라고 스스로 밝힌 것이다 — 제목에는
+    # 출처를 달지 않는다. 개조식은 "…확산 중 (출처 10)"·"…영향을 분석 (출처 10)"처럼
+    # 명사·부사로 끝나는 서술이 흔한데, 종결형만 보면 이게 전부 검사 밖으로 샜다.
+    # 실측(2026-08-27): 검사 제외 줄 중 마커 있는 230줄은 전수가 진짜 서술이었고,
+    # 마커 없는 448줄은 전수가 제목·캡션이었다 — 마커가 둘을 깨끗이 가른다.
+    #
+    # 한글 조건은 여기서도 지킨다 — 영문 줄은 대개 인용한 원문이나 캡션이지 저자의
+    # 주장이 아니고, 그건 교차언어 계약이다(test_alignment). 마커가 붙었다고 열면
+    # 영문 원문 인용이 통째로 주장이 되어 근거 대조가 자기 자신을 대조한다.
+    if cited and _HANGUL_RE.search(bare):
+        return True
+    if _SENTENCE_END_RE.search(bare) or bare.endswith(_CLAIM_TAILS):
+        return True
+    stripped = _TRAILING_PAREN_RE.sub("", bare).rstrip()
+    if stripped != bare and (_SENTENCE_END_RE.search(stripped) or stripped.endswith(_CLAIM_TAILS)):
+        return True
+    # 명사형 어미 -ㅁ으로 끝나면 서술이다 — _CLAIM_TAILS가 음·임·함·됨·짐·옴·남·듦을
+    # **낱개로 열거**하는데 -ㅁ은 어간 모음에 따라 무한히 갈린다(나뉘다→나뉨, 갖추다→
+    # 갖춤, 이루다→이룸, 세우다→세움). 그래서 "…으로 나뉨"·"…체계를 갖춤" 같은 평범한
+    # 개조식 본문이 모든 검사에서 증발했다(2026-08-26 실측: 완료 8개 프로젝트의 미포착
+    # 623줄 중 210줄, 34%). 목록이 아니라 규칙으로 판정해 그 계급을 닫는다.
+    # 대가는 ㅁ 종결 명사 소제목("…운영 시스템")의 오탐인데, 25자 미만은 이미 후보에서
+    # 빠지므로 남는 위험이 작다 — '남'을 받아들인 것과 같은 판단이다.
+    if _ends_with_m_nominal(bare):
+        return True
+    # 유의미 수치를 실은 한글 문장은 꼬리와 무관하게 주장이다 — 개조식 명사 종결("…약
+    # 2.5배 수준"·"…로 측정"·"…에 그침")이 모든 검사에서 증발하던 77건(2026-08-14
+    # 실측)의 구조적 마감. 연도·연월은 유의미 수치에서 이미 빠져 있어 헤딩 오탐이 없고,
+    # 한글 조건은 '영문 줄은 주장이 아니다' 계약(test_alignment 교차언어 원칙)을 지킨다.
+    return bool(_HANGUL_RE.search(bare)) and bool(_significant_numbers(bare))
+
+
+def claim_units(content: str) -> list[str]:
+    """본문을 '주장 단위'(문장·개조식 항목)로 자른다 — 인용 여부와 무관하게 전부.
+
+    제목·표·구분선과 짧은 나열 항목, 명사로 끝나는 소제목은 주장이 아니라 제외한다.
+    근거 추적(services/qa/alignment)과 미인용 검사가 같은 단위를 봐야 화면의 숫자와
+    경고가 어긋나지 않는다 — 그래서 분해를 여기 하나로 둔다.
+    """
+    return [
+        unit
+        for unit, bare in _candidate_units(content)
+        if _is_claim(bare, MARK_RE.search(unit) is not None)
+    ]
+
+
+def uncovered_units(content: str) -> list[str]:
+    """주장 후보였지만 종결형 검사에서 떨어진 줄 — 어떤 검사도 보지 않는 본문.
+
+    claim_units가 못 집은 줄은 근거 대조·무근거 수치·산술 검사에서 통째로 증발하는데,
+    화면에는 그 사실이 안 나타났다. 사람은 "왜 이 줄만 표시가 없지"를 알 수가 없다
+    (2026-08-26 지적). 목록으로 내려 화면이 짚어 줄 수 있게 한다.
+
+    claim_coverage가 세는 것과 같은 후보·같은 판정을 쓴다 — 숫자와 목록이 어긋나면
+    둘 중 하나는 거짓말이 된다.
+    """
+    return [
+        unit
+        for unit, bare in _candidate_units(content)
+        if not _is_claim(bare, MARK_RE.search(unit) is not None)
+    ]
+
+
+class LineAccounting(NamedTuple):
+    """본문 한 절의 줄 회계 — 화면이 분모를 보여줄 수 있게.
+
+    "86개 중 2개 확인"은 86이 무엇인지 모르면 좋은 비율인지 나쁜 비율인지 알 수 없다.
+    실제 본문은 122줄인데 86만 대조 대상이었다면 2/86이 아니라 2/122가 실상에 가깝다
+    (2026-08-27 지적: 분모를 안 보여주면 숫자가 거짓말을 한다).
+
+    두 제외 통은 성격이 다르므로 합치지 않는다:
+      not_candidate — 구조로 갈린다(제목·표 행·캡션·구분선·짧은 줄). 문장이 아니라
+        구조라서 "이 문장이 어느 근거를 봤나"를 물을 대상이 아니다. 위험도 낮음.
+      uncovered — 본문 서술인데 종결형 검사에서 떨어진 것. **판정**이라 틀릴 수 있고,
+        실제로 여기서 크게 샜다(-ㅁ 명사형 210줄). 숫자가 갑자기 늘면 새고 있다는 신호다.
+    합쳐서 "36줄 안 봤음"으로 보여주면 위험한 4가 안전한 32에 묻힌다.
+    """
+
+    body_lines: int  # 빈 줄·코드펜스를 뺀 본문 줄
+    counted_lines: int  # 후보 단위를 하나라도 낸 줄
+    claims: int  # 주장 단위(문장)
+    uncovered: int  # 후보였으나 종결형에서 떨어진 단위
+
+
+def line_accounting(content: str) -> LineAccounting:
+    """본문 줄 → (전체·대조한 줄·주장·검사 제외). 화면 분모의 단일 출처."""
+    body = 0
+    in_fence = False
+    for raw in content.splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if not in_fence and line:
+            body += 1
+    units = _candidate_units(content)
+    # 한 줄이 문장 여럿으로 갈릴 수 있으므로 줄과 단위를 섞지 않는다 — 줄 수는 원문에서
+    # 다시 센다(단위를 세면 122 < 90+α 같은 어긋난 산수가 나온다).
+    counted = 0
+    in_fence = False
+    for raw in content.splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not line:
+            continue
+        if any(u in line or line in u for u, _b in units):
+            counted += 1
+    claims = sum(1 for u, b in units if _is_claim(b, MARK_RE.search(u) is not None))
+    return LineAccounting(body, counted, claims, len(units) - claims)
+
+
+def claim_coverage(content: str) -> tuple[int, int, list[str]]:
+    """(픽업 주장 수, 후보 문장 수, 미포착 중 수치 포함 문장) — 분모를 드러내는 지표.
+
+    claim_units가 못 집은 문장은 근거 대조·무근거·산술 검사 전부에서 증발하는데,
+    그 손실은 정밀도·재현율 어디에도 안 나타난다(지표는 들어온 문장에 대해서만
+    계산된다). '남' 꼬리 누락으로 산술 결함이 통째로 안 보이던 실사고(2026-08-14)의
+    재발 방지 — 미포착 수치 문장 목록이 곧 다음 보수 대상이다.
+    """
+    picked = 0
+    total = 0
+    missed_numeric: list[str] = []
+    for unit, bare in _candidate_units(content):
+        total += 1
+        if _is_claim(bare, MARK_RE.search(unit) is not None):
+            picked += 1
+        elif _significant_numbers(bare):
+            missed_numeric.append(bare[:60])
+    # 캡션 제외는 그 자체가 새 맹점이다 — "표 3: 2030년 감축목표 40%"처럼 캡션 꼴로
+    # 수치 주장을 하는 줄은 후보에서 빠져 어떤 검사도 못 본다. 표·그림 캡션에 유의미
+    # 수치가 남아 있으면 미포착으로 센다("(단위: …)"는 정의상 단위 선언이라 제외,
+    # 연도·연차·용어 숫자는 유의미 수치가 아니라 "…현황(’23년)"·"RE100 비교"는 무해).
+    # 이로써 missed_numeric은 동어반복이 아니라 실제 발화 가능한 지표가 된다:
+    # 분할 실패·수치 정의 변경·캡션 과잉 제외 셋 다 여기서 드러난다(2026-08-14 지침).
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if _TABLE_FIGURE_CAPTION_RE.match(line) and _significant_numbers(line):
+            missed_numeric.append(f"캡션: {line[:60]}")
+    return picked, total, missed_numeric
+
+
+def uncited_units(content: str) -> list[str]:
+    """인용 마커가 없는 주장 단위 목록.
+
+    게이트와 화면이 같은 판정을 쓰도록 분리했다(ungrounded_numbers와 같은 규약).
+    그것까지 세면 개조식 보고서는 항상 절반이 '미인용'으로 나와 신호가 죽는다.
+    """
+    return [u for u in claim_units(content) if not MARK_RE.search(u)]
+
+
+def check_uncited_claims(draft: SectionDraft) -> GateResult:
+    """근거 마커가 붙지 않은 주장이 지나치게 많은지.
+
+    마커가 가리키는 청크와 본문이 어긋나는 것은 numeric_grounded가 잡지만, 아예
+    마커가 없는 문장은 어떤 검사에도 안 걸려 그대로 통과했다. 모델이 근거 없이
+    쓴 대목이 여기서 드러난다. 개조식 특성상 이어지는 항목은 마커를 생략하는 게
+    자연스러워 SOFT — 비율이 절반을 넘을 때만 사람에게 알린다.
+    """
+    units = uncited_units(draft.content)
+    total = len(units) + len(MARK_RE.findall(draft.content))
+    ratio = len(units) / total if total else 0.0
+    passed = len(units) < 3 or ratio <= 0.5
+    detail = None
+    if not passed:
+        preview = " / ".join(u[:30] for u in units[:2])
+        detail = f"근거 표기 없는 주장 {len(units)}건({ratio:.0%}): {preview}"
+    return GateResult(
+        check="uncited_claims",
         severity=CheckSeverity.SOFT,
         passed=passed,
         detail=detail,
@@ -164,6 +1110,142 @@ def check_citation_markers(draft: SectionDraft) -> GateResult:
         severity=CheckSeverity.SOFT,
         passed=passed,
         detail=detail,
+    )
+
+
+# 편집 잔재 — 모델이 본문에 남긴 작성 과정의 흔적(2026-08-14 실측: 탄소규제 런에
+# "(… — 삭제)" 메모 2건·"본 파트에서는" 노출·고아 헤딩. 2026-08-15 검증런에서 신형
+# 대량 실측: "(출처 17 제외)"류 배정 메모 13건+·오염 마커 "(출превод처 25)"·기형
+# <callout> 태그). 문장 자체는 유효할 수 있어 SOFT — 조립 세정(sections/scrub)이
+# 같은 패턴을 결정적으로 걷어내고, 여기는 세정 밖 경로(재작성·옛 절)의 가시화 몫이다.
+def _forbidden_cell_pattern() -> re.Pattern[str]:
+    from src.services.sections.scrub import EMPTY_CELL_VALUES
+
+    joined = "|".join(re.escape(v) for v in sorted(EMPTY_CELL_VALUES))
+    return re.compile(r"\|\s*(?:" + joined + r")\s*\|")
+
+
+_LEFTOVER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"[-—–]\s*삭제\s*\)"), "편집 메모 잔재(… — 삭제)"),
+    (re.compile(r"본 파트"), "내부 작성 단위 용어('본 파트')"),
+    (re.compile(r"^#+\s*$", re.M), "빈 헤딩(#만 있는 줄)"),
+    (
+        re.compile(r"\(출처\s*[\d,\s]+\s*(?:은|는)?\s*제외[^()]{0,30}\)"),
+        "출처 배정 메모('(출처 n 제외)')",
+    ),
+    (
+        re.compile(r"\(출처\s*[\d,\s]+\s*(?:은|는)?[^()]{0,15}(?:사용\s*불가|미사용)[^()]{0,30}\)"),
+        "출처 배정 메모(사용 불가·미사용)",
+    ),
+    (
+        re.compile(r"\(출처\s*[\d,\s]+\s*(?:은|는)?[^()]{0,25}생략[^()]{0,10}\)"),
+        "출처 배정 메모(생략)",
+    ),
+    (
+        re.compile(r"\(출처\s*[\d,\s]+\s*(?:에|은|는)?\s*해당\s*없음[^()]{0,40}\)"),
+        "출처 배정 메모(해당 없음)",
+    ),
+    (re.compile(r"\(출[^\s처()]{1,12}처(?=\s*\d)"), "오염된 출처 마커"),
+    # 2026-08-29 철강 정독 실측 3종 — 4.1 "(출처 11 대신 출처 12 기준 — …)" 작업 메모가
+    # 본문에 그대로 노출됐고, 결측 표기("자료상 미제시")·근거팩 지칭("근거 자료상")이
+    # 독자에게 지시 대상 없는 내부 용어로 남았다.
+    (re.compile(r"\(출처\s*\d+\s*대신"), "출처 교체 메모('(출처 n 대신 …)')"),
+    (re.compile(r"자료상\s*(?:미제시|제시\s*없음)"), "자료 결측 메모('자료상 미제시')"),
+    (re.compile(r"제시되지\s*않아[^\n]{0,25}제외"), "편집 메모(비교 항목 제외)"),
+    (re.compile(r"근거 자료상"), "내부 근거팩 지칭('근거 자료상')"),
+    (re.compile(r"<callout[^>]*>|</callout\s*>"), "기형 callout 태그(정식은 ::: 펜스)"),
+    # 표 금지 셀 - 조립 세정(sections/scrub)이 걷지만, 수동 편집·구버전 본문은 세정을
+    # 안 지나므로 여기서 가시화한다(2026-08-21 v6 결함 세대교체 3번). 값 집합은 세정과
+    # 같은 단일 진실(EMPTY_CELL_VALUES)이다.
+    (_forbidden_cell_pattern(), "표 금지 셀(자료 없음류 - '-'로 통일할 것)"),
+)
+
+# 절단 의심 꼬리 — 수량 표현 뒤 단위 없이 끝나거나("GDP가 약 2"), 접속사로 끝나는 줄.
+# 정밀도 우선(_CLAIM_TAILS와 같은 원칙): 애매한 꼴(라틴 약어 RE100·코드 CN 7204)은
+# 세지 않는다. 절 끝이 아니라 파트 결합부 중간에 박힌 토막이 표적이다(2026-08-14
+# 실측: 탄소규제 런 4.4 "…GDP가 약 2"에서 끊긴 채 다음 항목으로 넘어감).
+_TRUNCATED_TAIL_RE = re.compile(
+    r"(?:(?:^|\s)(?:약|총|평균|최대|최소)\s*\d[\d,]*(?:\.\d+)?|\s(?:및|또는|그리고))$"
+)
+
+
+def leftover_artifacts(content: str) -> list[str]:
+    """본문에 남은 편집 잔재 설명 목록 (순수 함수 — 게이트·PM 경고 공용)."""
+    out: list[str] = []
+    for pattern, label in _LEFTOVER_PATTERNS:
+        if pattern.search(content) and label not in out:
+            out.append(label)
+    return out
+
+
+# 저자 선언문 — 범위 획정·구성 확정 같은 저자 자신의 발화. 외부 자료가 대신 말할 수
+# 없는 문장이라 출처가 붙으면 그 자체가 오귀속이다(2026-08-29 철강 정독: 1.1의 결론
+# 문장 4개 전부 "동 보고서는 …로 정의하고 …설정함(출처 12)" 꼴 — 절마다 반복되며
+# 근거 불일치 다발의 구조 원인이 됐다).
+_AUTHOR_VOICE_RE = re.compile(r"(?:동|본|이)\s*(?:보고서|절|장|항)(?:은|는|에서는)")
+_AUTHOR_DECL_RE = re.compile(
+    r"(?:확정함|확정하며|설정함|설정하며|정의함|정의하고|획정함|획정하며|구성함|채택함|삼음|삼는다)"
+)
+
+
+def author_decl_citations(content: str) -> list[str]:
+    """출처가 붙은 저자 선언문 목록 — "동 보고서는 …확정함(출처 n)" 꼴."""
+    out: list[str] = []
+    for unit in claim_units(content or ""):
+        if MARK_RE.search(unit) and _AUTHOR_VOICE_RE.search(unit) and _AUTHOR_DECL_RE.search(unit):
+            out.append(unit.strip())
+    return out
+
+
+def truncated_lines(content: str) -> list[str]:
+    """문장 중간에서 끊긴 것으로 보이는 줄(원문 앞부분) 목록 (순수 함수).
+
+    표·제목·짧은 나열 항목은 제외하고, 주장으로 볼 만한 길이의 줄만 본다.
+    """
+    out: list[str] = []
+    for raw in content.split("\n"):
+        line = raw.rstrip()
+        if len(line.strip()) < _MIN_CLAIM_CHARS or _NON_CLAIM_LINE_RE.match(line):
+            continue
+        if _TRUNCATED_TAIL_RE.search(line):
+            # 절단 지점은 줄 끝이다 - 머리가 아니라 꼬리를 보여줘야 사람이 바로 찾는다.
+            out.append(line.strip()[-40:])
+    return out
+
+
+def check_citation_attribution(draft: SectionDraft, chunks: Sequence[RetrievedChunk]) -> GateResult:
+    """작성 시점 마커 오귀속 검사 — 로컬 번호↔cited_chunk_ids 순서 규약으로 대조.
+
+    본문에 등장한 서로 다른 번호의 첫 등장 순서 = cited_chunk_ids 저장 순서
+    (candidates._extract_cited_ids, renumber._local_to_global과 같은 규약).
+    """
+    mapping: dict[int, list[UUID]] = {}
+    for i, n in enumerate(numbers_in_order(draft.content)):
+        if i >= len(draft.cited_chunk_ids):
+            break
+        mapping.setdefault(n, []).append(draft.cited_chunk_ids[i])
+    found = misattributed_numbers(draft.content, mapping, {c.chunk_id: c.content for c in chunks})
+    passed = not found
+    return GateResult(
+        check="citation_attribution",
+        severity=CheckSeverity.SOFT,
+        passed=passed,
+        detail=None if passed else f"마커 오귀속 의심 {len(found)}건: {found[0]}",
+    )
+
+
+def check_leftovers(draft: SectionDraft) -> GateResult:
+    """편집 잔재·절단 의심 줄 검사 — 본문은 유효할 수 있어 SOFT 경고."""
+    problems = leftover_artifacts(draft.content)
+    cut = truncated_lines(draft.content)
+    if cut:
+        problems.append(f'절단 의심 줄 {len(cut)}건 (예: "{cut[0]}…")')
+    passed = not problems
+    return GateResult(
+        check="leftovers",
+        severity=CheckSeverity.SOFT,
+        passed=passed,
+        detail=None if passed else "; ".join(problems),
     )
 
 
@@ -211,9 +1293,13 @@ def run_section_gate(
     cited_content = "\n".join(c.content for c in chunks if c.chunk_id in cited_ids)
     results = [
         check_citation_resolves(draft, valid_ids),
+        check_complete(draft),
         check_renderable(draft),
         check_citation_markers(draft),
+        check_citation_attribution(draft, chunks),
+        check_leftovers(draft),
         check_numeric_grounded(draft, cited_content),
+        check_uncited_claims(draft),
         check_bounds(
             draft,
             min_chars=min_chars,
@@ -254,12 +1340,18 @@ def check_structure_complete(
     selected: Sequence[SectionDraft],
     plan: Sequence[SectionPlan],
 ) -> GateResult:
-    """조립 후 보고서 레벨 검사 — 선택된 초안이 계획된 전 섹션을 빠짐없이 덮는지."""
-    planned = {s.section_id for s in plan}
-    drafted = {d.section_id for d in selected}
-    missing = planned - drafted
+    """조립 후 보고서 레벨 검사 — 선택된 초안이 계획된 전 섹션을 빠짐없이 덮는지.
+
+    내용이 빈 초안은 '선택됐어도' 누락으로 센다 — 0자 절이 완성 보고서로 마감된
+    실사고(2026-08-13, 6.1절) 재발 방지. detail에 절 번호를 실어 사람이 어느 절을
+    고쳐야 하는지 바로 알게 한다.
+    """
+    drafted = {d.section_id for d in selected if d.content.strip()}
+    missing = [
+        f"{s.chapter_number}.{s.section_number}" for s in plan if s.section_id not in drafted
+    ]
     passed = not missing
-    detail = None if passed else f"누락 섹션 {len(missing)}개"
+    detail = None if passed else f"미작성 절 {len(missing)}개: {', '.join(missing)}"
     return GateResult(
         check="structure_complete",
         severity=CheckSeverity.HARD,

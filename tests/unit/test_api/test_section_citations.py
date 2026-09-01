@@ -1,7 +1,10 @@
 """섹션 인용 — [N] 번호 추출과 전역 번호 직해석(순수 로직, DB·라우팅 없음).
 
 전역 번호화(2026-08-05) 이후 본문 [n] = 채택 자료 수집 순서 n번째(출처 최종장과
-동일 단일 진실). 미리보기 인용 목록은 그 순서를 그대로 읽는다.
+동일 단일 진실). 단, 이 직해석은 **조립 후 전용**이다 — 조립 전(절-로컬 번호)에
+쓰면 엉뚱한 자료 이름이 붙는다(2026-08-12 사용자 보고). 조립 전 라벨은
+_draft_citations(인용 청크→자료 규약)가 담당하며 통합 테스트(TestDraftCitations)가
+검증한다.
 """
 
 from __future__ import annotations
@@ -46,3 +49,7 @@ class TestCitationsFromNumbers:
 
     def test_empty(self):
         assert _citations_from_numbers([], []) == []
+
+
+# (TestPreAssembleNumbers는 ea0982d에서 제거됨 - renumbered 플래그 직해석은 조립 전
+# 라벨을 엉뚱한 자료로 풀던 버그였다. feat/qa 병합이 옛 버전을 되살려 다시 지운다.)

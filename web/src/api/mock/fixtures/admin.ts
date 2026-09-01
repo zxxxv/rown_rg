@@ -3,6 +3,14 @@ import type { UserRoleType } from "@/api/types";
 export interface AdminKPI {
   total_cost_usd: number;
   cost_limit_usd: number;
+  // 활성 사용자에게 배정된 개인 한도의 합 - 조직 한도를 넘으면 초과 배정이다
+  // (실제 지출은 조직 한도에서 먼저 막히므로 늘려 준 몫을 다 못 쓴다).
+  allocated_limit_usd: number;
+  // 현재 접속중 - last_seen_at이 최근 5분 이내인 사용자 수 (기간 무관)
+  online_users: number;
+  // 접속중 명단(최근 활동순, 상한 50) - 카드 호버가 '누구인지'를 보여준다
+  online_list: { name: string; email: string; last_seen_at: string }[];
+  // 기간 활성 - 조회 기간 내 1회 이상 로그인한 사용자 수
   active_users: number;
   active_projects: number;
   completed_reports: number;
@@ -302,8 +310,16 @@ export function buildAdminDashboardFixture(
   return {
     period: { type: period, label },
     kpis: {
+      allocated_limit_usd: 9_000,
       total_cost_usd,
       cost_limit_usd: 3_000,
+      online_users: 4,
+      online_list: [
+        { name: "김분석", email: "kim@loweninsight.kr", last_seen_at: new Date(Date.now() - 40_000).toISOString() },
+        { name: "이보고", email: "lee@loweninsight.kr", last_seen_at: new Date(Date.now() - 150_000).toISOString() },
+        { name: "박검토", email: "park@loweninsight.kr", last_seen_at: new Date(Date.now() - 200_000).toISOString() },
+        { name: "최관리", email: "choi@loweninsight.kr", last_seen_at: new Date(Date.now() - 280_000).toISOString() },
+      ],
       active_users: 13,
       active_projects: 7,
       completed_reports: 4,
