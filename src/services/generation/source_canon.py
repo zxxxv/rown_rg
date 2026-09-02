@@ -104,14 +104,28 @@ def merge_into_notes(
             f"{a['topic']}({a['owner']}절 소관)" for a in assignments if a["owner"] != label
         )
         if own_add:
-            base = str(note.get("owns") or "").strip()
-            note["owns"] = (f"{base} · {own_add}" if base else own_add)[:_FIELD_MAX_CHARS]
+            note["owns"] = _dedup_join(str(note.get("owns") or ""), own_add)[:_FIELD_MAX_CHARS]
         if foreign_add:
-            base = str(note.get("foreign_topics") or "").strip()
-            note["foreign_topics"] = (f"{base} · {foreign_add}" if base else foreign_add)[
-                :_FIELD_MAX_CHARS
-            ]
+            note["foreign_topics"] = _dedup_join(
+                str(note.get("foreign_topics") or ""), foreign_add
+            )[:_FIELD_MAX_CHARS]
     return {sid: note for sid, note in merged.items() if any(note.values())}
+
+
+def _dedup_join(base: str, addition: str) -> str:
+    """' · ' 목록 병합 — 같은 항목이 라운드마다 다시 붙지 않게 한다.
+
+    2026-09-03 수리: 배정이 재실행(게이트 재개방·재시작)될 때마다 같은 자료명 배정이
+    통째로 덧붙어, 철강 _design_plan owns에 동일 항목이 6중으로 쌓여 작성 프롬프트를
+    같은 지시 6줄로 오염시켰다.
+    """
+    seen: list[str] = []
+    combined = f"{base} · {addition}" if base.strip() else addition
+    for part in combined.split(" · "):
+        p = part.strip()
+        if p and p not in seen:
+            seen.append(p)
+    return " · ".join(seen)
 
 
 async def _confirmed_sources(project_id) -> list[dict[str, Any]]:

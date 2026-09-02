@@ -204,11 +204,13 @@ async def _commit_design_plan(
             key: str(s.get(key) or "").strip()[:_PLAN_FIELD_MAX_CHARS]
             for key in ("goal", "source_strategy", "writing_plan")
         }
-        note["owns"] = " · ".join(t["topic"] for t in ownership if t["owner"] == label)[
-            :_PLAN_FIELD_MAX_CHARS
-        ]
+        note["owns"] = " · ".join(
+            dict.fromkeys(t["topic"] for t in ownership if t["owner"] == label)
+        )[:_PLAN_FIELD_MAX_CHARS]
         note["foreign_topics"] = " · ".join(
-            f"{t['topic']}({t['owner']}절 소관)" for t in ownership if t["owner"] != label
+            dict.fromkeys(
+                f"{t['topic']}({t['owner']}절 소관)" for t in ownership if t["owner"] != label
+            )
         )[:_PLAN_FIELD_MAX_CHARS]
         note["receives"] = "; ".join(receives.get(label, []))[:_PLAN_FIELD_MAX_CHARS]
         note["establishes"] = "; ".join(establishes.get(label, []))[:_PLAN_FIELD_MAX_CHARS]
