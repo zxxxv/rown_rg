@@ -34,6 +34,12 @@ import { Button } from "@/components/ui/button";
 import { HelpTip } from "@/components/ui/help-tip";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   type DraftChapter,
   draftId,
   fromOutline,
@@ -882,6 +888,28 @@ export default function BriefPage() {
     }
     return set;
   }, [brief, duplicatedLabels]);
+  // ⚠ 배지 상세 - 숫자(경고 걸린 절 수)만으론 무엇이 문제인지 알 수 없다는 지적
+  // (2026-09-02). 배지에 마우스를 대면 절 좌표와 사유를 그대로 보여준다.
+  const warnDetailsByChapter = useMemo(() => {
+    const map = new Map<number, string[]>();
+    const push = (ch: number, line: string) => {
+      const arr = map.get(ch) ?? [];
+      if (!arr.includes(line)) arr.push(line);
+      map.set(ch, arr);
+    };
+    for (const g of brief?.duplicate_queries ?? []) {
+      const labels = g.sections.map((s) => `${s.chapter_number}.${s.section_number}`);
+      const line = `${labels.join("·")} - 같은 검색 질의 "${g.query}" (같은 자료를 인용하게 됨)`;
+      for (const s of g.sections) push(s.chapter_number, line);
+    }
+    for (const o of brief?.ai_plan?.outline_overlaps ?? []) {
+      const line = `${o.sections.join("·")} - 소재 겹침: ${o.material}${
+        o.proposal ? ` (${o.proposal})` : ""
+      }`;
+      for (const label of o.sections) push(Number(label.split(".")[0]), line);
+    }
+    return map;
+  }, [brief]);
   // 장별 실행 계획은 기본 접힘 - 20절 목차가 통째로 펼쳐져 경고를 지나치던 것의 처방.
   // 경고가 걸린 장만 처음부터 열어 둔다(사용자가 토글하면 그 선택이 우선).
   const defaultOpenChapters = useMemo(() => {
@@ -1120,10 +1148,28 @@ export default function BriefPage() {
                             ({group.sections.length}절)
                           </span>
                           {warnCount > 0 ? (
-                            <span className="flex items-center gap-0.5 rounded-sm border border-fg-danger/30 bg-bg-danger px-1 py-0.5 text-[10px] font-medium text-fg-danger">
-                              <AlertTriangle className="h-2.5 w-2.5" aria-hidden />
-                              {warnCount}
-                            </span>
+                            <TooltipProvider delayDuration={150}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="flex items-center gap-0.5 rounded-sm border border-fg-danger/30 bg-bg-danger px-1 py-0.5 text-[10px] font-medium text-fg-danger">
+                                    <AlertTriangle className="h-2.5 w-2.5" aria-hidden />
+                                    {warnCount}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-sm">
+                                  <p className="mb-1 font-medium">
+                                    경고가 걸린 절 {warnCount}개
+                                  </p>
+                                  <ul className="space-y-1 text-xs">
+                                    {(
+                                      warnDetailsByChapter.get(group.chapter_number) ?? []
+                                    ).map((line) => (
+                                      <li key={line}>{line}</li>
+                                    ))}
+                                  </ul>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
                           ) : null}
                         </span>
                         {isOpen && chapterGoals.get(group.chapter_number) ? (
