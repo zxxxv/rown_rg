@@ -18,3 +18,8 @@ services:
     image: ghcr.io/zxxxv/rown-app:main
   app:
     image: ghcr.io/zxxxv/rown-app:main
+    volumes:
+      # 레지스트리 이미지는 모델 없이 굽는다(러너 체크아웃에 gitignore된 models/가
+      # 없어 첫 빌드 실패, 2026-09-02). 호스트의 모델을 읽기 전용 마운트 -
+      # 최초 1회 기존 컨테이너에서 추출: docker cp rown-app-1:/app/models ~/rown/models
+      - ./models:/app/models:ro
