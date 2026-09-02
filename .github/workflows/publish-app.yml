@@ -27,6 +27,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # models/(BGE-M3 로컬 모델, ~1.1GB)는 gitignore 대상이라 체크아웃에 없다 —
+      # Dockerfile의 COPY models/가 러너에서 실패한 첫 빌드(2026-09-02)의 원인.
+      # 레지스트리 이미지는 모델 없이 굽고, 서버가 볼륨으로 마운트한다
+      # (docker-compose.registry.yml). 이미지가 1.1GB 가벼워져 pull도 빨라진다.
+      - name: Empty models dir (host-volume mounted in registry mode)
+        run: mkdir -p models
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
