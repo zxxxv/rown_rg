@@ -369,6 +369,7 @@ async def create_personal_preset(
         description=data.description,
         outline={"chapters": [ch.model_dump() for ch in data.chapters]},
         is_public=data.is_public,
+        overwrite=data.overwrite,
     )
     n_ch, n_sec = _preset_counts(row.outline)
     return UserPresetRead(

@@ -100,6 +100,9 @@ class UserPresetUpsert(BaseModel):
     chapters: list[UserPresetChapterIn] = Field(..., min_length=1, max_length=50)
     # 켜면 전 계정의 프리셋 선택지에 뜬다(본인 토글).
     is_public: bool = False
+    # 같은 이름이 이미 있으면 그 프리셋을 이 구성으로 교체한다(id 유지).
+    # 기본은 거절(DUPLICATE_PRESET_NAME) — 덮어쓰기는 사용자 확인을 거친 재요청만.
+    overwrite: bool = False
 
     @model_validator(mode="after")
     def _check_sections(self) -> UserPresetUpsert:
