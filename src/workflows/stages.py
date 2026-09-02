@@ -705,6 +705,19 @@ async def plan_brief(state: ProjectState) -> ProjectState:
         model_mode=mode,
         domain_context=domain_context,
     )
+    # 근거팩 겹침 실측(리허설 산출) — 첫 게이트(색인 전)엔 빈 목록, 재개방·재열람부터
+    # 실린다. 질의 문자열 중복 경고가 못 보는 '결과 수렴' 재탕의 전조를 사람과
+    # AI 계획(소유권 강제)이 함께 본다.
+    try:
+        from src.services.retrieval.rehearsal import stored_pack_overlaps
+
+        label_by_sid = {
+            str(s.section_id): f"{s.chapter_number}.{s.section_number}" for s in state.section_plan
+        }
+        brief["pack_overlaps"] = await stored_pack_overlaps(state.project_id, label_by_sid)
+    except Exception:
+        logger.warning("plan_brief.pack_overlaps_failed", project_id=str(pid), exc_info=True)
+        brief["pack_overlaps"] = []
     # (업로드 목록 주입은 폐지 — 2026-08-21. 설계 시점의 자료명 배정은 자료 검토에서
     # 제외될 파일을 가리킬 수 있는 유령 배정이었다. 자료명 수준은 코퍼스 확정 후
     # source_canon(정본 배정)이 맡고, 설계 브리프는 구조 수준만 다룬다.)
@@ -1137,10 +1150,12 @@ async def _rehearse(state: ProjectState) -> ProjectState:
     from src.services.retrieval.rehearsal import (
         BAND_EMPTY,
         BAND_HYDE,
+        attach_shared_sources,
         classify,
         current_index_version,
         empty_floor,
         needed_evidence,
+        overlap_pairs_from_packs,
         plan_fingerprint,
         store_rehearsal,
     )
@@ -1156,6 +1171,9 @@ async def _rehearse(state: ProjectState) -> ProjectState:
     flows_in = await _design_flows_inbound(pid)
     probe = _summary_probe(state)
     sections_report: list[dict] = []
+    # 절 라벨 → 근거팩 청크 id — 절쌍 겹침 실측용(질의가 달라도 결과가 수렴하는
+    # 재탕 병리는 결과로만 보인다. 2026-09-02 철강 1.1↔5.1 실사고).
+    packs: dict[str, set[str]] = {}
     n_total = len(state.section_plan)
     n_hyde = 0
     for i, section in enumerate(state.section_plan, start=1):
@@ -1211,6 +1229,9 @@ async def _rehearse(state: ProjectState) -> ProjectState:
         except Exception:
             # 영속 실패 → 작성이 실검색 폴백을 쓴다. 리허설이 색인을 막으면 안 된다.
             logger.warning("rehearsal.store_failed", project_id=str(pid), exc_info=True)
+        packs[f"{section.chapter_number}.{section.section_number}"] = {
+            str(c.chunk_id) for c in citable if not c.is_summary
+        }
         emit_step(pid, "indexing", f"검색 리허설 {i}/{n_total} · {label}", "completed")
         sections_report.append(
             {
@@ -1229,6 +1250,21 @@ async def _rehearse(state: ProjectState) -> ProjectState:
         # 부족 절이 이만큼 많으면 개별 절 보강이 아니라 질의 설계 문제다 — HyDE 킬 기준
         # 판단(20절 중 15절 발동)에 쓰는 신호라 경고로 남긴다.
         logger.warning("rehearsal.hyde_overuse", project_id=str(pid), n_hyde=n_hyde, total=n_total)
+    # 절쌍 근거팩 겹침 실측 — 강한 겹침은 재탕의 전조라 경고 로그+보고서로 올린다.
+    # 게이트가 다시 열리면 브리프(plan_brief)가 이 실측을 읽어 소유권 분담을 강제한다.
+    try:
+        pack_overlaps = await attach_shared_sources(overlap_pairs_from_packs(packs))
+    except Exception:
+        logger.warning("rehearsal.pack_overlap_failed", project_id=str(pid), exc_info=True)
+        pack_overlaps = []
+    for o in pack_overlaps:
+        logger.warning(
+            "rehearsal.pack_overlap",
+            project_id=str(pid),
+            sections=o["sections"],
+            jaccard=o["jaccard"],
+            shared=o.get("shared_sources"),
+        )
     gap_sections = [s for s in sections_report if s["band"] == BAND_EMPTY and not s["constructive"]]
     opts = state.options if isinstance(state.options, dict) else {}
     try:
@@ -1239,6 +1275,7 @@ async def _rehearse(state: ProjectState) -> ProjectState:
     report = {
         "index_version": version,
         "sections": sections_report,
+        "pack_overlaps": pack_overlaps,
         "n_hyde": n_hyde,
         "reopen": reopen,
         "reopens_used": reopens,

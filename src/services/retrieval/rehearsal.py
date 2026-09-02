@@ -303,3 +303,110 @@ def make_cached_retriever(
         return chunks
 
     return _retrieve
+
+
+# ── 절쌍 근거팩 겹침(실측) ──────────────────────────────────────────────
+# 질의 '문자열' 중복 경고는 문구가 다른데 결과가 수렴하는 병리를 통과시킨다
+# (2026-09-02 철강 실측: 1.1↔5.1은 질의가 달랐지만 같은 K-스틸법 자료를 받아
+# 축자 재탕 14건). 7차 실측에서 쌍둥이 절 자카드 0.59~0.62가 재탕의 직접 원인 —
+# 리허설이 어차피 검색을 돌리므로 그 결과로 겹침을 실측해 게이트에 올린다.
+PACK_OVERLAP_THRESHOLD = 0.45
+_MAX_OVERLAP_PAIRS = 8
+
+
+def _label_key(label: str) -> tuple[int, int]:
+    a, _, b = label.partition(".")
+    try:
+        return (int(a), int(b or 0))
+    except ValueError:
+        return (0, 0)
+
+
+def overlap_pairs_from_packs(packs: dict[str, set[str]]) -> list[dict]:
+    """절 라벨 → 청크 id 집합에서 겹침 쌍을 자카드 내림차순으로. 순수 함수."""
+    labels = sorted((lab for lab, s in packs.items() if s), key=_label_key)
+    out: list[dict] = []
+    for i in range(len(labels)):
+        for j in range(i + 1, len(labels)):
+            a, b = packs[labels[i]], packs[labels[j]]
+            inter = a & b
+            if not inter:
+                continue
+            jac = len(inter) / len(a | b)
+            if jac >= PACK_OVERLAP_THRESHOLD:
+                out.append(
+                    {
+                        "sections": [labels[i], labels[j]],
+                        "jaccard": round(jac, 2),
+                        "shared_chunk_ids": sorted(inter)[:40],
+                    }
+                )
+    out.sort(key=lambda x: -x["jaccard"])
+    return out[:_MAX_OVERLAP_PAIRS]
+
+
+async def attach_shared_sources(overlaps: list[dict]) -> list[dict]:
+    """겹침 쌍의 공유 청크가 어느 자료인지 제목을 붙인다(쌍당 상위 2개).
+
+    사람이 게이트에서 "무엇이 겹치는가"를 자료명으로 봐야 소유권 분담을 판단할 수
+    있다 — 청크 id 목록은 판단 재료가 아니다.
+    """
+    if not overlaps:
+        return overlaps
+    from collections import Counter
+
+    from src.db.models.chunk import Chunk
+    from src.db.models.project_source import ProjectSource
+    from src.db.session import async_session_maker
+
+    all_ids = {cid for o in overlaps for cid in o.get("shared_chunk_ids", [])}
+    if not all_ids:
+        return overlaps
+    async with async_session_maker() as session:
+        rows = (
+            await session.execute(
+                select(Chunk.id, ProjectSource.title)
+                .join(ProjectSource, ProjectSource.id == Chunk.source_id)
+                .where(Chunk.id.in_([UUID(x) for x in all_ids]))
+            )
+        ).all()
+    title_by_chunk = {str(cid): (title or "") for cid, title in rows}
+    for o in overlaps:
+        counts = Counter(title_by_chunk.get(cid, "") for cid in o.get("shared_chunk_ids", []))
+        counts.pop("", None)
+        o["shared_sources"] = [t[:60] for t, _n in counts.most_common(2)]
+        o.pop("shared_chunk_ids", None)  # 화면·브리프에 id 목록은 잡음이다
+    return overlaps
+
+
+async def stored_pack_overlaps(project_id: UUID, label_by_sid: dict[str, str]) -> list[dict]:
+    """영속된 리허설 팩으로 겹침을 계산한다 — 게이트 재개방·브리프 표시용.
+
+    리허설 전(첫 게이트)에는 행이 없어 빈 목록 — 색인 후 다시 열린 게이트부터
+    실측이 실린다.
+    """
+    from src.db.models.section_rehearsal import SectionRehearsal
+    from src.db.session import async_session_maker
+
+    async with async_session_maker() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(SectionRehearsal).where(SectionRehearsal.project_id == project_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    if not rows:
+        return []
+    latest = max(r.index_version for r in rows)
+    packs: dict[str, set[str]] = {}
+    for r in rows:
+        if r.index_version != latest:
+            continue
+        label = label_by_sid.get(str(r.section_id))
+        if not label:
+            continue
+        packs[label] = {str(c.get("id")) for c in (r.chunks or []) if c.get("id")}
+    return await attach_shared_sources(overlap_pairs_from_packs(packs))
