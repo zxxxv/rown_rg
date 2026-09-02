@@ -652,7 +652,7 @@ async def list_projects(
     q: str | None = None,
     preset: str | None = None,
     scope: str = "mine",
-) -> list[Project]:
+) -> list[ProjectRead]:
     """프로젝트 목록(최신순).
 
     scope=mine(기본)은 내 것만, scope=all은 전체 — 단 all은 admin·super_admin만 허용
@@ -712,7 +712,32 @@ async def list_projects(
             )
         )
     stmt = stmt.order_by(Project.created_at.desc()).limit(limit).offset(offset)
-    return list((await session.execute(stmt)).scalars())
+    projects = list((await session.execute(stmt)).scalars())
+    # 개인 프리셋(u:<uuid>) 이름 해석 — 카탈로그 프리셋은 id가 곧 라벨이지만 개인
+    # 프리셋 이름은 서버만 안다. 안 내려주면 카드에 원시 키가 노출된다(2026-09-02 실측).
+    names = await _personal_preset_names(session, {p.preset for p in projects if p.preset})
+    out: list[ProjectRead] = []
+    for p in projects:
+        read = ProjectRead.model_validate(p)
+        read.preset_name = names.get(p.preset or "")
+        out.append(read)
+    return out
+
+
+async def _personal_preset_names(session: AsyncSession, keys: set[str]) -> dict[str, str]:
+    """u:<uuid> 프리셋 키 → 표시 이름. 지워진 프리셋 키는 조용히 빠진다(호출부 폴백)."""
+    from src.db.models.user_preset import UserPreset
+
+    by_key = {k: pid for k in keys if (pid := parse_personal_key(k)) is not None}
+    if not by_key:
+        return {}
+    rows = (
+        await session.execute(
+            select(UserPreset.id, UserPreset.name).where(UserPreset.id.in_(by_key.values()))
+        )
+    ).all()
+    by_id = dict(rows)
+    return {k: by_id[pid] for k, pid in by_key.items() if pid in by_id}
 
 
 @router.get("/{project_id}", response_model=ProjectRead)
@@ -751,6 +776,10 @@ async def get_project(
         read.updated_at is None or last_section_edit > read.updated_at
     ):
         read.updated_at = last_section_edit
+    if project.preset:
+        read.preset_name = (await _personal_preset_names(session, {project.preset})).get(
+            project.preset
+        )
     return read
 
 

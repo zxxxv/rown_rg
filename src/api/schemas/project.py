@@ -346,6 +346,9 @@ class ProjectRead(ProjectBase):
 
     id: UUID
     preset: str | None
+    # 개인 프리셋(u:<uuid>)의 표시 이름 — 서버가 해석해 내려준다. 안 내려주면 카드에
+    # 원시 키가 노출된다(2026-09-02 실측). 카탈로그 프리셋은 id가 곧 라벨이라 None.
+    preset_name: str | None = None
     config: dict[str, Any]
     status: ProjectStatus
     depth_mode: DepthMode
