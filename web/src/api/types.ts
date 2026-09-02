@@ -104,8 +104,6 @@ export const ProjectConfigSchema = z.object({
   // 파싱 실패가 config.catch(DEFAULT)로 번져 화면 전체가 기본값으로 둔갑한다
   // (2026-08-20 실사고: premium 런이 "표준"으로 표시). builds_on catch와 같은 규약.
   preset: z.string().nullable().catch(null),
-  // 개인 프리셋(u:<uuid>)의 표시 이름 - 서버가 해석. 없으면 배지는 "개인 프리셋" 폴백.
-  preset_name: z.string().nullable().catch(null),
   // 생성 화면에서 직접 확정한 목차 - 백엔드 필수(OUTLINE_REQUIRED), 편집 중엔 미완성일 수 있어 optional.
   // catch(undefined): 목차 파싱 실패는 "목차 미구성" 표시로 국소화한다 - required
   // 실패 하나가 config.catch(DEFAULT)로 번지면 모델·깊이까지 전부 둔갑한다(2026-08-21).
@@ -158,6 +156,8 @@ export const ProjectSchema = z.object({
   title: z.string(),
   topic: z.string(),
   preset: z.string().nullable(),
+  // 개인 프리셋(u:<uuid>)의 표시 이름 - 서버가 해석. 없으면 배지는 "개인 프리셋" 폴백.
+  preset_name: z.string().nullish().catch(null),
   config: ProjectConfigSchema.catch(DEFAULT_PROJECT_CONFIG),
   status: ProjectStatusSchema,
   depth_mode: DepthModeSchema,
