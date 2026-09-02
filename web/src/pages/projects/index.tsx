@@ -205,11 +205,16 @@ export default function ProjectsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all__">유형 전체</SelectItem>
-                {(presetsQuery.data ?? []).map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                  </SelectItem>
-                ))}
+                {/* 개인 프리셋(u:...)은 유형이 아니라 개인이 저장한 목차 - 유형 필터를
+                    오염시키지 않게 카탈로그만 나열하고, 분류는 자유 주제에 포함시킨다
+                    (2026-09-02 결정). 저장할 때마다 (2)(3)이 늘어 목록이 자라던 문제. */}
+                {(presetsQuery.data ?? [])
+                  .filter((p) => !p.id.startsWith("u:"))
+                  .map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
                 <SelectItem value="blank">자유 주제</SelectItem>
               </SelectContent>
             </Select>
