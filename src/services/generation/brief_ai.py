@@ -86,6 +86,10 @@ SYSTEM_PROMPT = """너는 정부·공공 보고서의 실행 계획을 세우는
     한 보고서에 네 번 실렸다).
   - 구조 수준(조사명·제도명·소재)까지만 배정하라. 개별 자료 파일 단위 배정은 자료가
     확정된 뒤 별도 단계가 한다 — 이 시점엔 어떤 자료가 채택될지 확정 전이다.
+  - 입력에 pack_overlaps가 있으면 그것은 검색 리허설로 **실측된** 근거팩 겹침 쌍이다
+    (질의가 달라도 같은 자료를 받는다 — 재탕의 직접 전조). 이 쌍들의 공유 소재
+    (shared_sources의 자료가 다루는 주제)는 **반드시** topic_ownership으로 한 절에
+    배정하고, outline_overlaps에도 분담 제안을 적어라.
 - outline_overlaps: **같은 소재를 요구하는 절 쌍**과 역할 분담 제안(0~5건). 목차
   자체가 겹침을 만들 때만 적는다 — sections는 "장.절" 2개, material은 겹치는 소재
   (자료명·조사명), proposal은 "1.3=수치 정본, 1.4=사례·해석" 형태의 분담 한 줄.
@@ -172,6 +176,15 @@ def _compact_input(brief: dict[str, Any]) -> str:
                     "sections": [x["label"] for x in g.get("sections", [])],
                 }
                 for g in brief.get("duplicate_queries", [])
+            ],
+            # 리허설 실측 겹침 — 재개방 게이트부터 실린다(첫 게이트는 색인 전이라 빈 값).
+            "pack_overlaps": [
+                {
+                    "sections": o.get("sections", []),
+                    "jaccard": o.get("jaccard"),
+                    "shared_sources": o.get("shared_sources", []),
+                }
+                for o in brief.get("pack_overlaps", [])
             ],
         },
         ensure_ascii=False,

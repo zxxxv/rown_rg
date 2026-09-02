@@ -886,6 +886,9 @@ export default function BriefPage() {
     for (const o of brief?.ai_plan?.outline_overlaps ?? []) {
       for (const label of o.sections) set.add(label);
     }
+    for (const o of brief?.pack_overlaps ?? []) {
+      for (const label of o.sections) set.add(label);
+    }
     return set;
   }, [brief, duplicatedLabels]);
   // ⚠ 배지 상세 - 숫자(경고 걸린 절 수)만으론 무엇이 문제인지 알 수 없다는 지적
@@ -906,6 +909,11 @@ export default function BriefPage() {
       const line = `${o.sections.join("·")} - 소재 겹침: ${o.material}${
         o.proposal ? ` (${o.proposal})` : ""
       }`;
+      for (const label of o.sections) push(Number(label.split(".")[0]), line);
+    }
+    for (const o of brief?.pack_overlaps ?? []) {
+      const shared = o.shared_sources.length ? ` (같은 자료: ${o.shared_sources.join(", ")})` : "";
+      const line = `${o.sections.join("·")} - 근거팩 겹침 ${Math.round(o.jaccard * 100)}% 실측${shared} - 두 절이 같은 자료로 쓰이면 재탕이 됩니다`;
       for (const label of o.sections) push(Number(label.split(".")[0]), line);
     }
     return map;

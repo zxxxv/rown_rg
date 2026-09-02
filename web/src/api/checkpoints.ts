@@ -315,6 +315,17 @@ export const DesignBriefPayloadSchema = z.object({
   chapters: z.array(BriefChapterSchema).default([]),
   sections: z.array(BriefSectionSchema).default([]),
   duplicate_queries: z.array(DuplicateQueryGroupSchema).default([]),
+  // 리허설 실측 근거팩 겹침 - 질의가 달라도 같은 자료를 받는 절 쌍(재탕의 전조).
+  // 첫 게이트(색인 전)엔 빈 값, 재개방 게이트부터 실린다.
+  pack_overlaps: z
+    .array(
+      z.object({
+        sections: z.array(z.string()),
+        jaccard: z.number(),
+        shared_sources: z.array(z.string()).default([]),
+      }),
+    )
+    .default([]),
   warnings: z
     .object({
       duplicate_query_sections: z.number().int().default(0),
