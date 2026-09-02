@@ -698,8 +698,13 @@ async def list_projects(
     # 보고서 유형(프리셋) 필터 — 목록에서 유형별로 좁혀 보기 위함. 자유 주제는
     # preset이 비어 있으므로 'blank' 토큰으로 그것만 고를 수 있게 한다.
     if preset:
+        # 자유 주제 = 프리셋 없음 + 개인 프리셋(u:<uuid>). 개인 프리셋은 보고서
+        # '유형'이 아니라 개인이 저장한 목차라 유형 분류상 자유 주제다(2026-09-02 결정
+        # — 저장할 때마다 유형 필터에 새 항목이 자라던 문제).
         stmt = stmt.where(
-            Project.preset.is_(None) if preset == "blank" else Project.preset == preset
+            or_(Project.preset.is_(None), Project.preset.like("u:%"))
+            if preset == "blank"
+            else Project.preset == preset
         )
     if q:
         pattern = f"%{q}%"
