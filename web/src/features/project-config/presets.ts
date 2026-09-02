@@ -8,8 +8,14 @@ export const PRESET_LABEL: Record<Preset, string> = {
 };
 
 /** 자유 주제(null)·백엔드 카탈로그 id(한국어)·레거시 키 모두를 표시용 라벨로 변환한다. */
-export function presetLabel(preset: string | null | undefined): string {
+export function presetLabel(
+  preset: string | null | undefined,
+  presetName?: string | null,
+): string {
   if (!preset || preset === "blank") return "자유 주제";
+  // 개인 프리셋 키(u:<uuid>)는 서버가 해석한 이름(preset_name)으로만 보여준다.
+  // 원시 키를 그대로 내면 카드 배지가 uuid로 도배된다(2026-09-02 실측).
+  if (preset.startsWith("u:")) return presetName || "개인 프리셋";
   if (preset in PRESET_LABEL) return PRESET_LABEL[preset as Preset];
   return preset; // 백엔드 카탈로그 id/name은 한국어 그 자체가 라벨
 }

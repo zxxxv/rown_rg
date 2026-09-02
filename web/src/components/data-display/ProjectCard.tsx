@@ -80,7 +80,7 @@ export function ProjectCard({ project, onClick, className }: ProjectCardProps) {
     >
       <header className="flex items-center justify-between gap-2">
         <Badge variant="secondary" className="font-mono text-xs">
-          {presetLabel(project.preset)}
+          {presetLabel(project.preset, project.preset_name)}
         </Badge>
         <StatusDot kind={kind} label={label} />
       </header>

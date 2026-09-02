@@ -226,7 +226,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
               <Badge variant="secondary" className="font-mono">
-                {presetLabel(project.preset)}
+                {presetLabel(project.preset, project.preset_name)}
               </Badge>
               {/* 상태 배지 2종(단계 점 + 검토 중/최종 확정)은 걷어냈다 - 바로 아래
                   상태 줄이 같은 말을 더 크게 한다. 작은 글씨로 두 번 말하면 훑을 때
