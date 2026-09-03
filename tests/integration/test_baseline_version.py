@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.models.report_version import ReportVersion
 from src.db.models.section import Section
 from src.db.models.user import User
-from tests.integration.test_drift_api import _auth, _completed_project
+from tests.conftest import auth_headers as _auth
+from tests.fixtures.builders import completed_project as _completed_project
 
 ORIGINAL = "이미 쓰인 본문입니다."
 

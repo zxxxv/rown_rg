@@ -6,83 +6,20 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.types import SectionPlan
 from src.db.models.project import Project
 from src.db.models.section import Section
 from src.db.models.user import User
-from src.services.sections.drift import content_fingerprint
+from tests.conftest import auth_headers as _auth
+from tests.fixtures.builders import completed_project as _completed_project
+from tests.fixtures.builders import drift_outline as _outline
+from tests.fixtures.builders import wait_job_done
 
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _outline(direction: str, sid: uuid.UUID) -> dict:
-    return {
-        "chapters": [
-            {
-                "id": "ch1",
-                "title": "1장",
-                "sections": [
-                    {
-                        "id": str(sid),
-                        "title": "배경",
-                        "direction": direction,
-                        "key_points": [],
-                        "agents": [],
-                    }
-                ],
-            }
-        ]
-    }
-
-
-async def _completed_project(
-    session: AsyncSession, owner_id: uuid.UUID, sid: uuid.UUID, direction: str
-) -> uuid.UUID:
-    plan = SectionPlan(
-        section_id=sid,
-        chapter_number=1,
-        section_number=1,
-        title="배경",
-        chapter_title="1장",
-        direction=direction,
-    )
-    proj = Project(
-        title="미반영 테스트",
-        topic="주제",
-        config={
-            "outline": _outline(direction, sid),
-            "_section_plan": [plan.model_dump(mode="json")],
-        },
-        status="completed",
-        depth_mode="full_report",
-        owner_id=owner_id,
-    )
-    session.add(proj)
-    await session.flush()
-    session.add(
-        Section(
-            id=sid,
-            project_id=proj.id,
-            chapter_number=1,
-            section_number=1,
-            chapter_title="1장",
-            title="배경",
-            content="이미 쓰인 본문입니다.",
-            source_ids=[],
-            plan_hash=content_fingerprint(plan),
-            status="completed",
-        )
-    )
-    await session.commit()
-    return proj.id
+# 공용 골격은 tests/fixtures/builders가 정본(교차 import 해소, 2026-09-04 정리).
 
 
 class TestDriftApi:
@@ -188,7 +125,7 @@ class TestDriftApi:
         """
         from src.api.routers import projects as projects_router
         from src.core.types import SectionDraft
-        from src.services.jobs import clear_job, get_job
+        from src.services.jobs import clear_job
 
         sid = uuid.uuid4()
         pid = await _completed_project(test_session, worker_user.id, sid, "원래 방향")
@@ -217,12 +154,7 @@ class TestDriftApi:
         )
         assert resp.status_code == 202, resp.text
 
-        for _ in range(80):
-            job = get_job(pid, projects_router.REWRITE_JOB)
-            if job and not job.running:
-                break
-            await asyncio.sleep(0.1)
-        job = get_job(pid, projects_router.REWRITE_JOB)
+        job = await wait_job_done(pid, projects_router.REWRITE_JOB, tries=80)
         assert job is not None and job.failures == {}, f"실패: {job and job.failures}"
         clear_job(pid, projects_router.REWRITE_JOB)
 

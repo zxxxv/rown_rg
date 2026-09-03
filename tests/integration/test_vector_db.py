@@ -22,29 +22,16 @@ from src.db.models.chunk import Chunk as ChunkModel
 from src.db.models.library_node import LibraryNode
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
-from src.db.models.user import User
-from src.infrastructure.auth.password_handler import hash_password
 from src.services.indexing._chunking import Chunk
 from src.services.indexing.vector import SourceInput, VectorIndexingService
+from tests.fixtures.builders import seed_owner_project
 
 pytestmark = pytest.mark.asyncio
 
 
+# 소유자+프로젝트 시드는 builders.seed_owner_project가 정본(3벌 복제이던 것).
 async def _seed_project(session: AsyncSession) -> Project:
-    user = User(
-        email=f"vec-{uuid4().hex[:6]}@test.com",
-        name="vec",
-        role="worker",
-        password_hash=hash_password("Vector123!@"),
-        is_active=True,
-    )
-    session.add(user)
-    await session.flush()
-    project = Project(title="vec-project", topic="topic", owner_id=user.id)
-    session.add(project)
-    await session.commit()
-    await session.refresh(project)
-    return project
+    return await seed_owner_project(session, prefix="vec")
 
 
 async def _seed_library_node(session: AsyncSession) -> LibraryNode:

@@ -18,7 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.project import Project
 from src.db.models.user import User
-from tests.integration.test_drift_api import _auth, _completed_project, _outline
+from tests.conftest import auth_headers as _auth
+from tests.fixtures.builders import completed_project as _completed_project
+from tests.fixtures.builders import drift_outline as _outline
 
 
 class TestDesignRefreshOnOutlineChange:

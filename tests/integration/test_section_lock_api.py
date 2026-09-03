@@ -7,7 +7,6 @@ test_drift_api가 지키므로, 여기서는 두 장치가 실제로 실행을 �
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 
 from httpx import AsyncClient
@@ -15,7 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.section import Section
 from src.db.models.user import User
-from tests.integration.test_drift_api import _auth, _completed_project, _outline
+from tests.conftest import auth_headers as _auth
+from tests.fixtures.builders import completed_project as _completed_project
+from tests.fixtures.builders import drift_outline as _outline
+from tests.fixtures.builders import wait_job_done
 
 
 class TestSectionLock:
@@ -105,7 +107,7 @@ class TestSectionLock:
         """
         from src.api.routers import projects as projects_router
         from src.core.types import SectionDraft
-        from src.services.jobs import clear_job, get_job
+        from src.services.jobs import clear_job
 
         locked_id = uuid.uuid4()
         pid = await _completed_project(test_session, worker_user.id, locked_id, "원래 방향")
@@ -148,11 +150,7 @@ class TestSectionLock:
         assert body["total"] == 1, "잠긴 절이 분모에 남으면 안 된다"
         assert body["skipped_locked"] == [str(locked_id)]
 
-        for _ in range(80):
-            job = get_job(pid, projects_router.REWRITE_JOB)
-            if job and not job.running:
-                break
-            await asyncio.sleep(0.1)
+        await wait_job_done(pid, projects_router.REWRITE_JOB, tries=80)
         clear_job(pid, projects_router.REWRITE_JOB)
 
         assert written == [free_id], "잠긴 절에 모델이 불렸다"

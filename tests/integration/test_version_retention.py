@@ -18,7 +18,7 @@ from src.db.models.report_version import ReportVersion
 from src.db.models.section import Section
 from src.db.models.user import User
 from src.services.sections.versions import KEEP_RECENT_CHURN, prune_versions, snapshot_report
-from tests.integration.test_drift_api import _completed_project
+from tests.fixtures.builders import completed_project as _completed_project
 
 
 async def _reasons(session: AsyncSession, pid: uuid.UUID) -> list[str]:
