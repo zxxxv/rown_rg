@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import re
 
+from src.core.citations import VARIANT_MARK_RE
+
 # 재지정 메모 — 목표 마커만 남긴다: "(출처 8, 19 중 8만 사용 → (출처 22))" → "(출처 22)"
 _REASSIGN_RE = re.compile(r"[^\S\n]*\(출처[^()]*→\s*\(출처\s*([\d,\s]+)\)\s*\)")
 # 교체 메모 — 최종 번호만 남긴다: "(출처 56 대신 출처 106)" → "(출처 106)"(2026-08-31
@@ -32,6 +34,18 @@ _MEMO_RES = (
 )
 # 마커 오염 — "(출превод처 25" → "(출처 25". 뒤에 숫자가 와야 마커다.
 _CORRUPT_MARKER_RE = re.compile(r"\(출[^\s처()]{1,12}처(?=\s*\d)")
+
+# 게이트(leftover_artifacts)와 공유하는 검출 표면 — 세정이 걷는 것과 게이트가
+# 경고하는 것이 같은 패턴이어야 "세정 밖 경로의 가시화"라는 분업이 성립한다.
+# 문자 그대로 2벌로 살다 한쪽만 수리될 운명이었다(2026-09-03 통일). 라벨 문구는
+# 게이트 경고 문구 그대로 — 바꾸면 화면·회귀 코퍼스의 경고 텍스트가 달라진다.
+LEFTOVER_DETECT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (_MEMO_RES[0], "출처 배정 메모('(출처 n 제외)')"),
+    (_MEMO_RES[1], "출처 배정 메모(사용 불가·미사용)"),
+    (_MEMO_RES[2], "출처 배정 메모(생략)"),
+    (_MEMO_RES[3], "출처 배정 메모(해당 없음)"),
+    (_CORRUPT_MARKER_RE, "오염된 출처 마커"),
+)
 # 기형 callout 태그 → 정식 펜스. 타입은 (warn)·type="warn" 어느 쪽이든 보존.
 _CALLOUT_OPEN_RE = re.compile(r'<callout\s*(?:\(([a-z]+)\)|type="([a-z]+)")?\s*>')
 _CALLOUT_CLOSE_RE = re.compile(r"</callout\s*>")
@@ -93,6 +107,9 @@ def scrub_leftovers(content: str) -> tuple[str, list[str]]:
             notes.append(f"{label} {n}건")
         return new
 
+    # 라벨 정본화가 먼저다 — 뒤의 메모·마커 패턴이 전부 "출처" 라벨 기준이고,
+    # 재번호(renumber)도 정본 라벨만 알아본다.
+    out = _sub(VARIANT_MARK_RE, r"(출처 \1)", "마커 라벨 정본화(근거·자료→출처)", out)
     out = _sub(_REASSIGN_RE, r" (출처 \1)", "출처 재지정 메모 정리", out)
     out = _sub(_REPLACE_RE, r" (출처 \1)", "출처 교체 메모 정리", out)
     for i, memo in enumerate(_MEMO_RES):

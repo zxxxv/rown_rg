@@ -303,7 +303,8 @@ class TestFrontendParity:
         assert f"const NUMERIC_CELL_RE = /{_NUMERIC_CELL_RE.pattern}/;" in source
 
     def test_부호_기호_목록이_같다(self) -> None:
-        from src.core.table_to_chart import _AMBIGUOUS_SIGNS, _NEGATIVE_SIGNS
+        from src.core.charts import NEGATIVE_SIGNS as _NEGATIVE_SIGNS
+        from src.core.table_to_chart import _AMBIGUOUS_SIGNS
 
         ambiguous = ", ".join(f'"{s}"' for s in _AMBIGUOUS_SIGNS)
         negative = ", ".join(f'"{s}"' for s in _NEGATIVE_SIGNS)
@@ -364,7 +365,8 @@ class TestPromptMatchesRules:
 
     def test_음수_기호_안내가_판정과_같다(self) -> None:
         """△는 음수로 읽고 ▲는 제외한다 - 규칙이 반대로 적혀 있으면 값이 뒤집힌다."""
-        from src.core.table_to_chart import _AMBIGUOUS_SIGNS, _NEGATIVE_SIGNS
+        from src.core.charts import NEGATIVE_SIGNS as _NEGATIVE_SIGNS
+        from src.core.table_to_chart import _AMBIGUOUS_SIGNS
 
         rules = self._rules()
         assert "△" in _NEGATIVE_SIGNS and "△934" in rules

@@ -34,7 +34,12 @@ from src.core.state import ProjectState
 from src.core.types import SectionDraft, SectionPlan
 from src.prompts import load_workflow_role
 from src.services.generation.planner import _parse_manifest
-from src.services.qa.gate import normalize_number, significant_numbers
+from src.services.qa.gate import (
+    KOR_SCALE_UNITS,
+    korean_magnitude,
+    normalize_number,
+    significant_numbers,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -94,25 +99,16 @@ def _norm_value(s: str) -> str:
 # 한국어 수 표기의 크기 동치 — '482.7억'과 '482억 7,000만 달러'는 같은 값이다.
 # 다보고서 회귀 실측(2026-08-23, 5유형)에서 PM 경고 45건 중 8건이 이런 '같은 값
 # 다른 표기' 지적이었다 — 문자열 정규화로는 못 가르므로 크기로 잰다.
-_KOR_UNIT = {"조": 1e12, "억": 1e8, "만": 1e4, "천": 1e3}
-_NUM_GROUP_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(조|억|만|천)?")
-_RESIDUE_STRIP = ("조", "억", "만", "천", "여", "약", "이상", "미만", "가량", "수준", "기준")
+# 크기 계산·단위 어휘는 gate가 단일 진실이다(2026-09-03 통일: 여기 4단위짜리 별도
+# 구현이 살아 있어 gate의 십억/천만/백만 수리가 전파되지 않았고, "252.5 십억"을
+# 252.5로 오독해 "2,525억"과의 동치를 놓쳤다).
+_RESIDUE_STRIP = (*KOR_SCALE_UNITS, "여", "약", "이상", "미만", "가량", "수준", "기준")
 
 
 def _magnitude(s: str) -> float | None:
-    """'482억 7,000만' → 4.827e10. 합성 표기는 단위가 내림차순일 때만 한 값으로 본다 —
-    '2025년 591억'처럼 별개 수가 이어진 문자열은 크기가 아니므로 None."""
-    text = s.replace(",", "")
-    total, last_scale = 0.0, None
-    found = False
-    for m in _NUM_GROUP_RE.finditer(text):
-        scale = _KOR_UNIT.get(m.group(2) or "", 1.0)
-        if last_scale is not None and scale >= last_scale:
-            return None
-        total += float(m.group(1)) * scale
-        last_scale = scale
-        found = True
-    return total if found else None
+    """'482억 7,000만' → 4.827e10. 단위 없는 맨숫자도 크기로 인정(다이제스트 토큰
+    의미론). '2025년 591억'처럼 별개 수가 이어진 문자열은 None."""
+    return korean_magnitude(s, bare_numbers=True)
 
 
 def _residue_tokens(s: str) -> set[str]:

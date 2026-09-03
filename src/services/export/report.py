@@ -297,7 +297,7 @@ def _collect_abbreviations(text: str, acc: dict[str, str]) -> None:
 
 # 행 끝 '|(출처 n)' 꼬리 — 마지막 파이프 **뒤**에 붙은 출처 표기만 잡는다. 근거 열이
 # 있는 표의 정상 셀("…|(출처 17) |")은 뒤에 파이프가 더 있어 매칭되지 않는다.
-_ROW_TAIL_SOURCE_RE = re.compile(r"\|\s*\((?:출처|근거)[^)]*\)\s*$")
+_ROW_TAIL_SOURCE_RE = re.compile(r"\|\s*\((?:출처|근거|자료|참고)[^)]*\)\s*$")
 
 
 def _table_cells(line: str) -> list[str]:
@@ -473,7 +473,8 @@ def _attach_table_sources(blocks: list[Block], titles: dict[int, str]) -> None:
 # 껍데기라 통째로 버린다(2026-08-12 지적: 표 밑에 빈 '출처:'만 떠 있었다).
 _BARE_SOURCE_LABEL_RE = re.compile(r"^[□ㅇ○◦\-*※\s]*(?:출처|자료|참고)\s*[:：]?\s*$")
 # 표 안 어디든 박힌 (출처 n) — 하단 출처 줄이 없는 표의 출처 복원에 쓴다.
-_TABLE_SOURCE_NUM_RE = re.compile(r"\((?:출처|근거)\s*(?P<nums>\d+(?:\s*,\s*\d+)*)\s*\)")
+# 라벨 집합은 core/citations 규약(정본 출처 + 변형 근거·자료·참고) — 세정 밖 경로용.
+_TABLE_SOURCE_NUM_RE = re.compile(r"\((?:출처|근거|자료|참고)\s*(?P<nums>\d+(?:\s*,\s*\d+)*)\s*\)")
 
 
 # 표 금지 셀 정의는 조립 세정(sections/scrub)이 정본 — 여기는 세정 밖 경로

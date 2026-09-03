@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.core.citations import (
+    normalize_mark_labels,
     numbers_in_order,
     renumber,
     source_numbers,
@@ -106,3 +107,22 @@ class TestStripNonnumericSourceMarks:
 
         text = "원문 인용이다 [3]"
         assert strip_nonnumeric_source_marks(text) == text
+
+
+class TestNormalizeMarkLabels:
+    """라벨 변형 정본화(2026-09-03) - 변형 라벨은 renumber(MARK_RE)를 지나쳐
+    절-로컬 번호가 최종 문서에 잔존하는 미봉인 경로였다."""
+
+    def test_변형_라벨을_출처로_정본화한다(self) -> None:
+        text = "성장했다 (근거 3). 확대됐다 (자료 7, 12). 유지된다 (참고 5)."
+        out = normalize_mark_labels(text)
+        assert out == "성장했다 (출처 3). 확대됐다 (출처 7, 12). 유지된다 (출처 5)."
+
+    def test_숫자_없는_괄호는_건드리지_않는다(self) -> None:
+        text = "(근거 부족) (자료 미비) (참고: 부록)"
+        assert normalize_mark_labels(text) == text
+
+    def test_정본화_후_renumber가_변형_마커도_갈아끼운다(self) -> None:
+        text = "성장했다 (근거 3)."
+        out = renumber(normalize_mark_labels(text), {3: 41})
+        assert out == "성장했다 (출처 41)."

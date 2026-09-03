@@ -23,6 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from uuid import UUID
 
+from src.core.citations import MARK_RE, numbers_in_order
 from src.services.qa.gate import (
     claim_units,
     normalize_haystack,
@@ -45,32 +46,16 @@ _NUMBER_TOKEN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
 _LATIN_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9\-]{2,}")
 _HANGUL_RUN_RE = re.compile(r"[가-힣]{2,}")
 
-# 근거 표기 두 형태를 다 받는다 — "[n]"(원문 직접 인용)과 "(출처 n)"·"(출처 3, 7)"
-# (참고해 재작성). 한쪽만 읽으면 다른 쪽을 쓴 문장이 통째로 '표기 없음'으로 잘못
-# 분류된다. (?!\()는 마크다운 링크 "[1](url)"의 라벨을 마커로 착각하지 않으려는 것.
-# 문법은 곧 src/core/citations.py로 합칠 자리다 — 그 모듈이 커밋되면 그쪽을 쓴다.
-_MARK_RE = re.compile(r"\(출처\s*(?P<source>\d+(?:\s*,\s*\d+)*)\s*\)|\[(?P<quote>\d+)\](?!\()")
-_NUM_SPLIT_RE = re.compile(r"\s*,\s*")
-
 
 def marker_numbers_in_order(text: str) -> list[int]:
     """근거 번호를 **등장 순서**대로 중복 없이 뽑는다(두 표기 모두).
 
     순서가 계약이다 — 작성기가 저장한 cited_chunk_ids가 이 순서와 위치로 대응하므로
     (candidates._extract_cited_ids), 정렬해 버리면 번호↔청크 매핑이 어긋난다.
+    구현은 core/citations.numbers_in_order 그대로다(2026-09-03 통일 — "곧 합칠
+    자리" 주석을 단 완전 재구현이 방치돼 있었다).
     """
-    out: list[int] = []
-    seen: set[int] = set()
-    for m in _MARK_RE.finditer(text):
-        raw = m.group("source") or m.group("quote") or ""
-        for token in _NUM_SPLIT_RE.split(raw.strip()):
-            if not token:
-                continue
-            n = int(token)
-            if n not in seen:
-                seen.add(n)
-                out.append(n)
-    return out
+    return numbers_in_order(text)
 
 
 def marker_numbers(text: str) -> list[int]:
@@ -355,7 +340,7 @@ def align_section(
     for claim in claim_units(content):
         numbers = marker_numbers(claim)
         # 마커 자체는 어휘가 아니다 — 점수 계산 전에 뗀다.
-        bare = _MARK_RE.sub(" ", claim).strip()
+        bare = MARK_RE.sub(" ", claim).strip()
         best: EvidenceSpan | None = None
         scored: list[EvidenceSpan] = []  # 후보 추림용 — 점수가 성립한 대목만 담는다
         cited_text: list[str] = []

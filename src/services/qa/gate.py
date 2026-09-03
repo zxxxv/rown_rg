@@ -154,12 +154,29 @@ _MIN_MANTISSA_DIGITS = 3
 _MAX_MANTISSA = 10**4
 
 
-def korean_magnitude(token: str) -> float | None:
-    """한국어 큰 수 표기의 값 — "2억 450만" → 204500000.0. 아니면 None."""
+# 단위 어휘의 공개 표면 — 소비처(pm_verify의 residue 스트립 등)가 자기 단위 목록을
+# 재선언하지 않게 한다. 긴 단위 먼저: "십억"을 "억"보다 먼저 걷어야 "십"이 안 남는다.
+KOR_SCALE_UNITS: tuple[str, ...] = tuple(sorted(_KOR_SCALE, key=len, reverse=True))
+
+_KOR_NUM_GROUP_RE = re.compile(rf"(\d+(?:\.\d+)?)\s*({_KOR_UNIT_ALT})")
+# bare_numbers용 — 단위가 없는 숫자도 크기 1로 합산에 참여시킨다.
+_KOR_NUM_GROUP_BARE_RE = re.compile(rf"(\d+(?:\.\d+)?)\s*({_KOR_UNIT_ALT})?")
+
+
+def korean_magnitude(token: str, *, bare_numbers: bool = False) -> float | None:
+    """한국어 큰 수 표기의 값 — "2억 450만" → 204500000.0. 아니면 None.
+
+    bare_numbers=True면 단위 없는 숫자도 크기 1로 합산·내림차순 검사에 참여한다
+    (pm_verify 다이제스트 값 대조 의미론 — "591"은 591.0, "2025년 591억"은 별개 수
+    연속이라 None). 기본(False)은 단위 표기가 최소 하나 있어야 크기로 인정한다.
+    2026-09-03 통일: pm_verify가 4단위(조·억·만·천)짜리 별도 구현을 갖고 있어
+    십억/천만/백만 수리가 전파되지 않았다 — 단위 테이블은 이 함수 하나만 갖는다.
+    """
     text = token.replace(",", "")
+    pattern = _KOR_NUM_GROUP_BARE_RE if bare_numbers else _KOR_NUM_GROUP_RE
     total, last, found = 0.0, None, False
-    for m in re.finditer(rf"(\d+(?:\.\d+)?)\s*({_KOR_UNIT_ALT})", text):
-        scale = _KOR_SCALE[m.group(2)]
+    for m in pattern.finditer(text):
+        scale = _KOR_SCALE.get(m.group(2) or "", 1.0)
         if last is not None and scale >= last:
             return None  # 자리 단위가 내림차순이 아니면 한 수가 아니다
         total += float(m.group(1)) * scale
@@ -1125,31 +1142,26 @@ def _forbidden_cell_pattern() -> re.Pattern[str]:
     return re.compile(r"\|\s*(?:" + joined + r")\s*\|")
 
 
+def _scrub_detect_patterns() -> tuple[tuple[re.Pattern[str], str], ...]:
+    # 함수 내 import — _forbidden_cell_pattern과 같은 이유(모듈 로드 순서 보수적으로).
+    from src.services.sections.scrub import LEFTOVER_DETECT_PATTERNS
+
+    return LEFTOVER_DETECT_PATTERNS
+
+
 _LEFTOVER_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"[-—–]\s*삭제\s*\)"), "편집 메모 잔재(… — 삭제)"),
     (re.compile(r"본 파트"), "내부 작성 단위 용어('본 파트')"),
     (re.compile(r"^#+\s*$", re.M), "빈 헤딩(#만 있는 줄)"),
-    (
-        re.compile(r"\(출처\s*[\d,\s]+\s*(?:은|는)?\s*제외[^()]{0,30}\)"),
-        "출처 배정 메모('(출처 n 제외)')",
-    ),
-    (
-        re.compile(r"\(출처\s*[\d,\s]+\s*(?:은|는)?[^()]{0,15}(?:사용\s*불가|미사용)[^()]{0,30}\)"),
-        "출처 배정 메모(사용 불가·미사용)",
-    ),
-    (
-        re.compile(r"\(출처\s*[\d,\s]+\s*(?:은|는)?[^()]{0,25}생략[^()]{0,10}\)"),
-        "출처 배정 메모(생략)",
-    ),
-    (
-        re.compile(r"\(출처\s*[\d,\s]+\s*(?:에|은|는)?\s*해당\s*없음[^()]{0,40}\)"),
-        "출처 배정 메모(해당 없음)",
-    ),
-    (re.compile(r"\(출[^\s처()]{1,12}처(?=\s*\d)"), "오염된 출처 마커"),
+    # 배정 메모·오염 마커는 조립 세정(sections/scrub)과 같은 패턴을 공유한다 —
+    # 문자 그대로 2벌로 살다 한쪽만 수리될 운명이었다(2026-09-03 통일).
+    *_scrub_detect_patterns(),
     # 2026-08-29 철강 정독 실측 3종 — 4.1 "(출처 11 대신 출처 12 기준 — …)" 작업 메모가
     # 본문에 그대로 노출됐고, 결측 표기("자료상 미제시")·근거팩 지칭("근거 자료상")이
     # 독자에게 지시 대상 없는 내부 용어로 남았다.
-    (re.compile(r"\(출처\s*\d+\s*대신"), "출처 교체 메모('(출처 n 대신 …)')"),
+    # 복수 번호("(출처 8, 19 대신 …)")까지 — 세정(_REPLACE_RE)은 복수를 받는데 검출만
+    # 단수라, 세정 밖 경로의 복수 교체 메모는 경고조차 안 떴다(2026-09-03 감사 A-6).
+    (re.compile(r"\(출처\s*\d+(?:\s*,\s*\d+)*\s*대신"), "출처 교체 메모('(출처 n 대신 …)')"),
     (re.compile(r"자료상\s*(?:미제시|제시\s*없음)"), "자료 결측 메모('자료상 미제시')"),
     (re.compile(r"제시되지\s*않아[^\n]{0,25}제외"), "편집 메모(비교 항목 제외)"),
     (re.compile(r"근거 자료상"), "내부 근거팩 지칭('근거 자료상')"),

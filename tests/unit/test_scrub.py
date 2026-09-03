@@ -134,3 +134,18 @@ class TestReplaceMemo:
         text = "단계에 있음(출처 11 대신 출처 12 기준 — 유럽이 선도하고 있음)(출처 11)"
         out, _notes = scrub_leftovers(text)
         assert "대신" in out
+
+
+class TestMarkerLabelCanon:
+    """세정 첫 단계의 라벨 정본화(2026-09-03) - 변형 라벨이 재번호를 지나치던 구멍."""
+
+    def test_변형_라벨이_세정에서_정본화된다(self) -> None:
+        out, notes = scrub_leftovers("확대됐다 (근거 3). 성장했다 (자료 7).")
+        assert out == "확대됐다 (출처 3). 성장했다 (출처 7)."
+        assert any("라벨 정본화" in n for n in notes)
+
+    def test_정본_라벨만_있으면_손대지_않는다(self) -> None:
+        text = "확대됐다 (출처 3)."
+        out, notes = scrub_leftovers(text)
+        assert out == text
+        assert notes == []
