@@ -42,7 +42,9 @@ MAX_PDF_BYTES = 40 * 1024 * 1024
 # (docling OCR이 꺼져 있어 스캔 문서는 빈 텍스트가 나온다)
 MIN_CHARS_PER_PAGE = 50
 
-_UA = "Mozilla/5.0 (compatible; RownReportBot/1.0; +https://loweninsight.kr)"
+# 크롤러 신원 표기 - 연락처 도메인은 운영 도메인과 일치해야 한다(옛 브랜드
+# loweninsight.kr로 남아 있던 것, 2026-09-03 감사).
+_UA = "Mozilla/5.0 (compatible; RownReportBot/1.0; +https://www.rowninsight.cloud)"
 
 
 def looks_like_pdf(url: str, content_type: str | None = None) -> bool:

@@ -25,12 +25,13 @@ import structlog
 from src.clients.llm.base import CompletionRequest, LLMClient, Message
 from src.clients.llm.factory import get_llm_client
 from src.clients.llm.token_tracker import token_context
+from src.core.config import settings
 from src.core.types import SectionPlan
 from src.prompts import ReportPreset, load_preset, load_workflow_role
 
 logger = structlog.get_logger(__name__)
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = settings.planner_model  # 리터럴 재선언 금지 - config가 단일 진실
 # 최대 프리셋(예비타당성조사 35섹션)은 direction·key_points 포함 시 매니페스트가
 # 7천 토큰을 넘는다 — 4096은 실측 잘림(stop_reason=max_tokens, 2026-08-03)으로 상향.
 DEFAULT_MAX_TOKENS = 12000

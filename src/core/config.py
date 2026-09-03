@@ -166,6 +166,10 @@ class Settings(BaseSettings):
     # 재실행하면 과금만 배가된다(2026-07-21 스모크에서 실측).
     llm_client_timeout_s: float = 600.0
 
+    # 파일 업로드 상한(바이트) — 라이브러리 업로드와 프로젝트 자료 직접 업로드가
+    # 같은 값을 쓴다(50MB 리터럴 2벌이던 것, 2026-09-03 통일).
+    max_upload_bytes: int = 50 * 1024 * 1024
+
     # JWT
     jwt_secret_key: str = _DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
@@ -343,6 +347,10 @@ class Settings(BaseSettings):
     raptor_model: str = "gemini-3.1-flash-lite"  # 실작동 최저가(2026-08-04 실측 승계)
     # 약어 사전 설명 생성(assemble 1콜) — 배경 지원 기능이라 최저가 모델
     glossary_model: str = "gemini-3.1-flash-lite"
+    # 용어집 생성 상한 벨트 - LLM이 응답 없이 영구 정지한 실사례(2026-08-21 v6 조립,
+    # 11분 무응답) 대응. 용어집은 장식이라 초과는 건너뛴다. 운영 조정용으로 승격
+    # (인라인 240 리터럴이던 것, 2026-09-03 감사).
+    glossary_timeout_s: float = 240.0
 
     # 자료 용어 채굴·주입 — 색인 때 문서가 정의한 용어·한영 병기를 자료 행에 적립하고
     # (indexing/terms), 작성 시 근거팩에 등장하는 것만 프롬프트에 싣는다(generation/

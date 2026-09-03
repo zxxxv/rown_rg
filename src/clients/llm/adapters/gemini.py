@@ -6,6 +6,7 @@ from src.clients.llm.adapters.base import BaseLLMAdapter, RetryKind
 from src.clients.llm.base import CompletionRequest, CompletionResponse, Message
 from src.clients.llm.exceptions import LLMAPIError
 from src.clients.llm.models import supported_ids
+from src.core.config import settings
 
 SUPPORTED_GEMINI_MODELS: Final[frozenset[str]] = supported_ids("gemini")
 
@@ -17,7 +18,9 @@ class GeminiAdapter(BaseLLMAdapter):
     def _create_client(self, api_key: str) -> Any:
         if not api_key:
             raise LLMAPIError("GEMINI_API_KEY가 설정되지 않았습니다.")
-        return httpx.AsyncClient(timeout=60.0)
+        # 60초 인라인은 장문 생성(RAPTOR·용어집)에서 먼저 터진다 - 다른 어댑터와
+        # 같은 설정 키를 쓴다(2026-09-03 감사: config 우회 유일 사례였음).
+        return httpx.AsyncClient(timeout=settings.llm_client_timeout_s)
 
     def _classify_error(self, exc: Exception) -> RetryKind | None:
         if isinstance(exc, httpx.RequestError):

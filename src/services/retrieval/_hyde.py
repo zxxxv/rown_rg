@@ -21,12 +21,15 @@ import structlog
 from src.clients.llm.base import CompletionRequest, LLMClient, Message
 from src.clients.llm.factory import get_llm_client
 from src.clients.llm.token_tracker import token_context
+from src.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
 QueryExpander = Callable[[str], Awaitable[str]]
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+# 리터럴 재선언 금지 - config.hyde_model이 단일 진실(과거 이 폴백만 구세대
+# gemini-2.5-flash로 남아 드리프트했다, 2026-09-03 감사).
+DEFAULT_MODEL = settings.hyde_model
 DEFAULT_MAX_TOKENS = 512  # BGE-M3 입력 상한(512토큰)에 맞춰 짧게
 
 _SYSTEM = (
