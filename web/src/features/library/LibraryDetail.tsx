@@ -46,6 +46,8 @@ import {
 } from "@/components/ui/table";
 import { PromptBody } from "@/features/library/PromptPanel";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
+import { formatSize } from "@/lib/format";
+import { ROLE_LABEL } from "@/lib/labels";
 
 interface LibraryDetailProps {
   node: LibraryNode | null;
@@ -65,12 +67,6 @@ const KIND_LABEL: Record<SourceKind, string> = {
   upload: "업로드",
   web_search: "웹 검색",
 };
-
-function formatSize(bytes: number): string {
-  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
-  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(0)} KB`;
-  return `${bytes} B`;
-}
 
 function countDescendants(node: LibraryNode): {
   folders: number;
@@ -614,12 +610,10 @@ function DeleteNodeButton({ node }: { node: LibraryNode }) {
   );
 }
 
-const ROLE_OPTIONS: { value: UserRoleType; label: string }[] = [
-  { value: "viewer", label: "뷰어" },
-  { value: "worker", label: "작성자" },
-  { value: "admin", label: "관리자" },
-  { value: "super_admin", label: "최고관리자" },
-];
+// 권한 낮은 쪽부터 - 라벨은 ROLE_LABEL 단일 진실에서 온다.
+const ROLE_OPTIONS: { value: UserRoleType; label: string }[] = (
+  ["viewer", "worker", "admin", "super_admin"] as const
+).map((value) => ({ value, label: ROLE_LABEL[value] }));
 
 function VisibilityDialogButton({ node }: { node: Extract<LibraryNode, { type: "file" }> }) {
   const setVisibility = useSetNodeVisibility();

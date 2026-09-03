@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
 import { sectionKeys } from "@/api/sections";
+import { POLL_JOB_MS } from "@/lib/intervals";
 
 // 실계약: GET /projects/{id}/drift - 설계 변경이 아직 본문에 닿지 않은 절("미반영").
 // 보고서는 완성 순간이 끝이 아니다(2026-08-25) - 완료 뒤에도 목차를 고치거나 자료를
@@ -88,7 +89,7 @@ export function useRewriteBatchStatus(projectId: string, enabled = true) {
       return RewriteBatchStatusSchema.parse(data);
     },
     enabled: Boolean(projectId) && enabled,
-    refetchInterval: (query) => (query.state.data?.running ? 3000 : false),
+    refetchInterval: (query) => (query.state.data?.running ? POLL_JOB_MS : false),
   });
 }
 

@@ -47,6 +47,7 @@ import {
   toOutline,
 } from "@/features/project-config/OutlineEditor";
 import { useAuth } from "@/hooks/useAuth";
+import { POLL_PAGE_MS } from "@/lib/intervals";
 import { cn } from "@/lib/utils";
 
 /** 브리프 절 목록 → 목차 편집기 초안. 편집은 생성 화면과 같은 편집기를 재사용한다. */
@@ -407,7 +408,9 @@ function TopicOwnership({ brief }: { brief: DesignBriefPayload }) {
   );
 }
 
-const FLOW_EDGE = "var(--chart-ink, #a3a19c)";
+// 폴백은 tokens.css의 토큰 값과 같게 - 한 파일 안에서 --chart-ink 폴백이 두 값으로
+// 갈라져 있었다(#a3a19c/#52514e). 이제 토큰이 정의돼 폴백은 비상용일 뿐이다.
+const FLOW_EDGE = "var(--chart-ink, #52514e)";
 const FLOW_CROSS = "var(--chart-accent, #c26d3f)";
 const FLOW_GRID = "var(--chart-grid, #d6d5d2)";
 const FLOW_INK = "var(--chart-ink, #52514e)";
@@ -764,7 +767,7 @@ export default function BriefPage() {
   const { user, logout } = useAuth();
 
   const projectQuery = useProject(projectId);
-  const snapshot = useProgressSnapshot(projectId, true, { refetchInterval: 7_000 });
+  const snapshot = useProgressSnapshot(projectId, true, { refetchInterval: POLL_PAGE_MS });
   const gate = snapshot.data?.pending_gate;
   const open = gate?.gate === "design_brief";
   const pendingBrief = useMemo(

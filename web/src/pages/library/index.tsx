@@ -25,6 +25,7 @@ import { LibraryDetail } from "@/features/library/LibraryDetail";
 import { LibraryTree } from "@/features/library/LibraryTree";
 import { useAuth } from "@/hooks/useAuth";
 import { useDebounce } from "@/hooks/useDebounce";
+import { SEARCH_DEBOUNCE_MS } from "@/lib/intervals";
 import { cn } from "@/lib/utils";
 
 interface Lookup {
@@ -55,7 +56,7 @@ export default function LibraryPage() {
   useEffect(() => {
     setSearchInput(initialQ);
   }, [initialQ]);
-  const debouncedSearch = useDebounce(searchInput, 300);
+  const debouncedSearch = useDebounce(searchInput, SEARCH_DEBOUNCE_MS);
 
   useEffect(() => {
     const trimmed = debouncedSearch.trim();

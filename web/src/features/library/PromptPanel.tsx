@@ -6,6 +6,7 @@ import { type PresetChapterDetail, useImportSharedPreset, usePresetDetail } from
 import { useImportSharedPrompt, usePersonalPrompt, useSystemPrompt } from "@/api/prompts";
 import type { LibraryFileMeta, PromptRef } from "@/api/types";
 import { Button } from "@/components/ui/button";
+import { formatSize } from "@/lib/format";
 
 const KIND_LABEL: Record<PromptRef["kind"], string> = {
   agent: "에이전트",
@@ -27,12 +28,6 @@ export function PromptBody({ prompt, meta }: { prompt: PromptRef; meta?: Library
       {meta ? <PromptMeta meta={meta} /> : null}
     </div>
   );
-}
-
-function formatSize(bytes: number): string {
-  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
-  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(0)} KB`;
-  return `${bytes} B`;
 }
 
 /** 프롬프트 노드도 파일과 같은 메타(소유자·수정일·크기)를 보여준다 - 남의 자산을

@@ -10,12 +10,13 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { apiUrl } from "@/api/client";
 import { useReportVersions } from "@/api/versions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { HelpTip } from "@/components/ui/help-tip";
-import { env } from "@/env";
 import { useDownload } from "@/features/export/useDownload";
+import { fmtKstCompact } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 import { isMilestoneReason, reasonLabel } from "./reasons";
 import { SaveVersionDialog } from "./SaveVersionDialog";
@@ -27,13 +28,8 @@ import { SaveVersionDialog } from "./SaveVersionDialog";
 // 자동으로 쌓이는 스냅샷은 되돌리기용 안전망이지 사람이 읽는 이력이 아니라, 다 늘어놓으면
 // 35절 보고서 한 바퀴에 수십 줄이 되어 정작 찾는 지점이 묻힌다(2026-08-27).
 
-function fmtDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes(),
-  ).padStart(2, "0")}`;
-}
+// 표시는 KST 고정(fmtKstCompact) - 버전 이력만 브라우저 로컬 시간이라 화면마다
+// 시각이 달랐다.
 
 export function VersionHistoryCard({
   projectId,
@@ -84,7 +80,6 @@ export function VersionHistoryCard({
   );
   if (versions.length === 0) return null;
 
-  const apiBase = env.VITE_API_BASE_URL.replace(/\/$/, "");
   return (
     <section id="version-history" className="rounded border border-border bg-bg">
       <div className="flex w-full items-center gap-2 px-3 py-2">
@@ -113,7 +108,7 @@ export function VersionHistoryCard({
               (2026-08-27 지적). 접었다는 사실은 바로 아래 토글 줄이 이미 말한다. */}
           <span className="text-xs text-fg-tertiary">
             {versions.length}개 · 마지막 변경 v{versions[0].version_no} (
-            {fmtDate(versions[0].created_at)})
+            {fmtKstCompact(versions[0].created_at)})
           </span>
         </button>
         {/* 접는 머리가 <button>이라 도움말을 그 안에 넣으면 버튼 안 버튼이 된다
@@ -210,7 +205,9 @@ export function VersionHistoryCard({
                   >
                     {reasonLabel(v.reason)}
                   </span>
-                  <span className="shrink-0 text-xs text-fg-tertiary">{fmtDate(v.created_at)}</span>
+                  <span className="shrink-0 text-xs text-fg-tertiary">
+                    {fmtKstCompact(v.created_at)}
+                  </span>
                   {v.is_current ? (
                     <Badge
                       variant="outline"
@@ -287,7 +284,7 @@ export function VersionHistoryCard({
                     disabled={pending}
                     onClick={() =>
                       void download({
-                        url: `${apiBase}/projects/${projectId}/versions/${v.version_no}/download`,
+                        url: apiUrl(`projects/${projectId}/versions/${v.version_no}/download`),
                         filename: `${projectTitle}.v${v.version_no}.hwpx`,
                         label: `v${v.version_no} HWPX`,
                       })

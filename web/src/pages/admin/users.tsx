@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ApiError } from "@/api/client";
+import { ApiError, apiErrorMessage } from "@/api/client";
 import type { UserRoleType } from "@/api/types";
 import {
   type AdminUser,
@@ -53,6 +53,9 @@ import {
 } from "@/components/ui/table";
 import { useAuth } from "@/hooks/useAuth";
 import { useDebounce } from "@/hooks/useDebounce";
+import { fmtKstDateTime } from "@/lib/datetime";
+import { SEARCH_DEBOUNCE_MS } from "@/lib/intervals";
+import { ROLE_LABEL } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
@@ -64,40 +67,20 @@ const ROLE_RANK: Record<UserRoleType, number> = {
   super_admin: 4,
 };
 
-const ROLE_LABEL: Record<UserRoleType, string> = {
-  super_admin: "최고관리자",
-  admin: "관리자",
-  worker: "작성자",
-  viewer: "뷰어",
-};
-
 const ROLE_ORDER: UserRoleType[] = ["super_admin", "admin", "worker", "viewer"];
 
 const PASSWORD_POLICY_HINT =
   "12자 이상, 대문자·소문자·숫자·특수문자를 각각 1자 이상 포함해야 합니다.";
 
-function fmtDateTime(iso?: string | null): string {
-  if (!iso) return "-";
-  return new Date(iso).toLocaleString("ko-KR", {
-    timeZone: "Asia/Seoul",
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
 function isLocked(user: AdminUser): boolean {
   return Boolean(user.locked_until && new Date(user.locked_until).getTime() > Date.now());
-}
-
-function errMsg(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
 }
 
 export default function AdminUsersPage() {
   const { user, logout } = useAuth();
   const [offset, setOffset] = useState(0);
   const [search, setSearch] = useState("");
-  const debouncedSearch = useDebounce(search, 300);
+  const debouncedSearch = useDebounce(search, SEARCH_DEBOUNCE_MS);
 
   // 검색어가 바뀌면 첫 페이지로 되돌린다.
   // biome-ignore lint/correctness/useExhaustiveDependencies: offset은 리셋 대상이라 의존성 제외
@@ -286,7 +269,7 @@ function UserRow({
         onSuccess: () =>
           toast.success(`${row.name}의 역할을 ${ROLE_LABEL[role]}(으)로 변경했습니다.`),
         onError: (err) =>
-          toast.error("역할 변경 실패", { description: errMsg(err, "처리 중 오류") }),
+          toast.error("역할 변경 실패", { description: apiErrorMessage(err, "처리 중 오류") }),
       },
     );
   };
@@ -300,7 +283,7 @@ function UserRow({
             next ? `${row.name} 계정을 활성화했습니다.` : `${row.name} 계정을 비활성화했습니다.`,
           ),
         onError: (err) =>
-          toast.error("활성 상태 변경 실패", { description: errMsg(err, "처리 중 오류") }),
+          toast.error("활성 상태 변경 실패", { description: apiErrorMessage(err, "처리 중 오류") }),
       },
     );
   };
@@ -308,7 +291,7 @@ function UserRow({
   const doUnlock = () => {
     unlock.mutate(row.id, {
       onSuccess: (res) => toast.success(res.detail),
-      onError: (err) => toast.error("잠금 해제 실패", { description: errMsg(err, "처리 중 오류") }),
+      onError: (err) => toast.error("잠금 해제 실패", { description: apiErrorMessage(err, "처리 중 오류") }),
     });
   };
 
@@ -354,13 +337,13 @@ function UserRow({
         />
       </TableCell>
       <TableCell className="font-mono text-xs text-fg-tertiary">
-        {fmtDateTime(row.last_login_at)}
+        {fmtKstDateTime(row.last_login_at)}
       </TableCell>
       <TableCell>
         {locked ? (
           <Badge variant="destructive" className="gap-1">
             <Lock className="h-3 w-3" aria-hidden />
-            잠김 · {fmtDateTime(row.locked_until)}까지
+            잠김 · {fmtKstDateTime(row.locked_until)}까지
           </Badge>
         ) : (
           <span className="text-xs text-fg-tertiary">정상</span>
@@ -500,7 +483,7 @@ function ResetPasswordDialog({
         },
         onError: (err) =>
           toast.error("비밀번호 재설정 실패", {
-            description: errMsg(err, "정책을 확인해 주세요."),
+            description: apiErrorMessage(err, "정책을 확인해 주세요."),
           }),
       },
     );

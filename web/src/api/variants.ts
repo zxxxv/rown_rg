@@ -3,6 +3,7 @@ import { z } from "zod";
 import { apiClient } from "@/api/client";
 import { invalidateSection, sectionKeys } from "@/api/sections";
 import { SectionContentResponseSchema } from "@/api/types";
+import { POLL_JOB_MS } from "@/lib/intervals";
 
 // 실계약: /projects/{id}/sections/{sid}/variants - 한 절을 여러 벌 뽑아 놓고 고른다.
 //
@@ -46,7 +47,7 @@ export function useSectionVariants(projectId: string, sectionId: string, enabled
     },
     enabled: Boolean(projectId) && Boolean(sectionId) && enabled,
     // 완성되는 대로 쌓이므로 도는 동안 따라간다 - 셋을 다 기다릴 필요가 없다.
-    refetchInterval: (query) => (query.state.data?.running ? 3000 : false),
+    refetchInterval: (query) => (query.state.data?.running ? POLL_JOB_MS : false),
   });
 }
 

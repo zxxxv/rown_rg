@@ -21,6 +21,7 @@ import {
   useProgressSnapshot,
 } from "@/api/progress";
 import {
+  projectExportUrl,
   projectKeys,
   useDeleteProject,
   useProject,
@@ -48,7 +49,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { env } from "@/env";
 import { UnreflectedCard } from "@/features/export/UnreflectedCard";
 import { useDownload } from "@/features/export/useDownload";
 import { PipelineStepper } from "@/features/progress/PipelineStepper";
@@ -61,6 +61,8 @@ import { EvidenceCompositionCard } from "@/features/stats/EvidenceCompositionCar
 import { SourceUsageCard } from "@/features/stats/SourceUsageCard";
 import { ReopenDialog } from "@/features/versions/ReopenDialog";
 import { useAuth } from "@/hooks/useAuth";
+import { formatKstMinute } from "@/lib/datetime";
+import { POLL_PAGE_MS } from "@/lib/intervals";
 import { ReportWorkspace } from "@/pages/projects/[id]/preview";
 
 // 게이트별 결정 화면과 CTA 문구. 백엔드 runner._GATE_PAGES와 같은 대응이다.
@@ -188,7 +190,7 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
   // 단계 전이·게이트 개방을 따라잡는다(개요가 실행을 지켜보는 화면이 되도록).
   const terminal = ["completed", "archived"].includes(project.status);
   const usageQuery = useProgressSnapshot(project.id, true, {
-    refetchInterval: terminal ? false : 7_000,
+    refetchInterval: terminal ? false : POLL_PAGE_MS,
   });
   // 죽은 런(백엔드 태스크 소실) - 스피너 대신 중단 안내·재개 CTA로 바꾼다.
   const stalled = useConfirmedStalled(usageQuery.data);
@@ -493,14 +495,6 @@ function OverviewBody({ project, isUpdating, onSaveConfig }: OverviewBodyProps) 
   );
 }
 
-// 최근 수정을 분 단위 KST로 - 날짜만 보이면 같은 날의 편집이 화면에서 안 움직여
-// "반영이 안 된다"로 읽힌다(2026-08-31 지적). sv-SE 로케일이 YYYY-MM-DD HH:mm 꼴을 준다.
-function formatKstMinute(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
-  return d.toLocaleString("sv-SE", { timeZone: "Asia/Seoul" }).slice(0, 16);
-}
-
 // 완성된 프로젝트의 결과 요약 - 개요 본문이 텅 비지 않게, 산출물의 핵심 숫자를
 // 실데이터로 보여주고 각 타일에서 해당 작업 화면으로 바로 이동한다.
 function Meta({ label, value }: { label: string; value: string }) {
@@ -596,7 +590,7 @@ function PrimaryAction({
           disabled={downloading}
           onClick={() =>
             void download({
-              url: `${env.VITE_API_BASE_URL.replace(/\/$/, "")}/projects/${project.id}/export`,
+              url: projectExportUrl(project.id),
               filename: `${project.title}.hwpx`,
               label: "HWPX",
             })

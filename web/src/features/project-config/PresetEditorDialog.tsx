@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DuplicateNameNotice } from "./DuplicateNameNotice";
 import {
   type DraftChapter,
   emptyChapter,
@@ -173,16 +174,7 @@ export function PresetEditorDialog({
             />
           )}
         </div>
-        {duplicate ? (
-          <div className="rounded border border-border bg-bg-secondary p-3 text-xs">
-            <p className="font-medium text-fg-primary">
-              같은 이름의 프리셋이 이미 있습니다: {name.trim()}
-            </p>
-            <p className="mt-0.5 text-fg-tertiary">
-              덮어쓰면 기존 프리셋이 이 구성으로 바뀝니다. 따로 두려면 이름을 고쳐 주세요.
-            </p>
-          </div>
-        ) : null}
+        {duplicate ? <DuplicateNameNotice name={name.trim()} /> : null}
         <DialogFooter>
           <Button variant="ghost" onClick={onClose} disabled={pending}>
             취소

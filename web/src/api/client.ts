@@ -90,6 +90,11 @@ export function apiUrl(path: string): string {
   return `${resolvePrefixUrl(env.VITE_API_BASE_URL).replace(/\/$/, "")}/${path}`;
 }
 
+/** toast 오류 문구의 공용 축약 - ApiError면 서버 메시지를, 아니면 폴백 문구를. */
+export function apiErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
+}
+
 // 401 시 한 번만 토큰 자동 갱신을 시도한다(동시다발 401은 single-flight로 공유).
 let refreshInFlight: Promise<boolean> | null = null;
 

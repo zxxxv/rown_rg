@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { DuplicateNameNotice } from "./DuplicateNameNotice";
 import { type DraftChapter, toPresetChapters } from "./OutlineEditor";
 
 /** 목차 편집기의 현재 구성을 내 프리셋으로 저장 - 같은 구성으로 다음 보고서를
@@ -119,16 +120,7 @@ export function SavePresetDialog({
               저장할 절이 없습니다. 제목 있는 절을 1개 이상 만들어 주세요.
             </p>
           ) : null}
-          {duplicate ? (
-            <div className="rounded border border-border bg-bg-secondary p-3 text-xs">
-              <p className="font-medium text-fg-primary">
-                같은 이름의 프리셋이 이미 있습니다: {name.trim()}
-              </p>
-              <p className="mt-0.5 text-fg-tertiary">
-                덮어쓰면 기존 프리셋이 이 구성으로 바뀝니다. 따로 두려면 이름을 고쳐 주세요.
-              </p>
-            </div>
-          ) : null}
+          {duplicate ? <DuplicateNameNotice name={name.trim()} /> : null}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose} disabled={create.isPending}>

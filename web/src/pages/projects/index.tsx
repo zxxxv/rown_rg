@@ -20,6 +20,7 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/useAuth";
 import { useDebounce } from "@/hooks/useDebounce";
+import { SEARCH_DEBOUNCE_MS } from "@/lib/intervals";
 import { cn } from "@/lib/utils";
 
 // 상태 탭 - 단일 단계 대신 '진행 중'(미완료 단계 묶음)·'완료'로 단순화.
@@ -70,7 +71,7 @@ export default function ProjectsPage() {
   useEffect(() => {
     setSearchInput(qRaw);
   }, [qRaw]);
-  const debouncedSearch = useDebounce(searchInput, 300);
+  const debouncedSearch = useDebounce(searchInput, SEARCH_DEBOUNCE_MS);
 
   useEffect(() => {
     const normalized = debouncedSearch.trim();

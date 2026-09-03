@@ -1,7 +1,7 @@
 import { Coins, Save } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { ApiError } from "@/api/client";
+import { apiErrorMessage } from "@/api/client";
 import {
   QUOTA_META,
   type QuotaSetting,
@@ -14,10 +14,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/useAuth";
-
-function errMsg(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
-}
 
 type Meta = (typeof QUOTA_META)[number];
 
@@ -89,7 +85,7 @@ function QuotaRow({
       await update.mutateAsync({ [meta.key]: String(parsed) });
       toast.success(`${meta.label} 저장됨`);
     } catch (err) {
-      toast.error("저장 실패", { description: errMsg(err, "값을 확인해 주세요.") });
+      toast.error("저장 실패", { description: apiErrorMessage(err, "값을 확인해 주세요.") });
     }
   };
 
