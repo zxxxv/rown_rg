@@ -13,11 +13,15 @@
 #   echo <PAT> | docker login ghcr.io -u <github사용자> --password-stdin
 # SPA는 종전대로 별도 pnpm 빌드(이미지에 안 들어간다).
 
+# 이미지 좌표 단일 선언 - migrate/app 두 서비스가 같은 이미지를 써야 하며, 두 줄로
+# 살면 롤백(:main -> :<sha>) 때 한 줄만 고쳐 서로 다른 이미지로 뜨는 사고가 된다.
+x-app-image: &app-image ghcr.io/zxxxv/rown-app:main
+
 services:
   migrate:
-    image: ghcr.io/zxxxv/rown-app:main
+    image: *app-image
   app:
-    image: ghcr.io/zxxxv/rown-app:main
+    image: *app-image
     volumes:
       # 레지스트리 이미지는 모델 없이 굽는다(러너 체크아웃에 gitignore된 models/가
       # 없어 첫 빌드 실패, 2026-09-02). 호스트의 모델을 읽기 전용 마운트 -

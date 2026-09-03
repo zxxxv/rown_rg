@@ -92,7 +92,7 @@ known-first-party = ["src", "tests"]
 section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]
+# (S101 무시는 select에 S 계열이 없어 no-op이라 제거 - 2026-09-03 감사)
 "src/db/migrations/*" = ["E501"]
 
 [tool.mypy]

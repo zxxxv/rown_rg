@@ -12,7 +12,10 @@ on:
     branches: [main]
     paths:
       - "src/**"
-      - "alembic/**"
+      # 마이그레이션은 src/db/migrations(위 src/**에 포함)이고, alembic.ini는
+      # Dockerfile이 COPY하므로 여기 있어야 재빌드가 걸린다("alembic/**"는
+      # 존재하지 않는 경로라 영영 발화 안 하던 죽은 필터, 2026-09-03 수리).
+      - "alembic.ini"
       - "Dockerfile"
       - "pyproject.toml"
       - "uv.lock"

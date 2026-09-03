@@ -18,7 +18,9 @@ jobs:
 
     services:
       postgres:
-        image: ghcr.io/zxxxv/rown-postgres:latest
+        # 소유자명은 저장소에서 파생 - publish 워크플로들과 같은 규칙(리터럴이면
+        # 저장소 이전 시 여기만 남는다, 2026-09-03).
+        image: ghcr.io/${{ github.repository_owner }}/rown-postgres:latest
         credentials:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
