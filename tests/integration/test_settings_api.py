@@ -6,6 +6,7 @@ import pytest
 from httpx import AsyncClient
 
 from src.core import app_settings
+from tests.conftest import auth_headers as _auth
 
 
 @pytest.fixture(autouse=True)
@@ -14,10 +15,6 @@ def _clear_settings_cache():
     app_settings._cache.clear()
     yield
     app_settings._cache.clear()
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 class TestSettingsApi:

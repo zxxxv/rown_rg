@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -14,21 +13,12 @@ from src.db.models.project import Project
 from src.db.models.quota_setting import QuotaSettings
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
-from src.services.quota_settings import invalidate_quota_setting_cache
+from tests.conftest import auth_headers as _auth
 
 pytestmark = pytest.mark.integration
 
 
-@pytest.fixture(autouse=True)
-def _clear_quota_settings_cache() -> Iterator[None]:
-    # 모듈 전역 캐시가 테스트 간에 새어나가지 않도록 매 테스트 전후로 비운다.
-    invalidate_quota_setting_cache()
-    yield
-    invalidate_quota_setting_cache()
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+# 한도 캐시 격리는 conftest의 autouse(_reset_quota_settings_cache)가 전담한다.
 
 
 async def _seed_setting(session: AsyncSession, key: str, value: str) -> QuotaSettings:

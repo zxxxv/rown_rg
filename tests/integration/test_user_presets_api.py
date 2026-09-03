@@ -9,10 +9,7 @@ from __future__ import annotations
 
 from httpx import AsyncClient
 
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
+from tests.conftest import auth_headers as _auth
 
 _CHAPTERS = [
     {

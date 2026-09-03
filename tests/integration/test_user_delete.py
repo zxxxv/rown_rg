@@ -13,12 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.models.project import Project
 from src.db.models.user import User
 from src.infrastructure.auth import password_handler
+from tests.conftest import auth_headers as _auth
 
 pytestmark = pytest.mark.integration
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 async def _make_user(session: AsyncSession, email: str, *, active: bool = False) -> User:

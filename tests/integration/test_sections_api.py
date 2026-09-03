@@ -16,10 +16,7 @@ from src.api.routers import projects as projects_router
 from src.core.types import SectionDraft, SectionPlan
 from src.db.models.project import Project
 from src.db.models.section import Section
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+from tests.conftest import auth_headers as _auth
 
 
 async def _make_project(session: AsyncSession, owner_id: UUID) -> Project:

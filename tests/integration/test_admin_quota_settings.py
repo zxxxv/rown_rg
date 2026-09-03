@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -10,13 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.models.quota_setting import QuotaSettings
 from src.db.models.quota_setting_history import QuotaSettingsHistory
 from src.db.models.user import User
-from src.services.quota_settings import get_quota_setting, invalidate_quota_setting_cache
+from src.services.quota_settings import get_quota_setting
+from tests.conftest import auth_headers as _auth
 
 pytestmark = pytest.mark.integration
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 async def _seed_setting(session: AsyncSession, key: str, value: str) -> QuotaSettings:
@@ -27,12 +22,7 @@ async def _seed_setting(session: AsyncSession, key: str, value: str) -> QuotaSet
     return row
 
 
-@pytest.fixture(autouse=True)
-def _clear_quota_settings_cache() -> Iterator[None]:
-    # 모듈 전역 캐시가 테스트 간에 새어나가지 않도록 매 테스트 전후로 비운다.
-    invalidate_quota_setting_cache()
-    yield
-    invalidate_quota_setting_cache()
+# 한도 캐시 격리는 conftest의 autouse(_reset_quota_settings_cache)가 전담한다.
 
 
 class TestListQuotaSettings:

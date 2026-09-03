@@ -13,10 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.project import Project
 from src.db.models.section import Section
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+from tests.conftest import auth_headers as _auth
 
 
 async def _make_project(session: AsyncSession, owner_id: UUID) -> Project:

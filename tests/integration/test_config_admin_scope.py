@@ -20,12 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.models.project import Project
 from src.db.models.user import User
 from src.db.models.user_prompt import UserPrompt
+from tests.conftest import auth_headers as _auth
 
 pytestmark = pytest.mark.asyncio
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _outline(analysts: list[str]) -> dict:
