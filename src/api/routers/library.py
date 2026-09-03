@@ -59,11 +59,12 @@ router = APIRouter(prefix="/library", tags=["library"])
 
 ALL_ROLES: list[str] = [r.value for r in Role]
 VALID_SOURCE_KINDS = {"gov", "academic", "media", "library", "upload", "web_search"}
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_UPLOAD_BYTES = settings.max_upload_bytes  # 단일 진실 = config(2026-09-03 통일)
 
 
 def _is_admin(user: User) -> bool:
-    return user.role in (Role.SUPER_ADMIN.value, Role.ADMIN.value)
+    # 역할 그룹은 permissions.ADMINS가 단일 진실 - 리터럴 재선언 금지(2026-09-03).
+    return user.role in ADMINS
 
 
 def _can_view(node: LibraryNode, user: User) -> bool:

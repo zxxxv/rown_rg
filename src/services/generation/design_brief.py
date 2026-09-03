@@ -22,9 +22,11 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from src.core.outline import CHARS_PER_PAGE
 from src.core.types import SectionPlan
 from src.prompts import AnalystSpec
 from src.services.generation.writer_context import build_writer_context
+from src.services.qa.gate import DEFAULT_MAX_CHARS, DEFAULT_MIN_CHARS
 from src.services.research.web_research import collection_topic
 from src.services.retrieval.section import section_search_query
 
@@ -69,12 +71,13 @@ def duplicate_query_groups(plan: list[SectionPlan]) -> list[dict[str, Any]]:
     ]
 
 
-# 페이지 환산(자/페이지) — writer_context._CHARS_PER_PAGE와 같은 기준.
-_CHARS_PER_PAGE = 1500
+# 페이지 환산 계수는 core.outline.CHARS_PER_PAGE가 단일 진실(2026-09-03 통일).
+_CHARS_PER_PAGE = CHARS_PER_PAGE
 
-# 배정 없는 절의 분량 추정 폴백 — 정적 게이트 기본 경계(qa.gate)와 같은 값.
-_FALLBACK_MIN_CHARS = 200
-_FALLBACK_MAX_CHARS = 4000
+# 배정 없는 절의 분량 추정 폴백 = 정적 게이트 기본 경계 그 자체(재선언이던 것을
+# import로 - 게이트 경계를 조정하면 비용 추정도 같이 움직인다, 2026-09-03 통일).
+_FALLBACK_MIN_CHARS = DEFAULT_MIN_CHARS
+_FALLBACK_MAX_CHARS = DEFAULT_MAX_CHARS
 
 # 모드별 절당 실측 단가(USD, 수집·작성·검증 합산 근사) — 시작 전에 '얼마인지'를
 # 보여주기 위한 범위 추정이지 청구 예측이 아니다. 근거 실측:

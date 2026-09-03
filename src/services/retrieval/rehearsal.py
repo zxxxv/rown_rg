@@ -30,6 +30,7 @@ import structlog
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from src.core.outline import section_label_key
 from src.core.types import RetrievedChunk, SectionPlan
 from src.services.generation.writer_context import CHARS_PER_EVIDENCE
 
@@ -314,12 +315,8 @@ PACK_OVERLAP_THRESHOLD = 0.45
 _MAX_OVERLAP_PAIRS = 8
 
 
-def _label_key(label: str) -> tuple[int, int]:
-    a, _, b = label.partition(".")
-    try:
-        return (int(a), int(b or 0))
-    except ValueError:
-        return (0, 0)
+# 정렬 키는 core.outline.section_label_key가 단일 진실(3벌 복제이던 것, 2026-09-03).
+_label_key = section_label_key
 
 
 def overlap_pairs_from_packs(packs: dict[str, set[str]]) -> list[dict]:

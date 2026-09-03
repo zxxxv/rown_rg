@@ -26,7 +26,9 @@ from src.services.qa.evidence_findings import absorb_same_source_numbers, elsewh
 def _wire_session_maker(monkeypatch, test_session_maker):
     """evidence_findings는 세션메이커를 모듈 수준에서 물고 있어 conftest의
     src.db.session 패치가 안 닿는다 - 이 참조를 직접 테스트 DB로 돌린다."""
-    monkeypatch.setattr("src.services.qa.evidence_findings.async_session_maker", test_session_maker)
+    # open_session()이 호출 시점에 중앙 전역을 찾으므로 이 한 줄이면 된다
+    # (모듈 상단 바인딩 6곳을 걷어낸 2026-09-03 통일에 맞춤).
+    monkeypatch.setattr("src.db.session.async_session_maker", test_session_maker)
 
 
 async def _project_with_source(session: AsyncSession, owner_id) -> tuple[Project, ProjectSource]:

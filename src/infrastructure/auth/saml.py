@@ -1,5 +1,6 @@
 import base64
 import re
+from collections.abc import Mapping
 
 from fastapi import Request
 from onelogin.saml2.auth import OneLogin_Saml2_Auth
@@ -42,6 +43,18 @@ def get_saml_settings(base_url: str) -> dict:
     }
 
 
+def forwarded_origin(headers: Mapping[str, str]) -> tuple[str, str]:
+    """(proto, host) — 프록시 헤더 우선, 로컬 폴백.
+
+    auth 라우터(get_base_url)와 SAML 요청 준비가 같은 유도 규칙을 쓴다 — 한 줄이
+    두 파일에 통째로 복제돼 있어 프록시 헤더 처리를 바꾸면 한쪽만 고칠 위험이었다
+    (2026-09-03 통일).
+    """
+    proto = headers.get("x-forwarded-proto", "http")
+    host = headers.get("x-forwarded-host", headers.get("host", "localhost:8000"))
+    return proto, host
+
+
 async def prepare_fastapi_saml_request(request: Request) -> dict:
     headers = request.headers
 
@@ -50,8 +63,7 @@ async def prepare_fastapi_saml_request(request: Request) -> dict:
         host = prod_base_url.split("://")[-1]
         proto = "https"
     else:
-        host = headers.get("x-forwarded-host", headers.get("host", "localhost:8000"))
-        proto = headers.get("x-forwarded-proto", "http")
+        proto, host = forwarded_origin(headers)
 
     port = "443" if proto == "https" else "80"
     if ":" in host:

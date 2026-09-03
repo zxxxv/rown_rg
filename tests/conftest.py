@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
@@ -40,6 +40,26 @@ def _reset_login_rate_limiter() -> None:
     from src.infrastructure.auth import rate_limiter
 
     rate_limiter.clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_quota_settings_cache() -> Iterator[None]:
+    """한도 설정 캐시를 매 테스트 전후로 비운다(테스트 격리).
+
+    프로세스 전역 캐시라 앞 테스트가 만든 한도가 뒤 테스트에 샌다. 종전엔 이
+    autouse가 파일 5곳에 복붙돼 있어, 빠뜨린 신규 테스트가 이웃을 오염시키는
+    사고가 구조적으로 열려 있었다(2026-09-03 conftest 승격, 전후 소거는 원본 그대로).
+    """
+    from src.services.quota_settings import invalidate_quota_setting_cache
+
+    invalidate_quota_setting_cache()
+    yield
+    invalidate_quota_setting_cache()
+
+
+def auth_headers(token: str) -> dict[str, str]:
+    """Bearer 헤더 조립 — 통합 테스트 32곳이 같은 한 줄을 복붙하던 것(2026-09-03 승격)."""
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _swap_db_name(url: str, dbname: str) -> str:
@@ -135,10 +155,10 @@ async def test_session(
                 raise
 
     app.dependency_overrides[get_async_session] = _override_get_async_session
+    # open_session()이 호출 시점에 이 모듈 전역을 찾으므로 한 줄이면 전부 먹는다 —
+    # 종전의 소비 모듈별 추가 패치(ip_whitelist·token_tracker·ws)는 모듈 상단
+    # 바인딩의 응급 처치였고, 그 바인딩 자체를 걷어냈다(2026-09-03 통일).
     monkeypatch.setattr("src.db.session.async_session_maker", test_session_maker)
-    monkeypatch.setattr("src.api.middleware.ip_whitelist.async_session_maker", test_session_maker)
-    monkeypatch.setattr("src.clients.llm.token_tracker.async_session_maker", test_session_maker)
-    monkeypatch.setattr("src.api.routers.ws.async_session_maker", test_session_maker)
 
     try:
         async with test_session_maker() as session:

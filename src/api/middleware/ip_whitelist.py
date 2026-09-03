@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse, Response
 
 from src.core.config import Environment, settings
 from src.db.models.ip_whitelist import IpWhitelist
-from src.db.session import async_session_maker
+from src.db.session import open_session
 
 logger = structlog.get_logger(__name__)
 
@@ -38,7 +38,7 @@ class IPWhitelistMiddleware(BaseHTTPMiddleware):
         except ValueError:
             return self._forbidden("invalid client ip")
 
-        async with async_session_maker() as session:
+        async with open_session() as session:
             stmt = select(IpWhitelist.ip_cidr).where(
                 IpWhitelist.is_active.is_(True),
                 or_(IpWhitelist.expires_at.is_(None), IpWhitelist.expires_at > func.now()),
