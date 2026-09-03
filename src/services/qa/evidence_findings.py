@@ -23,7 +23,7 @@ from src.db.models.chunk import Chunk
 from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.section import Section
-from src.db.session import async_session_maker
+from src.db.session import open_session
 from src.services.generation.term_rules import load_project_terms
 from src.services.qa.alignment import ClaimAlignment, align_section
 from src.services.qa.claim_verify import verify_claims
@@ -657,7 +657,7 @@ async def _locate_tokens(
     by_norm = {normalize_number(t): t for t in tokens if normalize_number(t)}
     todo = sorted(n for n in by_norm if n not in cache)
     if todo:
-        async with async_session_maker() as session:
+        async with open_session() as session:
             for norm in todo:
                 # 자릿수 환산 표기까지 함께 찾는다 — 본문 "70.5억 달러"가 코퍼스에는
                 # "USD 7.05 billion"으로 적힌다(2026-08-24 COMPA 실측: 이 한 겹이
@@ -770,7 +770,7 @@ async def _injection_suspects(
         if norm in located and years and (norm, years) not in cache
     ]
     if todo:
-        async with async_session_maker() as session:
+        async with open_session() as session:
             for norm, years in todo:
                 haystack = func.replace(Chunk.content, ",", "")
                 # 연도도 사전 선별에 건다 - 묻는 것이 "수치가 연도 곁에 있는 청크가
@@ -857,7 +857,7 @@ async def absorb_same_source_numbers(
 
     moved = 0
     cache: dict[tuple[str, str], tuple[UUID, int, int, str] | None] = {}
-    async with async_session_maker() as session:
+    async with open_session() as session:
         for claim in claims:
             if not claim.ungrounded or not claim.cited_chunk_ids:
                 continue
@@ -954,7 +954,7 @@ async def elsewhere_numbers(
     skip = skip or {}
     out: dict[int, list[tuple[str, UUID, str, UUID, int, int]]] = {}
     cache: dict[str, tuple[UUID, str, UUID, int, int] | None] = {}
-    async with async_session_maker() as session:
+    async with open_session() as session:
         for i, claim in enumerate(claims):
             if not claim.ungrounded:
                 continue
@@ -1059,7 +1059,7 @@ async def evidence_findings(
     겹침 판정이 건져 올린 의심 문장은 근거 원문과 함께 LLM에 한 번 더 묻는다
     (절당 1콜, 의심 문장이 있는 절만). 판정이 실패하면 겹침 결과를 그대로 쓴다.
     """
-    async with async_session_maker() as session:
+    async with open_session() as session:
         rows = (
             (
                 await session.execute(

@@ -4,7 +4,7 @@ from urllib.parse import quote
 import httpx
 
 from src.core import app_settings
-from src.infrastructure.naver_works.auth import get_valid_token
+from src.infrastructure.naver_works.auth import NW_HTTP_TIMEOUT_S, get_valid_token
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ async def send_bot_message(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=NW_HTTP_TIMEOUT_S) as client:
             resp = await client.post(
                 url,
                 json=payload,

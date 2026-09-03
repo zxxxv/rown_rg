@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from src.clients.llm.base import LLMMode
 from src.db.models.token_usage import TokenUsage
-from src.db.session import async_session_maker
+from src.db.session import open_session
 from src.workflows.events import emit_cost
 
 logger = structlog.get_logger(__name__)
@@ -57,7 +57,7 @@ async def record_usage(
     mode: LLMMode,
 ) -> None:
     user_id, project_id, operation = get_context()
-    async with async_session_maker() as session:
+    async with open_session() as session:
         usage = TokenUsage(
             user_id=user_id,
             project_id=project_id,

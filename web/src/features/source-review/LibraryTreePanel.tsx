@@ -8,6 +8,7 @@ import type { LibraryNode } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { formatSize } from "@/lib/format";
 
 /** 자료 검토 화면의 인라인 라이브러리 패널 - 트리에서 체크로 골라 일괄 추가한다.
 
@@ -43,13 +44,6 @@ function AddedBadge() {
       추가됨
     </span>
   );
-}
-
-function formatSize(bytes: number): string {
-  if (bytes <= 0) return "-";
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${Math.round(kb)} KB`;
-  return `${(kb / 1024).toFixed(1)} MB`;
 }
 
 export function LibraryTreePanel({ projectId }: { projectId: string }) {

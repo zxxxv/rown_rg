@@ -24,7 +24,7 @@ from src.core.types import RetrievedChunk, SectionDraft, SectionPlan
 from src.services.generation.effort import write_effort
 from src.services.generation.writer_context import WriterContext, build_writer_context
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = settings.write_model  # 리터럴 재선언 금지 - config가 단일 진실
 DEFAULT_N = 2
 TEMPERATURE_STEP = 0.15  # 후보 간 다양성용 temperature 증분
 TEMPERATURE_CEILING = 1.0

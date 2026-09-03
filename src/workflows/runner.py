@@ -33,7 +33,7 @@ from src.db.models.project_source import ProjectSource
 from src.db.models.review_point import ReviewPoint
 from src.db.models.section import Section
 from src.db.models.user import User
-from src.db.session import async_session_maker
+from src.db.session import open_session
 from src.infrastructure.naver_works.bot import send_bot_message
 from src.workflows import cancel
 from src.workflows.events import emit_checkpoint, emit_error, gate_level
@@ -65,7 +65,7 @@ async def _notify_safe(
     /export·/progress는 폐지된 경로다(개요로 리다이렉트만 남음) — 쓰지 말 것.
     """
     try:
-        async with async_session_maker() as session:
+        async with open_session() as session:
             owner = await session.get(User, owner_id)
             project = await session.get(Project, project_id)
         if owner is None or not owner.is_active or project is None:
@@ -204,11 +204,13 @@ async def _commit_design_plan(
             key: str(s.get(key) or "").strip()[:_PLAN_FIELD_MAX_CHARS]
             for key in ("goal", "source_strategy", "writing_plan")
         }
-        note["owns"] = " · ".join(t["topic"] for t in ownership if t["owner"] == label)[
-            :_PLAN_FIELD_MAX_CHARS
-        ]
+        note["owns"] = " · ".join(
+            dict.fromkeys(t["topic"] for t in ownership if t["owner"] == label)
+        )[:_PLAN_FIELD_MAX_CHARS]
         note["foreign_topics"] = " · ".join(
-            f"{t['topic']}({t['owner']}절 소관)" for t in ownership if t["owner"] != label
+            dict.fromkeys(
+                f"{t['topic']}({t['owner']}절 소관)" for t in ownership if t["owner"] != label
+            )
         )[:_PLAN_FIELD_MAX_CHARS]
         note["receives"] = "; ".join(receives.get(label, []))[:_PLAN_FIELD_MAX_CHARS]
         note["establishes"] = "; ".join(establishes.get(label, []))[:_PLAN_FIELD_MAX_CHARS]
@@ -451,7 +453,7 @@ async def _execute(project_id: uuid.UUID) -> None:
     owner_id: uuid.UUID | None = None
     entered_from_created = False
     try:
-        async with async_session_maker() as session:
+        async with open_session() as session:
             project = await session.get(Project, project_id)
             if project is None:
                 logger.warning("project.missing", project_id=str(project_id))
@@ -507,7 +509,7 @@ async def _execute(project_id: uuid.UUID) -> None:
                 실패는 로그만 남긴다(표시가 실행을 죽이면 안 된다).
                 """
                 try:
-                    async with async_session_maker() as display_session:
+                    async with open_session() as display_session:
                         await display_session.execute(
                             update(Project)
                             .where(Project.id == project_id)
@@ -623,7 +625,7 @@ async def _execute(project_id: uuid.UUID) -> None:
         # 사용자 취소 — 실패가 아니라 깨끗한 중단으로 CANCELLED 확정(created 복귀 로직 회피).
         logger.info("project.cancelled", project_id=str(project_id))
         try:
-            async with async_session_maker() as recovery:
+            async with open_session() as recovery:
                 cancelled = await recovery.get(Project, project_id)
                 if cancelled is not None:
                     # 재개 지점 보존 — 이 값이 없으면 취소한 런은 처음부터 다시 돌려야 한다.
@@ -651,7 +653,7 @@ async def _execute(project_id: uuid.UUID) -> None:
             # 첫 구간(research)에서 죽은 실행은 created로 복귀 — 사용자가
             # '작성 시작'으로 재시도할 수 있어야 한다(researching 고착 방지).
             try:
-                async with async_session_maker() as recovery:
+                async with open_session() as recovery:
                     await recovery.execute(
                         update(Project)
                         .where(
@@ -771,7 +773,6 @@ def _spawn_limited(project_id: uuid.UUID, work: Any, *, clear_cancel_on_exit: bo
 
 async def _resync_stage(project_id: uuid.UUID) -> None:
     """실행이 끝난 뒤 단계를 다시 새긴다 — 실패해도 실행 정리를 막지 않는다."""
-    from src.db.session import open_session
     from src.services.projects.derive import sync_project_stage
 
     try:
@@ -802,7 +803,7 @@ async def resume_run(project_id: uuid.UUID, decision: dict[str, Any]) -> None:
     라운드 1회를 돌린 뒤 게이트를 다시 연다 — 사람이 누를 때마다 1라운드
     (무한성 캡: 자동 반복 없음).
     """
-    async with async_session_maker() as session:
+    async with open_session() as session:
         review = (
             await session.execute(
                 select(ReviewPoint)
@@ -851,7 +852,6 @@ async def resume_run(project_id: uuid.UUID, decision: dict[str, Any]) -> None:
         # 재개(reopen)로 열린 게이트에서 제외하면 이미 본문이 있다 — 전역 인용 번호가
         # 당겨져 문서 전체가 어긋나므로 여기서도 다시 맞춘다. 첫 런에서는 절이 비어
         # 있어 아무 일도 하지 않는다(비용 0).
-        from src.db.session import open_session
         from src.services.sections.renumber import rebase_global_numbers
 
         async with open_session() as s2:
@@ -929,7 +929,7 @@ async def _replan(project_id: uuid.UUID) -> None:
 
     owner_id: uuid.UUID | None = None
     try:
-        async with async_session_maker() as session:
+        async with open_session() as session:
             project = await session.get(Project, project_id)
             if project is None:
                 logger.warning("project.missing", project_id=str(project_id))
@@ -938,7 +938,7 @@ async def _replan(project_id: uuid.UUID) -> None:
             state = _state_from_project(project)
         state = await plan_brief(state)
         review = _design_brief_gate(state)
-        async with async_session_maker() as session:
+        async with open_session() as session:
             project = await session.get(Project, project_id)
             if project is None:
                 return
@@ -987,14 +987,14 @@ async def refresh_design_plan(project_id: uuid.UUID) -> None:
     from src.workflows.stages import plan_brief
 
     try:
-        async with async_session_maker() as session:
+        async with open_session() as session:
             project = await session.get(Project, project_id)
             if project is None:
                 return
             state = _state_from_project(project)
         state = await plan_brief(state)
         review = _design_brief_gate(state)
-        async with async_session_maker() as session:
+        async with open_session() as session:
             project = await session.get(Project, project_id)
             if project is None:
                 return
@@ -1044,7 +1044,7 @@ async def _collect_more(project_id: uuid.UUID, *, reopen_gate: bool = True) -> N
 
     owner_id: uuid.UUID | None = None
     try:
-        async with async_session_maker() as session:
+        async with open_session() as session:
             project = await session.get(Project, project_id)
             if project is None:
                 logger.warning("project.missing", project_id=str(project_id))
@@ -1105,7 +1105,7 @@ async def _collect_more(project_id: uuid.UUID, *, reopen_gate: bool = True) -> N
             logger.info("source_pool.collect_more_done", project_id=str(project_id))
             return
         review = _source_pool_gate(state)
-        async with async_session_maker() as session:
+        async with open_session() as session:
             session.add(
                 ReviewPoint(
                     id=review.id,

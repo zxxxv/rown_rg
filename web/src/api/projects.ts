@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "@/api/client";
+import { apiClient, apiUrl } from "@/api/client";
 import {
   type Project,
   type ProjectConfig,
@@ -170,6 +170,11 @@ export function useDeleteProject() {
       void qc.invalidateQueries({ queryKey: projectKeys.all });
     },
   });
+}
+
+/** HWPX 내보내기 다운로드 URL - 쿠키 인증(same-origin)이라 href/다운로드에 그대로 쓴다. */
+export function projectExportUrl(id: string): string {
+  return apiUrl(`projects/${id}/export`);
 }
 
 export async function getProject(id: string): Promise<Project> {

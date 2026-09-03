@@ -78,6 +78,7 @@ import {
 import { SectionHistoryPanel } from "@/features/versions/SectionHistoryPanel";
 import { VersionDiffView } from "@/features/versions/VersionDiffView";
 import { useAuth } from "@/hooks/useAuth";
+import { POLL_PAGE_MS } from "@/lib/intervals";
 import { cn } from "@/lib/utils";
 
 const EVIDENCE_UI_ENABLED = true;
@@ -128,7 +129,7 @@ export function ReportWorkspace({ projectId }: { projectId: string }) {
 
   // QA 게이트 대기 감지 - 열려 있으면 상단 승인 바 + 절별 정적검사 경고 표시
   const snapshotQuery = useProgressSnapshot(projectId, true, {
-    refetchInterval: maybeActive ? 7000 : false,
+    refetchInterval: maybeActive ? POLL_PAGE_MS : false,
   });
   // **실제로 도는가** - 편집 잠금·표시의 유일한 근거. 단계 이름이 아니다.
   // 다 쓴 보고서가 'reviewing'이라는 이유로 읽기 전용이 되던 회귀가 여기서 났다.
@@ -1612,7 +1613,7 @@ function SectionView({
                       ) : (
                         <span>문장 {claimStats.total}</span>
                       )}
-                      <span aria-hidden>—</span>
+                      <span aria-hidden>-</span>
                       <span className={claimStats.aligned > 0 ? "text-fg-success" : undefined}>
                         대목 확인 {claimStats.aligned}
                       </span>

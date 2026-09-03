@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from decimal import Decimal
 
 import pytest
@@ -14,16 +13,9 @@ from src.services.quota_settings import (
     get_quota_setting,
     get_quota_setting_int,
     get_role_default_limit_usd,
-    invalidate_quota_setting_cache,
 )
 
-
-@pytest.fixture(autouse=True)
-def _clear_quota_settings_cache() -> Iterator[None]:
-    # 모듈 전역 캐시가 테스트 간에 새어나가지 않도록 매 테스트 전후로 비운다.
-    invalidate_quota_setting_cache()
-    yield
-    invalidate_quota_setting_cache()
+# 한도 캐시 격리는 conftest의 autouse(_reset_quota_settings_cache)가 전담한다.
 
 
 async def _seed_setting(session: AsyncSession, key: str, value: str) -> QuotaSettings:

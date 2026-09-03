@@ -20,11 +20,7 @@ from src.db.models.project import Project
 from src.db.models.project_source import ProjectSource
 from src.db.models.section import Section
 from src.db.models.user import User
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
+from tests.conftest import auth_headers as _auth
 
 # 문단 둘 — 앞 문단만 1번 자료를 인용한다. 뒤 문단은 건드려지면 안 된다.
 _BODY = "첫 문단은 1번을 본다 [1].\n\n둘째 문단은 2번만 본다 [2]."

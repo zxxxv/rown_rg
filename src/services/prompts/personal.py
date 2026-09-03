@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import NotFoundError, ValidationError
+from src.core.outline import CHARS_PER_PAGE
 from src.db.models.user import User
 from src.db.models.user_prompt import UserPrompt
 from src.prompts import AnalystSpec, VolumeTarget, list_analysts, load_component
@@ -54,8 +55,8 @@ VOLUME_PRESETS: dict[str, VolumeTarget] = {
 # 사람이 넣을 수 있는 범위 — 아래로는 절 하나의 골격, 위로는 단일 절 현실 상한.
 MIN_VOLUME_CHARS = 1000
 MAX_VOLUME_CHARS = 60000
-# 페이지 환산 계수(자/페이지). 시스템 카탈로그 값들(15000~22500 = 10~15p 등)에서 역산.
-_CHARS_PER_PAGE = 1500
+# 페이지 환산 계수는 core.outline.CHARS_PER_PAGE가 단일 진실(2026-09-03 통일).
+_CHARS_PER_PAGE = CHARS_PER_PAGE
 
 # 작성 규칙 슬롯 — 시스템 조각 3종의 고정 순서. 개인 규칙은 base_ref로 이 중
 # 하나를 교체하거나(슬롯 교체), base_ref 없이 뒤에 덧붙는다(추가 규칙).

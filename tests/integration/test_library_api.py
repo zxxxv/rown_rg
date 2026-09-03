@@ -15,10 +15,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.project_source import ProjectSource
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+from tests.conftest import auth_headers as _auth
 
 
 def _find(nodes: list[dict[str, Any]], node_id: str) -> dict[str, Any] | None:

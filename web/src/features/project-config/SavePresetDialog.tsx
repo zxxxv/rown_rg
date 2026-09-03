@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { DuplicateNameNotice } from "./DuplicateNameNotice";
 import { type DraftChapter, toPresetChapters } from "./OutlineEditor";
 
 /** 목차 편집기의 현재 구성을 내 프리셋으로 저장 - 같은 구성으로 다음 보고서를
@@ -30,11 +31,14 @@ export function SavePresetDialog({
   const [description, setDescription] = useState("");
   // 켜면 사내 전원의 프리셋 선택지에 뜬다(에이전트 공개와 같은 규약).
   const [isPublic, setIsPublic] = useState(false);
+  // 같은 이름 충돌 - 이름을 바꾸거나, 한 번 더 눌러 기존 프리셋을 교체한다.
+  // 덮어쓰기 길이 없으면 사용자가 손으로 "(2)(3)"을 붙여 복제가 쌓인다.
+  const [duplicate, setDuplicate] = useState(false);
   const cleaned = toPresetChapters(chapters);
   const nSections = cleaned.reduce((n, ch) => n + ch.sections.length, 0);
   const valid = name.trim() !== "" && cleaned.length > 0;
 
-  const save = async () => {
+  const save = async (overwrite: boolean) => {
     if (!valid || create.isPending) return;
     try {
       const saved = await create.mutateAsync({
@@ -42,12 +46,17 @@ export function SavePresetDialog({
         description: description.trim() || null,
         is_public: isPublic,
         chapters: cleaned,
+        overwrite,
       });
-      toast.success(`"${saved.name}" 프리셋 저장됨`, {
+      toast.success(overwrite ? `"${saved.name}" 프리셋 덮어씀` : `"${saved.name}" 프리셋 저장됨`, {
         description: "다음 프로젝트 생성 시 보고서 유형에서 선택할 수 있습니다.",
       });
       onClose();
     } catch (err) {
+      if (err instanceof ApiError && err.code === "DUPLICATE_PRESET_NAME" && !overwrite) {
+        setDuplicate(true);
+        return;
+      }
       toast.error("프리셋 저장 실패", {
         description: err instanceof ApiError ? err.message : "다시 시도해 주세요.",
       });
@@ -70,7 +79,10 @@ export function SavePresetDialog({
             <Input
               id="preset-name"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value);
+                setDuplicate(false);
+              }}
               placeholder="예: 정책분석 표준 구성"
               disabled={create.isPending}
             />
@@ -108,14 +120,25 @@ export function SavePresetDialog({
               저장할 절이 없습니다. 제목 있는 절을 1개 이상 만들어 주세요.
             </p>
           ) : null}
+          {duplicate ? <DuplicateNameNotice name={name.trim()} /> : null}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose} disabled={create.isPending}>
             취소
           </Button>
-          <Button onClick={() => void save()} disabled={!valid || create.isPending}>
-            {create.isPending ? "저장 중…" : "저장"}
-          </Button>
+          {duplicate ? (
+            <Button
+              variant="destructive"
+              onClick={() => void save(true)}
+              disabled={!valid || create.isPending}
+            >
+              {create.isPending ? "덮어쓰는 중…" : "덮어쓰기"}
+            </Button>
+          ) : (
+            <Button onClick={() => void save(false)} disabled={!valid || create.isPending}>
+              {create.isPending ? "저장 중…" : "저장"}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

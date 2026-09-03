@@ -20,10 +20,7 @@ from src.clients.llm.token_tracker import token_context
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
 from tests.conftest import FIXTURE_PASSWORD, _make_user
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+from tests.conftest import auth_headers as _auth
 
 
 async def _drain_background_tasks() -> None:

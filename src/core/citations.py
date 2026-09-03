@@ -30,6 +30,20 @@ MARK_RE = re.compile(
 # 출처형만 — 본문에서 걷어낼 때 쓴다(직접 인용 [n]은 남겨야 하므로 따로 둔다).
 _SOURCE_MARK_RE = re.compile(r"[^\S\n]*\(출처\s*(?P<nums>\d+(?:\s*,\s*\d+)*)\s*\)")
 
+# 라벨 변형 — 정본 라벨은 "출처" 하나다. 검증 프롬프트(claim_verify)가 "(근거 n)"
+# 표기를 쓰는 탓에 모델이 본문에 근거·자료·참고 라벨을 되뱉을 수 있는데, 이 변형은
+# MARK_RE(정본만 인식)를 지나쳐 재번호가 안 되고 절-로컬 번호가 최종 문서에 잔존한다
+# (2026-09-03 감사 — 소비처 12곳이 제각각 라벨 집합을 재선언하던 원인). 저장 직전
+# 세정(scrub)이 normalize_mark_labels로 정본화하고, 세정 밖 경로용 검출·스트립은
+# 이 패턴을 import해서 쓴다 — 라벨 집합의 재선언 금지.
+VARIANT_MARK_RE = re.compile(r"\((?:근거|자료|참고)\s*(\d+(?:\s*,\s*\d+)*)\s*\)")
+
+
+def normalize_mark_labels(content: str) -> str:
+    """``(근거 n)``·``(자료 n)``·``(참고 n)`` → ``(출처 n)``. 결정적 라벨 정본화."""
+    return VARIANT_MARK_RE.sub(lambda m: f"(출처 {m.group(1)})", content)
+
+
 _NUM_SPLIT_RE = re.compile(r"\s*,\s*")
 
 

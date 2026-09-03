@@ -21,7 +21,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from src.core.charts import MAX_SERIES, ChartSeries, ChartSpec, to_fence
+from src.core.charts import (
+    MAX_SERIES,
+    NUMBER_RE,
+    ChartSeries,
+    ChartSpec,
+    signed_number,
+    to_fence,
+)
 from src.core.citations import MARK_RE
 
 # ── 이식층: tableToChart.ts와 같은 규칙 ────────────────────────────────────────
@@ -35,12 +42,8 @@ _TRAILING_PAREN_RE = re.compile(r"[（(]\s*(?:단위\s*[:：]\s*)?([^）)]+)\s*[
 # 제목 꼬리의 단위 — "제목 (단위: %)"에서 떼어 단위 칸으로 옮긴다(HWPX 조립의
 # _CAPTION_TRAILING_UNIT_RE와 같은 규칙). 안 떼면 그림 캡션에 단위가 박혀 표 관례와 어긋난다.
 _CAPTION_UNIT_RE = re.compile(r"\s*[（(]\s*단위\s*[:：]\s*([^)）]*?)\s*[）)]\s*$")
-# 숫자 하나 — 천 단위 콤마와 소수점, 앞 부호를 받는다(charts._NUMBER_RE와 같은 식).
-_NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
-# 음수를 나타내는 앞 기호. 한글 보고서는 마이너스를 '△'로 적는다(정부·한국은행 표기 관례).
-# 이것을 안 읽으면 "수입액 △934"가 +934로 그려진다 — 감소가 증가로 뒤집힌 그래프가
-# 값 라벨까지 달고 나간다(v7 3.2절 실측, 2026-08-28).
-_NEGATIVE_SIGNS = ("△", "▽", "−", "–", "-")
+# 숫자·부호 해석은 charts가 단일 진실(2026-09-03 통일 - 여기 복제본에만 △ 음수
+# 수리가 있어 charts 쪽 파서는 △934를 +934로 그렸다).
 # 방향 화살표는 부호가 아니다 — '▲'는 문서마다 증가를 뜻하기도, 값의 부호이기도 하다.
 # 뜻이 갈리는 기호는 자동 변환에서 숫자로 읽지 않는다(사람이 보고 고르는 건 막지 않는다).
 _AMBIGUOUS_SIGNS = ("▲", "▼")
@@ -53,7 +56,7 @@ _AMBIGUOUS_SIGNS = ("▲", "▼")
 _NUMERIC_CELL_RE = re.compile(r"^[+\-−–△▽]?\s*\d[\d,]*(?:\.\d+)?[^\d\s]{0,4}$")
 # 칸 안의 숫자를 전부 센다. 하나를 넘으면 첫 숫자만 집는 규칙이 값을 잘라 먹는다
 # ("1조 96억 원" → 1, "3만 6,000명(10년)" → 3).
-_NUMBERS_IN_CELL_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+_NUMBERS_IN_CELL_RE = NUMBER_RE
 
 
 @dataclass(frozen=True)
@@ -84,14 +87,8 @@ def strip_markers(cell: str) -> str:
 
 
 def try_number(token: str) -> float | None:
-    """숫자로 읽히면 숫자, 아니면 None. '△36'은 -36으로 읽는다."""
-    match = _NUMBER_RE.search(token)
-    if match is None:
-        return None
-    value = float(match.group().replace(",", ""))
-    if token[: match.start()].strip().endswith(_NEGATIVE_SIGNS):
-        return -abs(value)
-    return value
+    """숫자로 읽히면 숫자, 아니면 None. '△36'은 -36으로 읽는다(charts.signed_number)."""
+    return signed_number(token)
 
 
 def is_numeric_cell(cell: str) -> bool:

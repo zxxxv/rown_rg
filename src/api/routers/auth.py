@@ -37,7 +37,7 @@ from src.infrastructure.auth import (
     refresh_token_handler,
     totp_handler,
 )
-from src.infrastructure.auth.saml import init_saml_auth
+from src.infrastructure.auth.saml import forwarded_origin, init_saml_auth
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = structlog.get_logger(__name__)
@@ -259,8 +259,8 @@ def get_base_url(request: Request) -> str:
     if prod_base_url:
         return prod_base_url
 
-    proto = request.headers.get("x-forwarded-proto", "http")
-    host = request.headers.get("x-forwarded-host", request.headers.get("host", "localhost:8000"))
+    # 프록시 헤더 유도 규칙은 saml.forwarded_origin이 단일 진실(2026-09-03 통일).
+    proto, host = forwarded_origin(request.headers)
     return f"{proto}://{host}"
 
 

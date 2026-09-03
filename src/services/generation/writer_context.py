@@ -22,6 +22,7 @@ from functools import lru_cache
 import structlog
 
 from src.core.config import settings
+from src.core.outline import CHARS_PER_PAGE
 from src.core.types import SectionPlan
 from src.prompts import AnalystSpec, load_analyst, load_component
 
@@ -48,8 +49,8 @@ DEFAULT_MAX_TOKENS = 2048
 
 # 분량 지시문 접두어 — 재료 부족으로 목표가 깎일 때 이 줄만 갈아 끼운다.
 _VOLUME_PREFIX = "목표 분량:"
-# 페이지 환산 계수(자/페이지) — 카탈로그 표기와 같은 기준.
-_CHARS_PER_PAGE = 1500
+# 페이지 환산 계수는 core.outline.CHARS_PER_PAGE가 단일 진실(2026-09-03 통일).
+_CHARS_PER_PAGE = CHARS_PER_PAGE
 
 
 # 절 단위로 분량을 눌러 놓은 자리에 붙이는 지시 — 본론과 같은 두께로 쓰면 앞 내용을

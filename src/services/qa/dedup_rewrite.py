@@ -28,6 +28,7 @@ import structlog
 from src.clients.llm.base import CompletionRequest, LLMClient, Message
 from src.clients.llm.factory import create_llm_client
 from src.clients.llm.token_tracker import token_context
+from src.core.outline import section_label_key
 from src.core.state import ProjectState
 from src.services.qa.cross_section import DUPLICATE_THRESHOLD, duplicate_pairs
 from src.services.qa.gate import significant_numbers
@@ -63,12 +64,8 @@ class RewriteTarget(NamedTuple):
     dup_sentences: list[str]
 
 
-def _order_key(ref: str) -> tuple[int, int]:
-    a, _, b = ref.partition(".")
-    try:
-        return (int(a), int(b or 0))
-    except ValueError:
-        return (0, 0)
+# 정렬 키는 core.outline.section_label_key가 단일 진실(3벌 복제이던 것, 2026-09-03).
+_order_key = section_label_key
 
 
 def _paragraphs(content: str) -> list[str]:

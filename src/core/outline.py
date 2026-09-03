@@ -28,6 +28,26 @@ from uuid import UUID, uuid4
 
 from src.core.builds_on import MAX_REFS_PER_SECTION, parse_ref
 
+# 페이지 환산 계수(자/페이지) — 카탈로그 표기(15000~22500자 = 10~15p 등)의 기준.
+# writer_context(분량 지시문)·prompts/personal(개인 규칙 표기)·design_brief(비용
+# 추정)가 각자 1500을 재선언하다 통일했다(2026-09-03 감사 — 한 곳만 바꾸면 지시문과
+# 화면 표기가 조용히 어긋나는 구조였다).
+CHARS_PER_PAGE = 1500
+
+
+def section_label_key(label: str) -> tuple[int, int]:
+    """절 라벨("4.1")의 목차 정렬 키 — 문자열 정렬은 "10.1"을 "2.1" 앞에 둔다.
+
+    리허설·중복 재작성·절 간 대조가 같은 함수를 세 벌 갖고 있었다(2026-09-03 통일).
+    숫자가 아니면 (0, 0) — 맨 앞으로 보내되 예외는 안 낸다(옛 라벨 방어).
+    """
+    a, _, b = label.partition(".")
+    try:
+        return (int(a), int(b or 0))
+    except ValueError:
+        return (0, 0)
+
+
 # 절당 에이전트 배정 상한 — 초과는 저장 단계에서 오류로 알린다(조용한 절단 금지).
 # 프론트 project-config/validation.ts·프리셋 스키마(api/schemas/project)와 거울.
 # 5인 이유(2026-08-28 사용자 결정): 절 분량 목표가 최대 2만자대로 고정이라 관점이

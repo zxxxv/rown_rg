@@ -17,10 +17,11 @@ import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import func, select
 
+from src.api.dependencies.permissions import ADMINS
 from src.db.models.project import Project
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
-from src.db.session import async_session_maker
+from src.db.session import open_session
 from src.infrastructure.auth.jwt_handler import decode_token
 from src.workflows.events import gate_level, progress_broker
 from src.workflows.runner import get_pending_gate
@@ -41,21 +42,21 @@ async def _authorize(websocket: WebSocket, project_id: uuid.UUID) -> User | None
         return None
     if token_data.token_type != "access":
         return None
-    async with async_session_maker() as session:
+    async with open_session() as session:
         user = await session.get(User, token_data.user_id)
         if user is None or not user.is_active:
             return None
         project = await session.get(Project, project_id)
         if project is None:
             return None
-        if project.owner_id != user.id and user.role not in ("super_admin", "admin"):
+        if project.owner_id != user.id and user.role not in ADMINS:
             return None
     return user
 
 
 async def _initial_snapshot(websocket: WebSocket, project_id: uuid.UUID) -> None:
     """접속 즉시 현재 상태를 동기화 — 누적 비용(DB 합산) + 대기 게이트."""
-    async with async_session_maker() as session:
+    async with open_session() as session:
         totals = (
             await session.execute(
                 select(

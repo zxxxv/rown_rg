@@ -9,10 +9,7 @@ from __future__ import annotations
 
 from httpx import AsyncClient
 
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
+from tests.conftest import auth_headers as _auth
 
 _CHAPTERS = [
     {
@@ -100,6 +97,30 @@ class TestPersonalPresetCrud:
         )
         assert resp.status_code == 422
         assert resp.json()["error"]["code"] == "DUPLICATE_PRESET_NAME"
+
+    async def test_duplicate_name_overwrite_replaces_in_place(
+        self, test_client: AsyncClient, worker_token: str
+    ) -> None:
+        """overwrite=true는 같은 이름의 기존 행을 교체한다 - id(u: 키)가 유지돼야
+        복제("(2)(3)")가 안 쌓이고, 이 프리셋을 가리키던 참조도 안 끊긴다."""
+        created = await _create(test_client, worker_token, name="덮어쓸 이름")
+        resp = await test_client.post(
+            "/api/v1/presets/personal",
+            headers=_auth(worker_token),
+            json={
+                "name": "덮어쓸 이름",
+                "description": "교체된 설명",
+                "chapters": _CHAPTERS,
+                "overwrite": True,
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["id"] == created["id"]
+        assert body["description"] == "교체된 설명"
+        listed = await test_client.get("/api/v1/presets", headers=_auth(worker_token))
+        mine = [p for p in listed.json() if p.get("scope") == "personal"]
+        assert [p["name"] for p in mine] == ["덮어쓸 이름"]
 
     async def test_empty_sections_rejected(
         self, test_client: AsyncClient, worker_token: str

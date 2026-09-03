@@ -28,6 +28,11 @@ import structlog
 
 from src.core.citations import MARK_RE, numbers_in_order
 from src.services.qa.alignment import _weighted_tokens, token_similarity
+from src.services.qa.cross_section import (
+    _POINTER_TAIL_RE,
+    DUPLICATE_THRESHOLD,
+    MIN_UNIT_CHARS,
+)
 from src.services.qa.gate import (
     claim_units,
     derived_numbers,
@@ -41,17 +46,19 @@ logger = structlog.get_logger(__name__)
 
 # 교정 후보 탐색에서 문장당 대조할 수치 상한 — 상위 수치가 일치하면 충분하다.
 _MAX_TOKENS_PER_UNIT = 3
-# 절 내 중복 판정 임계 — cross_section.DUPLICATE_THRESHOLD과 같은 값(복사 수준).
-_INTRA_DUP_THRESHOLD = 0.80
+# 절 내 중복 판정 임계 = 절 간 검출(cross_section)과 같은 경계여야 검출과 수리가
+# 같은 것을 본다 - 값 복사이던 것을 import로(2026-09-03 통일).
+_INTRA_DUP_THRESHOLD = DUPLICATE_THRESHOLD
 # 절 내 소거 가드레일 — 이 비율 넘게 얇아지면 중단한다(제거 방향 처방은 보고서를
 # 조용히 얇게 만든다는 검토 지적 반영). 남는 건 검출기 경고 몫.
 _MAX_REMOVAL_RATIO = 0.15
-_MIN_UNIT_CHARS = 30
+_MIN_UNIT_CHARS = MIN_UNIT_CHARS
 _HANGUL_RE = re.compile(r"[가-힣]")  # gate._HANGUL_RE와 같은 판정(비공개라 로컬 정의)
 # 출처형 마커 하나 — 교정 치환용(직접 인용 [n]은 원문 전사라 교정 대상이 아니다).
 _ONE_SOURCE_MARK_RE = re.compile(r"\(출처\s*\d+(?:\s*,\s*\d+)*\s*\)")
-# 술어가 '…절 참조'인 위임 문장 — 중복 소거 대상이 아니다(cross_section과 같은 판정).
-_POINTER_RE = re.compile(r"\d{1,2}\s*\.\s*\d{1,2}\s*절\s*참조\s*[).\s]*$")
+# 술어가 '…절 참조'인 위임 문장 — 중복 소거 대상이 아니다(cross_section과 같은 판정
+# - 정규식도 그쪽 정의를 그대로 쓴다, 2026-09-03 통일).
+_POINTER_RE = _POINTER_TAIL_RE
 # 개조식 마커 깊이 — 삭제할 줄보다 깊은 하위 불릿이 바로 이어지면 고아가 되므로 포기.
 _MARKER_DEPTH = {"□": 0, "ㅇ": 1, "○": 1, "◦": 1, "-": 2, "*": 3}
 _LINE_MARKER_RE = re.compile(r"^\s*([□ㅇ○◦*-])\s+")

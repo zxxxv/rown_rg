@@ -13,13 +13,11 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 
+from tests.conftest import auth_headers as _auth
+
 pytestmark = pytest.mark.asyncio
 
 _OUTLINE = [{"title": "1장", "sections": [{"title": "1.1 절", "agents": []}]}]
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _find(nodes: list[dict[str, Any]], node_id: str) -> dict[str, Any] | None:

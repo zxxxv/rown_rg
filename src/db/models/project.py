@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
@@ -20,6 +20,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapped, Mapper, mapped_column, relationship
 
+from src.core import clock
 from src.core.types import ProjectStage
 from src.db.base import Base
 
@@ -131,7 +132,7 @@ def _sync_completed_at(mapper: Mapper, connection: Connection, target: Project) 
         return
 
     if current_status == ProjectStage.COMPLETED.value:
-        target.completed_at = datetime.now(UTC)
+        target.completed_at = clock.now()
     elif previous_status == ProjectStage.COMPLETED.value:
         target.completed_at = None
         # 다시 열린 보고서는 더 이상 확정본이 아니다 — 선언도 함께 내린다.

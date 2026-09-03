@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { ApiError } from "@/api/client";
+import { apiErrorMessage } from "@/api/client";
 import {
   type PersonalPrompt,
   type PromptKind,
@@ -34,10 +34,6 @@ const KIND_META: Record<PromptKind, { title: string; placeholder: string }> = {
   agent: { title: "내 분석 에이전트", placeholder: "예: 우리회사 시장분석가" },
   rule: { title: "내 작성 규칙", placeholder: "예: 사내 문체 규칙" },
 };
-
-function errMsg(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
-}
 
 /** 에이전트 프롬프트의 칸 - 백엔드 composer.SECTION_FIELDS와 같은 순서·라벨.
  * 서버가 이 칸들로 프롬프트 한 장을 조합한다(제목 줄·분량 문구는 자동). */
@@ -260,7 +256,7 @@ export function PromptDialog({
       }
       onClose();
     } catch (err) {
-      toast.error("저장 실패", { description: errMsg(err, "값을 확인해 주세요.") });
+      toast.error("저장 실패", { description: apiErrorMessage(err, "값을 확인해 주세요.") });
     }
   };
 

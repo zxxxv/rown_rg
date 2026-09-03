@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DuplicateNameNotice } from "./DuplicateNameNotice";
 import {
   type DraftChapter,
   emptyChapter,
@@ -77,8 +78,10 @@ export function PresetEditorDialog({
   const pending = create.isPending || update.isPending;
   const cleaned = chapters ? toPresetChapters(chapters) : [];
   const valid = name.trim() !== "" && cleaned.length > 0;
+  // 같은 이름 충돌(신규 작성만) - 한 번 더 누르면 기존 프리셋을 이 구성으로 교체한다.
+  const [duplicate, setDuplicate] = useState(false);
 
-  const save = async () => {
+  const save = async (overwrite: boolean) => {
     if (!valid || pending) return;
     const body = {
       name: name.trim(),
@@ -90,14 +93,18 @@ export function PresetEditorDialog({
         await update.mutateAsync({ id: existing.id, ...body });
         toast.success(`"${body.name}" 저장됨`);
       } else {
-        await create.mutateAsync(body);
+        await create.mutateAsync({ ...body, overwrite });
         clearPresetEditorDraft(); // 저장됐으면 초안은 역할이 끝났다
-        toast.success(`"${body.name}" 만들어짐`, {
+        toast.success(overwrite ? `"${body.name}" 덮어씀` : `"${body.name}" 만들어짐`, {
           description: "프로젝트 생성 시 보고서 유형에서 선택할 수 있습니다.",
         });
       }
       onClose();
     } catch (err) {
+      if (err instanceof ApiError && err.code === "DUPLICATE_PRESET_NAME" && !overwrite) {
+        setDuplicate(true);
+        return;
+      }
       toast.error("저장 실패", {
         description: err instanceof ApiError ? err.message : "다시 시도해 주세요.",
       });
@@ -131,7 +138,10 @@ export function PresetEditorDialog({
               <Input
                 id="upreset-name"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setDuplicate(false);
+                }}
                 placeholder="예: 정책분석 표준 구성"
                 disabled={pending}
               />
@@ -164,13 +174,24 @@ export function PresetEditorDialog({
             />
           )}
         </div>
+        {duplicate ? <DuplicateNameNotice name={name.trim()} /> : null}
         <DialogFooter>
           <Button variant="ghost" onClick={onClose} disabled={pending}>
             취소
           </Button>
-          <Button onClick={() => void save()} disabled={!valid || pending}>
-            {pending ? "저장 중…" : "저장"}
-          </Button>
+          {duplicate ? (
+            <Button
+              variant="destructive"
+              onClick={() => void save(true)}
+              disabled={!valid || pending}
+            >
+              {pending ? "덮어쓰는 중…" : "덮어쓰기"}
+            </Button>
+          ) : (
+            <Button onClick={() => void save(false)} disabled={!valid || pending}>
+              {pending ? "저장 중…" : "저장"}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

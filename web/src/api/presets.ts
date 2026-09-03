@@ -109,6 +109,8 @@ export interface UserPresetBody {
   description?: string | null;
   chapters: PresetChapterDetail[];
   is_public?: boolean;
+  /** 같은 이름이 있으면 그 프리셋을 교체 - 확인을 거친 재요청에서만 켠다 */
+  overwrite?: boolean;
 }
 
 export function useCreateUserPreset() {

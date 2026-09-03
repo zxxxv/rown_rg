@@ -23,15 +23,18 @@ from collections import defaultdict
 from typing import NamedTuple
 
 from src.core.citations import numbers_in_order, strip_source_marks
-from src.services.qa.alignment import _weighted_tokens
+from src.core.outline import section_label_key
+from src.services.qa.alignment import _weighted_tokens, token_similarity
 from src.services.qa.gate import claim_units
 
 # 같은 문장이 통째로 복사된 수준. 실측에서 이 위는 전부 진짜 중복이었다.
 DUPLICATE_THRESHOLD = 0.80
 # 같은 사실을 다시 쓴 수준. 한 절에 한두 건은 자연스러워 건수로 판단한다.
 SIMILAR_THRESHOLD = 0.65
-# 너무 짧은 문장은 우연히 겹친다("이에 따른 대응이 필요함").
-_MIN_UNIT_CHARS = 30
+# 너무 짧은 문장은 우연히 겹친다("이에 따른 대응이 필요함"). 절 내 소거
+# (sections/citation_repair)도 같은 하한을 쓴다 - 공개 이름(2026-09-03 통일).
+MIN_UNIT_CHARS = 30
+_MIN_UNIT_CHARS = MIN_UNIT_CHARS
 # 후보 생성에 쓸 토큰의 문서 빈도 상한 비율. 흔한 글자쌍("있다")으로 후보를 만들면
 # 전수 비교와 다를 게 없어진다. 중복 문장은 드문 토큰(수치·영문·고유어)을 공유한다.
 _MAX_DF_RATIO = 0.05
@@ -101,17 +104,9 @@ def _candidate_pairs(token_sets: list[dict[str, float]]) -> set[tuple[int, int]]
     return pairs
 
 
-def _similarity(a: dict[str, float], b: dict[str, float]) -> float:
-    """두 문장의 겹침 — 양방향 중 큰 쪽.
-
-    짧은 문장이 긴 문장에 통째로 들어간 경우가 실제 중복의 전형이다(개조식 요약 한 줄이
-    다른 절에서 문장으로 풀어 쓰인다). 한쪽 분모로만 재면 그 경우를 놓친다.
-    """
-    if not a or not b:
-        return 0.0
-    small, large = (a, b) if len(a) <= len(b) else (b, a)
-    hit = sum(w for t, w in small.items() if t in large)
-    return max(hit / sum(a.values()), hit / sum(b.values()))
+# 유사도는 alignment.token_similarity가 단일 진실 - 완전 동일 구현이 2벌이었다
+# (2026-09-03 통일. _weighted_tokens는 이미 import하면서 이 함수만 복제돼 있었다).
+_similarity = token_similarity
 
 
 def duplicate_pairs(
@@ -148,12 +143,8 @@ def duplicate_pairs(
     return out
 
 
-def _ref_key(ref: str) -> tuple[int, int]:
-    parts = ref.split(".")
-    try:
-        return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
-    except ValueError:
-        return (0, 0)
+# 정렬 키는 core.outline.section_label_key가 단일 진실(3벌 복제이던 것, 2026-09-03).
+_ref_key = section_label_key
 
 
 class SourceMismatch(NamedTuple):

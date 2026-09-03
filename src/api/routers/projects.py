@@ -19,7 +19,7 @@ from sqlalchemy.orm import selectinload
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.cost_limit import enforce_cost_limit
 from src.api.dependencies.db import get_async_session
-from src.api.dependencies.permissions import require_writer
+from src.api.dependencies.permissions import ADMINS, require_writer
 from src.api.schemas.execution import DecideRequest, ProgressResponse, RunResponse
 from src.api.schemas.project import (
     AnalystRead,
@@ -369,6 +369,7 @@ async def create_personal_preset(
         description=data.description,
         outline={"chapters": [ch.model_dump() for ch in data.chapters]},
         is_public=data.is_public,
+        overwrite=data.overwrite,
     )
     n_ch, n_sec = _preset_counts(row.outline)
     return UserPresetRead(
@@ -496,7 +497,7 @@ async def get_preset_detail(
             session,
             current_user.id,
             personal_id,
-            is_admin=current_user.role in ("admin", "super_admin"),
+            is_admin=current_user.role in ADMINS,
         )
         return PresetDetailRead(
             id=preset_key,
@@ -566,7 +567,7 @@ async def _get_authorized_project(
     project = await session.get(Project, project_id, options=[selectinload(Project.owner)])
     if project is None:
         raise NotFoundError(message="프로젝트를 찾을 수 없습니다", code="PROJECT_NOT_FOUND")
-    if project.owner_id != current_user.id and current_user.role not in ("super_admin", "admin"):
+    if project.owner_id != current_user.id and current_user.role not in ADMINS:
         raise AuthorizationError(message="권한이 없습니다", code="FORBIDDEN")
     return project
 
@@ -668,7 +669,7 @@ async def list_projects(
         )
     if scope not in ("mine", "all"):
         raise ValidationError(message="scope는 mine 또는 all 이어야 합니다", code="INVALID_SCOPE")
-    is_admin = current_user.role in ("super_admin", "admin")
+    is_admin = current_user.role in ADMINS
 
     stmt = select(Project).options(selectinload(Project.owner))
     # 가시성: 일반 사용자는 항상 자기 것. 관리자는 scope=all일 때만 전체.
@@ -1802,7 +1803,7 @@ async def delete_project(
         logger.warning("project.export_cleanup_failed", project_id=str(project.id))
 
 
-MAX_SOURCE_UPLOAD_BYTES = 50 * 1024 * 1024  # 50MB — 직접 업로드 자료 상한
+MAX_SOURCE_UPLOAD_BYTES = settings.max_upload_bytes  # 단일 진실 = config(2026-09-03 통일)
 _FILE_SOURCE_LABEL = {"upload": "업로드 파일", "library": "라이브러리 자료"}
 
 

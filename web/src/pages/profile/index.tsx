@@ -53,33 +53,11 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/useAuth";
+import { fmtKstDate, fmtKstDateTime } from "@/lib/datetime";
+import { roleLabel } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
-const ROLE_LABEL: Record<string, string> = {
-  super_admin: "최고관리자",
-  admin: "관리자",
-  worker: "작성자",
-  viewer: "뷰어",
-};
-
 const PASSWORD_ROTATION_DAYS = 90;
-
-function fmtDateTime(iso?: string | null): string {
-  if (!iso) return "-";
-  return new Date(iso).toLocaleString("ko-KR", {
-    timeZone: "Asia/Seoul",
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-function fmtDate(iso?: string | null): string {
-  if (!iso) return "-";
-  return new Date(iso).toLocaleDateString("ko-KR", {
-    timeZone: "Asia/Seoul",
-    dateStyle: "medium",
-  });
-}
 
 function daysSince(iso?: string | null): number | null {
   if (!iso) return null;
@@ -163,7 +141,7 @@ function ProfileCard({ user }: { user: User }) {
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
               <span className="text-xl font-semibold text-fg">{user.name}</span>
-              <Badge variant="secondary">{ROLE_LABEL[user.role] ?? user.role}</Badge>
+              <Badge variant="secondary">{roleLabel(user.role)}</Badge>
               {user.is_active === false ? <Badge variant="destructive">비활성</Badge> : null}
             </div>
             <span className="flex items-center gap-1.5 font-mono text-sm text-fg-secondary">
@@ -184,9 +162,9 @@ function ProfileCard({ user }: { user: User }) {
         <Separator />
 
         <dl className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <InfoItem icon={ShieldHalf} label="권한" value={ROLE_LABEL[user.role] ?? user.role} />
-          <InfoItem icon={Calendar} label="가입일" value={fmtDate(user.created_at)} />
-          <InfoItem icon={Clock} label="최근 로그인" value={fmtDateTime(user.last_login_at)} />
+          <InfoItem icon={ShieldHalf} label="권한" value={roleLabel(user.role)} />
+          <InfoItem icon={Calendar} label="가입일" value={fmtKstDate(user.created_at)} />
+          <InfoItem icon={Clock} label="최근 로그인" value={fmtKstDateTime(user.last_login_at)} />
         </dl>
       </CardContent>
     </Card>
@@ -472,7 +450,7 @@ function ChangePasswordCard({ user }: { user: User }) {
             ? "비밀번호는 90일마다 변경하는 것을 권장합니다."
             : overdue
               ? `마지막 변경 후 ${sinceChange}일 지났습니다. 변경을 권장합니다.`
-              : `마지막 변경: ${fmtDate(user.password_changed_at)} (${sinceChange}일 전)`}
+              : `마지막 변경: ${fmtKstDate(user.password_changed_at)} (${sinceChange}일 전)`}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">

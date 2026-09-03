@@ -23,6 +23,13 @@
   --color-accent: #2C6CB8;
   --color-accent-hover: #205594;
 
+  /* 차트 전용 잉크 - 여태 참조만 되고 정의가 없어 화면별 var() 폴백이 실값 노릇을
+     했고, 폴백끼리 갈라져 있었다(드리프트 수리). 값은 ChartBlock·brief의 폴백. */
+  --chart-grid: #e3e3e0;
+  --chart-ink: #52514e;
+  --chart-accent: #c26d3f;
+  --chart-node: #ffffff;
+
   --border-radius-sm: 4px;
   --border-radius-md: 6px;
   --border-radius-lg: 10px;

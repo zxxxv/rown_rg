@@ -68,7 +68,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SERIES_COLORS } from "@/features/preview/chartSpec";
 import { useAuth } from "@/hooks/useAuth";
+import { fmtKstDateTime } from "@/lib/datetime";
+import { roleLabel } from "@/lib/labels";
 import { cn } from "@/lib/utils";
 
 const PERIOD_LABEL: Record<AdminDashboardPeriod, string> = {
@@ -434,8 +437,9 @@ function DailyCostChart({
   );
 }
 
-// 카테고리형 팔레트(dataviz 검증 슬롯 1–6, 스택 인접쌍 통과). '기타'는 중립 회색.
-const USER_SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"];
+// 카테고리형 팔레트 - 차트 계열색(chartSpec.SERIES_COLORS 5색, dataviz 검증)에
+// 6번째 슬롯만 보탠다(스택 인접쌍 통과). '기타'는 중립 회색.
+const USER_SERIES_COLORS = [...SERIES_COLORS, "#008300"];
 const OTHER_COLOR = "var(--color-text-tertiary)";
 
 function UserDailyChart({
@@ -532,27 +536,11 @@ function usageTone(pct: number): "default" | "warning" | "danger" {
   return "default";
 }
 
-function fmtDateTime(iso?: string | null): string {
-  if (!iso) return "-";
-  return new Date(iso).toLocaleString("ko-KR", {
-    timeZone: "Asia/Seoul",
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
 const ROLE_KIND: Record<string, StatusKind> = {
   admin: "info",
   super_admin: "info",
   worker: "tertiary",
   viewer: "tertiary",
-};
-
-const ROLE_LABEL: Record<string, string> = {
-  super_admin: "최고관리자",
-  admin: "관리자",
-  worker: "작성자",
-  viewer: "뷰어",
 };
 
 function UsageTable({
@@ -604,7 +592,7 @@ function UsageTable({
                         <span>{row.email}</span>
                         <StatusDot
                           kind={ROLE_KIND[row.role] ?? "tertiary"}
-                          label={ROLE_LABEL[row.role] ?? row.role}
+                          label={roleLabel(row.role)}
                         />
                       </div>
                     </div>
@@ -644,7 +632,7 @@ function UsageTable({
                     </div>
                   </TableCell>
                   <TableCell className="whitespace-nowrap font-mono text-xs text-fg-tertiary">
-                    {fmtDateTime(row.last_active)}
+                    {fmtKstDateTime(row.last_active)}
                   </TableCell>
                   <TableCell className="text-right">
                     <Button variant="ghost" size="sm" onClick={() => onSelectUser(row.user_id)}>
@@ -728,7 +716,7 @@ function UserDetailBody({ data, onDone }: { data: UserUsageDetail; onDone: () =>
           {data.name}
           <StatusDot
             kind={ROLE_KIND[data.role] ?? "tertiary"}
-            label={ROLE_LABEL[data.role] ?? data.role}
+            label={roleLabel(data.role)}
           />
         </DialogTitle>
         <DialogDescription>

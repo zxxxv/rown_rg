@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { apiClient } from "@/api/client";
+import { POLL_VERIFY_MS } from "@/lib/intervals";
 
 // 실계약: GET /projects/{id}/verify-report - PM 검증 경고 리포트(차단 아님).
 // assemble 직후 챕터당 1콜 pm_verify가 저장한 문서 횡단 일관성 경고.
@@ -43,7 +44,7 @@ export function useVerifyReport(projectId: string, enabled = true, generating = 
     // 완주 전에 열어 둔 화면이 빈 배열을 한 번 받고 멈춰, 조립 직후 pm_verify가
     // 쓴 경고가 새로고침 전엔 안 보였다(2026-08-20 3차 런에서 사용자 발견 - 89건이
     // DB에 있는데 화면은 0건). 끝나면 스스로 멈추는 건 그대로다.
-    refetchInterval: running || generating ? 4000 : false,
+    refetchInterval: running || generating ? POLL_VERIFY_MS : false,
   });
 }
 
@@ -97,7 +98,7 @@ export function useVerifyStatus(projectId: string, enabled = true) {
         .parse(data);
     },
     enabled: Boolean(projectId) && enabled,
-    refetchInterval: (query) => (query.state.data?.running ? 4000 : false),
+    refetchInterval: (query) => (query.state.data?.running ? POLL_VERIFY_MS : false),
   });
 }
 

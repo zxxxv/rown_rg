@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, KeyRound, Save, Settings2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ApiError } from "@/api/client";
+import { apiErrorMessage } from "@/api/client";
 import { type SettingItem, useSettings, useUpdateSetting } from "@/api/settings";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
@@ -31,10 +31,6 @@ const GROUP_HINT: Record<string, string> = {
 // 감출 설정 키. 절약 모드의 본문 작성이 gpt-5.4-mini라 OpenAI 키는 실제로 쓰인다 -
 // 숨기면 키를 못 넣어 그 모드가 통째로 죽는다(2026-08-10 되돌림).
 const HIDDEN_KEYS = new Set<string>();
-
-function errMsg(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
-}
 
 const GROUP_ORDER = ["LLM", "SSO", "네이버웍스"];
 
@@ -139,7 +135,7 @@ function SettingRow({ item }: { item: SettingItem }) {
       toast.success(`${item.label} 저장됨`);
       setValue("");
     } catch (err) {
-      toast.error("저장 실패", { description: errMsg(err, "값을 확인해 주세요.") });
+      toast.error("저장 실패", { description: apiErrorMessage(err, "값을 확인해 주세요.") });
     }
   };
 

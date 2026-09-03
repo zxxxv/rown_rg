@@ -17,12 +17,9 @@ from src.core.clock import now as clock_now
 from src.db.models.project import Project
 from src.db.models.review_point import ReviewPoint
 from src.db.models.user import User
+from tests.conftest import auth_headers as _auth
 
 pytestmark = pytest.mark.integration
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 async def _insert_project_with_gate(

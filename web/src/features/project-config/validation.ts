@@ -18,7 +18,7 @@ import { duplicateQueryGroups } from "./searchPreview";
 export const LIMITS = {
   /** ProjectBase.title: min_length=1, max_length=255 */
   title: 255,
-  /** 서버 상한 없음 - 주제는 수집 질의의 틀이라 길수록 흐려진다(폼 상한, schema.ts와 같은 값) */
+  /** 서버 상한 없음 - 주제는 수집 질의의 틀이라 길수록 흐려진다(폼 상한, schema.ts가 이 값을 씀) */
   topic: 2000,
   /** OutlineChapterIn.title: max_length=255 (빈 문자열 허용) */
   chapterTitle: 255,

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.dependencies.auth import get_current_active_user
 from src.api.dependencies.db import get_async_session
-from src.api.dependencies.permissions import require_writer
+from src.api.dependencies.permissions import ADMINS, require_writer
 from src.api.schemas.prompt import (
     PersonalPromptCreate,
     PersonalPromptRead,
@@ -112,7 +112,7 @@ async def get_my_prompt(
         session,
         current_user.id,
         prompt_id,
-        is_admin=current_user.role in ("admin", "super_admin"),
+        is_admin=current_user.role in ADMINS,
     )
     return PersonalPromptRead.model_validate(row)
 

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.state import ProjectState
 from src.core.types import SectionCandidateSet, SectionPlan
 from src.db.models.section import Section
-from src.db.session import async_session_maker
+from src.db.session import open_session
 from src.prompts import load_preset
 from src.services.sections.drift import content_fingerprint
 
@@ -112,7 +112,7 @@ async def persist_sections(state: ProjectState) -> None:
     요청 밖 경로라 자체 세션을 열고(=opener) 직접 커밋한다(session.py 규칙).
     """
     rows = _rows(state)
-    async with async_session_maker() as session:
+    async with open_session() as session:
         # 전량 교체 전에 기존 meta를 읽어 둔다 — resume 조립은 state에 지표가 없어
         # 그냥 덮으면 작성 때 기록한 '자료 부족' 플래그가 사라진다.
         prior = {
@@ -134,7 +134,7 @@ async def persist_sections(state: ProjectState) -> None:
 
 async def clear_project_sections(project_id) -> None:
     """write 시작 시 이전 런 잔재 제거 — 증분 초안이 옛 완성본과 섞이지 않게."""
-    async with async_session_maker() as session:
+    async with open_session() as session:
         await session.execute(delete(Section).where(Section.project_id == project_id))
         await session.commit()
 
@@ -149,7 +149,7 @@ async def persist_draft_section(state: ProjectState, plan, draft) -> None:
     """
     try:
         chapter_titles = _chapter_titles(state)
-        async with async_session_maker() as session:
+        async with open_session() as session:
             # 같은 절(id)의 잔재(재시도·이전 부분 실행)와 같은 위치를 차지한 낡은
             # 행(목차 재정렬 잔재)을 함께 걷어내고 새 초안으로 교체 — 정체성은 id,
             # 위치는 표시값이라 둘 다 청소해야 uq_section_pos 충돌이 없다.

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "@/api/client";
+import { apiClient, apiUrl } from "@/api/client";
 import {
   type LibraryTreeResponse,
   LibraryTreeResponseSchema,
@@ -7,7 +7,6 @@ import {
   SourceContentSchema,
 } from "@/api/types";
 import { uploadWithProgress } from "@/api/upload";
-import { env } from "@/env";
 
 export const libraryKeys = {
   all: ["library"] as const,
@@ -133,13 +132,11 @@ export function useSourceContent(contentUrl: string | null | undefined) {
 
 /** 파일 다운로드 URL(쿠키 인증, same-origin) - <a href> 또는 프로그램적 클릭에 사용. */
 export function libraryFileDownloadUrl(nodeId: string): string {
-  const base = env.VITE_API_BASE_URL.replace(/\/$/, "");
-  return `${base}/library/files/${nodeId}/download`;
+  return apiUrl(`library/files/${nodeId}/download`);
 }
 
 /** 가상 파일의 download_url 해석 - 절대 URL(웹 출처)은 그대로, 상대경로는 API base 접두. */
 export function resolveDownloadUrl(url: string): string {
   if (/^https?:\/\//.test(url)) return url;
-  const base = env.VITE_API_BASE_URL.replace(/\/$/, "");
-  return `${base}/${url.replace(/^\//, "")}`;
+  return apiUrl(url.replace(/^\//, ""));
 }

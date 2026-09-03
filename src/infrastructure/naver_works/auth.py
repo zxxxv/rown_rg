@@ -11,6 +11,8 @@ from src.core.config import settings
 logger = logging.getLogger(__name__)
 
 _NW_TOKEN_URL = "https://auth.worksmobile.com/oauth2/v2.0/token"
+# 네이버웍스 API 공용 타임아웃 - bot.py와 같은 값을 쓴다(인라인 2벌이던 것).
+NW_HTTP_TIMEOUT_S = 10.0
 
 _cache: dict = {
     "access_token": None,
@@ -39,7 +41,7 @@ def _build_jwt_assertion() -> str:
 async def _issue_access_token() -> str:
     assertion = _build_jwt_assertion()
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=NW_HTTP_TIMEOUT_S) as client:
         resp = await client.post(
             _NW_TOKEN_URL,
             data={

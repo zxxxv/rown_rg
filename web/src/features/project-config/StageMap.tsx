@@ -1,26 +1,17 @@
 import { Bot, RotateCcw, User } from "lucide-react";
+import { PIPELINE_STAGES, type PipelineStageKey } from "@/features/progress/stages";
 import { cn } from "@/lib/utils";
 
 // 진행 단계 지도(2026-08-20 사용자 요청) - 파이프라인이 어떤 순서로 돌고, 어디서
 // 사람의 검토가 필요한지, 어디로 되돌아올 수 있는지를 설계 화면에서 한눈에 보여준다.
 // 사람 단계는 아이콘·색으로 구분한다 - "여기가 사람 검토 지점이다"가 지도의 목적.
+// 키·라벨은 stages.ts 단일 진실에서 온다 - 이 지도만 라벨 어순이 뒤집혀
+// ("검증·조립") 스테퍼와 어긋나 있었다. 옛 "계획" 칸·옛 키(planning 등)도
+// 스테퍼의 단계 집합에 맞춰 걷어냈다.
 
-interface Stage {
-  key: string;
-  label: string;
-  human?: boolean;
-}
+const HUMAN_STAGES = new Set<PipelineStageKey>(["brief", "review", "done"]);
 
-const STAGES: Stage[] = [
-  { key: "planning", label: "계획" },
-  { key: "brief", label: "설계 검토", human: true },
-  { key: "research", label: "자료 수집" },
-  { key: "sources", label: "자료 검토", human: true },
-  { key: "indexing", label: "색인·리허설" },
-  { key: "writing", label: "본문 작성" },
-  { key: "review", label: "검증·조립" },
-  { key: "done", label: "완성 검토", human: true },
-];
+const STAGES = PIPELINE_STAGES.map((s) => ({ ...s, human: HUMAN_STAGES.has(s.key) }));
 
 export function StageMap({ current }: { current?: string }) {
   return (

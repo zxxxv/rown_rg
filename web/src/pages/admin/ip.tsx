@@ -1,7 +1,7 @@
 import { Globe, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { ApiError } from "@/api/client";
+import { apiErrorMessage } from "@/api/client";
 import {
   type IpWhitelistEntry,
   useCreateIpEntry,
@@ -35,19 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAuth } from "@/hooks/useAuth";
-
-function fmtDateTime(iso?: string | null): string {
-  if (!iso) return "-";
-  return new Date(iso).toLocaleString("ko-KR", {
-    timeZone: "Asia/Seoul",
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-function errMsg(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
-}
+import { fmtKstDateTime } from "@/lib/datetime";
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 const IPV6_RE =
@@ -152,7 +140,7 @@ function AddEntryCard() {
           setExpiresAt("");
         },
         onError: (err) =>
-          toast.error("등록 실패", { description: errMsg(err, "IP/CIDR 형식을 확인해 주세요.") }),
+          toast.error("등록 실패", { description: apiErrorMessage(err, "IP/CIDR 형식을 확인해 주세요.") }),
       },
     );
   };
@@ -252,7 +240,7 @@ function EntryRow({ entry, onDelete }: { entry: IpWhitelistEntry; onDelete: () =
       {
         onSuccess: () =>
           toast.success(next ? `${entry.ip_cidr} 활성화됨` : `${entry.ip_cidr} 비활성화됨`),
-        onError: (err) => toast.error("변경 실패", { description: errMsg(err, "처리 중 오류") }),
+        onError: (err) => toast.error("변경 실패", { description: apiErrorMessage(err, "처리 중 오류") }),
       },
     );
   };
@@ -274,7 +262,7 @@ function EntryRow({ entry, onDelete }: { entry: IpWhitelistEntry; onDelete: () =
       <TableCell>
         {entry.expires_at ? (
           <span className="flex items-center gap-1.5 whitespace-nowrap font-mono text-xs text-fg-tertiary">
-            {fmtDateTime(entry.expires_at)}
+            {fmtKstDateTime(entry.expires_at)}
             {expired ? <Badge variant="destructive">만료됨</Badge> : null}
           </span>
         ) : (
@@ -285,7 +273,7 @@ function EntryRow({ entry, onDelete }: { entry: IpWhitelistEntry; onDelete: () =
         {entry.created_by ?? "-"}
       </TableCell>
       <TableCell className="font-mono text-xs text-fg-tertiary">
-        {fmtDateTime(entry.created_at)}
+        {fmtKstDateTime(entry.created_at)}
       </TableCell>
       <TableCell className="text-right">
         <Button variant="ghost" size="sm" onClick={onDelete} title="삭제">
@@ -313,7 +301,7 @@ function DeleteConfirmDialog({
         toast.success(res.detail || "삭제되었습니다");
         onClose();
       },
-      onError: (err) => toast.error("삭제 실패", { description: errMsg(err, "처리 중 오류") }),
+      onError: (err) => toast.error("삭제 실패", { description: apiErrorMessage(err, "처리 중 오류") }),
     });
   };
 

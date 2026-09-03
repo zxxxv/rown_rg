@@ -102,7 +102,25 @@ async def create_user_preset(
     description: str | None,
     outline: dict,
     is_public: bool = False,
+    overwrite: bool = False,
 ) -> UserPreset:
+    if overwrite:
+        # 같은 이름이면 그 행을 교체한다 — id(u: 키)가 유지돼 이 프리셋을 가리키던
+        # 화면·필터가 계속 같은 항목을 본다. 덮어쓰기 길이 없어 사용자가 손으로
+        # "(2)(3)"을 붙여 복제가 쌓이던 병리의 수리(2026-09-03).
+        existing = (
+            await session.execute(
+                select(UserPreset).where(UserPreset.owner_id == owner_id, UserPreset.name == name)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            existing.description = description
+            existing.outline = outline
+            # 끄기는 목록의 공개 토글이 관장한다 — 덮어쓰기가 공개를 몰래 풀면 안 된다.
+            existing.is_public = existing.is_public or is_public
+            await session.flush()
+            await session.refresh(existing)
+            return existing
     await _check_name_free(session, owner_id, name)
     row = UserPreset(
         owner_id=owner_id,

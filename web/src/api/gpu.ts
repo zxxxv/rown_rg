@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/api/client";
+import { POLL_GPU_MS } from "@/lib/intervals";
 
 /** gpu_service /health의 queue 스냅샷 — 필드 정의는 gpu_service/app/gpu_queue.py */
 export interface GpuQueueSnapshot {
@@ -105,6 +106,6 @@ export function useGpuMonitor() {
     queryKey: gpuKeys.monitor,
     queryFn: getGpuMonitor,
     // 라이브 화면이다. 10초면 5초 샘플 두 칸 - 더 조여도 새 정보가 없다.
-    refetchInterval: 10_000,
+    refetchInterval: POLL_GPU_MS,
   });
 }

@@ -20,16 +20,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.project import Project
 from src.db.models.user import User
+from tests.conftest import auth_headers as _auth
 
 pytestmark = pytest.mark.asyncio
 
 _OUTLINE = {
     "chapters": [{"title": "1장", "sections": [{"title": "1.1 절", "analysts": []}]}],
 }
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 async def _project(session: AsyncSession, owner_id: uuid.UUID, *, status: str) -> uuid.UUID:

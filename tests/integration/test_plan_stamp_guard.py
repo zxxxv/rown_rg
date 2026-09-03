@@ -40,7 +40,7 @@ def _plan_items(n: int, tag: str) -> list[dict]:
 
 @pytest.fixture(autouse=True)
 def _wire(monkeypatch, test_session_maker):
-    monkeypatch.setattr("src.workflows.runner.async_session_maker", test_session_maker)
+    # open_session 통일(2026-09-03) - runner 모듈 바인딩이 사라져 중앙만 패치.
     monkeypatch.setattr("src.db.session.async_session_maker", test_session_maker)
 
 

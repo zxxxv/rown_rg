@@ -30,6 +30,9 @@ from src.core.types import SectionPlan
 
 logger = structlog.get_logger(__name__)
 
+# 의존 그래프는 절 나열→간선 목록이라 짧다 - 목차 35절(예타)도 1500이면 남는다.
+_MAX_TOKENS = 1500
+
 _SYSTEM = (
     "당신은 보고서 목차를 읽고 **절 사이의 의존 관계**만 뽑는 편집자다.\n"
     "의존이란 '그 절을 쓰려면 앞 절이 낸 결론·수치가 반드시 있어야 한다'는 뜻이다.\n"
@@ -154,7 +157,7 @@ async def draft_builds_on(
                     model=model,
                     messages=[Message(role="user", content=prompt)],
                     system=_SYSTEM,
-                    max_tokens=1500,
+                    max_tokens=_MAX_TOKENS,
                     temperature=0.0,
                 )
             )

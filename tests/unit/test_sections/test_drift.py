@@ -112,7 +112,15 @@ class TestDetectDrift:
         a = _plan(chapter_number=1, section_number=1)
         b = _plan(chapter_number=1, section_number=2)
         assert detect_drift([a, b], {}) == []
-        assert detect_drift([a], {a.section_id: _snap(a, has_content=False)}) == []
+        # 한 번도 안 쓴 행은 본문도 지문(plan_hash)도 없다 - 억제 판별자는 작성
+        # 흔적이므로 둘 다 비워야 미작성으로 억제된다(2026-09-03 수리).
+        never = _snap(a, has_content=False, plan_hash="")
+        assert detect_drift([a], {a.section_id: never}) == []
+        # 반대로 지문이 남은 빈 절(작성 후 비워짐)은 missing으로 떠야 한다 -
+        # 완료 프로젝트의 빈 절이 기각 시도 후 목록에서 사라지던 결함의 회귀 가드.
+        emptied = _snap(a, has_content=False)
+        [drift] = detect_drift([a], {a.section_id: emptied})
+        assert drift.reasons == ("missing",)
 
     def test_excluded_source_is_flagged_with_ids(self):
         plan = _plan()

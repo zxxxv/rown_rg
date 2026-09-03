@@ -26,30 +26,25 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { PIPELINE_STAGES, type PipelineStageKey } from "./stages";
 
 // 파이프라인 순서 - 사람 결정이 필요한 단계(자료 검토)는 도달 시 강조되고 해당
 // 작업 화면으로 가는 버튼이 붙는다. 본문 검토(QA) 게이트는 제거됨(2026-08-07) -
 // 작성이 끝나면 곧장 조립·검증되고, 검토·편집은 보고서 화면에서 사후에 한다.
+// 키·라벨은 stages.ts 단일 진실에서 온다 - 여기는 이 화면 전용 부가 정보만 얹는다.
 // human: 사람의 확인·결정이 필요한 단계(단계 지도 이식, 2026-08-21 사용자 요청).
 // loop: 이 단계에서 앞으로 되돌아갈 수 있음 - 회전 아이콘과 한 줄 설명이 붙는다.
-const STEPS = [
-  { key: "brief", label: "설계 검토 · 확정", human: true },
-  { key: "collect", label: "자료 수집" },
-  { key: "review", label: "자료 검토 · 확정", human: true },
-  {
-    key: "index",
-    label: "색인 · 리허설",
-    loop: "자료가 부족한 절이 있으면 자료 검토로 되돌아옵니다(최대 2회)",
-  },
-  { key: "write", label: "본문 작성" },
-  { key: "assemble", label: "조립 · PM 검증" },
-  {
-    key: "done",
-    label: "완성 검토",
+const STEP_EXTRAS: Partial<Record<PipelineStageKey, { human?: boolean; loop?: string }>> = {
+  brief: { human: true },
+  review: { human: true },
+  index: { loop: "자료가 부족한 절이 있으면 자료 검토로 되돌아옵니다(최대 2회)" },
+  done: {
     human: true,
     loop: "절 재작성·자료 보강은 전체를 되돌리지 않고 해당 절만 다시 씁니다",
   },
-] as const;
+};
+
+const STEPS = PIPELINE_STAGES.map((s) => ({ ...s, ...STEP_EXTRAS[s.key] }));
 
 type StepPhase = "done" | "active" | "action" | "pending";
 
@@ -117,11 +112,7 @@ function deriveSteps(projectId: string, snapshot: ProgressSnapshot | undefined):
   }
 
   return STEPS.map((step, i) => {
-    const base = {
-      label: step.label,
-      human: "human" in step ? step.human : undefined,
-      loop: "loop" in step ? step.loop : undefined,
-    };
+    const base = { label: step.label, human: step.human, loop: step.loop };
     if (i < current) return { ...base, phase: "done" as const };
     if (i === current) return { ...base, phase: currentPhase, actionLabel, actionTo };
     return { ...base, phase: "pending" as const };

@@ -26,7 +26,9 @@ from src.services.research.pdf_fetch import PdfSourceFetcher, looks_like_pdf
 
 logger = structlog.get_logger(__name__)
 
-DEFAULT_MODEL = "claude-sonnet-4-6"  # 가성비 기본(동적필터 지원). Opus 4.8로 승격 가능.
+# 리터럴 재선언 금지 - config.research_model이 단일 진실(운영 호출은 전부 모드
+# 맵이 model을 명시 전달하므로 이 폴백은 직접 호출·스크립트용).
+DEFAULT_MODEL = settings.research_model
 
 SYSTEM_PROMPT = """너는 보고서 작성을 위한 웹 리서처다.
 입력으로 보고서의 주제·종류·세부목차(JSON)가 주어진다.

@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, FilePlus2, Pencil, ScrollText, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { ApiError } from "@/api/client";
+import { ApiError, apiErrorMessage } from "@/api/client";
 import {
   type UserPreset,
   useDeleteUserPreset,
@@ -110,10 +110,6 @@ const KIND_META: Record<PromptKind, { title: string; desc: string; placeholder: 
   },
 };
 
-function errMsg(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
-}
-
 export default function PromptsPage() {
   const { user, logout } = useAuth();
   return (
@@ -154,7 +150,7 @@ function MyPresetsSection() {
     del.mutate(id, {
       onSuccess: () => toast.success(`"${name}" 삭제됨`),
       onError: (err) =>
-        toast.error("삭제 실패", { description: errMsg(err, "다시 시도해 주세요.") }),
+        toast.error("삭제 실패", { description: apiErrorMessage(err, "다시 시도해 주세요.") }),
     });
   };
 
@@ -247,7 +243,7 @@ function KindSection({ kind }: { kind: PromptKind }) {
     del.mutate(p.id, {
       onSuccess: () => toast.success(`"${p.name}" 삭제됨`),
       onError: (err) =>
-        toast.error("삭제 실패", { description: errMsg(err, "다시 시도해 주세요.") }),
+        toast.error("삭제 실패", { description: apiErrorMessage(err, "다시 시도해 주세요.") }),
     });
   };
 

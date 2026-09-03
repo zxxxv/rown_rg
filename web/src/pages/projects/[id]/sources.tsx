@@ -27,6 +27,8 @@ import { LibraryTreePanel } from "@/features/source-review/LibraryTreePanel";
 import { SourceDetailDialog } from "@/features/source-review/SourceDetailDialog";
 import { UploadDropzone, type UploadingFile } from "@/features/source-review/UploadDropzone";
 import { useAuth } from "@/hooks/useAuth";
+import { formatSize } from "@/lib/format";
+import { POLL_LIST_MS, POLL_PAGE_MS } from "@/lib/intervals";
 import { cn } from "@/lib/utils";
 
 export default function SourcesPage() {
@@ -38,7 +40,7 @@ export default function SourcesPage() {
   // 검토는 SOURCE_POOL 게이트가 열려 있을 때만 유효 - 확정 후(작성·완료)에는
   // 이 페이지가 읽기 전용 기록이 된다(채택/제외/추가 검색/검토 완료 숨김).
   // 게이트가 열리기 전(초기 수집 중)에는 스냅샷을 폴링해 게이트 도착을 따라잡는다.
-  const snapshot = useProgressSnapshot(projectId, true, { refetchInterval: 7_000 });
+  const snapshot = useProgressSnapshot(projectId, true, { refetchInterval: POLL_PAGE_MS });
   const reviewOpen = snapshot.data?.pending_gate?.gate === "source_pool";
   // 채택/제외를 만질 수 있는가 - 검토 게이트가 열렸을 때뿐 아니라 **실행이 멈춰 있으면
   // 언제든** 허용한다. 보고서는 완주가 끝이 아니라 계속 손보는 대상이고, 완료 뒤 자료를
@@ -65,7 +67,7 @@ export default function SourcesPage() {
   const [collectBaseline, setCollectBaseline] = useState<number | null>(null);
   const collecting = collectBaseline !== null;
   const sourcesQuery = useProjectSources(projectId, {
-    refetchInterval: collecting || gathering ? 5_000 : false,
+    refetchInterval: collecting || gathering ? POLL_LIST_MS : false,
   });
   const patchSource = usePatchSource(projectId);
 
@@ -633,8 +635,7 @@ function FinalizeBar({
 function fileFacts(s: Source): string {
   const parts: string[] = [];
   if (s.size_bytes) {
-    const mb = s.size_bytes / (1024 * 1024);
-    parts.push(mb >= 1 ? `${mb.toFixed(1)}MB` : `${Math.round(s.size_bytes / 1024)}KB`);
+    parts.push(formatSize(s.size_bytes));
   }
   if (s.page_count) parts.push(`${s.page_count}쪽`);
   if (s.indexing) parts.push("색인 중…");

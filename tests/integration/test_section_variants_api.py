@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 
 from httpx import AsyncClient
@@ -17,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.section import Section
 from src.db.models.user import User
-from tests.integration.test_drift_api import _auth, _completed_project
+from tests.conftest import auth_headers as _auth
+from tests.fixtures.builders import completed_project as _completed_project
+from tests.fixtures.builders import wait_job_done
 
 
 async def _wait_done(pid: uuid.UUID) -> None:
@@ -25,16 +26,11 @@ async def _wait_done(pid: uuid.UUID) -> None:
 
     실패 사유는 작업 상태에만 산다(안 자체는 절 meta에 쌓인다). 여기서 지우면 화면이
     읽기 전에 사라져, "셋 중 둘만 나왔다"는 사실을 아무도 모르게 된다. 실서비스에서도
-    다음 뽑기 전까지 남아 있는 것이 계약이다.
+    다음 뽑기 전까지 남아 있는 것이 계약이다(폴링은 builders.wait_job_done 공용).
     """
     from src.api.routers import projects as projects_router
-    from src.services.jobs import get_job
 
-    for _ in range(100):
-        job = get_job(pid, projects_router.VARIANTS_JOB)
-        if job and not job.running:
-            return
-        await asyncio.sleep(0.1)
+    await wait_job_done(pid, projects_router.VARIANTS_JOB)
 
 
 class TestSectionVariants:

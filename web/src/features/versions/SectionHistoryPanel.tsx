@@ -7,6 +7,7 @@ import { LoadingSkeleton } from "@/components/feedback/LoadingSkeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarkdownContent } from "@/features/preview/MarkdownContent";
+import { fmtKstCompact } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 import { reasonLabel } from "./reasons";
 import { diffWords } from "./textDiff";
@@ -16,13 +17,8 @@ import { diffWords } from "./textDiff";
 // 같은 내용이 이어진 구간은 서버가 한 칸으로 접어 준다(안 접으면 남의 절을 고친
 // 버전까지 이 절 이력에 한 줄씩 쌓인다).
 
-function fmtDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes(),
-  ).padStart(2, "0")}`;
-}
+// 표시는 KST 고정(fmtKstCompact) - 버전 이력만 브라우저 로컬 시간이라 화면마다
+// 시각이 달랐다.
 
 /** 지금 본문과 이 시점 본문의 단어 단위 차이 - 몇 자가 늘고 줄었는지 한 줄로. */
 function changeSummary(before: string, after: string): string {
@@ -101,7 +97,9 @@ function Entry({
             {range}
           </Badge>
           <span className="shrink-0 text-xs text-fg-secondary">{reasonLabel(entry.reason)}</span>
-          <span className="shrink-0 text-xs text-fg-tertiary">{fmtDate(entry.created_at)}</span>
+          <span className="shrink-0 text-xs text-fg-tertiary">
+            {fmtKstCompact(entry.created_at)}
+          </span>
           <span className="min-w-0 flex-1 truncate text-xs text-fg-tertiary">
             {entry.char_count.toLocaleString()}자 · {changeSummary(entry.content, current)}
           </span>

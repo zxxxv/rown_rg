@@ -9,12 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models.token_usage import TokenUsage
 from src.db.models.user import User
+from tests.conftest import auth_headers as _auth
 
 pytestmark = pytest.mark.integration
-
-
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 async def _add_usage(session: AsyncSession, user: User, cost_usd: Decimal) -> None:

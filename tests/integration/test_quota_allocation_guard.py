@@ -10,7 +10,6 @@ quota_gate는 조직 한도를 **먼저** 본다(AND 조건). 그래서 역할 �
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from decimal import Decimal
 
 import pytest
@@ -20,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.models.quota_setting import QuotaSettings
 from src.db.models.user import User
 from src.db.models.user_limit import UserLimit
-from src.services.quota_settings import invalidate_quota_setting_cache
+from tests.conftest import auth_headers as _auth
 
 pytestmark = pytest.mark.integration
 
@@ -30,15 +29,7 @@ _ADMIN = "DEFAULT_LIMIT_ADMIN_USD"
 _SUPER = "DEFAULT_LIMIT_SUPER_ADMIN_USD"
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture(autouse=True)
-def _clear_quota_settings_cache() -> Iterator[None]:
-    invalidate_quota_setting_cache()
-    yield
-    invalidate_quota_setting_cache()
+# 한도 캐시 격리는 conftest의 autouse(_reset_quota_settings_cache)가 전담한다.
 
 
 async def _seed(session: AsyncSession, **values: int) -> None:

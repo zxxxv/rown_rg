@@ -81,7 +81,25 @@ CHART_FENCE_RE = re.compile(r"^```chart[ \t]*\n(?P<body>.*?)^```[ \t]*$", re.M |
 _FIELD_RE = re.compile(r"^(?P<key>[a-z_]+)[ \t]*:[ \t]*(?P<value>.*)$")
 _SERIES_RE = re.compile(r"^(?P<name>.+?)[ \t]*=[ \t]*(?P<values>.+)$")
 # 숫자 — 천 단위 콤마와 소수점, 앞 부호를 받는다. 단위·기호가 붙어 있어도 숫자만 뽑는다.
-_NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+# table_to_chart도 이 정의를 import한다(2026-09-03 통일 - "같은 식" 주석 복제이던 것).
+NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+# 음수를 나타내는 앞 기호. 한글 보고서는 마이너스를 '△'로 적는다(정부·한국은행 표기
+# 관례). 이것을 안 읽으면 "수입액 △934"가 +934로 그려진다 — 감소가 증가로 뒤집힌
+# 그래프가 값 라벨까지 달고 나간다(v7 3.2절 실측, 2026-08-28). 그 수리가 변환기
+# (table_to_chart)에만 있고 이 파서엔 없어, 수동 편집·모델 생성 펜스의 △값은 여전히
+# 양수로 그려졌다 — 부호 해석을 여기 한 곳으로 모은다(2026-09-03).
+NEGATIVE_SIGNS = ("△", "▽", "−", "–", "-")
+
+
+def signed_number(token: str) -> float | None:
+    """숫자로 읽히면 숫자, 아니면 None. '△36'은 -36으로 읽는다."""
+    match = NUMBER_RE.search(token)
+    if match is None:
+        return None
+    value = float(match.group().replace(",", ""))
+    if token[: match.start()].strip().endswith(NEGATIVE_SIGNS):
+        return -abs(value)
+    return value
 
 
 class ChartSpecError(ValueError):
@@ -130,11 +148,11 @@ def _split_numbers(value: str) -> list[str]:
 
 
 def _parse_number(token: str) -> float:
-    """숫자 토큰 하나 → float. 단위·기호가 섞여 있어도 숫자 부분만 읽는다."""
-    match = _NUMBER_RE.search(token)
-    if match is None:
+    """숫자 토큰 하나 → float. 단위·기호가 섞여 있어도 숫자 부분만 읽고 △는 음수다."""
+    value = signed_number(token)
+    if value is None:
         raise ChartSpecError(f"숫자로 읽을 수 없는 값: {token!r}")
-    return float(match.group().replace(",", ""))
+    return value
 
 
 def _parse_fields(body: str) -> tuple[dict[str, str], list[str]]:
