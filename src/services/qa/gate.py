@@ -131,8 +131,23 @@ _KOR_SCALE: dict[str, int] = {
     "만": 10**4,
     "천": 10**3,
 }
-_KOR_UNIT_ALT = r"천만|백만|십만|십억|[조억만천]"
-_KOR_NUM_PART = rf"\d[\d,]*(?:\.\d+)?\s*(?:{_KOR_UNIT_ALT})"
+# 단위 글자가 다른 낱말의 첫 글자로 쓰인 경우(조선·조달·억제·만약·천연…)를 단위로
+# 오독하지 않는다 - 단위별 결합어만 정밀 차단한다. 후속 허용 목록 방식은 조사가
+# 붙는 정상 표기("21조에 따른"·"5조를 투입")를 깨서 기각했다. 유의: "5천명"의
+# 명(수량사)처럼 숫자 뒤에서 단위+수량사로만 결합하는 글자는 차단하지 않는다.
+# 2026-09-04 실사고: "반도체 0.7, 조선 0.6"에서 '조선'의 조가 단위로 읽혀
+# "7, 조"라는 유령 수치가 무근거 보류에 올랐다(철강 R&D 첫 런 층2 감사).
+_KOR_UNIT_ALT = (
+    r"천만|백만|십만|십억"
+    r"|조(?![선달성정사치건합업립항문례만])"
+    r"|억(?![제지류압측])"
+    r"|만(?![성약족료능회세감무반큼단])"
+    r"|천(?![연문안사지])"
+)
+# 숫자 몸통 - 콤마는 천 단위 그룹으로만 잇고("9,423"), 꼬리 콤마("7,")를 숫자에
+# 붙이지 않으며, 소수·큰 수의 꼬리에서 시작하지 않는다((?<![\d.,])).
+_KOR_NUM_BODY = r"(?<![\d.,])\d+(?:,\d{3})*(?:\.\d+)?"
+_KOR_NUM_PART = rf"{_KOR_NUM_BODY}\s*(?:{_KOR_UNIT_ALT})"
 # 자리 단위를 이어 쓴 합성 표기("2억 450만")까지 한 토큰으로 본다 — 쪼개 읽으면
 # 2와 450이 되어 코퍼스의 "204.5 million"과 절대 안 맞고, 450은 주입 의심으로 샌다.
 _KOR_NUMBER_RE = re.compile(rf"{_KOR_NUM_PART}(?:\s*{_KOR_NUM_PART})*")
@@ -158,9 +173,9 @@ _MAX_MANTISSA = 10**4
 # 재선언하지 않게 한다. 긴 단위 먼저: "십억"을 "억"보다 먼저 걷어야 "십"이 안 남는다.
 KOR_SCALE_UNITS: tuple[str, ...] = tuple(sorted(_KOR_SCALE, key=len, reverse=True))
 
-_KOR_NUM_GROUP_RE = re.compile(rf"(\d+(?:\.\d+)?)\s*({_KOR_UNIT_ALT})")
+_KOR_NUM_GROUP_RE = re.compile(rf"((?<![\d.])\d+(?:\.\d+)?)\s*({_KOR_UNIT_ALT})")
 # bare_numbers용 — 단위가 없는 숫자도 크기 1로 합산에 참여시킨다.
-_KOR_NUM_GROUP_BARE_RE = re.compile(rf"(\d+(?:\.\d+)?)\s*({_KOR_UNIT_ALT})?")
+_KOR_NUM_GROUP_BARE_RE = re.compile(rf"((?<![\d.])\d+(?:\.\d+)?)\s*({_KOR_UNIT_ALT})?")
 
 
 def korean_magnitude(token: str, *, bare_numbers: bool = False) -> float | None:
