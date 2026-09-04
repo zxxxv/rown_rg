@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     environment: Environment = Environment.LOCAL
     log_level: str = "DEBUG"
 
+    # 모니터링(Sentry) — DSN이 비면 src/main.py가 init을 통째로 건너뛴다.
+    sentry_dsn: str = ""
+    sentry_traces_sample_rate: float = 0.1
+
     # DB
     database_url: str = "postgresql+asyncpg://dev:dev@localhost:5432/rown"
     postgres_db: str = "rown"

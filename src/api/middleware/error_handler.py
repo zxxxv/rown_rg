@@ -1,5 +1,6 @@
 from typing import Any
 
+import sentry_sdk
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -119,6 +120,13 @@ def _code(exc: BaseError, default: str) -> str:
     return exc.code or default
 
 
+def _capture_server_error(exc: Exception, error_type: str) -> None:
+    # 5xx로 나가는 예외를 Sentry에 명시적으로 올린다.
+    with sentry_sdk.new_scope() as scope:
+        scope.set_tag("error_type", error_type)
+        sentry_sdk.capture_exception(exc)
+
+
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AuthenticationError)
     async def _auth(_: Request, exc: AuthenticationError) -> JSONResponse:
@@ -153,6 +161,7 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(LLMError)
     async def _llm(_: Request, exc: LLMError) -> JSONResponse:
         logger.error("llm.error", code=exc.code, message=exc.message)
+        _capture_server_error(exc, "llm_gateway")
         return _response(502, _code(exc, "LLM_ERROR"), exc.message)
 
     @app.exception_handler(QuotaExceededError)
@@ -170,11 +179,13 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(DatabaseError)
     async def _db(_: Request, exc: DatabaseError) -> JSONResponse:
         logger.error("db.error", code=exc.code, message=exc.message)
+        _capture_server_error(exc, "database")
         return _response(500, _code(exc, "DATABASE_ERROR"), exc.message)
 
     @app.exception_handler(BaseError)
     async def _base(_: Request, exc: BaseError) -> JSONResponse:
         logger.error("app.error", code=exc.code, message=exc.message)
+        _capture_server_error(exc, "application")
         return _response(500, _code(exc, "INTERNAL_ERROR"), exc.message)
 
     @app.exception_handler(Exception)

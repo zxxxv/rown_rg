@@ -3,6 +3,7 @@ import os
 import sys
 from logging.handlers import RotatingFileHandler
 
+import sentry_sdk
 import structlog
 
 from src.core.config import settings
@@ -85,6 +86,12 @@ def configure_logging() -> None:
             root_logger.addHandler(file_handler)
         except OSError:
             root_logger.warning("file_logging.setup_failed", exc_info=True)
+            # 파일 로깅만 못 붙는다 — stdout 핸들러는 그대로라 비치명. 다만 배포
+            # 후 로그가 다시 휘발되는 상태이므로 알린다(프로세스당 1회).
+            with sentry_sdk.new_scope() as scope:
+                scope.set_tag("bg_failure", "file_logging_setup")
+                scope.set_extra("log_dir", log_dir)
+                sentry_sdk.capture_exception()
 
     for noisy in ("uvicorn.access", "httpx", "sqlalchemy.engine"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
