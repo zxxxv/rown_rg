@@ -265,6 +265,42 @@ def chart_fences_as_tables(md: str) -> str:
     return CHART_FENCE_RE.sub(_sub, md)
 
 
+_SOURCE_LINE_RE = re.compile(r"^(?P<indent>[ 	]*)source:[ 	]*(?P<nums>[\d,\s]+)$", re.M)
+
+
+def renumber_chart_sources(md: str, local_to_global: dict[int, int]) -> str:
+    """차트 펜스의 ``source:`` 번호를 본문 마커와 같은 매핑으로 갈아끼운다.
+
+    차트는 표를 변환할 때 그 표의 로컬 마커 번호를 source 필드에 담는다. 조립
+    재번호(renumber_marks)는 본문·펜스 안 ``(출처 n)`` 마커만 바꾸므로, 이 필드를
+    같이 안 바꾸면 참고문헌과 무관한 내부 번호(로컬)가 최종 문서에 그대로 노출된다
+    (2026-09-04 철강 R&D 첫 런 정독 실측: 차트 6개 전수 — source: 34·44·61 등,
+    자료는 12건뿐). 매핑 없는 번호는 마커 계약과 동일하게 지우고, 전부 사라지면
+    source 줄 자체를 지운다(출처 없는 차트 — 렌더는 계속).
+    """
+
+    def _sub(m: re.Match[str]) -> str:
+        mapped: list[int] = []
+        for tok in m.group("nums").split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            g = local_to_global.get(int(tok))
+            if g is not None and g not in mapped:
+                mapped.append(g)
+        if not mapped:
+            return ""
+        return f"{m.group('indent')}source: " + ", ".join(str(n) for n in mapped)
+
+    def _fence(fm: re.Match[str]) -> str:
+        body = _SOURCE_LINE_RE.sub(_sub, fm.group("body"))
+        # source 줄이 통째로 지워지며 남는 빈 줄 정리
+        body = re.sub(r"\n{3,}", "\n\n", body)
+        return fm.group(0).replace(fm.group("body"), body)
+
+    return CHART_FENCE_RE.sub(_fence, md)
+
+
 def to_fence(spec: ChartSpec) -> str:
     """ChartSpec → 본문에 넣을 차트 펜스 문자열(변환 UI가 저장할 형태)."""
     lines = [f"type: {spec.type}", f"title: {spec.title}"]
