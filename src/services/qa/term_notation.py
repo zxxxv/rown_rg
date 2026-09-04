@@ -145,6 +145,11 @@ def term_notation_findings(
         cands = [e for e in by_key.get(key, []) if e.get("ko")]
         if not cands:
             continue
+        # 정본(사람 확정)이 있으면 그것만 잣대다 — 채굴 상충은 정본 앞에서 무의미하고,
+        # 불일치 판정도 정본 표기 기준으로 간다(2026-09-04 승격 사슬).
+        confirmed = [e for e in cands if e.get("origin") == "glossary"]
+        if confirmed:
+            cands = confirmed
         table_kos = {str(e["ko"]).strip() for e in cands}
         # 용어표 자체가 상충이면 불일치 판정을 보류한다 — 오염된 표를 잣대로 쓰면
         # 올바른 본문 표기를 벌한다(2026-08-28 v7 실측: 문장 조각 채굴판 "재생에너지
@@ -235,12 +240,21 @@ def term_notation_findings(
 
     # 3) 정의 용어 표기 검토 — 자료가 정의한 용어의 본문 표기를 사람이 훑을 한 행.
     #    한글 뜻이 정의(대개 영문)와 맞는지는 기계로 못 가른다 — 목록만 세운다.
+    #    정본으로 확정된 용어는 뺀다 — 사람이 이미 판단을 끝낸 것을 매 런 다시 묻는
+    #    것은 소음이다(확정 표기와 다르게 썼다면 검사 1이 불일치로 잡는다).
+    confirmed_keys = {
+        _norm_en(str(k))
+        for e in entries
+        if e.get("origin") == "glossary"
+        for k in (e.get("en"), e.get("abbr"))
+        if k
+    }
     defined: dict[str, str] = {}
     for e in entries:
         if not e.get("definition"):
             continue
         for k in (e.get("en"), e.get("abbr")):
-            if k:
+            if k and _norm_en(str(k)) not in confirmed_keys:
                 defined.setdefault(_norm_en(str(k)), str(e.get("en") or e.get("abbr")))
     review: list[str] = []
     review_first: tuple[int, str] | None = None

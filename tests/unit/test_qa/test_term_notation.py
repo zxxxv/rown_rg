@@ -136,3 +136,52 @@ class TestTableConflict:
         assert "무역협회" in f["detail"]
         assert "알이백" in f["detail"]
         assert f["section_ref"] == "3.4"
+
+
+class TestGlossaryYardstick:
+    """정본이 있으면 그것만 잣대다(2026-09-04) - 채굴 상충은 정본 앞에서 무의미."""
+
+    def test_confirmed_term_silences_conflict_and_judges_against_it(self):
+        sections = [(3, "3.4", "재생에너지 사용 확인(RE100)에 기업들이 참여한다")]
+        entries = [
+            _entry(ko="알이백", en="Renewable Electricity 100", abbr="RE100", source_title="A"),
+            _entry(
+                ko="재생에너지 사용 확인",
+                en="Renewable Electricity 100",
+                abbr="RE100",
+                source_title="무역협회",
+            ),
+            {
+                **_entry(ko="알이백", en="Renewable Electricity 100", abbr="RE100"),
+                "origin": "glossary",
+                "source_title": "정본 용어집",
+            },
+        ]
+        found = term_notation_findings(sections, entries)
+        cats = [f["category"] for f in found]
+        assert "용어표 상충" not in cats
+        assert "용어 표기 불일치" in cats
+        mismatch = next(f for f in found if f["category"] == "용어 표기 불일치")
+        assert "알이백" in mismatch["detail"]
+
+    def test_body_matching_glossary_is_silent(self):
+        sections = [(3, "3.4", "알이백(RE100)에 기업들이 참여한다")]
+        entries = [
+            _entry(ko="재생에너지 사용 확인", en="Renewable Electricity 100", abbr="RE100"),
+            {
+                **_entry(ko="알이백", en="Renewable Electricity 100", abbr="RE100"),
+                "origin": "glossary",
+            },
+        ]
+        assert term_notation_findings(sections, entries) == []
+
+    def test_confirmed_defined_term_skipped_in_review_list(self):
+        # 사람이 확정을 끝낸 용어를 매 런 정의 검토 목록에 다시 올리지 않는다.
+        sections = [(1, "1.1", "알이백(RE100) 기준을 따른다")]
+        entries = [
+            {
+                **_entry(ko="알이백", abbr="RE100", definition="a corporate initiative"),
+                "origin": "glossary",
+            },
+        ]
+        assert term_notation_findings(sections, entries) == []

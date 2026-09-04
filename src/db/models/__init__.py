@@ -2,6 +2,7 @@ from src.db.models.app_setting import AppSetting
 from src.db.models.chunk import Chunk
 from src.db.models.chunk_span_vector import ChunkSpanVector
 from src.db.models.consistency_graph_node import ConsistencyGraphNode
+from src.db.models.glossary_term import GlossaryTerm
 from src.db.models.ip_whitelist import IpWhitelist
 from src.db.models.library_node import LibraryNode
 from src.db.models.limit_request import LimitRequest
@@ -27,6 +28,7 @@ __all__ = [
     "Chunk",
     "ChunkSpanVector",
     "ConsistencyGraphNode",
+    "GlossaryTerm",
     "IpWhitelist",
     "LibraryNode",
     "LimitRequest",
