@@ -255,3 +255,223 @@ def table_prose_mismatches(content: str) -> list[str]:
             raw, other = example
             out.append(f"표 '{label}/{header}' {cell.token} vs 본문 {other} (\"{raw[:40]}…\")")
     return out
+
+
+# ── 표 합산·복제·빈 목록 검산 (2026-09-04 철강 R&D 정독 실측 3종) ──────────────
+
+# 본문 총계 주장: "전체 수요 매칭은 87건", "총 45개 품목" 류. 수량사까지 요구해
+# 정밀도를 지킨다(연도·비율이 총계로 오인되지 않게).
+_PROSE_TOTAL_RE = re.compile(
+    r"(?:총|전체|도합|모두|합계)\s*[가-힣 ]{0,12}?(\d[\d,]*)\s*(?:건|개|명|곳|개사|과제|품목|종)"
+)
+# 덧셈 검산식: "16+8+3+13+5 = 45" — 보고서가 스스로 보여준 산술은 공짜로 검증된다.
+_ADDITION_RE = re.compile(r"(\d[\d,]*(?:\s*\+\s*\d[\d,]*)+)\s*=\s*(\d[\d,]*)")
+# 열 합산을 신뢰할 최소 항목 수 — 2개짜리는 표가 아니라 나열이다.
+_SUM_MIN_ITEMS = 3
+# 총계 주장을 표와 짝지을 최대 줄 거리(표 블록 끝 기준).
+_TOTAL_CLAIM_WINDOW = 6
+
+
+def _table_blocks(content: str) -> list[tuple[int, int, list[list[str]]]]:
+    """(시작 줄, 끝 줄, 셀 행렬) 목록 — 구분선 행은 셀 행렬에서 뺀다."""
+    lines = content.split("\n")
+    out: list[tuple[int, int, list[list[str]]]] = []
+    i = 0
+    while i < len(lines):
+        if not _TABLE_LINE_RE.match(lines[i]):
+            i += 1
+            continue
+        start = i
+        block: list[list[str]] = []
+        while i < len(lines) and _TABLE_LINE_RE.match(lines[i]):
+            cells = _cells_of(lines[i])
+            if not all(_SEP_CELL_RE.match(c) or not c for c in cells):
+                block.append(cells)
+            i += 1
+        if len(block) >= 2:
+            out.append((start, i - 1, block))
+    return out
+
+
+# 셀 전체가 '수 하나(+짧은 수량사)'인 꼴 — significant_numbers는 한 자리 수를
+# 변별력 없다고 버리는데(문장 대조용 눈금), 건수 열의 8건·5건은 합산에 필요하다.
+_WHOLE_CELL_NUM_RE = re.compile(
+    r"^(\d[\d,]*(?:\.\d+)?)\s*(?:건|개|명|곳|개사|과제|품목|종|회|억원|억 원|억)?$"
+)
+
+
+def _cell_number(cell: str) -> float | None:
+    """셀이 '값 하나'일 때만 그 수 — 서술·복수 수치·비율 셀은 합산에 안 넣는다."""
+    text = MARK_RE.sub(" ", cell).strip()
+    m = _WHOLE_CELL_NUM_RE.match(text)
+    if m is None:
+        return None
+    try:
+        return float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def table_total_mismatches(content: str) -> list[str]:
+    """열 합산 vs 합계 행·본문 총계 주장·덧셈식 — 산술로 갈리는 자기모순 검산.
+
+    2026-09-04 철강 R&D 실측: 표가 16+8+3+13+5=45건을 검산식까지 보여주고 바로
+    다음 줄이 "전체 87건"이라 주장했는데 어떤 검사도 못 봤다 — 셀 단위 대조
+    (table_prose_mismatches)는 라벨+열 머리가 문장에 있어야만 봐서, '총계'라는
+    새 이름을 단 주장은 짝을 못 찾는다. 합산은 산술이라 방향까지 확정된다.
+    """
+    out: list[str] = []
+    lines = content.split("\n")
+    for start, end, block in _table_blocks(content):
+        headers = block[0]
+        data_rows = []
+        total_row = None
+        for row in block[1:]:
+            label = _clean_label(row[0]) if row else ""
+            if _TOTAL_ROW_RE.search(label.strip()):
+                total_row = row
+            else:
+                data_rows.append(row)
+        if len(data_rows) < _SUM_MIN_ITEMS:
+            continue
+        col_sums: dict[int, float] = {}
+        for col in range(1, max(len(r) for r in data_rows)):
+            values = [
+                v for r in data_rows if col < len(r) and (v := _cell_number(r[col])) is not None
+            ]
+            if len(values) >= _SUM_MIN_ITEMS:
+                col_sums[col] = sum(values)
+        # 1) 합계 행 검산
+        if total_row is not None:
+            for col, total in col_sums.items():
+                if col < len(total_row) and (shown := _cell_number(total_row[col])) is not None:
+                    if abs(shown - total) > 0.5:
+                        header = _clean_label(headers[col]) if col < len(headers) else f"{col}열"
+                        out.append(f"'{header}' 열 합 {total:g} vs 합계 행 {shown:g}")
+        # 2) 표 근처 본문의 총계 주장 검산 — 표와 같은 수 밴드(×10 이내)일 때만
+        lo = max(0, start - _TOTAL_CLAIM_WINDOW)
+        hi = min(len(lines), end + 1 + _TOTAL_CLAIM_WINDOW)
+        for ln in lines[lo:start] + lines[end + 1 : hi]:
+            if _TABLE_LINE_RE.match(ln):
+                continue
+            for m in _PROSE_TOTAL_RE.finditer(ln):
+                claim = float(m.group(1).replace(",", ""))
+                for col, total in col_sums.items():
+                    if total <= 0 or claim == total:
+                        continue
+                    ratio = max(claim, total) / max(min(claim, total), 0.1)
+                    if ratio < 10 and abs(claim - total) > 0.5:
+                        header = _clean_label(headers[col]) if col < len(headers) else f"{col}열"
+                        out.append(
+                            f"본문 총계 주장 {m.group(1)} vs '{header}' 열 합 {total:g}"
+                            f' ("{ln.strip()[:40]}…")'
+                        )
+    # 3) 덧셈식 검산 — 표 밖 포함 전 본문
+    for m in _ADDITION_RE.finditer(content):
+        terms = [float(t.replace(",", "")) for t in re.split(r"\s*\+\s*", m.group(1))]
+        shown = float(m.group(2).replace(",", ""))
+        if abs(sum(terms) - shown) > 0.5:
+            out.append(f"덧셈식 불일치: {m.group(1)} = {m.group(2)} (실제 {sum(terms):g})")
+    return out
+
+
+# 복제 판정 셀 최소 길이 — "해당 없음"·"-" 같은 정상 반복 값을 걸러낸다.
+_DUP_CELL_MIN_CHARS = 10
+
+
+def table_duplicate_row_cells(content: str) -> list[str]:
+    """같은 표에서 두 행의 서술 셀 문안이 동일 — 옆 행 복사의 서명.
+
+    2026-09-04 실측: CBAM과 GSSA 비교표의 '목적' 칸이 토씨까지 동일했고, 그
+    복제가 본문의 발효일 오귀속(CBAM 날짜가 GSSA에 붙음)과 같은 뿌리였다.
+    수치 셀·짧은 값은 정상 반복이 흔해 서술형(길이 10+·비수치)만 본다.
+    """
+    out: list[str] = []
+    for _start, _end, block in _table_blocks(content):
+        headers = block[0]
+        rows = block[1:]
+        for i in range(len(rows)):
+            for j in range(i + 1, len(rows)):
+                a, b = rows[i], rows[j]
+                la, lb = _clean_label(a[0]) if a else "", _clean_label(b[0]) if b else ""
+                if not la or not lb or la == lb:
+                    continue
+                for col in range(1, min(len(a), len(b))):
+                    ca = re.sub(r"\s+", " ", a[col]).strip()
+                    cb = re.sub(r"\s+", " ", b[col]).strip()
+                    if (
+                        ca
+                        and ca == cb
+                        and len(ca) >= _DUP_CELL_MIN_CHARS
+                        and re.search(r"[가-힣A-Za-z]", ca)
+                        and _cell_number(ca) is None
+                    ):
+                        header = _clean_label(headers[col]) if col < len(headers) else f"{col}열"
+                        out.append(f"'{la}'와 '{lb}' 행의 '{header}' 칸 문안 동일: \"{ca[:30]}…\"")
+        # 전치형 표(비교 대상이 열로 놓인 꼴)의 옆 칸 복사 — 같은 행의 두 열이
+        # 동일 문안이면 한쪽이 다른 쪽을 베낀 서명이다(2026-09-04 실측: CBAM과
+        # GSSA 비교표의 '목적' 행에서 두 제도 칸이 토씨까지 동일).
+        for row in rows:
+            label = _clean_label(row[0]) if row else ""
+            if not label:
+                continue
+            for ci in range(1, len(row)):
+                for cj in range(ci + 1, len(row)):
+                    ca = re.sub(r"\s+", " ", row[ci]).strip()
+                    cb = re.sub(r"\s+", " ", row[cj]).strip()
+                    if (
+                        ca
+                        and ca == cb
+                        and len(ca) >= _DUP_CELL_MIN_CHARS
+                        and re.search(r"[가-힣A-Za-z]", ca)
+                        and _cell_number(ca) is None
+                    ):
+                        ha = _clean_label(headers[ci]) if ci < len(headers) else f"{ci}열"
+                        hb = _clean_label(headers[cj]) if cj < len(headers) else f"{cj}열"
+                        out.append(f"'{label}' 행의 '{ha}'와 '{hb}' 칸 문안 동일: \"{ca[:30]}…\"")
+    return out
+
+
+# 목록 선언: "확정 개발기술 목록(20개 품목)" 류 — 개수 선언이 있는 줄.
+_DECLARED_LIST_RE = re.compile(r"목록\s*[（(]\s*(\d{1,3})\s*개[^）)]*[）)]")
+_BULLET_RE = re.compile(r"^\s*(?:[-*·ㅇ○◦□]|\d{1,2}[.)])\s+\S")
+# 개조식 마커 깊이 — 선언 줄과 같은 깊이의 뒤 불릿은 목록 항목이 아니라 형제
+# 서술이다(2026-09-04 실측: 빈 목록 선언 두 줄 뒤의 형제 ㅇ 불릿을 항목으로
+# 오인해 놓침). 항목은 선언보다 깊은 마커·번호 목록·표만 인정한다.
+_LIST_MARKER_DEPTH = {"□": 0, "ㅇ": 1, "○": 1, "◦": 1, "-": 2, "·": 2, "*": 3}
+
+
+def _marker_depth(line: str) -> int | None:
+    m = re.match(r"^\s*([□ㅇ○◦·*-])\s+", line)
+    return _LIST_MARKER_DEPTH.get(m.group(1)) if m else None
+
+
+def declared_lists_unfilled(content: str) -> list[str]:
+    """ "목록(N개)" 선언 직후에 항목이 하나도 없는 곳 — 유실된 산출물의 서명.
+
+    2026-09-04 실측: "내역① 확정 개발기술 목록(20개 품목)" 선언 아래가 통째로
+    빈칸이었고, 후속 절이 그 목록을 재인용한다고 서술했다. 부족(N 미달)은
+    나열 방식이 다양해 오탐이 많으므로 '0건'만 확정 결함으로 본다.
+    """
+    out: list[str] = []
+    lines = content.split("\n")
+    for i, line in enumerate(lines):
+        m = _DECLARED_LIST_RE.search(line)
+        if not m:
+            continue
+        decl_depth = _marker_depth(line)
+        n_items = 0
+        for follow in lines[i + 1 : i + 8]:
+            if not follow.strip():
+                continue
+            if _TABLE_LINE_RE.match(follow) or re.match(r"^\s*\d{1,2}[.)]\s+\S", follow):
+                n_items += 1
+                continue
+            depth = _marker_depth(follow)
+            if depth is not None and (decl_depth is None or depth > decl_depth):
+                n_items += 1
+                continue
+            break
+        if n_items == 0:
+            out.append(f'{m.group(1)}개 목록 선언 직후가 빈칸: "{line.strip()[:40]}…"')
+    return out
