@@ -1,5 +1,6 @@
 import logging
 
+import sentry_sdk
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +30,12 @@ async def _dispatch_notifications(
             result_type=result_type,
         )
     except Exception:
+        # 수신자 이메일은 싣지 않는다(send_default_pii=False와 같은 취지) —
+        # 어떤 알림 종류가 실패했는지만.
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "notify_bot")
+            scope.set_tag("result_type", result_type)
+            sentry_sdk.capture_exception()
         logger.exception("notify.bot.failed", extra={"target": target_email})
 
     # try:

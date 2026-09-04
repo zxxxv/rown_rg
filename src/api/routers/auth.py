@@ -3,6 +3,7 @@ import re
 import zlib
 from typing import Annotated
 
+import sentry_sdk
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -296,6 +297,11 @@ async def saml_login(request: Request):
         return RedirectResponse(url=auth.login(return_to=react_frontend_url))
     except Exception:
         logger.exception("saml.login_url_failed")
+        # SAML 경로 — assertion(raw_xml)·SAMLResponse·발급 토큰은 어느 것도
+        # 싣지 않는다. 실패한 지점을 가리키는 태그 하나뿐이다.
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "saml_login_url")
+            sentry_sdk.capture_exception()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="SAML 로그인을 시작할 수 없습니다.",
@@ -350,6 +356,10 @@ async def saml_acs(
             raise
         except Exception:
             logger.exception("saml.acs_processing_error")
+            # 위와 같음 — assertion·토큰·XML 본문 미포함.
+            with sentry_sdk.new_scope() as scope:
+                scope.set_tag("bg_failure", "saml_acs_processing")
+                sentry_sdk.capture_exception()
             if not is_local:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -413,6 +423,10 @@ async def saml_acs(
         raise
     except Exception:
         logger.exception("saml.acs_unhandled_error")
+        # 위와 같음 — assertion·토큰·XML 본문 미포함.
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "saml_acs_unhandled")
+            sentry_sdk.capture_exception()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="인증 처리 중 오류가 발생했습니다.",

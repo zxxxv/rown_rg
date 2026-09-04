@@ -1,12 +1,14 @@
 import asyncio
 import hashlib
 import re
+from collections.abc import Awaitable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 from zipfile import BadZipFile
 
+import sentry_sdk
 import structlog
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from fastapi.responses import FileResponse
@@ -91,6 +93,7 @@ from src.core.section_plan import (
     load_section_plan,
     plan_from_config,
 )
+from src.core.sentry_budget import capture_budgeted
 from src.core.state import ProjectState
 from src.core.types import (
     ProjectStage,
@@ -1994,6 +1997,27 @@ async def delete_project_source(
 
 # 색인 백그라운드 태스크 참조 — GC로 사라지지 않게 붙잡아 둔다.
 _INDEX_TASKS: set[asyncio.Task] = set()
+
+
+async def _isolated_bg(kind: str, project_id: UUID, coro: Awaitable[None]) -> None:
+    """요청에서 spawn되는 백그라운드를 Sentry 격리 스코프 안에서 돌린다.
+
+    create_task는 요청의 컨텍스트를 복사한다 — 격리하지 않으면 동시에 도는 업로드
+    색인들이 스코프를 공유하고, 이미 응답이 끝난 요청의 태그(엔드포인트 등)를 계속
+    달고 다닌다. workflows.runner._execute와 같은 패턴이다.
+
+    예산(core.sentry_budget)은 **리셋하지 않는다** — 태스크마다 리셋하면 자료 단위
+    상한이 매번 풀려 무의미해진다. 런 밖 경로는 공용 예산을 그대로 쓴다.
+
+    실행에는 관여하지 않는다: coro를 그대로 await하고 예외도 그대로 전파한다.
+    """
+    with sentry_sdk.isolation_scope() as scope:
+        scope.set_tag("bg_task", kind)
+        scope.set_tag("task_id", str(uuid4()))
+        scope.set_tag("project_id", str(project_id))
+        await coro
+
+
 # 동시 색인 상한. PDF 파싱(docling 레이아웃 모델)은 파일당 수 GB를 쓴다 — 여러 건을
 # 한꺼번에 돌리면 메모리가 터지고 **조용히 저품질 파서로 폴백**한다. 2026-08-20 실측:
 # 13건을 한 번에 올렸더니 9건이 OSError 1455(페이징 파일 부족)로 docling에 실패해
@@ -2022,6 +2046,13 @@ async def _title_in_background(source_id: UUID, file_path: Path, error_context: 
             await extract_and_apply_doc_title(source_id, file_path)
     except Exception:
         logger.warning("source.title_extract_failed_bg", context=error_context, exc_info=True)
+        # 파일명 표시로 남을 뿐 흐름은 그대로 — 다만 자료 검토 게이트가 실제 문서
+        # 제목 대신 파일명을 보게 된다. 문서 내용·경로는 싣지 않는다.
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "title_extract")
+            scope.set_tag("source_id", str(source_id))
+            scope.set_extra("filename", file_path.name)
+            sentry_sdk.capture_exception()
 
 
 async def _index_in_background(source: SourceInput, error_context: str) -> None:
@@ -2043,6 +2074,16 @@ async def _index_in_background(source: SourceInput, error_context: str) -> None:
     except Exception as exc:
         error = _index_error_message(exc)
         logger.warning("source.index_failed_bg", context=error_context, exc_info=True)
+        # 수백 페이지 PDF가 조용히 색인에 실패하는 지점 — 화면엔 index_error로만
+        # 남는다. 자료 본문은 싣지 않고 프로젝트·자료 종류 메타만 붙인다.
+        capture_budgeted(
+            "index_source",
+            exc,
+            tags={
+                "project_id": str(source.project_id),
+                "source_type": source.source_type,
+            },
+        )
     async with open_session() as session:
         row = (
             await session.execute(
@@ -2200,13 +2241,23 @@ async def upload_project_source(
         # 게이트가 "A38B4BB2CA_….pdf" 대신 실제 문서 제목을 보게. 파스 캐시가 남아
         # 런 색인이 재사용하므로 이중 비용이 없다.
         title_task = asyncio.create_task(
-            _title_in_background(row.id, dest, f"upload-title:{project.id}:{safe_name}")
+            _isolated_bg(
+                "title_extract",
+                project.id,
+                _title_in_background(row.id, dest, f"upload-title:{project.id}:{safe_name}"),
+            )
         )
         _INDEX_TASKS.add(title_task)
         title_task.add_done_callback(_INDEX_TASKS.discard)
         return _to_source_item(row)
     await session.commit()
-    task = asyncio.create_task(_index_in_background(source, f"upload:{project.id}:{safe_name}"))
+    task = asyncio.create_task(
+        _isolated_bg(
+            "index_source",
+            project.id,
+            _index_in_background(source, f"upload:{project.id}:{safe_name}"),
+        )
+    )
     _INDEX_TASKS.add(task)
     task.add_done_callback(_INDEX_TASKS.discard)
     return _to_source_item(row)
@@ -2270,7 +2321,13 @@ async def attach_library_source(
         await session.commit()
         return _to_source_item(row)
     await session.commit()
-    task = asyncio.create_task(_index_in_background(source, f"library:{project.id}:{node.id}"))
+    task = asyncio.create_task(
+        _isolated_bg(
+            "index_source",
+            project.id,
+            _index_in_background(source, f"library:{project.id}:{node.id}"),
+        )
+    )
     _INDEX_TASKS.add(task)
     task.add_done_callback(_INDEX_TASKS.discard)
     return _to_source_item(row)
@@ -2347,7 +2404,17 @@ async def _reverify_in_background(project_id: UUID) -> None:
     if not rows:
         return
     state = _state_for_export(project, rows)
-    await run_pm_verify(state, model=_models_for(state)["verify"])
+    try:
+        await run_pm_verify(state, model=_models_for(state)["verify"])
+    except Exception:
+        # 재검증 실패 — 사용자는 옛 경고를 계속 보게 된다(고친 게 반영 안 됨).
+        # dev가 이 경로를 잡(start_job) 기반으로 바꿔 _VERIFYING 셋은 사라졌다 —
+        # 캡처 후 재던져 잡 상태에도 실패로 남긴다(머지 결합, 2026-09-04).
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("bg_failure", "verify_rerun")
+            scope.set_tag("project_id", str(project_id))
+            sentry_sdk.capture_exception()
+        raise
 
 
 @router.post("/{project_id}/verify-report", status_code=status.HTTP_202_ACCEPTED)
@@ -2363,7 +2430,11 @@ async def rerun_verify_report(
     from src.services.jobs import start_job
 
     project = await _get_authorized_project(project_id, session, current_user)
-    started = start_job(project.id, PM_VERIFY_JOB, lambda _job: _reverify_in_background(project.id))
+    started = start_job(
+        project.id,
+        PM_VERIFY_JOB,
+        lambda _job: _isolated_bg("verify_rerun", project.id, _reverify_in_background(project.id)),
+    )
     return {"started": started is not None, "running": True}
 
 

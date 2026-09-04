@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
+import sentry_sdk
 import structlog
 
 from src.clients.embedding_client import EmbeddingClient, EmbeddingResult
@@ -175,6 +176,17 @@ class RemoteEmbeddingClient(EmbeddingClient):
                 busy=busy,
                 elapsed_ms=round((time.perf_counter() - t0) * 1000, 1),
             )
+            # CPU 폴백은 그대로 — 다만 색인/질의 벡터 공간이 갈리는 순간이라
+            # "조용히 나빠짐"을 Sentry에 남긴다. 텍스트 본문은 싣지 않는다.
+            # 429는 위 쿨다운 판단과 같은 이유로 제외한다 — 서비스가 죽은 게
+            # 아니라 잠깐 밀린 것이고, 대량 색인 중 연속 발생해 quota를 태운다.
+            if not busy:
+                with sentry_sdk.new_scope() as scope:
+                    scope.set_tag("degradation", "embedding")
+                    scope.set_tag("embedding_backend", "remote_gpu")
+                    scope.set_extra("n_texts", len(clamped))
+                    scope.set_extra("cooldown_s", self._cooldown_s)
+                    sentry_sdk.capture_exception(exc)
             return await self._fallback_embed(clamped, reason="error")
 
         self.stats.record_ok()
