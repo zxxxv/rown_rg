@@ -20,7 +20,11 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0052"
-down_revision: str | None = "0051"
+# 0051(insights 칼럼 drop)은 딴 세션 미커밋 WIP라 저장소에 없다 - 이걸 부모로
+# 두면 운영 migrate가 KeyError 0051로 죽는다(2026-09-05 배포 실사고: 앱 기동
+# 실패 3분 중단). 0050에 직결하고, 0051은 나중에 이 뒤(down_revision=0052)로
+# 재지정해 합류한다 - 두 마이그레이션은 서로 다른 테이블이라 순서 무관.
+down_revision: str | None = "0050"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
