@@ -164,3 +164,21 @@ class TestSentenceFragmentGuard:
         hit = next(e for e in entries if e["abbr"] == "CBAM")
         assert hit["en"].endswith("Carbon Border Adjustment Mechanism")
         assert len(hit["en"].split()) <= 6
+
+
+class TestDiscoveryContext:
+    """발견 문맥 적립(2026-09-04) - 승격 화면이 원문 문장을 카드에서 보여줄 재료."""
+
+    def test_pair_entry_carries_discovery_sentence(self):
+        entries = mine_term_patterns(
+            "정부는 에너지속성인증서(Energy Attribute Certificate, EAC)를 도입했다. 별개 문장이다."
+        )
+        hit = next(e for e in entries if e["abbr"] == "EAC")
+        assert "도입했다" in hit["context"]
+        assert "별개 문장" not in hit["context"]
+
+    def test_definition_entry_keeps_context_empty(self):
+        # 정의 항목은 definition이 이미 원문 문장이다 - 같은 값을 두 번 싣지 않는다.
+        entries = mine_term_patterns(_RE100_DEF)
+        hit = next(e for e in entries if e["en"] == "operational commencement")
+        assert hit["definition"] and hit["context"] is None

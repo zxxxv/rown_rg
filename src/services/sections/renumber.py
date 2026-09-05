@@ -20,6 +20,7 @@ from uuid import UUID
 
 import structlog
 
+from src.core.charts import renumber_chart_sources
 from src.core.citations import numbers_in_order
 from src.core.citations import renumber as renumber_marks
 from src.core.state import ProjectState
@@ -53,8 +54,11 @@ def renumber_content(
 
     로컬 n(등장 순서 i번째 고유 번호) ↔ cited_chunk_ids[i] ↔ 전역 번호.
     표기 형태((출처 n)·[n])는 그대로 두고 번호만 바꾸며, 매핑 없는 마커는 제거한다.
+    차트 펜스의 source 필드도 같은 매핑으로 바꾼다 — 마커만 바꾸면 차트에 로컬
+    번호가 그대로 노출된다(2026-09-04 정독 실측 6건).
     """
-    return renumber_marks(content, _local_to_global(content, cited_chunk_ids, chunk_to_global))
+    mapping = _local_to_global(content, cited_chunk_ids, chunk_to_global)
+    return renumber_chart_sources(renumber_marks(content, mapping), mapping)
 
 
 def citation_chunk_map(

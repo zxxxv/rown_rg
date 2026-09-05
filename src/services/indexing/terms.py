@@ -149,6 +149,7 @@ def _entry(
     en: str | None = None,
     abbr: str | None = None,
     definition: str | None = None,
+    context: str | None = None,
     origin: str = "pattern",
 ) -> dict[str, Any]:
     return {
@@ -156,6 +157,10 @@ def _entry(
         "en": (en or "").strip()[:_MAX_EN_CHARS] or None,
         "abbr": (abbr or "").strip()[:_MAX_ABBR_CHARS] or None,
         "definition": (definition or "").strip()[:_MAX_DEF_CHARS] or None,
+        # 발견 문맥(병기가 나온 원문 문장) — 승격 화면에서 사람이 표기를 고를 때
+        # "원문에서 어떻게 쓰였나"를 카드 안에서 바로 읽게 한다(2026-09-04 결정).
+        # 정의 항목은 definition이 이미 원문 문장이라 context를 따로 싣지 않는다.
+        "context": (context or "").strip()[:_MAX_DEF_CHARS] or None,
         "origin": origin,
     }
 
@@ -192,7 +197,7 @@ def merge_entries(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     continue
                 out.append(e)
             else:
-                for field in ("ko", "en", "abbr", "definition"):
+                for field in ("ko", "en", "abbr", "definition", "context"):
                     if not found.get(field) and e.get(field):
                         found[field] = e[field]
                 e = found
@@ -231,13 +236,17 @@ def mine_term_patterns(md: str) -> list[dict[str, Any]]:
             ko = ko[frags[-1].end() :].strip()
         if not ko:
             continue
-        entries.append(_entry(ko=ko, en=en, abbr=abbr))
+        entries.append(
+            _entry(ko=ko, en=en, abbr=abbr, context=_sentence_around(md, m.start(), m.end()))
+        )
 
     for m in _EN_ABBR_RE.finditer(md):
         abbr = m.group("abbr")
         if abbr in _COMMON_ABBR or not _looks_abbr(abbr):
             continue
-        entries.append(_entry(en=m.group("en"), abbr=abbr))
+        entries.append(
+            _entry(en=m.group("en"), abbr=abbr, context=_sentence_around(md, m.start(), m.end()))
+        )
 
     for pattern in (_QUOTED_DEF_RE, _IS_DEFINED_RE, _EQUIV_RE):
         for m in pattern.finditer(md):

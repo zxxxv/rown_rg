@@ -209,3 +209,60 @@ class TestPairConflicts:
         ]
         block, _ = format_term_injection(entries, chunks)
         assert "에너지속성인증서" in block
+
+
+def _glossary(ko, definition=None):
+    return {
+        "ko": ko,
+        "en": "Renewable Electricity 100",
+        "abbr": "RE100",
+        "definition": definition,
+        "origin": "glossary",
+        "source_id": None,
+        "source_title": "정본 용어집",
+    }
+
+
+class TestGlossaryPrecedence:
+    """정본 우선(2026-09-04 승격 사슬) - 사람이 확정한 표기가 상충과 캡을 이긴다."""
+
+    def test_glossary_resolves_tie_and_forces_notation(self):
+        # 채굴만으로는 1:1 동률이라 표기 강제가 빠지던 상황 - 정본이 판가름한다.
+        chunks = [_chunk("RE100 참여기업의 조달 확대")]
+        entries = [
+            _glossary("알이백"),
+            _pair("알이백", "A"),
+            _pair("재생에너지 사용 확인", "무역협회"),
+        ]
+        block, keys = format_term_injection(entries, chunks)
+        assert '"알이백"' in block
+        assert "재생에너지 사용 확인" not in block
+
+    def test_glossary_overrides_mined_majority(self):
+        # 채굴 다수결(2표)이 반대여도 정본이 이긴다 - 확정은 다수결 위다.
+        chunks = [_chunk("RE100 참여기업의 조달 확대")]
+        entries = [
+            _pair("재생에너지 사용 확인", "무역협회"),
+            _pair("재생에너지 사용 확인", "B"),
+            _glossary("알이백"),
+        ]
+        block, _ = format_term_injection(entries, chunks)
+        assert '"알이백"' in block
+        assert "재생에너지 사용 확인" not in block
+
+    def test_glossary_survives_injection_cap(self):
+        chunks = [_chunk("RE100 " + " ".join(f"용어{i}" for i in range(20)))]
+        pairs = [
+            {
+                "ko": f"용어{i}",
+                "en": f"Foreign Term Number {i}",
+                "abbr": None,
+                "definition": f"정의 {i}",
+                "source_id": str(uuid4()),
+                "source_title": "",
+            }
+            for i in range(20)
+        ]
+        block, keys = format_term_injection([*pairs, _glossary("알이백")], chunks)
+        assert keys[0] == "Renewable Electricity 100"
+        assert '"알이백"' in block

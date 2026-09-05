@@ -44,18 +44,81 @@ _TAIL = (
 )
 
 
+GLOSSARY_ORIGIN = "glossary"
+GLOSSARY_TITLE = "정본 용어집"
+
+
+def normalize_term_key(en: str | None, abbr: str | None) -> str:
+    """정본 용어집·상충 판정이 공유하는 원어 키 — en 우선, 공백 정규화·소문자."""
+    raw = str(en or abbr or "")
+    return " ".join(raw.split()).lower()
+
+
+def glossary_row_to_entry(row: Any) -> dict[str, Any]:
+    """GlossaryTerm 행 → 채굴 엔트리와 같은 모양. origin으로 정본임을 표시한다."""
+    return {
+        "ko": row.ko,
+        "en": row.en,
+        "abbr": row.abbr,
+        "definition": row.definition,
+        "context": row.note,
+        "origin": GLOSSARY_ORIGIN,
+        "source_id": None,
+        "source_title": GLOSSARY_TITLE,
+    }
+
+
+async def load_glossary_entries(project_id: UUID) -> list[dict[str, Any]]:
+    """정본 용어집(회사 공유 + 이 프로젝트 덮어쓰기) — 같은 키면 프로젝트 행이 이긴다.
+
+    테이블이 아직 없어도(마이그레이션 전) 용어 주입 전체가 죽으면 안 되므로 실패는
+    빈 목록으로 눕는다 — 정본 없이도 채굴 용어표는 성립한다.
+    """
+    from sqlalchemy import select
+
+    from src.db.models.glossary_term import GlossaryTerm
+    from src.db.session import open_session
+
+    try:
+        async with open_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(GlossaryTerm).where(
+                            (GlossaryTerm.project_id.is_(None))
+                            | (GlossaryTerm.project_id == project_id)
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+    except Exception:
+        logger.warning("glossary_load_failed", project_id=str(project_id), exc_info=True)
+        return []
+    by_key: dict[str, Any] = {}
+    for row in rows:  # 회사 공유 먼저 깔고 프로젝트 행으로 덮는다
+        if row.project_id is None:
+            by_key.setdefault(row.term_key, row)
+    for row in rows:
+        if row.project_id is not None:
+            by_key[row.term_key] = row
+    return [glossary_row_to_entry(r) for r in by_key.values()]
+
+
 async def load_project_terms(project_id: UUID) -> list[dict[str, Any]]:
-    """프로젝트의 채택(is_included) 자료 전체에서 용어를 모아 돌려준다.
+    """정본 용어집 + 프로젝트의 채택(is_included) 자료 전체의 채굴 용어.
 
     자료 간 병합은 하지 않는다 — 각 항목에 source_id·source_title을 달아 정의의
     적용 범위(그 자료)를 보존한다. 병합은 한 자료 안(indexing/terms)에서 끝났다.
+    정본(사람 확정)이 목록 앞에 서고, 주입·검사가 origin으로 우선 취급한다.
     """
     from sqlalchemy import select
 
     from src.db.models.project_source import ProjectSource
-    from src.db.session import async_session_maker
+    from src.db.session import open_session
 
-    async with async_session_maker() as session:
+    async with open_session() as session:
         rows = (
             await session.execute(
                 select(ProjectSource.id, ProjectSource.title, ProjectSource.metadata_).where(
@@ -64,7 +127,7 @@ async def load_project_terms(project_id: UUID) -> list[dict[str, Any]]:
                 )
             )
         ).all()
-    out: list[dict[str, Any]] = []
+    out: list[dict[str, Any]] = await load_glossary_entries(project_id)
     for sid, title, meta in rows:
         for e in (meta or {}).get(TERM_ENTRIES_KEY) or []:
             if isinstance(e, dict) and (e.get("ko") or e.get("en") or e.get("abbr")):
@@ -170,7 +233,9 @@ def _pair_conflicts(
 
 
 def _rank(e: dict[str, Any], pack_sources: set[str]) -> tuple[int, int]:
-    """정렬 — 근거팩에 든 자료의 정의 > 다른 자료의 정의 > 한영 병기 > 나머지."""
+    """정렬 — 정본 > 근거팩에 든 자료의 정의 > 다른 자료의 정의 > 한영 병기 > 나머지."""
+    if e.get("origin") == GLOSSARY_ORIGIN:
+        return (-1, 0)  # 사람이 확정한 표기가 캡에 밀려 떨어지면 승격이 무의미하다
     if e.get("definition"):
         return (0 if e.get("source_id") in pack_sources else 1, 0)
     has_pair = bool(e.get("ko") and (e.get("en") or e.get("abbr")))
@@ -196,14 +261,39 @@ def format_term_injection(
     if not hits:
         return "", []
 
+    # 정본 우선 — 사람이 확정한 표기가 있으면 그 키의 상충은 이미 판가름 났다.
+    # 다른 표기의 채굴 병기는 강제에서 떨구고(정의는 유지) 정본만 표기를 지시한다.
+    glossary_ko: dict[str, str] = {}
+    for e in entries:
+        if e.get("origin") == GLOSSARY_ORIGIN:
+            key = _pair_conflict_key(e)
+            if key:
+                glossary_ko.setdefault(key, str(e["ko"]).replace(" ", ""))
+
     # 상충 보수화 — 근거팩 밖 자료의 표까지 전체 용어표로 세야 상충이 보인다(팩에는
     # 오염판 하나만 걸릴 수 있다). 승자 표기만 강제하고, 승자가 없으면 표기 강제를
-    # 통째로 뺀다(정의 항목은 정의만 남긴다).
-    conflicts = _pair_conflicts(entries)
-    if conflicts:
+    # 통째로 뺀다(정의 항목은 정의만 남긴다). 정본이 있는 키는 다수결 대상이 아니다.
+    conflicts = _pair_conflicts([e for e in entries if e.get("origin") != GLOSSARY_ORIGIN])
+    if conflicts or glossary_ko:
         adjusted: list[dict[str, Any]] = []
         for e in hits:
+            if e.get("origin") == GLOSSARY_ORIGIN:
+                adjusted.append(e)
+                continue
             key = _pair_conflict_key(e)
+            if key in glossary_ko:
+                if str(e.get("ko") or "").replace(" ", "") == glossary_ko[key]:
+                    adjusted.append(e)
+                elif e.get("definition"):
+                    adjusted.append({**e, "ko": None})
+                else:
+                    logger.info(
+                        "term_injection_overridden_by_glossary",
+                        term=_label(e),
+                        ko=e.get("ko"),
+                        source=e.get("source_title"),
+                    )
+                continue
             if key is None or key not in conflicts:
                 adjusted.append(e)
                 continue

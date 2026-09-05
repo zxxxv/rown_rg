@@ -12,6 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { MarkdownContent } from "./MarkdownContent";
 import { markerNumbers } from "./markers";
 
 // 새로 뽑는 벌 수. 견줄 것은 셋이다 - **지금 본문 + 새 안 2**. 셋을 새로 뽑으면
@@ -217,14 +218,7 @@ export function SectionVariantsPanel({
               </Button>
             </span>
           </div>
-          <p
-            className={cn(
-              "mt-1 whitespace-pre-wrap text-xs leading-relaxed text-fg-secondary",
-              openId === CURRENT_ID ? "max-h-96 overflow-y-auto" : "line-clamp-3",
-            )}
-          >
-            {currentContent}
-          </p>
+          <VariantPreview content={currentContent} open={openId === CURRENT_ID} />
         </li>
         {variants.map((v, i) => (
           <li key={v.id} className="rounded border border-border bg-bg p-2">
@@ -258,14 +252,7 @@ export function SectionVariantsPanel({
                 </Button>
               </span>
             </div>
-            <p
-              className={cn(
-                "mt-1 whitespace-pre-wrap text-xs leading-relaxed text-fg-secondary",
-                openId === v.id ? "max-h-96 overflow-y-auto" : "line-clamp-3",
-              )}
-            >
-              {v.content}
-            </p>
+            <VariantPreview content={v.content} open={openId === v.id} />
           </li>
         ))}
       </ul>
@@ -281,5 +268,26 @@ export function SectionVariantsPanel({
         </ul>
       ) : null}
     </section>
+  );
+}
+
+/** 안 미리보기 - 날 마크다운(#, 표 파이프)을 그대로 내보이지 않고 본문 렌더러로
+ *  그린다(2026-09-04 지적). 견주는 대상이 완성 지면이므로 미리보기도 지면 모양이어야
+ *  "이게 나은가"가 눈으로 판정된다. 접힌 상태는 높이만 자른다 - 렌더된 블록(표·헤딩)
+ *  위에서 line-clamp는 성립하지 않는다.
+ *
+ *  머리의 절 제목 헤딩 한 줄은 걷어낸다 - 셋 다 같은 제목이라 견주는 데 정보가 없고,
+ *  접힌 높이(112px)를 큰 활자가 다 먹어 정작 다른 내용이 안 보인다. */
+function VariantPreview({ content, open }: { content: string; open: boolean }) {
+  const body = content.replace(/^#{1,3}\s[^\n]*\n+/, "");
+  return (
+    <div
+      className={cn(
+        "mt-1 text-xs",
+        open ? "max-h-96 overflow-y-auto" : "max-h-28 overflow-hidden",
+      )}
+    >
+      <MarkdownContent content={body} markUncited={false} traceable={false} />
+    </div>
   );
 }

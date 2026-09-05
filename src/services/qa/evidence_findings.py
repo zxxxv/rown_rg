@@ -53,8 +53,11 @@ from src.services.qa.gate import (
     truncated_lines,
 )
 from src.services.qa.table_check import (
+    declared_lists_unfilled,
+    table_duplicate_row_cells,
     table_prose_mismatches,
     table_share_sum_mismatches,
+    table_total_mismatches,
     table_ungrounded_numbers,
 )
 from src.services.qa.term_notation import term_notation_findings
@@ -466,6 +469,45 @@ def _table_findings(
                 "표 합계 불일치",
                 f"구성비 합이 100%가 아닌 표 {len(share_gaps)}건: {share_gaps[0]}"
                 + (f" 외 {len(share_gaps) - 1}건" if len(share_gaps) > 1 else ""),
+            )
+        )
+
+    totals = table_total_mismatches(content)
+    if totals:
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "표 합산-본문 총계 불일치",
+                f"열 합산과 합계 행·본문 총계 주장이 어긋남 {len(totals)}건: {totals[0]}"
+                + (f" 외 {len(totals) - 1}건" if len(totals) > 1 else ""),
+            )
+        )
+
+    dup_cells = table_duplicate_row_cells(content)
+    if dup_cells:
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "warning",
+                "표 행 문안 복제 의심",
+                f"서로 다른 행의 서술 칸이 동일 {len(dup_cells)}건(옆 행 복사 의심): {dup_cells[0]}"
+                + (f" 외 {len(dup_cells) - 1}건" if len(dup_cells) > 1 else ""),
+            )
+        )
+
+    unfilled = declared_lists_unfilled(content)
+    if unfilled:
+        out.append(
+            _finding(
+                row.chapter_number,
+                ref,
+                "critical",
+                "선언 직후 빈 목록",
+                f"개수를 선언한 목록의 본체가 빈칸 {len(unfilled)}건: {unfilled[0]}"
+                + (f" 외 {len(unfilled) - 1}건" if len(unfilled) > 1 else ""),
             )
         )
 

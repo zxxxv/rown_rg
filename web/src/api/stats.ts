@@ -85,9 +85,19 @@ export const ChapterEvidenceCompositionSchema = EvidenceTallySchema.extend({
 });
 export type ChapterEvidenceComposition = z.infer<typeof ChapterEvidenceCompositionSchema>;
 
+export const SectionEvidenceCompositionSchema = EvidenceTallySchema.extend({
+  section_id: z.string(),
+  chapter_number: z.number(),
+  section_number: z.number(),
+  title: z.string(),
+});
+export type SectionEvidenceComposition = z.infer<typeof SectionEvidenceCompositionSchema>;
+
 export const EvidenceCompositionResponseSchema = z.object({
   total: EvidenceTallySchema,
   chapters: z.array(ChapterEvidenceCompositionSchema),
+  // 절 단위 원자. 서버가 v3 지문으로 재계산하기 전(옛 저장분)에는 비어 온다.
+  sections: z.array(SectionEvidenceCompositionSchema).default([]),
 });
 export type EvidenceCompositionResponse = z.infer<typeof EvidenceCompositionResponseSchema>;
 
