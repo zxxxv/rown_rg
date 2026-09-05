@@ -325,8 +325,11 @@ function Legend({ spec }: { spec: ChartSpec }) {
   );
 }
 
-/** 차트 펜스 하나를 SVG로 그린다. 못 그리면 원본 표(또는 안내)를 대신 보여준다. */
-export function ChartBlock({ source }: { source: string }) {
+/** 차트 펜스 하나를 SVG로 그린다. 못 그리면 원본 표(또는 안내)를 대신 보여준다.
+ *
+ * hideLegend: 옆에 항목별 수치 목록을 따로 두는 화면용(서술 구성 통계). 같은 색·같은
+ * 이름을 두 벌 그리면 읽는 사람이 둘을 대조하느라 오히려 느려진다. 기본은 종전대로 표시. */
+export function ChartBlock({ source, hideLegend }: { source: string; hideLegend?: boolean }) {
   const [hover, setHover] = useState<HoverPoint | null>(null);
   const parsed = useMemo(() => {
     try {
@@ -392,7 +395,7 @@ export function ChartBlock({ source }: { source: string }) {
           </div>
         )}
       </div>
-      {(spec.series.length > 1 || spec.type === "pie") && <Legend spec={spec} />}
+      {!hideLegend && (spec.series.length > 1 || spec.type === "pie") && <Legend spec={spec} />}
     </figure>
   );
 }
