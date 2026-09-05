@@ -4254,9 +4254,9 @@ _MAX_VARIANTS = 4
 class SectionVariantsRequest(BaseModel):
     """한 절을 서로 다른 안으로 여러 벌 뽑는다 - 골라 쓰기 위해."""
 
-    # 기본 2 - 견줄 것은 셋이다(지금 본문 + 새 안 2). 3을 새로 뽑으면 넷이 되는데,
-    # 넷을 한 화면에서 견주는 사람은 없다는 지적(2026-08-27). 값도 안 수에 곱해진다.
-    n: int = Field(2, ge=1, le=_MAX_VARIANTS)
+    # 기본 1 - 지금 본문 + 새 안 1의 1:1 비교(2026-09-06 사용자 지시: 3안 나란히
+    # 출력 제거). 값이 안 수에 곱해지기도 한다. 상한은 유지 - 필요하면 더 뽑는다.
+    n: int = Field(1, ge=1, le=_MAX_VARIANTS)
     instruction: str = Field(default="", max_length=2000)
 
 

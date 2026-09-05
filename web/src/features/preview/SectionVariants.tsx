@@ -15,9 +15,10 @@ import { cn } from "@/lib/utils";
 import { MarkdownContent } from "./MarkdownContent";
 import { markerNumbers } from "./markers";
 
-// 새로 뽑는 벌 수. 견줄 것은 셋이다 - **지금 본문 + 새 안 2**. 셋을 새로 뽑으면
-// 넷이 되는데, 넷을 한 화면에서 견주는 사람은 없다(2026-08-27 지적). 값도 곱해진다.
-const DEFAULT_N = 2;
+// 새로 뽑는 벌 수. 지금 본문 + 새 안 1의 1:1 비교 - 3안 나란히는 견주는 비용이
+// 크고 뽑는 값도 곱해진다는 지적으로 축소(2026-09-06 사용자 지시). 마음에 안 들면
+// 다시 뽑으면 된다.
+const DEFAULT_N = 1;
 
 /** 목록에서 '지금 본문' 행을 가리키는 자리표 - 실제 안의 id와 겹치지 않는다. */
 const CURRENT_ID = "__current__";
@@ -62,7 +63,7 @@ export function SectionVariantsTrigger({
       { n: DEFAULT_N, instruction },
       {
         onSuccess: () => {
-          toast.success(`다른 안 ${DEFAULT_N}개를 뽑고 있습니다`, {
+          toast.success(`새 안을 뽑고 있습니다`, {
             description: "완성되는 대로 지금 본문 옆에 쌓입니다. 본문은 고를 때까지 그대로입니다.",
           });
           void query.refetch();
@@ -82,10 +83,10 @@ export function SectionVariantsTrigger({
         size="sm"
         disabled={disabled || start.isPending}
         onClick={onStart}
-        title="지금 본문은 그대로 두고 다른 안을 2벌 뽑아 셋을 나란히 놓고 고릅니다"
+        title="지금 본문은 그대로 두고 새 안을 하나 뽑아 나란히 견주고 고릅니다"
       >
         <Layers className="mr-1 h-3.5 w-3.5" />
-        다른 안 {DEFAULT_N}개 뽑기
+        새 안 뽑기
       </Button>
       {/* 금액만 - 근거(절당·출처)는 옆의 재작성 문구가 한 번 말한다. */}
       {estimateLabel(costBasis.data, DEFAULT_N, { compact: true }) ? (
@@ -179,7 +180,7 @@ export function SectionVariantsPanel({
       </div>
 
       <p className="text-xs text-fg-secondary">
-        지금 본문을 포함해 셋 중 하나를 고릅니다. 고를 때까지 본문은 그대로이고, 새 안을 고르면
+        지금 본문과 새 안을 나란히 견주고 하나를 고릅니다. 고를 때까지 본문은 그대로이고, 새 안을 고르면
         재작성과 같은 경로로 반영되며 지금 본문은 버전 기록에 남습니다.
       </p>
 
